@@ -1,3 +1,5 @@
+import { depthChunk, INTERIOR_POINTS } from './depth-occlusion';
+
 // The object's light, drawn on one quad around its silhouette. All of its softness is computed
 // here from the signed distance field (HighlightMask): nothing is blurred on the CPU.
 //
@@ -14,17 +16,76 @@
 // The light gets bluer and deeper as it falls off and lighter where it is strongest, as emitted
 // light does. Output is premultiplied with alpha below the emitted colour, so over passthrough it
 // mostly adds light (and only slightly dims what is behind the bloom).
+//
+// It keeps the room's depth order: hands' occluders (depth only) hide it through the depth test,
+// and with a depth map (GLOW_DEPTH, glow/depth-occlusion.ts) a real surface nearer than the
+// object's own front by more than a margin fades it out: the vertex shader finds that front from
+// the map at points inside the silhouette, then each fragment needs one depth read.
 
 export const SLICES = 7;
 
 export const glowVertexShader = /* glsl */ `
   varying vec2 vUv;
   varying vec3 vEye;
+  varying vec3 vWorld;
+  #if GLOW_DEPTH > 0
+    ${depthChunk}
+    uniform vec2 interior[${INTERIOR_POINTS}];
+    uniform int interiorCount;
+    uniform float maxFront;
+    uniform float occlusionPlane;
+    // How far the object's own front is in front of this plane (m), for this eye and frame...
+    flat varying float vFront;
+    // ...and its surface as a tilted plane: front ~ x + y (u - 0.5) + z (v - 0.5) in the quad's uv.
+    flat varying vec3 vSurface;
+  #endif
   void main() {
     vUv = uv;
+    vWorld = (modelMatrix * vec4(position, 1.0)).xyz;
     // The eye in the quad's own frame: x and y in field units (the quad is scaled to the field),
     // z in metres. Each stereo eye gets its own, so each sees its own parallax.
     vEye = (inverse(modelMatrix) * vec4(cameraPosition, 1.0)).xyz;
+    #if GLOW_DEPTH > 0
+      // The object's front: the second-largest gap at the points inside the silhouette (about the
+      // 10th percentile of their real depth), never behind the plane, capped by its size. Four
+      // vertices per eye; the same in each (glowOcclusion / objectFront mirror this in TS).
+      float first = 0.0;
+      float second = 0.0;
+      int valid = 0;
+      // Least squares for the plane: sums of 1, u, v, uu, uv, vv, g, ug, vg (u, v centred).
+      float n = 0.0, su = 0.0, sv = 0.0, suu = 0.0, suv = 0.0, svv = 0.0;
+      float sg = 0.0, sug = 0.0, svg = 0.0;
+      for (int i = 0; i < ${INTERIOR_POINTS}; i++) {
+        if (i >= interiorCount) break;
+        float gap = depthGap((modelMatrix * vec4(interior[i] - 0.5, 0.0, 1.0)).xyz);
+        if (gap <= NO_DEPTH) continue;
+        valid++;
+        float g = max(gap, 0.0);
+        vec2 c = interior[i] - 0.5;
+        n += 1.0; su += c.x; sv += c.y;
+        suu += c.x * c.x; suv += c.x * c.y; svv += c.y * c.y;
+        sg += g; sug += c.x * g; svg += c.y * g;
+        if (g > first) {
+          second = first;
+          first = g;
+        } else if (g > second) {
+          second = g;
+        }
+      }
+      vFront = min(valid >= 2 ? second : first, maxFront);
+      // An object's surface is rarely at one depth (a laptop's lid leans toward you, its corners
+      // are nearer than its middle), so where the points allow, fit a plane to their gaps and let
+      // each fragment use whichever is further forward: the plane there or vFront. Solved by
+      // Cramer's rule; too few points or a degenerate spread keeps the single depth.
+      vSurface = vec3(vFront, 0.0, 0.0);
+      float det = n * (suu * svv - suv * suv) - su * (su * svv - suv * sv) + sv * (su * suv - suu * sv);
+      if (occlusionPlane > 0.5 && valid >= 6 && abs(det) > 1e-7) {
+        float a = (sg * (suu * svv - suv * suv) - su * (sug * svv - suv * svg) + sv * (sug * suv - suu * svg)) / det;
+        float b = (n * (sug * svv - suv * svg) - sg * (su * svv - suv * sv) + sv * (su * svg - sug * sv)) / det;
+        float c = (n * (suu * svg - sug * suv) - su * (su * svg - sug * sv) + sg * (su * suv - suu * sv)) / det;
+        vSurface = vec3(a, b, c);
+      }
+    #endif
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `;
@@ -44,6 +105,90 @@ export const glowFragmentShader = /* glsl */ `
   varying vec3 vEye;
 
   const int SLICES = ${SLICES};
+
+  // GLOW_DEPTH (a define): 0 no depth map, 1 a texture array (a layer per eye), 2 a plain texture.
+  varying vec3 vWorld;
+  #if GLOW_DEPTH > 0
+    ${depthChunk}
+    uniform float occlusionOn;
+    uniform float occlusionMargin;
+    uniform float occlusionFalloff;
+    uniform int vizMode;
+    uniform float occlusionFilter;
+    uniform float occlusionSoftness;
+    uniform float maxFront;
+    flat varying float vFront;
+    flat varying vec3 vSurface;
+
+    // The object's own front at this point of the quad (m in front of the plane): the fitted
+    // plane where it is further forward than the single depth, within [0, maxFront].
+    float frontAt(vec2 uv) {
+      float planeFront = vSurface.x + vSurface.y * (uv.x - 0.5) + vSurface.z * (uv.y - 0.5);
+      return max(vFront, clamp(planeFront, 0.0, maxFront));
+    }
+
+    // One texel's test: a real surface nearer than the object's front by more than the margin.
+    float texelHidden(ivec2 p, float glow, float front) {
+      float real = realDepthAt(p);
+      if (real <= 0.0) return 0.0;
+      return smoothstep(occlusionMargin, occlusionMargin + occlusionFalloff, glow - real - front);
+    }
+
+    // Hidden (0..1), smooth at the edges: the depth map is coarse (320 texels across the view on
+    // Quest), so the nearest texels' tests are blended and the blend is cut a little past one
+    // half over a narrow band, keeping the edge tight to what is in front (a wide band reads as a
+    // halo around a hand). 'cubic' blends 4 x 4 texels with cubic B-spline weights, whose
+    // contours are curvature-continuous: no texel shows. 'smooth' blends 3 x 3 with quadratic
+    // B-spline weights (round, faint texel ripples); 'bilinear' 2 x 2, as percentage-closer
+    // filtering does for shadow maps (texel corners show).
+    float occlusion(vec3 world, float front) {
+      if (occlusionOn < 0.5) return 0.0;
+      vec3 t = depthTexel(world);
+      if (t.z <= 0.0) return 0.0;
+      float h = 0.0;
+      if (occlusionFilter < 0.5) {
+        vec2 f = t.xy - 0.5;
+        ivec2 p = ivec2(floor(f)) - 1;
+        vec2 u = fract(f);
+        vec2 u2 = u * u;
+        vec2 u3 = u2 * u;
+        vec2 w0 = (1.0 - 3.0 * u + 3.0 * u2 - u3) / 6.0;
+        vec2 w1 = (4.0 - 6.0 * u2 + 3.0 * u3) / 6.0;
+        vec2 w2 = (1.0 + 3.0 * u + 3.0 * u2 - 3.0 * u3) / 6.0;
+        vec2 w3 = u3 / 6.0;
+        for (int j = 0; j < 4; j++) {
+          float wy = j == 0 ? w0.y : j == 1 ? w1.y : j == 2 ? w2.y : w3.y;
+          for (int i = 0; i < 4; i++) {
+            float wx = i == 0 ? w0.x : i == 1 ? w1.x : i == 2 ? w2.x : w3.x;
+            h += wx * wy * texelHidden(p + ivec2(i, j), t.z, front);
+          }
+        }
+      } else if (occlusionFilter > 1.5) {
+        vec2 f = t.xy - 0.5;
+        ivec2 p = ivec2(floor(f));
+        vec2 w = fract(f);
+        float a = texelHidden(p, t.z, front);
+        float b = texelHidden(p + ivec2(1, 0), t.z, front);
+        float c = texelHidden(p + ivec2(0, 1), t.z, front);
+        float d = texelHidden(p + ivec2(1, 1), t.z, front);
+        h = mix(mix(a, b, w.x), mix(c, d, w.x), w.y);
+      } else {
+        ivec2 p = ivec2(floor(t.xy));
+        vec2 s = fract(t.xy) - 0.5;
+        vec2 lo = 0.5 * (0.5 - s) * (0.5 - s);
+        vec2 mid = 0.75 - s * s;
+        vec2 hi = 0.5 * (0.5 + s) * (0.5 + s);
+        for (int j = -1; j <= 1; j++) {
+          float wy = j < 0 ? lo.y : j > 0 ? hi.y : mid.y;
+          for (int i = -1; i <= 1; i++) {
+            float wx = i < 0 ? lo.x : i > 0 ? hi.x : mid.x;
+            h += wx * wy * texelHidden(p + ivec2(i, j), t.z, front);
+          }
+        }
+      }
+      return smoothstep(0.55 - occlusionSoftness, 0.55 + occlusionSoftness, h);
+    }
+  #endif
 
   // The field holds distance / size in one half-float channel, filtered linearly.
   float distanceAt(vec2 uv) {
@@ -66,6 +211,22 @@ export const glowFragmentShader = /* glsl */ `
   }
 
   void main() {
+    float hidden = 0.0;
+    #if GLOW_DEPTH > 0
+      if (vizMode == 2) {
+        float gap = depthGap(vWorld);
+        // window.__occlusion.setViz('diff'): how the real surface compares with the object's
+        // front here. Green: the object itself (kept); red: in front (hidden); blue: behind.
+        if (gap <= NO_DEPTH) discard;
+        float rel = gap - frontAt(vUv);
+        vec3 tint = rel > occlusionMargin ? vec3(1.0, 0.15, 0.1)
+          : rel < -occlusionMargin ? vec3(0.1, 0.3, 1.0) : vec3(0.1, 1.0, 0.3);
+        gl_FragColor = vec4(tint * 0.5, 0.5);
+        return;
+      }
+      hidden = occlusion(vWorld, frontAt(vUv));
+    #endif
+    if (hidden >= 0.999) discard;
     vec3 ray = vec3(vUv - 0.5, 0.0) - vEye;
     vec2 slope = ray.xy / min(ray.z, -1e-4);
     float swell = 1.0 + 0.5 * ignite + 0.1 * breath;
@@ -88,7 +249,7 @@ export const glowFragmentShader = /* glsl */ `
     light *= (0.86 + 0.14 * breath) * (1.0 + 0.6 * ignite);
     // Never a hard quad edge, however far the bloom reaches.
     vec2 border = min(vUv, 1.0 - vUv);
-    light *= smoothstep(0.0, 0.08, min(border.x, border.y));
+    light *= smoothstep(0.0, 0.08, min(border.x, border.y)) * (1.0 - hidden);
     float energy = (1.0 - exp(-1.6 * light)) * opacity;
     vec3 deep = color * vec3(0.3, 0.62, 1.0);
     vec3 bright = mix(color, vec3(1.0), 0.08);

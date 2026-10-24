@@ -1,4 +1,5 @@
 import { DataTexture, HalfFloatType, LinearFilter, RedFormat } from 'three';
+import { INTERIOR_POINTS } from './glow/depth-occlusion';
 import type { Point2 } from './stroke';
 
 // The glow's only CPU work: the signed distance to the silhouette, rebuilt when a new mask
@@ -21,6 +22,8 @@ import type { Point2 } from './stroke';
 const SIZE = 192;
 const FAR = 1e20;
 const SMOOTHING_PASSES = 2;
+/** Interior points are picked from a grid this many texels apart. */
+const INTERIOR_STRIDE = 6;
 /** Contours are resampled to this spacing (texels) first, so smoothing rounds corners locally. */
 const SPACING = 3;
 /** ...but to no more than this many points per contour. */
@@ -61,6 +64,13 @@ export class HighlightMask {
   private rowSegments = new Int32Array(4096);
   /** best, read as float bits for the half-float conversion. */
   private readonly bits = new Uint32Array(this.best.buffer);
+  /**
+   * Up to INTERIOR_POINTS points well inside the silhouette, as (u, v) in the field (0..1): where
+   * the glow reads the depth map for the object's own front (glow/depth-occlusion.ts).
+   */
+  readonly interior = new Float32Array(INTERIOR_POINTS * 2);
+  interiorCount = 0;
+  private readonly candidates = new Int32Array(Math.ceil(SIZE / INTERIOR_STRIDE) ** 2);
   private readonly bounds: FieldBounds = { x: 0, y: 0, size: 1 };
   readonly texture = new DataTexture(this.halfs, SIZE, SIZE, RedFormat, HalfFloatType);
 
@@ -97,6 +107,7 @@ export class HighlightMask {
     }
     if (usable === 0 || !(right > left) || !(top > bottom)) {
       this.halfs.fill(0);
+      this.interiorCount = 0;
       this.texture.needsUpdate = true;
       return null;
     }
@@ -128,8 +139,49 @@ export class HighlightMask {
           ? 0
           : ((x >>> 16) & 0x8000) | ((exponent << 10) + (((x & 0x7fffff) + 0x1000) >>> 13));
     }
+    this.pickInterior();
     this.texture.needsUpdate = true;
     return bounds;
+  }
+
+  /**
+   * Interior points, spread over the silhouette: texels of a coarse grid at least a few texels
+   * inside (any inside texel, or the deepest one, for a sliver), every k-th of them in scan order.
+   */
+  private pickInterior(): void {
+    const { best, candidates, interior } = this;
+    let count = 0;
+    for (let pass = 0; pass < 2; pass++) {
+      count = 0;
+      const min = (pass === 0 ? 3 : 0.5) / SIZE;
+      for (let row = INTERIOR_STRIDE >> 1; row < SIZE; row += INTERIOR_STRIDE) {
+        for (let col = INTERIOR_STRIDE >> 1; col < SIZE; col += INTERIOR_STRIDE) {
+          const i = row * SIZE + col;
+          if ((best[i] as number) >= min) candidates[count++] = i;
+        }
+      }
+      if (count >= 4) break;
+    }
+    if (count === 0) {
+      // Thinner than the grid: its deepest texel.
+      let deepest = -1;
+      for (let i = 0; i < best.length; i++) {
+        if (
+          (best[i] as number) > 0 &&
+          (deepest < 0 || (best[i] as number) > (best[deepest] as number))
+        ) {
+          deepest = i;
+        }
+      }
+      if (deepest >= 0) candidates[count++] = deepest;
+    }
+    const n = Math.min(INTERIOR_POINTS, count);
+    for (let k = 0; k < n; k++) {
+      const i = candidates[Math.floor(((k + 0.5) * count) / n)] as number;
+      interior[k * 2] = ((i % SIZE) + 0.5) / SIZE;
+      interior[k * 2 + 1] = (Math.floor(i / SIZE) + 0.5) / SIZE;
+    }
+    this.interiorCount = n;
   }
 
   private reserve(points: number, paths: number): void {

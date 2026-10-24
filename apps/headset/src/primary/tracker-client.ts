@@ -32,6 +32,8 @@ const MaskSchema = z.object({
   /** Middle of the mask's lowest edge, where the object most likely rests on a surface. */
   contact: NormalizedPointSchema.nullable().default(null),
   score: z.number().nullable().default(null),
+  /** tracking, coasting, lost, unknown or idle (TRACK.md); null from a tracker that omits it. */
+  state: z.string().nullable().default(null),
   ms: z.object({ segment: z.number(), total: z.number() }).partial().nullable().default(null),
   model: z.string().nullable().default(null),
 });
@@ -56,6 +58,8 @@ export type TargetMessage = {
   seq: number;
   box: readonly [number, number, number, number];
   name: string;
+  /** ?focus=part: the box is one part of the main object (a label, a button), not all of it. */
+  part?: boolean;
 };
 export type ClearMessage = { type: 'clear' };
 

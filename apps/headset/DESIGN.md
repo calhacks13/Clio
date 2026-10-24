@@ -37,6 +37,21 @@ channel: never distance packed into 8-bit channels, which mobile GPUs filter at 
 edge spans at least 1.5 texels. Half a step of screen-space dither keeps the long bloom free of
 8-bit bands.
 
+Depth order: the light sits where the object is. A hand in front hides it, through depth-only
+occluders built from the tracked joints (each joint's radius plus 1 mm: any more shows as a gap
+around the hand). A real surface hides it only when it is more than 5 cm nearer than the object's
+own front, fading over 3 cm. That front is read from the depth map at 16 points inside the
+silhouette: about the 10th percentile, and where the points allow, a plane fitted to them, so an
+object that leans toward the wearer (a laptop's lid, its near corners) never hides its own light.
+The depth map is coarse (320 texels across the view on Quest), so each fragment blends the tests
+of the 4 x 4 nearest texels with cubic B-spline weights and cuts the blend narrowly: a smooth
+contour that stays tight to the hand. Quest Browser hands out the same XRFrame object every frame,
+so per-frame caches key on the renderer's frame count, never on the frame object.
+window.__occlusion switches all of it live on the headset (setDepth, setHands, setFilter,
+setSoftness, setPlane, setMargin, setViz, probe, stats). The primary demo renders with no fixed
+foveation and at 1.25 times the browser's resolution, so the light's edges stay sharp across the
+view.
+
 Cost: the CPU builds only that field per new mask (about 0.9 ms on a Mac for a 64-point mask),
 with no allocations; all softness is shaped in the fragment shader. Quad, material and texture are
 reused; XR frames only move, fade and animate the group. `glow-preview.html` renders the effect

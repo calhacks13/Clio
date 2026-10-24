@@ -1,5 +1,10 @@
 import { Group, type Vector3 } from 'three';
 import type { Text } from 'troika-three-text';
+import {
+  installOcclusionDebug,
+  type WindowFar,
+  XrDepthOcclusion,
+} from '../adapters/render/glow/depth-occlusion';
 import { type ObjectGlowMode, ObjectHighlight } from '../adapters/render/object-highlight';
 import { makeText, setText } from '../adapters/render/text';
 import type { Placement } from './placement';
@@ -10,7 +15,9 @@ import type { Placement } from './placement';
 // glow's bright edge. Each new mask reshapes the light in place; a newly found object (a new name,
 // or one back after being lost) fades in quickly with a brief flare; "nothing found" fades it out.
 // Nothing is allocated per frame: the group turns with lookAt, whose basis (+z at the eye, x
-// level) is the outline's billboard.
+// level) is the outline's billboard. The light and its name keep the room's depth order: hands
+// hide them through their occluders (tracking/hand-occluders.ts), and real surfaces nearer than
+// the object hide the light through the depth map (adapters/render/glow/depth-occlusion.ts).
 
 const LABEL_SIZE = 0.024;
 const LABEL_GAP = 0.01;
@@ -31,7 +38,15 @@ export class PrimaryOutlineView {
   private target = 0;
   private name: string | null = null;
 
-  constructor() {
+  /**
+   * `windowFar`: how this runtime's depth map encodes window depth ('infinite' for IWER, as for
+   * the depth sampler in main.ts).
+   */
+  constructor({ windowFar = 'reported' }: { windowFar?: WindowFar } = {}) {
+    const occlusion = new XrDepthOcclusion(windowFar);
+    this.highlight.setOcclusion(occlusion);
+    occlusion.probeTarget = this.highlight.probeTarget();
+    installOcclusionDebug(occlusion);
     this.label = makeText({
       size: LABEL_SIZE,
       anchorX: 'center',

@@ -14,6 +14,12 @@ import {
   ShaderMaterial,
 } from 'three';
 import type { ObjectOutline } from '../../domain/world/outline';
+import {
+  DepthVariant,
+  depthUniforms,
+  type ProbeTarget,
+  type XrDepthOcclusion,
+} from './glow/depth-occlusion';
 import { type GlowMode, type GlowProfile, glowProfile } from './glow/profile';
 import { glowFragmentShader, glowVertexShader } from './glow/shader';
 import { HighlightMask } from './highlight-mask';
@@ -27,6 +33,10 @@ import { cornerBrackets, mergeStrokes, type Stroke, strokePolyline } from './str
 // glow. A new mask only rebuilds that field; the quad, material and texture are reused. The light
 // breathes slowly and flares briefly when an object is found. A box alone does not identify a
 // surface: it gets honest corner brackets instead.
+//
+// The light keeps the room's depth order: it depth-tests (hand occluders hide it), and in an XR
+// session with a gpu-optimized depth map each eye's map fades it where a real surface is nearer
+// (glow/depth-occlusion.ts). Without one it draws as before.
 
 export const OBJECT_HIGHLIGHT_COLOR = 0x24d4ed;
 export type ObjectGlowMode = GlowMode;
@@ -36,6 +46,9 @@ const BRACKET_SHARE = 0.3;
 const BREATH_MS = 3600;
 /** The flare when an object is found decays with this time constant (ms). */
 const IGNITE_MS = 380;
+/** The object's front is never taken as more than this share of its size, nor this far (m). */
+const MAX_FRONT_SHARE = 0.75;
+const MAX_FRONT_M = 0.4;
 
 export class ObjectHighlight extends Group {
   private readonly mask = new HighlightMask();
@@ -51,6 +64,10 @@ export class ObjectHighlight extends Group {
     spill: { value: 1 },
     breath: { value: 0 },
     ignite: { value: 0 },
+    ...depthUniforms(),
+    interior: { value: this.mask.interior },
+    interiorCount: { value: 0 },
+    maxFront: { value: 0 },
   };
   private readonly edge = new Mesh(
     new BufferGeometry(),
@@ -68,6 +85,7 @@ export class ObjectHighlight extends Group {
       uniforms: this.glowUniforms,
       vertexShader: glowVertexShader,
       fragmentShader: glowFragmentShader,
+      defines: { GLOW_DEPTH: DepthVariant.None },
       // Premultiplied: the shader's colour is light added to the scene.
       blending: CustomBlending,
       blendEquation: AddEquation,
@@ -76,12 +94,15 @@ export class ObjectHighlight extends Group {
       blendSrcAlpha: OneFactor,
       blendDstAlpha: OneMinusSrcAlphaFactor,
       transparent: true,
+      depthTest: true,
       depthWrite: false,
       side: DoubleSide,
       forceSinglePass: true,
       toneMapped: false,
     }),
   );
+  /** Off until set (the primary demo sets it; the lesson's targets draw as before). */
+  private occlusion: XrDepthOcclusion | null = null;
   private readonly paths: (readonly [number, number][])[] = [[]];
   /** performance.now() when the light was last lit; -Infinity until the first outline. */
   private ignitedAt = Number.NEGATIVE_INFINITY;
@@ -93,8 +114,19 @@ export class ObjectHighlight extends Group {
     this.edge.renderOrder = 10;
     this.glow.visible = false;
     this.edge.visible = false;
-    // Once per eye per frame: two numbers, no allocation.
-    this.glow.onBeforeRender = () => this.animate(performance.now());
+    // Once per eye per frame, no allocation: the breath and flare, and this eye's depth map.
+    this.glow.onBeforeRender = (renderer, _scene, camera) => {
+      this.animate(performance.now());
+      const { material } = this.glow;
+      const variant = this.occlusion?.bind(renderer, camera, this.glowUniforms) ?? 0;
+      // The shader changes only when a depth map of another kind appears, never per frame.
+      if (variant !== DepthVariant.None && material.defines.GLOW_DEPTH !== variant) {
+        material.defines.GLOW_DEPTH = variant;
+        material.needsUpdate = true;
+      }
+      // Both eyes draw with the same material: upload this eye's uniforms.
+      material.uniformsNeedUpdate = true;
+    };
     this.add(this.edge, this.glow);
     this.setColor(color);
   }
@@ -134,8 +166,38 @@ export class ObjectHighlight extends Group {
     u.halo.value = profile.halo;
     u.thickness.value = profile.thickness;
     u.spill.value = profile.spill;
+    u.interiorCount.value = this.mask.interiorCount;
+    u.maxFront.value = Math.min(
+      MAX_FRONT_M,
+      MAX_FRONT_SHARE * Math.max(right - left, top - bottom),
+    );
     this.glow.position.set(bounds.x, bounds.y, 0);
     this.glow.scale.set(bounds.size, bounds.size, 1);
+  }
+
+  /**
+   * Which depth maps hide this light (null: none), and how far in front of it a real surface
+   * must be (m) before it does.
+   */
+  setOcclusion(occlusion: XrDepthOcclusion | null, margin?: number): void {
+    this.occlusion = occlusion;
+    this.glowUniforms.depthOn.value = 0;
+    if (margin !== undefined) this.glowUniforms.occlusionMargin.value = margin;
+  }
+
+  /** This glow's quad and interior points, for window.__occlusion.probe(). */
+  probeTarget(): ProbeTarget {
+    const { glow, mask, glowUniforms } = this;
+    return {
+      matrixWorld: glow.matrixWorld,
+      interior: mask.interior,
+      get interiorCount() {
+        return glowUniforms.interiorCount.value;
+      },
+      get maxFront() {
+        return glowUniforms.maxFront.value;
+      },
+    };
   }
 
   /** Flare briefly: a new object was found (the first outline does this by itself). */

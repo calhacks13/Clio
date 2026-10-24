@@ -11,6 +11,7 @@ import {
 } from '../adapters/camera/stored-calibration';
 import { ApiClient } from '../adapters/net/api-client';
 import { HttpEpisodeSink } from '../adapters/net/http-episode-sink';
+import { depthOverlay } from '../adapters/render/glow/depth-occlusion';
 import { poseFromMatrix } from '../adapters/xr/frame-sampler';
 import { XrPlaneSurfaces } from '../adapters/xr/planes';
 import { createLogger } from '../core/log';
@@ -18,9 +19,11 @@ import { composePose, type Pose } from '../core/math';
 import type { CameraModel } from '../domain/world/camera-model';
 import type { CameraFrameSource } from '../domain/world/grounding';
 import { PoseHistory } from '../domain/world/pose-history';
+import { HandOccluders } from '../tracking/hand-occluders';
 import { HandsView } from '../tracking/hands';
 import { readAnswer } from './answer';
 import { PrimaryClient } from './client';
+import { boxMask, DebugBoxes, debugFlags } from './debug-boxes';
 import { createDepthProbe, type DepthSource, type XrDepthProbe } from './depth';
 import { DepthMemory } from './depth-memory';
 import {
@@ -70,7 +73,9 @@ import { TrackerClient, type TrackerMask, trackerUrl } from './tracker-client';
 // ?emulate=1 runs against IWER's synthetic room, ?frame=640|512|480|320 sets the streamed frames'
 // width (frame-stream.ts), and ?debug=1 shows the last name, the tracker's rate, how long a frame
 // takes from capture to its answer and to its outline being drawn, and the look time (the same
-// numbers are on window.__primaryStats).
+// numbers are on window.__primaryStats). ?debug=boxes shows jev's box and the tracker's mask on
+// the frame they were measured on, and jev's box in the room (debug-boxes.ts;
+// window.__primaryDebug). Both show by default; ?debug=0 hides them.
 // The placed outline is steadied in the room and drawn where the object is now, its frame's
 // latency predicted away, and held a moment through short losses (motion-smoothing.ts: ?smooth=0
 // turns that off; ?minCutoff=, ?beta=, ?predictMs=, ?holdMs= and the rest tune it).
@@ -91,12 +96,23 @@ const TARGET_FRAME_RATE = 72;
 const MAX_FRAME_AGE_MS = 200;
 /** A look reuses the last streamed frame if it went out at most this long ago (ms). */
 const STREAMED_FRAME_MAX_AGE_MS = 1000;
+/**
+ * Between namings (a Gemini pick takes 1.5 s or so), jev boxes the named object again this often
+ * (ms): a request with `known` skips Gemini and costs only a jev call. ?refindMs= tunes it; 0 turns
+ * it off.
+ */
+const REFIND_MS = Number(params.get('refindMs') ?? 333);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local-floor');
+// three's default is full fixed foveation, which renders the edges of the view at a fraction of
+// the resolution and makes the glow look blocky away from the centre; the demo draws little, so
+// render all of it sharp, and above the browser's default resolution (?fbScale= tunes it).
+renderer.xr.setFoveation(0);
+renderer.xr.setFramebufferScaleFactor(Number(params.get('fbScale') ?? 1.25));
 // The depth map measures objects; it must not hide the outline behind them.
 disableXrDepthOcclusion(renderer);
 document.body.appendChild(renderer.domElement);
@@ -113,16 +129,34 @@ sun.position.set(1, 3, 2);
 scene.add(sun);
 
 const hands = new HandsView();
-const outline = new PrimaryOutlineView();
+/** The real hands in the depth buffer, so the glow behind a hand stays behind it. */
+const handOccluders = new HandOccluders();
+// The glow fades where the depth map sees a real surface in front of it (IWER: see windowFar).
+const outline = new PrimaryOutlineView({
+  windowFar: params.get('emulate') === '1' ? 'infinite' : 'reported',
+});
 /** Steadies the outline and draws it where the object is now (motion-smoothing.ts); ?smooth=0: off. */
 const MOTION_OPTIONS = motionOptionsFromParams(params);
 const motion = MOTION_OPTIONS && new OutlineMotion(MOTION_OPTIONS);
 /** The smoothed shape last handed to the outline view, and the name drawn with it. */
 let shownShape = -1;
 let motionName = '';
-const hud = params.get('debug') === '1' ? new PrimaryHud() : null;
-scene.add(hands.object, outline.object);
+const DEBUG = debugFlags(params);
+const hud = DEBUG.has('1') ? new PrimaryHud() : null;
+/** ?debug=boxes: jev's box and the tracker's mask on the frame they belong to (debug-boxes.ts). */
+const debugBoxes = DEBUG.has('boxes') ? new DebugBoxes() : null;
+/** ?focus=part: one part of the main object is highlighted, not all of it. */
+const FOCUS_PART = params.get('focus') === 'part';
+// depthOverlay: window.__occlusion.setViz('depth') shows the depth map over the view.
+scene.add(hands.object, handOccluders.object, outline.object, depthOverlay.object);
 if (hud) scene.add(hud.object);
+if (debugBoxes) {
+  scene.add(debugBoxes.panel, debugBoxes.box);
+  Object.defineProperty(window, '__primaryDebug', {
+    get: () => debugBoxes.snapshot(),
+    configurable: true,
+  });
+}
 
 /** Head poses, so a camera frame is lifted from where the head was when it was captured. */
 const poses = new PoseHistory(128);
@@ -198,6 +232,7 @@ const tracker = new TrackerClient({
   mask(mask) {
     answerMs.add(performance.now() - mask.t);
     stream.received(mask.seq);
+    debugBoxes?.mask(mask);
     pendingMask = mask;
   },
   connection(open) {
@@ -219,7 +254,12 @@ const stream = new FrameStream({
     const image = frames?.();
     return image ? { ...image, t: captureTime(image.t) } : null;
   },
-  send: ({ jpeg, ...header }) => tracker.sendFrame(header, jpeg.bytes),
+  send(frame) {
+    const { jpeg, ...header } = frame;
+    const sent = tracker.sendFrame(header, jpeg.bytes);
+    if (sent) debugBoxes?.frameSent(frame);
+    return sent;
+  },
   failed(err) {
     log.warn(`frame encoding failed: ${String(err)}`);
   },
@@ -235,10 +275,16 @@ async function lookFrame(): Promise<{ t: number; jpegBase64: string; seq: number
     return { t: streamed.t, jpegBase64: streamed.jpeg.base64, seq: streamed.seq };
   }
   const frame = await source?.capture();
+  if (frame) debugBoxes?.lookFrame(captureTime(frame.t), frame.jpegBase64);
   return frame ? { t: captureTime(frame.t), jpegBase64: frame.jpegBase64, seq: null } : null;
 }
 
 const client = new PrimaryClient();
+/** The object the latest naming answered with: what the refind loop asks jev for again. */
+let known: { name: string; description: string } | null = null;
+/** The capture time of the newest answer taken, so an older refind can't replace it. */
+let takenT = Number.NEGATIVE_INFINITY;
+
 const loop = new PrimaryLoop<Look>({
   now: () => performance.now(),
   async ask(previous, signal) {
@@ -250,16 +296,50 @@ const loop = new PrimaryLoop<Look>({
       {
         image: { mimeType: 'image/jpeg', data: frame.jpegBase64 },
         ...(previous ? { previous: { name: previous } } : {}),
+        // ?focus=part highlights one part of the main object (a label, button, wheel).
+        ...(params.get('focus') === 'part' ? { focus: 'part' as const } : {}),
       },
       signal,
     );
     return { response, model, head, seq: frame.seq, t: frame.t };
   },
   answer(look, cycleMs) {
+    // A naming always wins: it is the authority on which object it is.
+    const { name, description } = look.response;
+    known = name && description ? { name, description } : null;
+    takenT = look.t;
     pending = { look, cycleMs };
   },
   failed(err) {
     log.warn(`look failed: ${err instanceof Error ? err.message : String(err)}`);
+  },
+});
+
+/** jev alone, on the named object, between namings (REFIND_MS). */
+const refind = new PrimaryLoop<Look & { asked: string }>({
+  now: () => performance.now(),
+  options: { periodMs: REFIND_MS },
+  async ask(_previous, signal) {
+    const asked = known;
+    if (!asked) return null;
+    const frame = await lookFrame();
+    const model = source?.model();
+    const head = frame && poses.at(frame.t);
+    if (!frame || !model || !head) return null;
+    const response = await client.ask(
+      { image: { mimeType: 'image/jpeg', data: frame.jpegBase64 }, known: asked },
+      signal,
+    );
+    return { response, model, head, seq: frame.seq, t: frame.t, asked: asked.name };
+  },
+  answer(look, cycleMs) {
+    // Dropped once a naming moved on to another object, or a newer answer was taken.
+    if (look.asked !== known?.name || look.t <= takenT) return;
+    takenT = look.t;
+    pending = { look, cycleMs };
+  },
+  failed(err) {
+    log.warn(`refind failed: ${err instanceof Error ? err.message : String(err)}`);
   },
 });
 
@@ -448,6 +528,28 @@ function outlineAtOnce(
   return true;
 }
 
+/** ?debug=boxes: jev's box on the panel, and in the room placed the way the outline would be. */
+function showDebugBox(
+  answer: ReturnType<typeof readAnswer>,
+  model: CameraModel,
+  head: Pose,
+  seq: number | null,
+  t: number,
+): void {
+  const box = answer.found ? answer.detection.box : null;
+  debugBoxes?.answer({ name: answer.name, box, seq, t });
+  if (!box) {
+    debugBoxes?.place(null);
+    return;
+  }
+  const mask = boxMask(box);
+  const tuned = withCameraOffset(model);
+  const eye = composePose(head, tuned.headFromCamera).p;
+  measure(mask, tuned, head)
+    .then((depth) => debugBoxes?.place(depth && placeOutline(mask, head, tuned, depth), eye))
+    .catch((err: unknown) => log.warn(`debug box placement failed: ${String(err)}`));
+}
+
 /**
  * A new answer: its name labels the outline and tells the tracker what to follow. While the
  * tracker follows the frames, its masks draw the outline; otherwise the answer's own outline is.
@@ -458,8 +560,12 @@ function showAnswer({ response, model, head, seq, t }: Look, cycleMs: number): v
   // Before this frame's mask, so a mask still in flight for the last target isn't recorded.
   recording.answer(response, t);
   hud?.show(answer.name, cycleMs);
-  const update = trackerUpdate(answer, seq, tracking);
+  if (debugBoxes) showDebugBox(answer, model, head, seq, t);
+  const found = trackerUpdate(answer, seq, tracking);
+  // The tracker ignores fields it doesn't know (TRACK.md); `part` says jev boxed a part.
+  const update = found?.type === 'target' && FOCUS_PART ? { ...found, part: true } : found;
   if (update && tracker.send(update)) {
+    if (update.type === 'target') debugBoxes?.target(update);
     const next = update.type === 'target' ? update.name : null;
     if (next !== tracking) depths.forget();
     tracking = next;
@@ -554,8 +660,10 @@ function track(frame: XRFrame, time: number): void {
     pendingMask = null;
   }
   hands.update(frame, space, time, orientation);
+  handOccluders.update(frame, space);
   stream.tick();
   loop.tick();
+  if (REFIND_MS > 0) refind.tick();
   if (motion) presentMotion();
   outline.update(head, dt, time);
   if (hud && time - lastStatsT >= STATS_EVERY_MS) {
@@ -563,6 +671,7 @@ function track(frame: XRFrame, time: number): void {
     lastStatsT = time;
   }
   hud?.update(head, orientation, dt);
+  debugBoxes?.update(head, orientation, dt, time);
 }
 
 renderer.setAnimationLoop((time, frame) => {
@@ -596,9 +705,11 @@ function updateStreaming(): void {
   if (shown && !stream.streaming) {
     stream.start();
     loop.start();
+    refind.start();
   } else if (!shown && stream.streaming) {
     stream.stop();
     loop.stop();
+    refind.stop();
   }
 }
 
@@ -613,6 +724,9 @@ function endSession(): void {
   updateStreaming();
   tracker.close();
   loop.stop();
+  refind.stop();
+  known = null;
+  takenT = Number.NEGATIVE_INFINITY;
   probe?.close();
   probe = null;
   sensing?.close();
@@ -628,9 +742,11 @@ function endSession(): void {
   tracking = null;
   scene.background = desktopBackground;
   hands.hide();
+  handOccluders.hide();
   motion?.reset();
   shownShape = -1;
   outline.clear();
+  debugBoxes?.hide();
   photo?.hide();
   hud?.hide();
   lastTime = 0;
@@ -730,6 +846,9 @@ async function init(): Promise<void> {
   }
   if (opened instanceof StillImageCamera) {
     photo = new PhotoView(opened.image);
+    // The photo stands in for passthrough, which never hides virtual content: no depth.
+    photo.object.material.depthWrite = false;
+    photo.object.renderOrder = -1;
     scene.add(photo.object);
     frames = () => opened.grab();
   } else if (opened instanceof PassthroughCamera) {

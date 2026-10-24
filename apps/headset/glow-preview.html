@@ -43,6 +43,46 @@ photo.position.z = -0.005;
 scene.add(photo);
 const view = new PrimaryOutlineView();
 scene.add(view.object);
+// ?occlude=1: a synthetic depth map (as a headset's, seen from the starting eye) through the
+// glow's real depth-map path. Left of x = -0.07: a surface 0.5 m away, well in front of the glow
+// (0.78 m): hidden. From there to x = 0.07: a surface 3 cm in front (the object's own front,
+// inside the margin): visible. Right of it: the wall behind at 1.5 m: visible.
+if (params.get('occlude') === '1') {
+  const SIZE = 64;
+  const near = 0.1;
+  const depthCamera = new THREE.PerspectiveCamera(34, innerWidth / innerHeight, 0.01, 10);
+  depthCamera.position.set(0, 0, 0.78);
+  depthCamera.updateMatrixWorld();
+  depthCamera.updateProjectionMatrix();
+  const data = new Float32Array(SIZE * SIZE * 2);
+  const point = new THREE.Vector3();
+  for (let row = 0; row < SIZE; row++) {
+    for (let col = 0; col < SIZE; col++) {
+      point.set(((col + 0.5) / SIZE) * 2 - 1, ((row + 0.5) / SIZE) * 2 - 1, 0.5).unproject(depthCamera);
+      const dir = point.sub(depthCamera.position).normalize();
+      const x = depthCamera.position.x + (dir.x * 0.78) / -dir.z;
+      const d = x < -0.07 ? 0.5 : x < 0.07 ? 0.75 : 1.5;
+      data[row * SIZE + col] = 1 - near / d;
+      data[SIZE * SIZE + row * SIZE + col] = 1 - near / d;
+    }
+  }
+  const depthMap = new THREE.DataArrayTexture(data, SIZE, SIZE, 2);
+  depthMap.format = THREE.RedFormat;
+  depthMap.type = THREE.FloatType;
+  depthMap.needsUpdate = true;
+  view.highlight.setOcclusion({
+    bind(_renderer, _camera, u) {
+      u.depthMap.value = depthMap;
+      u.depthLayer.value = 0;
+      u.depthFromWorld.value.multiplyMatrices(depthCamera.projectionMatrix, depthCamera.matrixWorldInverse);
+      u.depthUv.value.identity();
+      u.depthNear.value = near;
+      u.depthFar.value = 0;
+      u.depthOn.value = 1;
+      return 1;
+    },
+  });
+}
 
 let selected = Number(params.get('case') ?? 3);
 let detail = params.get('detail') === '1';

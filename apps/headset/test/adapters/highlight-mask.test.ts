@@ -224,3 +224,41 @@ describe('HighlightMask accuracy', () => {
     mask.texture.dispose();
   });
 });
+
+describe('HighlightMask interior points', () => {
+  it('spreads up to 16 points well inside the silhouette, for the object front', () => {
+    const mask = new HighlightMask();
+    const bounds = mask.update([SQUARE], PADDING);
+    if (!bounds) throw new Error('Missing bounds');
+    expect(mask.interiorCount).toBe(16);
+    const xs: number[] = [];
+    const ys: number[] = [];
+    for (let k = 0; k < mask.interiorCount; k++) {
+      const x = ((mask.interior[k * 2] ?? 0) - 0.5) * bounds.size + bounds.x;
+      const y = ((mask.interior[k * 2 + 1] ?? 0) - 0.5) * bounds.size + bounds.y;
+      expect(Math.abs(x)).toBeLessThan(0.05);
+      expect(Math.abs(y)).toBeLessThan(0.05);
+      xs.push(x);
+      ys.push(y);
+    }
+    // Spread over the square, not bunched in one corner.
+    expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(0.05);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(0.03);
+    expect(mask.update([], PADDING)).toBeNull();
+    expect(mask.interiorCount).toBe(0);
+    mask.texture.dispose();
+  });
+
+  it('still finds points inside a sliver', () => {
+    const sliver: Point2[] = [
+      [0, 0],
+      [0.1, 0],
+      [0.1, 0.003],
+      [0, 0.003],
+    ];
+    const mask = new HighlightMask();
+    mask.update([sliver], PADDING);
+    expect(mask.interiorCount).toBeGreaterThan(0);
+    mask.texture.dispose();
+  });
+});
