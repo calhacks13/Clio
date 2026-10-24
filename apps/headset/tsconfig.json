@@ -4,5 +4,5 @@
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["vite/client", "webxr"]
   },
-  "include": ["src", "test", "vite.config.ts"]
+  "include": ["src"]
 }
