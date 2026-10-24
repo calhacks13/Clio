@@ -1,5 +1,6 @@
-import { GEMINI_RELAY_PATH } from '@clio/protocol';
+import { GEMINI_RELAY_PATH, isNonBlockingTool } from '@clio/protocol';
 import {
+  FunctionResponseScheduling,
   GoogleGenAI,
   type LiveConnectConfig,
   type LiveServerMessage,
@@ -34,6 +35,12 @@ import { interpretServerMessage, TranscriptAggregator } from './messages';
 // together with whatever is narrated on 'ready'; tool answers and media for a dead connection are
 // dropped. updateInstruction() changes the system
 // instruction the next connection starts with, so a reconnect starts from the current plan.
+//
+// Tool answers go only to the connection that made the call, and not to a call it cancelled: Live
+// matches an answer with an id it never issued to a call still pending, and speaks it twice. A
+// non-blocking call's answer (look_closer) is scheduled WHEN_IDLE, so the voice says it once
+// neither it nor the learner is talking; INTERRUPT would cut its own filler off mid-word, and
+// SILENT would never say it.
 
 const log = createLogger('gemini');
 
@@ -62,6 +69,8 @@ export class GeminiLiveAgent implements RealtimeAgent {
   private closing = false;
   private reconnecting = false;
   private queued: Narration[] = [];
+  /** Ids of the calls the current connection made and hasn't had answered. */
+  private openCalls = new Set<string>();
   /** While 'ready' is announced, narrations join the queue so they go out in one turn. */
   private replaying = false;
 
@@ -98,11 +107,15 @@ export class GeminiLiveAgent implements RealtimeAgent {
   }
 
   respond(results: ToolResult[]): void {
+    const open = results.filter((r) => this.openCalls.delete(r.id));
+    if (open.length < results.length) log.info('dropped answers to calls this connection lacks');
+    if (open.length === 0) return;
     this.session?.sendToolResponse({
-      functionResponses: results.map((r) => ({
+      functionResponses: open.map((r) => ({
         id: r.id,
         name: r.name,
         response: r.ok ? { output: r.result } : { error: r.result },
+        ...(isNonBlockingTool(r.name) ? { scheduling: FunctionResponseScheduling.WHEN_IDLE } : {}),
       })),
     });
   }
@@ -178,6 +191,7 @@ export class GeminiLiveAgent implements RealtimeAgent {
 
   private async open(state: 'connecting' | 'reconnecting'): Promise<void> {
     this.events.emit('status', { state });
+    this.openCalls.clear();
     const ai = await this.client();
     let rejectClosed: (reason: Error) => void = () => {};
     const closedEarly = new Promise<never>((_, reject) => {
@@ -227,9 +241,11 @@ export class GeminiLiveAgent implements RealtimeAgent {
           this.events.emit('turnComplete', {});
           break;
         case 'toolCalls':
+          for (const call of ev.calls) this.openCalls.add(call.id);
           this.events.emit('toolCalls', { calls: ev.calls });
           break;
         case 'toolCancel':
+          for (const id of ev.ids) this.openCalls.delete(id);
           this.events.emit('cancelledTools', { ids: ev.ids });
           break;
         case 'goAway':

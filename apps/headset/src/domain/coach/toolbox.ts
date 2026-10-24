@@ -10,12 +10,22 @@ export interface ToolCallInfo {
   callId: string;
 }
 
-export type ToolHandlers = {
-  [N in CoachToolName]: (
-    args: CoachToolArgs<N>,
-    call: ToolCallInfo,
-  ) => ToolOutcome | Promise<ToolOutcome>;
+type HandlersFor<Names extends CoachToolName> = {
+  [N in Names]: (args: CoachToolArgs<N>, call: ToolCallInfo) => ToolOutcome | Promise<ToolOutcome>;
 };
+
+/** Tools the coach layer answers itself: look_closer asks the smart model, not the lesson. */
+export type CoachOwnToolName = 'look_closer';
+export type LessonToolName = Exclude<CoachToolName, CoachOwnToolName>;
+
+/** The lesson's tools (LessonController.handlers()). */
+export type ToolHandlers = HandlersFor<LessonToolName>;
+
+/** The coach's own tools (CloserLook.handlers()). */
+export type CoachOwnToolHandlers = HandlersFor<CoachOwnToolName>;
+
+/** What a coach can do: every lesson tool, and its own where it has them. */
+export type AvailableToolHandlers = ToolHandlers & Partial<CoachOwnToolHandlers>;
 
 /**
  * Validates the model's tool calls and dispatches them. Never throws at the model: bad arguments
@@ -24,7 +34,7 @@ export type ToolHandlers = {
  */
 export class CoachToolbox {
   constructor(
-    private readonly handlers: ToolHandlers,
+    private readonly handlers: AvailableToolHandlers,
     private readonly bus: AppBus,
     private readonly clock: Clock,
   ) {}
@@ -43,11 +53,12 @@ export class CoachToolbox {
       outcome = { ok: false, error: parsed.error };
     } else {
       try {
-        const handler = this.handlers[parsed.name] as (
-          args: unknown,
-          call: ToolCallInfo,
-        ) => ToolOutcome | Promise<ToolOutcome>;
-        outcome = await handler(parsed.args, { callId: call.id });
+        const handler = this.handlers[parsed.name] as
+          | ((args: unknown, call: ToolCallInfo) => ToolOutcome | Promise<ToolOutcome>)
+          | undefined;
+        outcome = handler
+          ? await handler(parsed.args, { callId: call.id })
+          : { ok: false, error: `${parsed.name} is not available on this headset.` };
       } catch (err) {
         outcome = { ok: false, error: err instanceof Error ? err.message : String(err) };
       }

@@ -1,10 +1,17 @@
-import { COACH_TOOLS, type CoachToolName, toolParametersJsonSchema } from '@clio/protocol';
+import {
+  COACH_TOOLS,
+  type CoachToolName,
+  isNonBlockingTool,
+  toolParametersJsonSchema,
+} from '@clio/protocol';
 import { Behavior, type FunctionDeclaration, type Schema, type Tool, Type } from '@google/genai';
 
 // Converts the protocol's tool definitions (zod → JSON Schema) into Gemini function declarations.
 // Gemini's Live docs use the OpenAPI-style `parameters` field, so we convert rather than relying on
-// `parametersJsonSchema`. Every tool is blocking: each answers in milliseconds, and slow work
-// (planning) reports back later as an [app] message.
+// `parametersJsonSchema`. Tools are blocking: each answers in milliseconds, and slow work
+// (planning) reports back later as an [app] message. The exception is NON_BLOCKING: look_closer
+// asks the smart model, and the voice keeps talking until the answer arrives (measured on
+// gemini-3.8-live: it says its filler, calls, and speaks a WHEN_IDLE answer once it is idle).
 
 interface JsonSchemaNode {
   type?: string;
@@ -42,7 +49,7 @@ export function toGeminiTools(names: readonly CoachToolName[]): Tool[] {
   const functionDeclarations: FunctionDeclaration[] = names.map((name) => ({
     name,
     description: COACH_TOOLS[name].description,
-    behavior: Behavior.BLOCKING,
+    behavior: isNonBlockingTool(name) ? Behavior.NON_BLOCKING : Behavior.BLOCKING,
     parameters: toSchema(toolParametersJsonSchema(name) as JsonSchemaNode),
   }));
   return [{ functionDeclarations }];

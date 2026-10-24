@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { COACH_TOOL_NAMES, parseToolArgs, toolParametersJsonSchema } from '../src/index';
+import {
+  COACH_TOOL_NAMES,
+  isNonBlockingTool,
+  parseToolArgs,
+  toolParametersJsonSchema,
+} from '../src/index';
 
 describe('coach tools', () => {
   it('fills the default highlight style', () => {
@@ -31,6 +36,11 @@ describe('coach tools', () => {
     }
   });
 
+  it('marks only look_closer non-blocking: it waits on the smart model', () => {
+    expect(COACH_TOOL_NAMES.filter(isNonBlockingTool)).toEqual(['look_closer']);
+    expect(isNonBlockingTool('teleport')).toBe(false);
+  });
+
   it('rejects unknown tools', () => {
     const r = parseToolArgs('teleport', {});
     expect(r.ok).toBe(false);
@@ -48,8 +58,10 @@ describe('coach tools', () => {
       'highlight',
       'show_demo',
       'flag_mistake',
+      'look_closer',
     ]);
     expect(toolParametersJsonSchema('start_lesson').required).toEqual(['goal']);
+    expect(toolParametersJsonSchema('look_closer').required).toEqual(['question']);
     expect(toolParametersJsonSchema('revise_plan').required).toEqual(['reason']);
     expect(toolParametersJsonSchema('add_step').required).toEqual(['text', 'done_when']);
     expect(toolParametersJsonSchema('update_step').required).toEqual(['step_id']);

@@ -11,6 +11,7 @@ import { episodeRoutes } from './routes/episodes';
 import { healthRoutes } from './routes/health';
 import { planRoutes } from './routes/plans';
 import { procedureRoutes } from './routes/procedures';
+import { sceneRoutes } from './routes/scene';
 import { visionRoutes } from './routes/vision';
 
 /** The HTTP API. The Gemini Live relay is not here: it hooks the server's `upgrade` event. */
@@ -27,6 +28,7 @@ export function createApp(deps: AppDeps): Hono {
   app.route('/', procedureRoutes(d));
   app.route('/', planRoutes(d));
   app.route('/', visionRoutes(d));
+  app.route('/', sceneRoutes(d));
   app.route('/', episodeRoutes(d));
   app.route('/', clipRoutes(d));
   app.route('/', benchRoutes(d));

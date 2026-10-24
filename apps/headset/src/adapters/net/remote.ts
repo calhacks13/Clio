@@ -1,5 +1,12 @@
-import type { DemoClip, PlanRequest, PlanResponse } from '@clio/protocol';
+import type {
+  DemoClip,
+  PlanRequest,
+  PlanResponse,
+  SceneAskRequest,
+  SceneAskResponse,
+} from '@clio/protocol';
 import type { ClipSource } from '../../domain/demo/demo-library';
+import type { SceneAsker } from '../../domain/session/closer-look';
 import type { LessonPlanner } from '../../domain/session/lesson-controller';
 import type { CameraFrame, LocateObject, VisionLocator } from '../../domain/world/grounding';
 import type { ApiClient } from './api-client';
@@ -21,6 +28,14 @@ export class RemoteLocator implements VisionLocator {
       objects,
     });
     return { detections, model };
+  }
+}
+
+/** The smart model's closer look, for the voice coach (POST /api/scene/ask). */
+export class RemoteSceneAsker implements SceneAsker {
+  constructor(private readonly api: ApiClient) {}
+  ask(request: SceneAskRequest): Promise<SceneAskResponse> {
+    return this.api.askScene(request);
   }
 }
 

@@ -22,6 +22,7 @@ export const ApiPaths = {
   plan: (id: string) => `/api/plans/${seg(id)}`,
   planCheck: '/api/plans/check',
   visionLocate: '/api/vision/locate',
+  sceneAsk: '/api/scene/ask',
   episodes: '/api/episodes',
   episode: (id: string) => `/api/episodes/${seg(id)}`,
   episodeBatches: (id: string) => `/api/episodes/${seg(id)}/batches`,
@@ -208,6 +209,53 @@ export const LocateResponseSchema = z.object({
   latencyMs: z.number().nonnegative(),
 });
 
+export const SceneObjectSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  look: z.string().max(300).optional().describe('What it looks like'),
+});
+export const SceneAskRequestSchema = z.object({
+  question: z
+    .string()
+    .min(3)
+    .max(300)
+    .describe('What the voice coach wants to know, e.g. "Which bottle is the vinegar?"'),
+  goal: z.string().max(300).optional().describe('The lesson goal, when a lesson is running'),
+  step: z
+    .object({
+      instruction: z.string().min(1).max(200),
+      doneWhen: z.string().max(200).optional(),
+    })
+    .optional()
+    .describe('The step being worked on'),
+  objects: z
+    .array(SceneObjectSchema)
+    .max(16)
+    .optional()
+    .describe("The lesson's materials, so the answer can say which one it means"),
+  images: z.array(ImagePayloadSchema).min(1).max(2).describe('Current camera views, newest last'),
+});
+export const SceneRefSchema = z
+  .object({
+    label: z.string().describe('What it is, in a few words'),
+    objectId: z.string().nullable().describe('One of the request objects, or null'),
+    point: NormalizedPointSchema,
+    box: NormalizedBoxSchema.nullable(),
+  })
+  .describe('Something the answer points out, where it is in the newest view');
+export const SceneAskResponseSchema = z.object({
+  hazard: z
+    .string()
+    .nullable()
+    .describe('A danger near the hands or the work, whatever the question was, in a few words'),
+  answer: z
+    .string()
+    .describe('At most two short sentences of plain facts, for the coach to say in its own words'),
+  refs: z.array(SceneRefSchema).describe('For the AR layer only: never passed on to the coach'),
+  model: z.string(),
+  latencyMs: z.number().nonnegative(),
+});
+
 export const EpisodeCreateResponseSchema = z.object({ episodeId: z.string() });
 export const EpisodeBatchResponseSchema = z.object({
   ok: z.literal(true),
@@ -279,6 +327,10 @@ export type LocateRequest = z.infer<typeof LocateRequestSchema>;
 export type Detection = z.output<typeof DetectionSchema>;
 export type DetectionInput = z.input<typeof DetectionSchema>;
 export type LocateResponse = z.infer<typeof LocateResponseSchema>;
+export type SceneObject = z.infer<typeof SceneObjectSchema>;
+export type SceneAskRequest = z.infer<typeof SceneAskRequestSchema>;
+export type SceneRef = z.infer<typeof SceneRefSchema>;
+export type SceneAskResponse = z.infer<typeof SceneAskResponseSchema>;
 export type EpisodeCreateResponse = z.infer<typeof EpisodeCreateResponseSchema>;
 export type EpisodeBatchResponse = z.infer<typeof EpisodeBatchResponseSchema>;
 export type EpisodeFinishResponse = z.infer<typeof EpisodeFinishResponseSchema>;

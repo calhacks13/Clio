@@ -1,5 +1,5 @@
 import { COACH_TOOL_NAMES } from '@clio/protocol';
-import { Behavior } from '@google/genai';
+import { Behavior, FunctionResponseScheduling } from '@google/genai';
 import { describe, expect, it, vi } from 'vitest';
 import { toGeminiTools } from '../../src/adapters/gemini/declarations';
 import { GeminiLiveAgent } from '../../src/adapters/gemini/gemini-live-agent';
@@ -31,6 +31,8 @@ const live = vi.hoisted(() => {
     session: FakeSession;
     /** Close it from the server side. */
     drop: () => void;
+    /** A message from the server. */
+    send: (msg: unknown) => void;
   }
   return { FakeSession, connections: [] as Connection[] };
 });
@@ -39,7 +41,10 @@ vi.mock('@google/genai', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@google/genai')>();
   interface ConnectParams {
     config: { systemInstruction?: unknown };
-    callbacks: { onclose?: (e: { code: number; reason: string }) => void };
+    callbacks: {
+      onclose?: (e: { code: number; reason: string }) => void;
+      onmessage?: (msg: unknown) => void;
+    };
   }
   class GoogleGenAI {
     readonly live = {
@@ -49,6 +54,7 @@ vi.mock('@google/genai', async (importOriginal) => {
           config,
           session,
           drop: () => callbacks.onclose?.({ code: 1006, reason: 'dropped' }),
+          send: (msg) => callbacks.onmessage?.(msg),
         });
         return session;
       },
@@ -73,10 +79,14 @@ describe('Gemini tool declarations', () => {
     });
   });
 
-  it('declares every tool blocking, since every tool answers at once', () => {
+  it('declares the tools that answer at once blocking, and look_closer non-blocking', () => {
     const all = toGeminiTools(COACH_TOOL_NAMES)[0]?.functionDeclarations ?? [];
     expect(all.map((d) => d.name)).toEqual(COACH_TOOL_NAMES);
-    for (const d of all) expect(d.behavior).toBe(Behavior.BLOCKING);
+    for (const d of all) {
+      expect(d.behavior, d.name).toBe(
+        d.name === 'look_closer' ? Behavior.NON_BLOCKING : Behavior.BLOCKING,
+      );
+    }
   });
 });
 
@@ -118,8 +128,13 @@ describe('GeminiLiveAgent', () => {
     await agent.close();
   });
 
-  it('answers tool calls without scheduling', async () => {
+  const calls = (...names: [id: string, name: string][]) => ({
+    toolCall: { functionCalls: names.map(([id, name]) => ({ id, name, args: {} })) },
+  });
+
+  it('answers blocking calls without scheduling', async () => {
     const { agent } = await connected();
+    connection(0).send(calls(['c1', 'complete_step'], ['c2', 'highlight']));
     agent.respond([
       { id: 'c1', name: 'complete_step', ok: true, result: { plan: 'Goal: g' } },
       { id: 'c2', name: 'highlight', ok: false, result: { error: 'Unknown object' } },
@@ -132,6 +147,47 @@ describe('GeminiLiveAgent', () => {
         ],
       },
     ]);
+    await agent.close();
+  });
+
+  it('schedules a non-blocking answer for when the voice is idle', async () => {
+    const { agent } = await connected();
+    connection(0).send(calls(['c1', 'look_closer']));
+    agent.respond([{ id: 'c1', name: 'look_closer', ok: true, result: { answer: 'Cup C.' } }]);
+    expect(connection(0).session.toolResponses).toEqual([
+      {
+        functionResponses: [
+          {
+            id: 'c1',
+            name: 'look_closer',
+            response: { output: { answer: 'Cup C.' } },
+            scheduling: FunctionResponseScheduling.WHEN_IDLE,
+          },
+        ],
+      },
+    ]);
+    await agent.close();
+  });
+
+  it('answers only calls the connection made and has not cancelled, once', async () => {
+    const { agent, back } = await connected();
+    connection(0).send(calls(['c1', 'highlight'], ['c2', 'look_closer'], ['c3', 'look_closer']));
+    connection(0).send({ toolCallCancellation: { ids: ['c1'] } });
+    agent.respond([{ id: 'c1', name: 'highlight', ok: true, result: {} }]);
+    agent.respond([{ id: 'nope', name: 'highlight', ok: true, result: {} }]);
+    agent.respond([{ id: 'c2', name: 'look_closer', ok: true, result: { answer: 'A' } }]);
+    agent.respond([{ id: 'c2', name: 'look_closer', ok: true, result: { answer: 'A' } }]);
+    const answered = (i: number) =>
+      (connection(i).session.toolResponses as { functionResponses: { id: string }[] }[]).flatMap(
+        (r) => r.functionResponses.map((f) => f.id),
+      );
+    expect(answered(0)).toEqual(['c2']);
+    // c3 belongs to the connection that dropped; the next one never made it.
+    const ready = back();
+    connection(0).drop();
+    await ready;
+    agent.respond([{ id: 'c3', name: 'look_closer', ok: true, result: { answer: 'B' } }]);
+    expect(answered(1)).toEqual([]);
     await agent.close();
   });
 

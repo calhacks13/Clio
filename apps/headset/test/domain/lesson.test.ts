@@ -1,6 +1,5 @@
 import {
   type CoachToolArgs,
-  type CoachToolName,
   HAND_LAYOUT,
   type PlanRequest,
   type PlanResponse,
@@ -9,7 +8,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import { ManualClock } from '../../src/core/clock';
 import { Emitter } from '../../src/core/emitter';
-import type { ToolOutcome } from '../../src/domain/coach/toolbox';
+import type { LessonToolName, ToolOutcome } from '../../src/domain/coach/toolbox';
 import { DemoLibrary } from '../../src/domain/demo/demo-library';
 import type { AppEvents } from '../../src/domain/events';
 import { EpisodeRecorder } from '../../src/domain/recording/recorder';
@@ -55,7 +54,7 @@ const generated = parseProcedure({
 });
 
 /** Calls one of the lesson's coach tools, as the toolbox would. */
-function call<N extends CoachToolName>(
+function call<N extends LessonToolName>(
   lesson: LessonController,
   name: N,
   args: CoachToolArgs<N>,

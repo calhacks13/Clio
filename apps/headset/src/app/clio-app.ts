@@ -5,7 +5,12 @@ import type { PassthroughCamera } from '../adapters/camera/passthrough-camera';
 import { GeminiLiveAgent } from '../adapters/gemini/gemini-live-agent';
 import type { ApiClient } from '../adapters/net/api-client';
 import { HttpEpisodeSink } from '../adapters/net/http-episode-sink';
-import { RemoteClipSource, RemoteLocator, RemotePlanner } from '../adapters/net/remote';
+import {
+  RemoteClipSource,
+  RemoteLocator,
+  RemotePlanner,
+  RemoteSceneAsker,
+} from '../adapters/net/remote';
 import { RemoteStepChecker, RemoteTemplates } from '../adapters/net/remote-plan';
 import type { PresentContext, Presenter } from '../adapters/render/presenter';
 import { GhostHandsPresenter } from '../adapters/render/presenters/ghost-hands';
@@ -37,6 +42,7 @@ import { PinchDetector, type PinchTransition } from '../domain/hands/pinch-detec
 import { HANDS, type TrackedFrame } from '../domain/hands/types';
 import { OverlayModel } from '../domain/overlay/overlay-model';
 import { EpisodeRecorder } from '../domain/recording/recorder';
+import { CloserLook } from '../domain/session/closer-look';
 import { LessonController } from '../domain/session/lesson-controller';
 import { CalibrationFlow } from '../domain/world/calibration';
 import { ObjectGrounder } from '../domain/world/grounding';
@@ -81,6 +87,8 @@ export class ClioApp {
   private readonly grasp: GraspTracker;
   private readonly recorder: EpisodeRecorder;
   private readonly lesson: LessonController;
+  /** The voice coach's line to the smart model (look_closer). */
+  private readonly closerLook: CloserLook;
   private readonly overlay: OverlayModel;
   private readonly sampler = new FrameSampler();
   private readonly surfaces = new XrPlaneSurfaces();
@@ -137,6 +145,14 @@ export class ClioApp {
         coachCanForce: true,
         showRefreshMs: o.config.showRefreshMs,
       },
+    });
+    this.closerLook = new CloserLook({
+      camera: o.camera,
+      asker: new RemoteSceneAsker(o.api),
+      view: this.lesson.view(),
+      bus,
+      clock,
+      placer: grounder,
     });
     this.overlay = new OverlayModel(bus, this.lesson.view());
     this.overlay.attach();
@@ -328,7 +344,11 @@ export class ClioApp {
     const session = (agent: RealtimeAgent) =>
       new CoachSession({
         agent,
-        toolbox: new CoachToolbox(this.lesson.handlers(), this.bus, this.clock),
+        toolbox: new CoachToolbox(
+          { ...this.lesson.handlers(), ...this.closerLook.handlers() },
+          this.bus,
+          this.clock,
+        ),
         bus: this.bus,
         clock: this.clock,
         view: this.lesson.view(),

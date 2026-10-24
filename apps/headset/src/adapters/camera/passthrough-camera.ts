@@ -79,8 +79,8 @@ export class PassthroughCamera implements CameraFrameSource, CoachFrameSource, P
     return this.calibration;
   }
 
-  async capture(): Promise<CameraFrame | null> {
-    const jpeg = this.encode(960, 0.8);
+  async capture(maxWidth = 960): Promise<CameraFrame | null> {
+    const jpeg = this.encode(maxWidth, 0.8);
     return jpeg
       ? {
           t: this.lastFrameT || performance.now(),
