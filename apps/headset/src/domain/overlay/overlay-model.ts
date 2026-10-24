@@ -43,9 +43,13 @@ export interface OverlaySnapshot {
   demoStepId: string | null;
   caption: { role: 'user' | 'coach'; text: string } | null;
   coach: AgentState | 'off';
+  /** The conversation right now: the learner talking, Clio talking, or neither. */
+  voice: CoachVoice;
   recording: { episodeId: string | null; queued: number } | null;
   missing: string[];
 }
+
+export type CoachVoice = 'quiet' | 'hearing' | 'speaking';
 
 /** How long a coach highlight shows (ms). */
 export const COACH_HIGHLIGHT_MS = 5000;
@@ -64,6 +68,7 @@ export class OverlayModel {
   private demoStepId: string | null = null;
   private caption: (NonNullable<OverlaySnapshot['caption']> & { until: number }) | null = null;
   private coach: AgentState | 'off' = 'off';
+  private voice: CoachVoice = 'quiet';
   private recording: OverlaySnapshot['recording'] = null;
   private missing: string[] = [];
 
@@ -171,6 +176,7 @@ export class OverlayModel {
       demoStepId: this.demoStepId,
       caption: this.caption && { role: this.caption.role, text: this.caption.text },
       coach: this.coach,
+      voice: this.voice,
       recording: this.recording,
       missing: [...this.missing],
     };

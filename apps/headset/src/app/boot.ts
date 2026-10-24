@@ -1,10 +1,11 @@
-import type { HealthResponse, Procedure, ProcedureSummary } from '@clio/protocol';
+import type { Procedure, ProcedureSummary } from '@clio/protocol';
 import { MicCapture } from '../adapters/audio/mic-capture';
 import { SpeakerOutput } from '../adapters/audio/voice-output';
 import { PassthroughCamera } from '../adapters/camera/passthrough-camera';
 import { ApiClient } from '../adapters/net/api-client';
 import { isArSupported } from '../adapters/xr/xr-session';
 import { createLogger } from '../core/log';
+import { renderBoot } from './boot-view';
 import { ClioApp } from './clio-app';
 import { readConfig } from './config';
 
@@ -13,8 +14,6 @@ import { readConfig } from './config';
 
 const log = createLogger('boot');
 const isQuest = () => /OculusBrowser|Quest/.test(navigator.userAgent);
-
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 export async function boot(root: HTMLElement): Promise<void> {
   const config = readConfig(location.search);
@@ -39,7 +38,7 @@ export async function boot(root: HTMLElement): Promise<void> {
     isArSupported(),
   ]);
 
-  root.innerHTML = render(health, procedures, ar, config.goal ?? '');
+  root.innerHTML = renderBoot({ health, procedures, ar, goal: config.goal ?? '' });
   const $ = <T extends HTMLElement>(sel: string) => root.querySelector(sel) as T;
   $<HTMLSelectElement>('#procedure').value = config.procedureId ?? '';
   $<HTMLInputElement>('#calibrate').checked = config.calibrate;
@@ -90,42 +89,4 @@ export async function boot(root: HTMLElement): Promise<void> {
       button.disabled = false;
     }
   });
-}
-
-function render(
-  health: HealthResponse | null,
-  procedures: ProcedureSummary[],
-  ar: boolean,
-  goal: string,
-): string {
-  const check = (ok: boolean, label: string) =>
-    `<li class="${ok ? 'ok' : 'bad'}">${ok ? '✓' : '✗'} ${label}</li>`;
-  const options = procedures
-    .map(
-      (p) =>
-        `<option value="${esc(p.id)}">${esc(p.title)}${p.source === 'generated' ? ' (AI-planned)' : ''}</option>`,
-    )
-    .join('');
-  return `
-    <main class="boot">
-      <h1>Clio</h1>
-      <p class="tag">Every lesson trains two students: you, and a robot.</p>
-      <ul class="checks">
-        ${check(!!health, health ? `server ${esc(health.version)}` : 'server unreachable (run pnpm dev)')}
-        ${check(!!health?.coach.configured, health?.coach.configured ? `voice coach ${esc(health.coach.liveModel)}` : 'no Gemini key: offline coach')}
-        ${check(ar, ar ? 'passthrough AR available' : 'no immersive-ar (use a Quest, or ?emulate=1)')}
-      </ul>
-      <label class="field">What do you want to learn?
-        <input id="goal" type="text" placeholder="e.g. refill windshield washer fluid" value="${esc(goal)}">
-        <small>Leave empty to just talk to Clio once you're in.</small>
-      </label>
-      <label class="field">…or run a saved lesson
-        <select id="procedure"><option value="">(none)</option>${options}</select>
-      </label>
-      <label class="check"><input id="calibrate" type="checkbox"> Calibrate the table first (pinch two corners)</label>
-      <label class="check"><input id="record" type="checkbox"> Record expert demonstrations</label>
-      <button id="enter" ${ar ? '' : 'disabled'}>Enter AR</button>
-      <p id="status" class="status"></p>
-    </main>
-    <div id="xr"></div>`;
 }
