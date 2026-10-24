@@ -8,20 +8,30 @@ generated photoreal scenes (a desk with look-alike mugs, a half-done pour-over, 
 One scene type is not a benchmark: treat the quality numbers as directional and re-check them on
 the bench ([planner-bench.md](planner-bench.md)) with real scenes.
 
-## The models
+## Two models at once
 
-| Model                                    | API               | What Clio uses it for                                   |
-| ---------------------------------------- | ----------------- | ------------------------------------------------------- |
-| `gemini-robotics-er-2-preview`           | `generateContent` | the planner, the step watcher, the object finder        |
-| `gemini-robotics-er-2-streaming-preview` | Live (bidi)       | the voice coach's reasoning; it answers in text only    |
-| a Gemini TTS model                       | `generateContent` | the coach's voice, because the streaming model is mute  |
-| `gemini-pro-latest`                      | `generateContent` | the bench's judge: a different model grades the planner |
+The coach is two models working side by side. The voice is a realtime native-audio Live model
+(`gemini-3.8-live`): it sees the camera, listens and talks, and never waits on the other one.
+Robotics-ER 2 is the smart model: it plans, watches each step, finds objects and answers the
+questions the voice hands it. The voice delegates through tools that answer at once, and
+Robotics-ER reports back as `[app]` messages when it has something: a plan, a refined plan, a step
+that looks done or wrong, an answer.
+
+| Model                          | API               | What Clio uses it for                                    |
+| ------------------------------ | ----------------- | -------------------------------------------------------- |
+| `gemini-3.8-live`              | Live (bidi)       | the voice: conversation, with the camera in view         |
+| `gemini-robotics-er-2-preview` | `generateContent` | planning, the step watcher, the object finder, questions |
+| `gemini-pro-latest`            | `generateContent` | the bench's judge: a different model grades the planner  |
+
+`gemini-robotics-er-2-streaming-preview` is Robotics-ER 2 on the Live API. It answers in text
+only (audio output is rejected with close code 1007), so it can't be the voice; it could watch in
+the background beside it.
 
 Robotics-ER 2 is built on Gemini 3.5 Flash. Input: text, images, video, audio, up to 131,072
 tokens (flash-lite takes 1M). Output: text, up to 65,536 tokens. It supports structured output
 (`responseJsonSchema`, including our planner schema with `$defs`, `$ref` and `anyOf`), function
 calling, code execution, Search and URL grounding, caching and batch. It does not support several
-candidates or logprobs. The streaming model rejects audio output with close code 1007.
+candidates or logprobs.
 
 ## Thinking
 
