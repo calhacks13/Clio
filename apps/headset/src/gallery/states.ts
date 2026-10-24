@@ -65,13 +65,6 @@ function progressState(name: string, progress: BootProgress, phone = false): Lau
 export const LAUNCH_STATES: LaunchState[] = [
   { name: 'Ready with saved lessons', model: READY, phone: true },
   { name: 'Goal prefilled', model: { ...READY, goal: 'refill the windshield washer fluid' } },
-  { name: 'No saved lessons', model: { ...READY, procedures: [] } },
-  { name: 'Server unreachable', model: { ...READY, health: null, procedures: [] }, phone: true },
-  {
-    name: 'No Gemini key',
-    model: { ...READY, health: { ...HEALTH, coach: { ...HEALTH.coach, configured: false } } },
-  },
-  { name: 'No passthrough AR', model: { ...READY, ar: false } },
   { name: 'Saved lesson chosen', model: { ...READY, procedureId: PH_INDICATOR.id } },
   { name: 'Recording demonstrations', model: { ...READY, record: true } },
   progressState('Asking for microphone and camera', { kind: 'permissions' }),
