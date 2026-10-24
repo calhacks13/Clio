@@ -29,6 +29,7 @@ pnpm dev                 # server :8787 + headset app :5173
 | [docs/data-format.md](docs/data-format.md)     | episodes on disk                                  |
 | [docs/dev-setup.md](docs/dev-setup.md)         | laptop, emulator, Quest, data, demo day           |
 | [docs/planner-bench.md](docs/planner-bench.md) | testing the planner on hard scenes from a webcam  |
+| [docs/robotics-er.md](docs/robotics-er.md)     | Gemini Robotics-ER 2: what it does, measured      |
 
 ```
 packages/protocol   shared contracts (zod → TS types + JSON Schema)
