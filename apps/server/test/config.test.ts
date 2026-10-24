@@ -14,8 +14,8 @@ describe('loadConfig', () => {
       proceduresDir: '/repo/procedures',
       geminiApiKey: null,
       liveModel: 'gemini-3.8-live',
-      plannerModel: 'gemini-3.5-flash-lite',
-      visionModel: 'gemini-3.5-flash-lite',
+      plannerModel: 'gemini-robotics-er-2-preview',
+      visionModel: 'gemini-robotics-er-2-preview',
       judgeModel: 'gemini-pro-latest',
       visionUrl: null,
       visionToken: null,
@@ -39,8 +39,8 @@ describe('loadConfig', () => {
     expect(config.port).toBe(8787);
     expect(config.geminiApiKey).toBeNull();
     expect(config.liveModel).toBe('gemini-3.8-live');
-    expect(config.plannerModel).toBe('gemini-3.5-flash-lite');
-    expect(config.visionModel).toBe('gemini-3.5-flash-lite');
+    expect(config.plannerModel).toBe('gemini-robotics-er-2-preview');
+    expect(config.visionModel).toBe('gemini-robotics-er-2-preview');
     expect(config.judgeModel).toBe('gemini-pro-latest');
     expect(config.dataDir).toBe('/repo/data');
   });

@@ -72,6 +72,14 @@ export const ImagePayloadSchema = z.object({
   data: z.string().min(1).describe('base64, no data: prefix'),
 });
 
+export const PlanStageSchema = z
+  .enum(['full', 'first', 'rest'])
+  .describe(
+    'full: the whole plan at once. first: step 1 in full and the other steps as an outline, so ' +
+      'the lesson can start quickly. rest: rewrite the outline steps (from revise.fromStepIndex) ' +
+      'in full while the learner works on the first step',
+  );
+
 export const PlanRequestSchema = z.object({
   goal: z.string().min(3).max(300).describe('What to teach, e.g. "refill windshield washer fluid"'),
   context: z.string().max(2000).optional().describe('What the user said about their setup'),
@@ -91,13 +99,34 @@ export const PlanRequestSchema = z.object({
       ),
     })
     .optional(),
+  stage: PlanStageSchema.default('full').describe('rest needs revise'),
 });
+export const PlanSightingSchema = z
+  .object({
+    objectId: z.string(),
+    view: z.number().int().nonnegative().describe('Index into the request images'),
+    point: NormalizedPointSchema,
+    box: NormalizedBoxSchema.nullable(),
+  })
+  .describe('Where the planner saw a declared object in one of the camera views it was given');
 export const PlanResponseSchema = z.object({
   planId: z.string(),
   procedure: ProcedureSchema,
   warnings: z.array(z.string()).describe('Non-fatal issues the planner fixed or skipped'),
+  outlineFrom: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe('Steps from this index are an outline, to be rewritten by a stage "rest" request'),
+  sightings: z.array(PlanSightingSchema).optional(),
 });
 
+export const StepCheckObjectSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  look: z.string().max(300).describe('What it looks like, so a look-alike is not taken for it'),
+});
 export const StepCheckRequestSchema = z.object({
   goal: z.string().min(1).max(300),
   step: z.object({
@@ -106,6 +135,21 @@ export const StepCheckRequestSchema = z.object({
     doneWhen: z.string().max(200).optional(),
   }),
   images: z.array(ImagePayloadSchema).min(1).max(3).describe('Current camera views, newest last'),
+  before: z
+    .array(ImagePayloadSchema)
+    .max(2)
+    .optional()
+    .describe('Views from when the step started, oldest first, to compare with now'),
+  objects: z
+    .array(StepCheckObjectSchema)
+    .max(6)
+    .optional()
+    .describe("The step's objects, as they look"),
+  confusions: z
+    .array(z.string().min(1).max(200))
+    .max(4)
+    .optional()
+    .describe('Mistakes that look like success, e.g. "picking up the milk, not the yogurt drink"'),
 });
 export const StepCheckVerdictSchema = z.enum(['done', 'not_done', 'unsure']);
 export const StepCheckResponseSchema = z.object({
@@ -113,6 +157,22 @@ export const StepCheckResponseSchema = z.object({
   observation: z.string().describe('What the model saw, in a few words'),
   model: z.string(),
   latencyMs: z.number().nonnegative(),
+  progress: z
+    .number()
+    .int()
+    .min(0)
+    .max(100)
+    .optional()
+    .describe('How far along the step looks, in percent'),
+  wrong: z
+    .string()
+    .optional()
+    .describe('The learner did something else instead, e.g. "picked up the milk, not the yogurt"'),
+  evidence: z
+    .object({ label: z.string(), point: NormalizedPointSchema })
+    .nullable()
+    .optional()
+    .describe('The object that decided the verdict, in the newest view'),
 });
 
 export const LocateRequestSchema = z.object({
@@ -207,8 +267,11 @@ export type CoachTokenResponse = z.infer<typeof CoachTokenResponseSchema>;
 export type ProcedureSummary = z.infer<typeof ProcedureSummarySchema>;
 export type ProcedureListResponse = z.infer<typeof ProcedureListResponseSchema>;
 export type ImagePayload = z.infer<typeof ImagePayloadSchema>;
+export type PlanStage = z.infer<typeof PlanStageSchema>;
+export type PlanSighting = z.infer<typeof PlanSightingSchema>;
 export type PlanRequest = z.input<typeof PlanRequestSchema>;
 export type PlanResponse = z.infer<typeof PlanResponseSchema>;
+export type StepCheckObject = z.infer<typeof StepCheckObjectSchema>;
 export type StepCheckRequest = z.infer<typeof StepCheckRequestSchema>;
 export type StepCheckVerdict = z.infer<typeof StepCheckVerdictSchema>;
 export type StepCheckResponse = z.infer<typeof StepCheckResponseSchema>;

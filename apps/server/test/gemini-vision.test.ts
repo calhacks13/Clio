@@ -58,9 +58,22 @@ describe('createGeminiLocator', () => {
         config: {
           responseMimeType: 'application/json',
           responseJsonSchema: locateJsonSchema(['cap', 'jug']),
+          abortSignal: expect.any(AbortSignal),
         },
       },
     ]);
+  });
+
+  it('thinks minimally on Gemini 3 models, Robotics-ER 2 among them, and not on older ones', async () => {
+    for (const [model, level] of [
+      ['gemini-robotics-er-2-preview', 'MINIMAL'],
+      ['gemini-3.5-flash-lite', 'MINIMAL'],
+      ['gemini-2.5-flash', undefined],
+    ] as const) {
+      const ai = fakeAi(ANSWER);
+      await createGeminiLocator(ai, model).locate({ image: IMAGE, objects: OBJECTS });
+      expect(ai.calls[0]?.config?.thinkingConfig?.thinkingLevel).toBe(level);
+    }
   });
 
   it('accepts the list wrapped in an object', async () => {

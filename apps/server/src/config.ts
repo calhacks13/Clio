@@ -5,8 +5,10 @@ import { prettifyError, z } from 'zod';
 export const REPO_ROOT = resolve(import.meta.dirname, '..', '..', '..');
 
 export const DEFAULT_LIVE_MODEL = 'gemini-3.8-live';
-export const DEFAULT_PLANNER_MODEL = 'gemini-3.5-flash-lite';
-export const DEFAULT_VISION_MODEL = 'gemini-3.5-flash-lite';
+/** Gemini Robotics-ER 2: embodied reasoning (pointing, success detection, task plans). */
+export const ROBOTICS_ER_MODEL = 'gemini-robotics-er-2-preview';
+export const DEFAULT_PLANNER_MODEL = ROBOTICS_ER_MODEL;
+export const DEFAULT_VISION_MODEL = ROBOTICS_ER_MODEL;
 /** The planner bench's judge: a stronger model than the planner it grades. */
 export const DEFAULT_JUDGE_MODEL = 'gemini-pro-latest';
 

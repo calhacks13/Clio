@@ -142,6 +142,7 @@ export function scenarioPlanRequest(
     goal,
     ...(context ? { context } : {}),
     images,
+    stage: 'full',
     ...(revise
       ? {
           revise: {

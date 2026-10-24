@@ -1,5 +1,6 @@
 import type { Detection, LocateRequest } from '@clio/protocol';
-import type { GenerateContentApi } from './gemini';
+import { type GenerateContentApi, thinkingConfig } from './gemini';
+import { generateJson } from './gemini-planner';
 import { isRecord, parseModelJson } from './model-json';
 import type { JsonSchema } from './plan-schema';
 import { fromGeminiDetection, type VisionLocator } from './vision';
@@ -7,6 +8,11 @@ import { fromGeminiDetection, type VisionLocator } from './vision';
 // Object grounding with Gemini: one image plus a list of { id, query, phrase? }, answered through
 // structured output in Gemini's native spatial convention (0..1000, y first), then converted.
 // Gemini returns points and boxes; outlines come from a segmenting finder (CLIO_VISION_URL).
+// On Robotics-ER 2 pointing is as accurate at minimal thinking as at high, in about a second, but
+// it will point at a look-alike unless told an absent object is an answer too (docs/robotics-er.md).
+
+/** One look. The headset looks again a few seconds later, so a slow answer is dropped. */
+export const LOCATE_TIMEOUT_MS = 10_000;
 
 type LocateObject = LocateRequest['objects'][number];
 
@@ -24,7 +30,9 @@ export function locatePrompt(objects: readonly LocateObject[]): string {
       'of the center of the visible, graspable part of the object, and box_2d to ' +
       '[ymin, xmin, ymax, xmax] around the visible object. Coordinates are integers from 0 to ' +
       '1000, normalized to the image height (y) and width (x), with the origin at the top left. ' +
-      'If the object is not visible, set found to false and point and box_2d to null. ' +
+      'If the object is not visible, set found to false and point and box_2d to null. Only ' +
+      'report an object that is really in the image: never point at something else that just ' +
+      'looks similar or could serve the same purpose. ' +
       'confidence is how sure you are, from 0 to 1, that the location is right.',
   ].join('\n');
 }
@@ -59,24 +67,28 @@ export function createGeminiLocator(ai: GenerateContentApi, model: string): Visi
   return {
     async locate(request) {
       const objects = uniqueById(request.objects);
-      const response = await ai.models.generateContent({
-        model,
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              { inlineData: { mimeType: request.image.mimeType, data: request.image.data } },
-              { text: locatePrompt(objects) },
-            ],
+      const text = await generateJson(
+        ai,
+        {
+          model,
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                { inlineData: { mimeType: request.image.mimeType, data: request.image.data } },
+                { text: locatePrompt(objects) },
+              ],
+            },
+          ],
+          config: {
+            responseMimeType: 'application/json',
+            responseJsonSchema: locateJsonSchema(objects.map((o) => o.id)),
+            ...thinkingConfig(model, 'minimal'),
           },
-        ],
-        config: {
-          responseMimeType: 'application/json',
-          responseJsonSchema: locateJsonSchema(objects.map((o) => o.id)),
         },
-      });
-      if (!response.text) throw new Error('Gemini returned an empty response');
-      const json = parseModelJson(response.text);
+        LOCATE_TIMEOUT_MS,
+      );
+      const json = parseModelJson(text);
       if (!json.ok) throw new Error(json.error);
       const entries = Array.isArray(json.value)
         ? json.value

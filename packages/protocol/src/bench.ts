@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { ImagePayloadSchema, PlanRequestSchema, StepCheckRequestSchema } from './api';
+import {
+  ImagePayloadSchema,
+  PlanRequestSchema,
+  PlanSightingSchema,
+  PlanStageSchema,
+  StepCheckRequestSchema,
+} from './api';
 import { SlugSchema } from './checks';
 import { ProcedureSchema } from './procedure';
 
@@ -77,6 +83,8 @@ export const BenchRunResultSchema = z.discriminatedUnion('ok', [
     planId: z.string(),
     procedure: ProcedureSchema,
     warnings: z.array(z.string()),
+    outlineFrom: z.number().int().nonnegative().optional(),
+    sightings: z.array(PlanSightingSchema).optional(),
   }),
   z.object({
     ok: z.literal(false),
@@ -108,6 +116,7 @@ export const BenchRunSchema = z.object({
       revise: z
         .object({ fromStepIndex: z.number().int().nonnegative(), reason: z.string() })
         .optional(),
+      stage: PlanStageSchema.optional(),
       views: z.number().int().nonnegative(),
     })
     .describe('What was asked, as it was asked'),
