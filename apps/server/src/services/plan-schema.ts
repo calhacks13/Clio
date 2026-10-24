@@ -163,8 +163,9 @@ const DEFS: Record<string, JsonSchema> = {
             object: objectId,
             phrase: str('2 to 5 words naming it, e.g. "blue washer fluid cap"'),
             description: str(
-              'One sentence that finds it in a camera frame on its own: what it is, color, ' +
-                'shape, size, markings, and where it is at this point in the task',
+              'One sentence of 12 to 30 words that finds it in a camera frame on its own: what ' +
+                'it is, color, material, shape, size, markings, and where it is at this point ' +
+                'in the task',
             ),
           },
           ['object', 'phrase', 'description'],

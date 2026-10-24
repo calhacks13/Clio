@@ -60,12 +60,13 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
   '  - `object`: the id of the declared object it is.',
   '  - `phrase`: 2 to 5 words naming it like a label on a box, e.g. "blue washer fluid cap". ' +
     'No verbs, no positions.',
-  '  - `description`: one sentence, at most 30 words, that singles it out in the frame: what it ' +
-    'is, its color, shape and size, any text or symbols on it, and where it is relative to ' +
-    'things around it, as it looks at that point in the task (after earlier steps, a cap may ' +
-    'be off and lying on the fender). If something similar is nearby, say what tells it apart, ' +
-    'e.g. "the blue cap, not the yellow coolant cap beside it". Describe only what a camera ' +
-    'can see.',
+  '  - `description`: one sentence of 12 to 30 words that singles it out in the frame: what it ' +
+    'is, its color, material, shape and size, any text or symbols on it, and where it is ' +
+    'relative to things around it, as it looks at that point in the task (after earlier ' +
+    'steps, a cap may be off and lying on the fender). If something similar is nearby, say ' +
+    'what tells it apart. Describe only what a camera can see. Good: "Round blue plastic cap ' +
+    'with a windshield-spray symbol, on a white tank at the front left of the engine bay, ' +
+    'beside a yellow cap." Too vague: "The washer fluid cap."',
   '',
   'OBJECTS',
   '- Declare every object that any step targets, acts on or checks, and nothing else. Ids are ' +
