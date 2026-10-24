@@ -7,7 +7,14 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!**/dist", "!packages/protocol/schema", "!fixtures", "!pipeline"]
+    "includes": [
+      "**",
+      "!**/dist",
+      "!packages/protocol/schema",
+      "!fixtures",
+      "!pipeline",
+      "!pnpm-lock.yaml"
+    ]
   },
   "formatter": {
     "enabled": true,
