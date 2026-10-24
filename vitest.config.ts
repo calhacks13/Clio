@@ -28,6 +28,14 @@ export default defineConfig({
           environment: 'node',
         },
       },
+      {
+        test: {
+          name: 'scripts',
+          root: './scripts',
+          include: ['test/**/*.test.ts'],
+          environment: 'node',
+        },
+      },
     ],
   },
 });
