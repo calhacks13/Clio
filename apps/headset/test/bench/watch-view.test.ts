@@ -96,6 +96,14 @@ describe('renderWatchStatus', () => {
     expect(html).toContain('Decided by: milk carton');
   });
 
+  it('shows a hazard the watcher noticed, whatever the step', () => {
+    const s = new WatchSession(steps, 0);
+    s.record({ ...milkLook(), hazard: 'kitchen knife by cup A' }, AUTO);
+    expect(renderWatchStatus(s, 'Yogurt drink', status)).toContain(
+      '<span class="verdict hazard">hazard</span> kitchen knife by cup A',
+    );
+  });
+
   it('works without the new fields', () => {
     const s = new WatchSession(steps, 0);
     s.record({ at: 1000, step: 0, verdict: 'not_done', observation: 'fridge closed' }, AUTO);

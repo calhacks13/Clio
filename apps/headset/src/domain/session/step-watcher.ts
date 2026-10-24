@@ -52,6 +52,13 @@ export interface StepWatcherOptions {
   confirmations?: number;
   /** Don't tell the coach the same thing about a step again for this long (ms). */
   repeatMs?: number;
+  /**
+   * Answers in a row that must name a hazard. One: Robotics-ER names a hazard on only some looks
+   * and invented none in our tests, and the coach sees the frame and warns only if it agrees.
+   */
+  hazardConfirmations?: number;
+  /** Don't tell the coach about a hazard again for this long, whatever the step (ms). */
+  hazardRepeatMs?: number;
   /** After this many failures in a row, pause for `pauseMs`. */
   maxFailures?: number;
   pauseMs?: number;
@@ -75,6 +82,8 @@ const DEFAULTS: Required<StepWatcherOptions> = {
   beforeFrames: 1,
   confirmations: 2,
   repeatMs: 20_000,
+  hazardConfirmations: 1,
+  hazardRepeatMs: 60_000,
   maxFailures: 3,
   pauseMs: 30_000,
 };
@@ -110,6 +119,9 @@ export class StepWatcher {
   private inFlight = false;
   private failures = 0;
   private pausedUntil = Number.NEGATIVE_INFINITY;
+  /** Answers in a row that named a hazard, and when the coach was last told of one. */
+  private hazardStreak = 0;
+  private hazardToldT = Number.NEGATIVE_INFINITY;
   private readonly off: () => void;
 
   constructor(private readonly deps: StepWatcherDeps) {
@@ -192,6 +204,7 @@ export class StepWatcher {
     if (now?.lesson !== target.lesson) return;
     const t = clock.now();
     bus.emit('annotation', { t, label: 'step.watch', data: watchData(target, answer) });
+    this.noteHazard(t, target, answer, images);
     // The step may have finished or changed while the model looked.
     if (now.step.id !== target.step.id || this.watch !== watch) return;
     const finding = findingOf(answer);
@@ -210,6 +223,28 @@ export class StepWatcher {
       const wrong = answer.wrong ?? '';
       bus.emit('step.looks_wrong', { t, stepId: target.step.id, wrong, observation, image });
     }
+  }
+
+  /**
+   * A hazard in view, named by enough answers in a row, goes to the coach whatever the step,
+   * then not again for `hazardRepeatMs`: a warning, not a nag.
+   */
+  private noteHazard(
+    t: number,
+    target: WatchTarget,
+    answer: StepCheckResponse,
+    images: ImagePayload[],
+  ): void {
+    if (!answer.hazard) {
+      this.hazardStreak = 0;
+      return;
+    }
+    if (++this.hazardStreak < this.o.hazardConfirmations) return;
+    if (t - this.hazardToldT < this.o.hazardRepeatMs) return;
+    this.hazardToldT = t;
+    this.hazardStreak = 0;
+    const image = images.at(-1)?.data ?? null;
+    this.deps.bus.emit('step.hazard', { t, stepId: target.step.id, hazard: answer.hazard, image });
   }
 
   private request(target: WatchTarget, watch: Watch, images: ImagePayload[]): StepCheckRequest {
@@ -263,7 +298,7 @@ export function stepLooks(
 
 /** What the annotation records of one answer: never the frames. */
 function watchData(target: WatchTarget, answer: StepCheckResponse): Record<string, unknown> {
-  const { verdict, observation, model, latencyMs, progress, wrong, evidence } = answer;
+  const { verdict, observation, model, latencyMs, progress, wrong, evidence, hazard } = answer;
   return {
     stepId: target.step.id,
     verdict,
@@ -273,5 +308,6 @@ function watchData(target: WatchTarget, answer: StepCheckResponse): Record<strin
     ...(progress === undefined ? {} : { progress }),
     ...(wrong ? { wrong } : {}),
     ...(evidence ? { evidence } : {}),
+    ...(hazard ? { hazard } : {}),
   };
 }

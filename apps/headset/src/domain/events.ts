@@ -56,6 +56,8 @@ export interface InternalEvents {
     observation: string;
     image: string | null;
   }>;
+  /** The step watcher saw a danger near the hands (a blade, something hot), whatever the step. */
+  'step.hazard': Timed<{ stepId: string; hazard: string; image: string | null }>;
   'step.stuck': Timed<{ stepId: string; elapsedMs: number }>;
   'object.missing': Timed<{ objectIds: string[] }>;
   'objects.updated': Timed<{ objects: ObjectState[] }>;

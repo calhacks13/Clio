@@ -133,6 +133,15 @@ export class Narrator {
           { stepId },
         );
       }),
+      b.on('step.hazard', ({ t, stepId, hazard }) => {
+        this.say(
+          t,
+          'hazard',
+          `Step watcher: a possible hazard near their hands: ${hazard}. If you see it too, warn them in a few words; if not, carry on without mentioning it.`,
+          true,
+          { stepId },
+        );
+      }),
       b.on('step.stuck', ({ t, stepId, elapsedMs }) => {
         const step = this.view.plan()?.steps.find((s) => s.id === stepId);
         const help = step?.demo

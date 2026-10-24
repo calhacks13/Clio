@@ -35,6 +35,8 @@ export interface WatchLook {
   wrong?: string;
   /** The object that decided it, in the frame it judged. */
   evidence?: { label: string; point: NormalizedPoint };
+  /** A danger near the hands it noticed, whatever the step, e.g. "kitchen knife by cup A". */
+  hazard?: string;
   error?: string;
   latencyMs?: number;
   model?: string;

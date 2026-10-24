@@ -75,7 +75,8 @@ with some thinking.
   fixed it, 7 of 7. Every Clio prompt that points says so.
 - **Hazards**: it called a kitchen knife a "pipette" every time it listed all objects, and plans
   never warned about the knife until the prompt carried an explicit hazard checklist (then 6 of 6).
-  Ask about hazards directly; don't trust its free labels for safety.
+  Ask about hazards directly; don't trust its free labels for safety. The step check asks on every
+  look (it named a drawn knife on 2 of 8 looks, and invented none in the fridge scenes).
 - **Out of view**: models answered `not_done` rather than `unsure` when the target was cropped
   out of the frame; the step check says that hidden or out-of-view means unsure.
 - **Masks**: not supported. The documented mask prompt returned boxes or nothing, and base64 PNG

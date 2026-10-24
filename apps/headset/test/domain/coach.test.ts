@@ -370,6 +370,19 @@ describe('Narrator', () => {
     ]);
   });
 
+  it('tells the coach in words about a hazard the step watcher sees, to warn the learner', () => {
+    const { b, out } = setup({ perception: 'trusted' });
+    b.emit('step.hazard', { t: 0, stepId: 'acid', hazard: 'kitchen knife by cup A', image: null });
+    expect(out).toEqual([
+      {
+        kind: 'hazard',
+        text: '[app] Step watcher: a possible hazard near their hands: kitchen knife by cup A. If you see it too, warn them in a few words; if not, carry on without mentioning it.',
+        reply: true,
+        data: { stepId: 'acid' },
+      },
+    ]);
+  });
+
   it('offers a demonstration to a stuck learner only when the step has one', () => {
     let plan = planView();
     const { b, out } = setup({}, () => plan);

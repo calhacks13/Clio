@@ -1355,6 +1355,11 @@ button.ok {
   background: var(--bad);
 }
 
+.verdict.hazard {
+  color: #04121a;
+  background: var(--warn);
+}
+
 /* Saving a look as a watcher test */
 
 .save-test {

@@ -21,6 +21,7 @@ const STEP = {
 describe('STEP_CHECK_INSTRUCTION', () => {
   it.each([
     'You judge one step of a hands-on task from headset camera views',
+    'first, whatever the step, a danger in view where the learner works',
     'Tell it apart from look-alikes by how it looks',
     'a white bottle of vinegar is not a white bottle of water',
     'they did something else: the step is not done',
@@ -135,9 +136,10 @@ describe('stepCheckContents', () => {
 });
 
 describe('stepCheckJsonSchema', () => {
-  it('asks for the evidence and what it sees before the verdict, in the subset Gemini supports', () => {
+  it('asks for a hazard, the evidence and what it sees before the verdict, in the subset Gemini supports', () => {
     const schema = stepCheckJsonSchema();
     expect(Object.keys(schema.properties as object)).toEqual([
+      'hazard',
       'evidence',
       'observation',
       'wrong',
@@ -147,6 +149,11 @@ describe('stepCheckJsonSchema', () => {
     expect(schema).toEqual({
       type: 'object',
       properties: {
+        hazard: {
+          type: 'string',
+          description:
+            'A danger in view where the learner works, in at most 10 words; empty if none',
+        },
         evidence: {
           type: ['object', 'null'],
           description: 'The object that decides it, in the newest view',
@@ -173,7 +180,7 @@ describe('stepCheckJsonSchema', () => {
         progress: { type: 'integer', description: 'How far along the step is, 0 to 100' },
         verdict: { type: 'string', enum: ['done', 'not_done', 'unsure'] },
       },
-      required: ['evidence', 'observation', 'wrong', 'progress', 'verdict'],
+      required: ['hazard', 'evidence', 'observation', 'wrong', 'progress', 'verdict'],
     });
     expect(JSON.stringify(schema)).not.toMatch(/maxLength|pattern|default|additionalProperties/);
   });
@@ -205,6 +212,18 @@ describe('parseStepCheck', () => {
       wrong: 'picked up the milk, not the yogurt drink',
       evidence: { label: 'milk carton', point: [0.61, 0.45] },
     });
+  });
+
+  it('reads a hazard, and not the ways of saying there is none', () => {
+    const answer = (hazard: string) =>
+      JSON.stringify({ verdict: 'not_done', observation: 'Cup C is empty.', hazard });
+    expect(parseStepCheck(answer(' Kitchen knife left of cup A ')).hazard).toBe(
+      'Kitchen knife left of cup A',
+    );
+    for (const none of ['', 'None', 'none visible', 'No hazards.', 'No danger near the hands']) {
+      expect(parseStepCheck(answer(none))).not.toHaveProperty('hazard');
+    }
+    expect(parseStepCheck(answer('x'.repeat(300))).hazard).toHaveLength(100);
   });
 
   it('treats an empty or "none" wrong as nothing wrong', () => {

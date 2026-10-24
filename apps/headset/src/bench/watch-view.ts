@@ -162,7 +162,10 @@ export function lookText(look: WatchLook): string {
   if (!look.verdict) return '';
   const wrong = look.wrong ? `<span class="verdict wrong">wrong</span> ${esc(look.wrong)} · ` : '';
   const along = look.progress === undefined ? '' : ` <span class="muted">${look.progress}%</span>`;
-  return `${wrong}<span class="verdict ${look.verdict}">${verdictLabel(look.verdict)}</span> ${esc(look.observation ?? '')}${along}`;
+  const hazard = look.hazard
+    ? ` · <span class="verdict hazard">hazard</span> ${esc(look.hazard)}`
+    : '';
+  return `${wrong}<span class="verdict ${look.verdict}">${verdictLabel(look.verdict)}</span> ${esc(look.observation ?? '')}${along}${hazard}`;
 }
 
 /** The frame a look judged, with the point that decided it when the model gave one. */

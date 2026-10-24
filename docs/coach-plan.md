@@ -219,6 +219,12 @@ frame and what went wrong, in words, and decides whether to correct them (once p
 The watcher suggests; it never completes a step. After 3 failures in a row it pauses for 30 s.
 Every answer is recorded, with its progress, what went wrong and the deciding object's point.
 
+Every look also names any hazard in view, whatever the step: a knife, something hot, broken glass.
+One answer is enough: the coach gets the frame and "[app] Step watcher: a possible hazard …", and
+warns the learner only if it sees it too, at most once a minute. Robotics-ER names a hazard on only
+some looks (2 of 8 on a drawn knife) and invented none in our tests; the plan's warnings name the
+hazards in view at the start.
+
 `forced` keeps its meaning on main: the step's full success check, with every position, had not
 passed when it was completed. Under coach authority the runner evaluates the check twice: once on
 trusted positions, which may complete the step, and once on everything, which only sets `forced`.

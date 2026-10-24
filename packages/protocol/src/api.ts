@@ -169,6 +169,12 @@ export const StepCheckResponseSchema = z.object({
     .string()
     .optional()
     .describe('The learner did something else instead, e.g. "picked up the milk, not the yogurt"'),
+  hazard: z
+    .string()
+    .optional()
+    .describe(
+      'A danger near the hands right now, whatever the step, e.g. "kitchen knife by cup A"',
+    ),
   evidence: z
     .object({ label: z.string(), point: NormalizedPointSchema })
     .nullable()

@@ -1152,6 +1152,7 @@ async function look(watch: Watch): Promise<void> {
       ...(answer.progress === undefined ? {} : { progress: answer.progress }),
       ...(answer.wrong?.trim() ? { wrong: answer.wrong.trim() } : {}),
       ...(answer.evidence ? { evidence: answer.evidence } : {}),
+      ...(answer.hazard?.trim() ? { hazard: answer.hazard.trim() } : {}),
     };
   } catch (err) {
     entry = { at: Date.now(), step: stepIndex, error: message(err), model: watch.model };

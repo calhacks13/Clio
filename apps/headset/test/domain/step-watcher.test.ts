@@ -26,6 +26,8 @@ function setup(answers: (StepCheckResponse | Error)[], options: StepWatcherOptio
   const asked: StepCheckRequest[] = [];
   const suggested: string[] = [];
   const wrong: AppEvents['step.looks_wrong'][] = [];
+  const hazards: AppEvents['step.hazard'][] = [];
+  bus.on('step.hazard', (e) => hazards.push(e));
   const watched: unknown[] = [];
   bus.on('step.looks_done', ({ stepId, image }) => suggested.push(`${stepId}:${image}`));
   bus.on('step.looks_wrong', (e) => wrong.push(e));
@@ -77,6 +79,7 @@ function setup(answers: (StepCheckResponse | Error)[], options: StepWatcherOptio
     asked,
     suggested,
     wrong,
+    hazards,
     watched,
     step,
     setTarget: (t: WatchTarget | null) => {
@@ -185,6 +188,33 @@ describe('StepWatcher', () => {
     for (let i = 0; i < 3; i++) await w.step(1000); // put it back, took the right one
     expect(w.asked).toHaveLength(6);
     expect(w.suggested).toEqual(['a:F7']);
+  });
+
+  it('warns of a hazard as soon as an answer names it, then not again for a minute', async () => {
+    const knife = { ...notDone, hazard: 'kitchen knife next to cup A' };
+    const w = setup([notDone, knife, knife, notDone, knife, knife, knife, knife]);
+    await w.step(0);
+    await w.step(1000);
+    expect(w.hazards).toEqual([]);
+    await w.step(1000);
+    expect(w.hazards).toEqual([
+      { t: 2000, stepId: 'a', hazard: 'kitchen knife next to cup A', image: 'F3' },
+    ]);
+    for (let i = 0; i < 3; i++) await w.step(1000); // within the minute: the coach already knows
+    expect(w.hazards).toHaveLength(1);
+    expect(w.watched.at(-1)).toMatchObject({ hazard: 'kitchen knife next to cup A' });
+    await w.step(60_000);
+    expect(w.hazards).toHaveLength(2);
+    expect(w.suggested).toEqual([]);
+  });
+
+  it('can ask for a hazard to be named several times in a row', async () => {
+    const knife = { ...notDone, hazard: 'kitchen knife next to cup A' };
+    const w = setup([knife, notDone, knife, knife], { hazardConfirmations: 2 });
+    for (let i = 0; i < 4; i++) await w.step(i === 0 ? 0 : 1000);
+    expect(w.hazards).toEqual([]);
+    await w.step(1000);
+    expect(w.hazards).toHaveLength(1);
   });
 
   it("sends what the step's objects look like and the mistakes that look like success", async () => {
