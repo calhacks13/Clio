@@ -11,9 +11,12 @@
 | ------------------------------ | ---------------------------------------------------------------------------------------- |
 | `feat/coach-plan-robotics-er2` | Green (852 tests). Robotics-ER 2 everywhere, two-stage plans, step watcher, voice bridge |
 | `er2/stage1-card`              | This work: the first stage writes a short "card". **4 server tests fail**; see below     |
-| `er2/fast-start`               | Another agent's headset-side work (may still be in progress); see "The headset path"     |
+| (not started)                  | The headset-side speed-ups in "The headset path" below: nothing written yet              |
 
-Nothing is pushed. The user is about to merge these with changes on Peter's laptop.
+All of these are on `origin`, with `feat/coach-plan` (the planner bench, under the Robotics-ER
+work). The merged `er2/bench`, `er2/step-watcher`, `er2/voice-coach` and `er2/staged-plans` are
+pushed too, for history; `feat/coach-plan-robotics-er2` already contains them. Next: merge all of
+this with the changes on Peter's laptop.
 
 ## Where the time goes (measured)
 
@@ -84,11 +87,18 @@ confirm (under a Gemini coach they only ever see trusted positions anyway).
 
 ## More ideas, roughly by gain
 
-- **The headset path (`er2/fast-start`)**: today, after the plan arrives, `run()` in
-  `lesson-controller.ts` waits for a locate of every object (1.5-2.5 s on Robotics-ER) before the
-  coach hears step 1, and planning first captures 2 frames 400 ms apart. That branch starts the
-  lesson without waiting for the locate and keeps recent planning frames ready. Merge it, check
-  its tests, and measure on the headset (it records a `lesson.first_step` annotation).
+- **The headset path (not started)**: today, from `start_lesson` to the coach hearing step 1,
+  the headset does in series: capture planning frames (`PassthroughCamera.snapshots(2)`, two
+  1024 px JPEGs about 400 ms apart), the plan, then `run()` in `lesson-controller.ts` AWAITS a
+  locate of every object (1.5-2.5 s on Robotics-ER) before the runner starts and the coach is
+  briefed. To do: start the runner and brief step 1 as soon as the plan arrives and locate in the
+  background (avoid two locates of the same objects at once; check auto demos, checks and
+  `highlight`'s `shown: false` still behave); keep a small buffer of recent encoded planning
+  frames (refreshed every ~400-500 ms while a lesson is being set up, at most ~1 s old, else
+  capture fresh) so capture is off the clock; look for any other serial wait before the first
+  briefing; record the time from `start_lesson` to the step-1 briefing as an annotation (e.g.
+  `lesson.first_step` with planMs, locateMs, totalMs) without changing the episode schema.
+  Expected gain: about 2-3 s on the headset.
 - **Drop `sightings` from stage 1** unless something uses them early (only the bench overlay
   does today): about 80 tokens, ~0.3 s.
 - **One camera view for stage 1** instead of two: ~1,000 fewer input tokens (small, maybe 0.2 s).
