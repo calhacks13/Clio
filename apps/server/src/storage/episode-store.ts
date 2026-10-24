@@ -231,14 +231,22 @@ export class EpisodeStore {
     return { meta, summary: await this.#summary(meta, finish), finish: finish.value };
   }
 
-  /** The complete lines of an NDJSON file as a byte stream, or null for an unknown episode. */
-  async openNdjson(id: string, file: NdjsonFile): Promise<ReadableStream<Uint8Array> | null> {
+  /**
+   * The complete lines of an NDJSON file from byte `from` on, as a byte stream, or null for an
+   * unknown episode. `end` is the settled size, always a line boundary: passing it back as `from`
+   * reads only what was appended since, which is how a viewer follows a live episode.
+   */
+  async openNdjson(
+    id: string,
+    file: NdjsonFile,
+    from = 0,
+  ): Promise<{ stream: ReadableStream<Uint8Array>; end: number } | null> {
     if (!(await this.exists(id))) return null;
     const path = this.#path(id, `${file}.ndjson`);
-    const size = await this.#settledSize(id, path);
+    const end = await this.#settledSize(id, path);
     const stream =
-      size === 0 ? Readable.from([]) : createReadStream(path, { start: 0, end: size - 1 });
-    return Readable.toWeb(stream) as ReadableStream<Uint8Array>;
+      from >= end ? Readable.from([]) : createReadStream(path, { start: from, end: end - 1 });
+    return { stream: Readable.toWeb(stream) as ReadableStream<Uint8Array>, end };
   }
 
   async readFrames(id: string): Promise<FrameRecord[]> {

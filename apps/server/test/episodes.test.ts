@@ -436,4 +436,44 @@ describe('GET /api/episodes/:id/{frames,events,objects}', () => {
     const h = await fixedHarness();
     expect((await h.request('GET', ApiPaths.episodeFrames('ep-nope'))).status).toBe(404);
   });
+
+  it('reads only the lines after ?from and says where to read next', async () => {
+    const h = await fixedHarness();
+    const id = await create(h);
+    const post = (seq: number, ts: number[]) =>
+      h.request('POST', ApiPaths.episodeBatches(id), {
+        seq,
+        frames: ts.map((t) => frame(t)),
+        events: [],
+      });
+    const read = async (from?: number) => {
+      const query = from === undefined ? '' : `?from=${from}`;
+      const res = await h.request('GET', `${ApiPaths.episodeFrames(id)}${query}`);
+      expect(res.status).toBe(200);
+      return { lines: ndjsonLines(await res.text()), next: Number(res.headers.get('x-next-from')) };
+    };
+
+    await post(0, [0, 10]);
+    const first = await read();
+    expect(first.lines).toEqual([frame(0), frame(10)]);
+    expect(first.next).toBe(Buffer.byteLength(await h.readData('episodes', id, 'frames.ndjson')));
+
+    await post(1, [20]);
+    const second = await read(first.next);
+    expect(second.lines).toEqual([frame(20)]);
+    expect(second.next).toBe(Buffer.byteLength(await h.readData('episodes', id, 'frames.ndjson')));
+
+    expect(await read(second.next)).toEqual({ lines: [], next: second.next });
+    expect(await read(second.next + 1000)).toEqual({ lines: [], next: second.next });
+  });
+
+  it('rejects a from that is not a byte offset', async () => {
+    const h = await fixedHarness();
+    const id = await create(h);
+    for (const from of ['-1', '1.5', 'abc', '']) {
+      const res = await h.request('GET', `${ApiPaths.episodeEvents(id)}?from=${from}`);
+      expect(res.status).toBe(400);
+      expect((await errorOf(res)).code).toBe('invalid_offset');
+    }
+  });
 });

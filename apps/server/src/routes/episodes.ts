@@ -74,13 +74,18 @@ export function episodeRoutes({ episodes, limits }: ServerDeps): Hono {
     return c.json(detail);
   });
 
+  // `?from=<byte offset>` answers only the lines after that offset. `x-next-from` is the offset to
+  // pass next time, so a viewer following a live episode never downloads a line twice.
   app.get('/api/episodes/:id/:file{frames|events|objects}', async (c) => {
     const id = safeId(c.req.param('id'), 'episode id');
     const file = c.req.param('file');
     if (!isNdjsonFile(file)) throw notFound(`No such episode file "${file}"`);
-    const stream = await episodes.openNdjson(id, file);
-    if (!stream) throw missing(id);
-    return c.body(stream, 200, { 'content-type': 'application/x-ndjson' });
+    const opened = await episodes.openNdjson(id, file, byteOffset(c.req.query('from')));
+    if (!opened) throw missing(id);
+    return c.body(opened.stream, 200, {
+      'content-type': 'application/x-ndjson',
+      'x-next-from': String(opened.end),
+    });
   });
 
   return app;
@@ -88,4 +93,13 @@ export function episodeRoutes({ episodes, limits }: ServerDeps): Hono {
 
 function isNdjsonFile(value: string): value is NdjsonFile {
   return (NDJSON_FILES as readonly string[]).includes(value);
+}
+
+function byteOffset(value: string | undefined): number {
+  if (value === undefined) return 0;
+  const offset = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(offset)) {
+    throw new ApiError(400, 'invalid_offset', 'Invalid from: use a byte offset (a whole number)');
+  }
+  return offset;
 }
