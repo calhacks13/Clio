@@ -10,10 +10,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-viz = ["rerun-sdk>=0.23"]
+viz = ["rerun-sdk>=0.40"]  # API verified against 0.40.0 (send_columns, Scalars, TransformAxes3D)
 # LeRobot >= 0.5 requires Python >= 3.12. Without the marker, uv's universal resolver would fall
-# back to an old 0.4.x release (different dataset API) to satisfy the 3.11 lower bound.
-lerobot = ["lerobot>=0.6; python_version >= '3.12'"]
+# back to an old 0.4.x release (different dataset API) to satisfy the 3.11 lower bound. The
+# `dataset` extra pulls in `datasets`, pandas, pyarrow and the video decoders.
+lerobot = ["lerobot[dataset]>=0.6; python_version >= '3.12'"]
 
 [project.scripts]
 clio = "clio_pipeline.cli:main"
