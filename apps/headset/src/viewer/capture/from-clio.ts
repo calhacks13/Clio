@@ -8,8 +8,11 @@ import {
   HAND_SAMPLE_LENGTH,
   JOINT_FIELDS,
   JOINT_STRIDE,
+  ObjectObservationSchema,
   type ObjectState,
   ObjectTrackRecordSchema,
+  type ObservationRole,
+  type ObservationStatus,
   type PlacementMethod,
   HAND_JOINTS as WEBXR_JOINTS,
 } from '@clio/protocol';
@@ -33,9 +36,10 @@ import {
   type Vec3,
 } from './model';
 
-// A Clio episode (meta.json plus the frames, events and objects NDJSON; docs/data-format.md) as a
-// Capture. Spatial values move from the workspace frame W (y up, +z toward the user) to ROS REP-103
-// the way the pipeline exports them; milliseconds become integer microseconds.
+// A Clio episode (meta.json plus the frames, events, objects and observations NDJSON;
+// docs/data-format.md) as a Capture. Spatial values move from the workspace frame W (y up, +z
+// toward the user) to ROS REP-103 the way the pipeline exports them; milliseconds become integer
+// microseconds.
 //
 //   frames   the headset's pose series, and one hand sample per side per frame (WebXR's 25 joints
 //            become OpenXR's 26: the palm, which WebXR lacks, is left invalid). Joint orientations
@@ -44,6 +48,8 @@ import {
 //            recorded (object.grasped and object.released), or in older episodes inferred from
 //            pinches that start within reach of a movable object
 //   objects  one pose series per object, starting from meta.objects at t = 0
+//   observations  what object finders saw in the camera image, per object by arrival, without the
+//            image geometry (observationsFor); they change no pose
 //
 // Episodes whose meta.features include 'object.grasp' record every grasp and release, so held spans
 // come from those events (origin 'runtime') and nothing is inferred. Older episodes get held spans
@@ -54,15 +60,16 @@ import {
 // other values are fixed, not measured.
 //
 // Location flags come from an estimate's locationFlags when recorded ('object.flags'), otherwise
-// from its source. An estimate is placed at its observedT, when its camera frame or tracked hand
-// frame was captured, otherwise at its line's time; a state without a valid position says what is
-// true when written, so it stays at its line's time. An estimate measured before the recording
-// started (observedT < 0) replaces the object's placement from meta.objects, which is older. A
-// change of an object's position validity adds a tracking_lost or tracking_recovered event.
+// from its source. A camera estimate that is valid but not tracked is typed 'predicted'. An
+// estimate is placed at its observedT, when its camera frame or tracked hand frame was captured,
+// otherwise at its line's time; a state without a valid position says what is true when written, so
+// it stays at its line's time. An estimate measured before the recording started (observedT < 0)
+// replaces the object's placement from meta.objects, which is older. A change of an object's
+// position validity adds a tracking_lost or tracking_recovered event.
 //
 // The same lines can arrive twice (read again after a server restart). Frames not after the newest
-// frame, object states at a (t, id) already seen and events equal to one at the same t are dropped
-// and counted in `duplicates`.
+// frame, object states at a (t, id) already seen, and events and observations equal to one at the
+// same t are dropped and counted in `duplicates`.
 
 export const HEADSET = 'headset';
 export const WORKSPACE = 'workspace';
@@ -110,7 +117,41 @@ const ESTIMATE: Record<PlacementMethod, EstimateType> = {
 
 const toUs = (ms: number) => Math.round(ms * 1000);
 
+/** What an object finder said about an object in one camera frame (observations.ndjson). */
+export interface ObservationMark {
+  /** When the answer arrived. */
+  availableUs: number;
+  /** When its camera frame was captured; can be before the episode started. */
+  observedUs: number;
+  status: ObservationStatus;
+  role: ObservationRole;
+  /** The model as reported. */
+  source: string;
+  /** Raw score as reported, not a probability. */
+  score: number | null;
+  /** The tracker's own id: provenance only. */
+  trackId: string | null;
+}
+
+/** Each capture's observations, per object by arrival. */
+const OBSERVATIONS = new WeakMap<Capture, Map<string, ObservationMark[]>>();
+const NO_OBSERVATIONS: readonly ObservationMark[] = Object.freeze([]);
+
+/** Every observation of the object read into `capture`, by arrival. */
+export function observationsFor(capture: Capture, entityId: string): readonly ObservationMark[] {
+  return OBSERVATIONS.get(capture)?.get(entityId) ?? NO_OBSERVATIONS;
+}
+
 const measured = (source: PlacementMethod) => source === 'marker' || source === 'detector';
+
+/**
+ * A camera estimate whose position is valid but was not measured on its frame (flags 2 or 3: a
+ * tracker coasting on a predicted box, a reused depth) is predicted, never a vision estimate.
+ */
+function estimateOf(source: PlacementMethod, flags: number): EstimateType {
+  const untracked = (flags & POSITION_VALID) !== 0 && (flags & POSITION_TRACKED) === 0;
+  return measured(source) && untracked ? 'predicted' : ESTIMATE[source];
+}
 
 type StateIn = Pick<ObjectState, 'id' | 'position' | 'orientation' | 'source'> &
   Partial<Pick<ObjectState, 'locationFlags' | 'heldBy' | 'observedT'>> & {
@@ -327,6 +368,48 @@ export class ClioCaptureBuilder {
     this.#settle();
   }
 
+  /** Observation lines, kept per object without their image geometry (observationsFor). */
+  addObservations(records: readonly unknown[]): void {
+    let byObject = OBSERVATIONS.get(this.capture);
+    if (!byObject) {
+      byObject = new Map();
+      OBSERVATIONS.set(this.capture, byObject);
+    }
+    for (const r of records) {
+      const parsed = ObjectObservationSchema.safeParse(r);
+      if (!parsed.success) {
+        this.rejected++;
+        continue;
+      }
+      const o = parsed.data;
+      const mark: ObservationMark = {
+        availableUs: toUs(o.t),
+        observedUs: toUs(o.observedT),
+        status: o.status,
+        role: o.role,
+        source: o.source,
+        score: o.score,
+        trackId: o.trackId,
+      };
+      const marks = byObject.get(o.objectId) ?? [];
+      if (marks.length === 0) byObject.set(o.objectId, marks);
+      let at = marks.length;
+      while (at > 0 && (marks[at - 1] as ObservationMark).availableUs > mark.availableUs) at--;
+      // A repeat arrived at the same time: look back only over the marks at that time.
+      let repeat = false;
+      for (let i = at - 1; i >= 0 && !repeat; i--) {
+        const m = marks[i] as ObservationMark;
+        if (m.availableUs !== mark.availableUs) break;
+        repeat = sameObservation(m, mark);
+      }
+      if (repeat) {
+        this.duplicates++;
+        continue;
+      }
+      marks.splice(at, 0, mark);
+    }
+  }
+
   /** The episode's length, once the headset has finished it. */
   finish(finish: { durationMs: number } | null | undefined): void {
     this.capture.durationUs = finish ? toUs(finish.durationMs) : null;
@@ -396,7 +479,7 @@ export class ClioCaptureBuilder {
         }
       : {
           source_id: `clio-${state.source}`,
-          estimate_type: ESTIMATE[state.source],
+          estimate_type: estimateOf(state.source, location.location_flags),
           location,
           confidence: measured(state.source) ? state.confidence : null,
         };
@@ -638,18 +721,29 @@ export interface ClioEpisode {
   frames: unknown[];
   events: unknown[];
   objects: unknown[];
+  observations?: unknown[];
   finish?: { durationMs: number } | null;
 }
 
 /**
- * A whole episode at once, in the order a live episode is read: frames, events, objects. For a live
- * episode, keep a ClioCaptureBuilder and feed it new lines.
+ * A whole episode at once, in the order a live episode is read: frames, events, objects,
+ * observations. For a live episode, keep a ClioCaptureBuilder and feed it new lines.
  */
 export function buildCaptureFromClio(episode: ClioEpisode): Capture {
   const builder = new ClioCaptureBuilder(episode.meta);
   builder.addFrames(episode.frames);
   builder.addEvents(episode.events);
   builder.addObjects(episode.objects);
+  builder.addObservations(episode.observations ?? []);
   builder.finish(episode.finish);
   return builder.capture;
 }
+
+/** The same answer read twice (a repeated read after a server restart). */
+const sameObservation = (a: ObservationMark, b: ObservationMark) =>
+  a.availableUs === b.availableUs &&
+  a.observedUs === b.observedUs &&
+  a.status === b.status &&
+  a.role === b.role &&
+  a.source === b.source &&
+  a.trackId === b.trackId;

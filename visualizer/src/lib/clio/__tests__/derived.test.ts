@@ -73,6 +73,7 @@ class FakeServer {
     frames: "",
     events: "",
     objects: "",
+    observations: "",
   };
 
   readonly fetch: Fetch = async (input, init) => {

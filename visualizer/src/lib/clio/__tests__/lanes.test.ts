@@ -306,6 +306,47 @@ describe("inspectObject", () => {
     });
   });
 
+  test("says what the camera last saw, a predicted box as inferred", () => {
+    const observed = syntheticEpisode();
+    const at = (t: number, status: string, trackId: string | null = "7") => ({
+      t,
+      observedT: t - 60,
+      objectId: "syringe",
+      status,
+      role: "tracker",
+      source: "yoloe-26l-seg",
+      box: null,
+      outline: null,
+      point: null,
+      contact: null,
+      score: null,
+      frame: null,
+      trackId,
+    });
+    const c = buildCaptureFromClio({
+      ...observed,
+      observations: [at(2000, "measured"), at(2050, "predicted", null)],
+    });
+    expect(
+      row(inspectObject(c, "syringe", us(1000))?.rows ?? [], "Camera"),
+    ).toBeUndefined();
+    expect(
+      row(inspectObject(c, "syringe", us(2020))?.rows ?? [], "Camera"),
+    ).toEqual({
+      label: "Camera",
+      value: "Seen at 0:02.0",
+      basis: "measured",
+      title: "yoloe-26l-seg, track 7, frame at 0:01.9",
+    });
+    expect(
+      row(inspectObject(c, "syringe", us(3000))?.rows ?? [], "Camera"),
+    ).toMatchObject({
+      value: "Predicted at 0:02.0",
+      basis: "inferred",
+      title: "yoloe-26l-seg, frame at 0:01.9",
+    });
+  });
+
   test("an inferred carry says so", () => {
     const i = inspectObject(capture, "syringe", us(5000));
     expect(row(i?.rows ?? [], "Held")).toMatchObject({

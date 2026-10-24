@@ -1,8 +1,9 @@
-import type {
-  EpisodeBatchIntegrity,
-  EpisodeDetailResponse,
-  EpisodeFinish,
-  EpisodeMeta,
+import {
+  EPISODE_FEATURE,
+  type EpisodeBatchIntegrity,
+  type EpisodeDetailResponse,
+  type EpisodeFinish,
+  type EpisodeMeta,
 } from "@clio/protocol";
 import {
   episodeTails,
@@ -25,7 +26,8 @@ import {
 // ClioCaptureBuilder. /clio/live follows the newest episode and switches when
 // a newer one appears; a pinned source stays on one episode.
 //
-// Each turn reads frames first, then events and objects, and applies them in
+// Each turn reads frames first, then events, objects and, when the episode
+// lists the object.observations feature, observations, and applies them in
 // that order. Offsets come from the server's x-next-from (NdjsonTail), except
 // when the source stops a read early itself (the frames window and size cap),
 // where the end of the last whole line read is the next offset.
@@ -149,6 +151,8 @@ interface Session {
   batches: EpisodeBatchIntegrity | null;
   tails: Record<Channel, NdjsonTail>;
   readers: Record<Channel, Reader>;
+  /** meta.features lists object.observations: observations.ndjson is read. */
+  observes: boolean;
   load: Load;
   /** The byte the frames were read from (the tail join point, or 0). */
   framesFrom: number;
@@ -178,6 +182,7 @@ const EMPTY_OFFSETS: Record<Channel, number> = {
   frames: 0,
   events: 0,
   objects: 0,
+  observations: 0,
 };
 
 const browserFetch: Fetch = (input, init) => fetch(input, init);
@@ -374,6 +379,7 @@ export class ClioSource {
       frames: new Reader(this.#fetch),
       events: new Reader(this.#fetch),
       objects: new Reader(this.#fetch),
+      observations: new Reader(this.#fetch),
     };
     let framesFrom = 0;
     if (load === "live") {
@@ -402,8 +408,12 @@ export class ClioSource {
         frames: tail("frames", framesFrom),
         events: tail("events"),
         objects: tail("objects"),
+        observations: tail("observations"),
       },
       readers,
+      observes:
+        detail.meta.features?.includes(EPISODE_FEATURE.objectObservations) ??
+        false,
       load,
       framesFrom,
       truncated: false,
@@ -429,7 +439,7 @@ export class ClioSource {
     return this.#ok(0);
   }
 
-  /** Reads what each channel gained and applies it as frames, events, objects. */
+  /** Reads what each channel gained and applies it as frames, events, objects, observations. */
   async #read(s: Session, signal: AbortSignal): Promise<number> {
     const finalRead = s.finish !== null;
     const before = { ...this.#offsets(s) };
@@ -448,10 +458,14 @@ export class ClioSource {
           receivedAtMs = this.#now();
         });
     const [framesResult] = await Promise.allSettled([framesRead]);
-    const [eventsResult, objectsResult] = await Promise.allSettled([
-      s.tails.events.read(signal),
-      s.tails.objects.read(signal),
-    ]);
+    const [eventsResult, objectsResult, observationsResult] =
+      await Promise.allSettled([
+        s.tails.events.read(signal),
+        s.tails.objects.read(signal),
+        s.observes
+          ? s.tails.observations.read(signal)
+          : Promise.resolve<unknown[]>([]),
+      ]);
     // Records already read are applied even if the loop was stopped meanwhile:
     // their offsets have moved on, so they would not be read again.
     if (this.#session !== s) return 0;
@@ -459,6 +473,7 @@ export class ClioSource {
       frames: framesResult as PromiseSettledResult<unknown[]>,
       events: eventsResult,
       objects: objectsResult,
+      observations: observationsResult,
     };
 
     const shrank = CHANNELS.some(
@@ -480,6 +495,7 @@ export class ClioSource {
     builder.addFrames(got("frames"));
     builder.addEvents(got("events"));
     builder.addObjects(got("objects"));
+    builder.addObservations(got("observations"));
     if (received > builder.duplicates + builder.rejected - skipped) {
       this.#revision++;
     }
@@ -614,6 +630,7 @@ export class ClioSource {
       frames: s.tails.frames.offset,
       events: s.tails.events.offset,
       objects: s.tails.objects.offset,
+      observations: s.tails.observations.offset,
     };
   }
 

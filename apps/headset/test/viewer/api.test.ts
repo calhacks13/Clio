@@ -176,5 +176,6 @@ describe('reading through another base path', () => {
       '/api/episodes',
     ]);
     expect(tails.events.url).toBe('/api/clio/episodes/ep-1/events');
+    expect(tails.observations.url).toBe('/api/clio/episodes/ep-1/observations');
   });
 });

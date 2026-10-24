@@ -2,6 +2,7 @@ import {
   EPISODE_FEATURE,
   type EpisodeEvent,
   type EpisodeMeta,
+  type ObservationStatus,
 } from "@clio/protocol";
 import {
   clioEvents,
@@ -9,7 +10,11 @@ import {
   detectionsFor,
   stepAt,
 } from "@clio-viewer/capture/clio-events";
-import { GRIP_SOURCE } from "@clio-viewer/capture/from-clio";
+import {
+  GRIP_SOURCE,
+  type ObservationMark,
+  observationsFor,
+} from "@clio-viewer/capture/from-clio";
 import {
   type Capture,
   entityAt,
@@ -311,6 +316,33 @@ export interface ObjectInspection {
 const formatPosition = (p: readonly number[]) =>
   p.map((v) => (v >= 0 ? " " : "") + v.toFixed(3)).join("  ");
 
+/** What an observation's status says about the camera image. */
+const OBSERVED: Record<ObservationStatus, string> = {
+  measured: "Seen",
+  predicted: "Predicted",
+  lost: "Lost",
+  absent: "Not in view",
+  unknown: "Unknown",
+};
+
+/**
+ * The newest observation of the object that had arrived by `tUs`. A tracker
+ * answers 20 to 30 times a second, so this is a binary search.
+ */
+function observationAt(
+  marks: readonly ObservationMark[],
+  tUs: number,
+): ObservationMark | null {
+  let lo = 0;
+  let hi = marks.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if ((marks[mid] as ObservationMark).availableUs <= tUs) lo = mid + 1;
+    else hi = mid;
+  }
+  return marks[lo - 1] ?? null;
+}
+
 /** The newest answer about the object that had arrived by `tUs`. */
 function answerAt(
   marks: readonly DetectionMark[],
@@ -403,6 +435,19 @@ export function inspectObject(
       value: span.origin === "inferred" ? `${by}, inferred from pinch` : by,
       basis: span.origin === "inferred" ? "inferred" : "measured",
       title: `Since ${formatTime(span.startUs)}`,
+    });
+  }
+  // What a tracker or identifier last said about the camera image. A
+  // predicted box was carried forward without being seen.
+  const observed = observationAt(observationsFor(capture, entityId), tUs);
+  if (observed) {
+    const track =
+      observed.trackId === null ? "" : `, track ${observed.trackId}`;
+    rows.push({
+      label: "Camera",
+      value: `${OBSERVED[observed.status]} at ${formatTime(observed.availableUs)}`,
+      basis: observed.status === "predicted" ? "inferred" : "measured",
+      title: `${observed.source}${track}, frame at ${formatTime(observed.observedUs)}`,
     });
   }
   const answer = answerAt(marks, tUs);

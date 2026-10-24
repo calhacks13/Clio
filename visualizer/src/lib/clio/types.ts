@@ -19,10 +19,15 @@ export type EpisodeStatus = "live" | "stopped" | "finished";
 export type FollowMode = "live" | "pinned";
 
 /** An episode's NDJSON files. */
-export type Channel = "frames" | "events" | "objects";
+export type Channel = "frames" | "events" | "objects" | "observations";
 
 /** The order channels are read in and applied to the builder in. */
-export const CHANNELS: readonly Channel[] = ["frames", "events", "objects"];
+export const CHANNELS: readonly Channel[] = [
+  "frames",
+  "events",
+  "objects",
+  "observations",
+];
 
 /** Batch integrity from GET /api/episodes/:id, and what the headset sent. */
 export interface BatchIntegrity {
