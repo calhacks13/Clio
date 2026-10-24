@@ -38,16 +38,16 @@ gets closer to the headset's view than the laptop's own camera.
 
 ## Plans in two stages
 
-**Plan in two stages** asks as the headset will, to start a lesson sooner: stage `first` writes
-step 1 in full and the other steps as an outline, and as soon as it is in, stage `rest` rewrites
-the outline in full from the same frames (a re-plan of the stage-1 plan from `outlineFrom`,
-"Refine the outline while the learner does step 1"). Each stage is a run of its own; their chips
-sit together with an arrow, the outline steps are drawn dashed, and the run says "Step 1 ready in
-X s, the rest refined Y s later". When the rest comes in, the page shows it instead of stage 1. If
-you are already watching stage 1 live, the refined steps replace the ones not done yet: the done
-steps, the focused step's clock and the looks so far are kept. A model that answers stage 1 with a
-whole plan (no `outlineFrom`) is told so, and nothing is refined. Saving a scenario keeps both
-stages, and a saved scenario runs in two stages too while the box is ticked.
+**Plan in two stages** asks as the headset will, to start a lesson sooner: stage `first` writes the
+lesson as an outline and step 1 as a short card ([coach-plan.md](coach-plan.md)), and as soon as it
+is in, stage `rest` writes the outline in full from the same frames (a re-plan of the stage-1 plan
+from `outlineFrom`, "Refine the outline while the learner does step 1"). Each stage is a run of its
+own; their chips sit together with an arrow, the outline steps are drawn dashed, and the run says
+"Step 1 ready in X s, the rest refined Y s later". When the rest comes in, the page shows it instead
+of stage 1. If you are already watching stage 1 live, the refined steps replace the ones not done
+yet: the done steps, the focused step's clock and the looks so far are kept. A model that answers
+stage 1 with a whole plan (no `outlineFrom`) is told so, and nothing is refined. Saving a scenario
+keeps both stages, and a saved scenario runs in two stages too while the box is ticked.
 
 ## Watching live
 
@@ -118,7 +118,8 @@ pnpm bench --model gemini-3.5-flash-lite --model gemini-3.8-flash --slow
 pnpm bench --tag hazard --repeat 3             # how steady are the answers?
 pnpm bench --staged                            # as the headset plans: stage first, then rest
 pnpm bench --staged --thinking first=low --thinking rest=high
-pnpm bench ph-lesson-cup-a-already-pink --no-judge
+pnpm bench --staged --thinking first=minimal --repeat 3   # how stage first was picked
+pnpm bench ph-lesson-cup-a-already-pink-knife-on-the-table --no-judge
 pnpm bench --list
 pnpm bench --checks                            # every watcher test, the planner model
 pnpm bench --checks --model gemini-robotics-er-2-preview --model gemini-3.8-flash --repeat 3
@@ -134,6 +135,16 @@ with: stage rest's steps, with the warnings of both stages, as the coach heard t
 `--thinking <stage>=<level>` tries another thinking level for a stage (`default` is the model's
 own). With `--checks` the table has looks, passes, the pass rate, passes by expected answer (done,
 not done, wrong) and the median time.
+
+`apps/server/scripts/stage1-timing.ts` times stage first alone, streamed, on the saved scenarios:
+how long the model thinks before it writes, when the first step starts and when the answer ends, the
+tokens, and each field's share of the answer. It saves nothing and needs no judge:
+
+```bash
+cd apps/server
+npx tsx --env-file-if-exists=../../.env scripts/stage1-timing.ts --thinking minimal
+npx tsx --env-file-if-exists=../../.env scripts/stage1-timing.ts fridge-yogurt-drink-beside-the-milk --thinking low --repeat 5
+```
 
 ## Scenes worth trying
 
