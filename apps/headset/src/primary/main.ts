@@ -30,11 +30,11 @@ import { TrackerClient, type TrackerMask, trackerUrl } from './tracker-client';
 
 // The primary-object demo (/primary.html): about once a second the server names the main object
 // in the passthrough camera's view (Gemini picks it, jev boxes it), and in between the tracker on
-// the Mac segments it on every camera frame streamed to it (services/jev-finder/TRACK.md). Its
-// outline is drawn around the real object with the name above it; both hands are drawn as
-// skeletons. Without the tracker, each answer's own outline is drawn instead. Either way the
-// outline is placed at the object's measured distance (hit-test along its camera rays, see
-// placement.ts), so it lines up for both eyes, not just the one next to the camera.
+// the Mac (YOLOE-26 + ByteTrack) outlines it on every camera frame streamed to it
+// (tracker/TRACK.md). Its outline is drawn around the real object with the name above it; both
+// hands are drawn as skeletons. Without the tracker, each answer's own outline is drawn instead.
+// Either way the outline is placed at the object's measured distance (hit-test along its camera
+// rays, see placement.ts), so it lines up for both eyes, not just the one next to the camera.
 // ?image=/demo/<file>.jpg replaces the camera with a photo, ?emulate=1 runs against IWER's
 // synthetic room, and ?debug=1 shows the last name, the tracker's rate and the look time.
 //

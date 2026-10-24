@@ -30,7 +30,7 @@ export default defineConfig({
     proxy: {
       '/api': { target: server, changeOrigin: true },
       '/gemini': { target: server, changeOrigin: true, ws: true },
-      // Live segmentation stream for primary.html (services/jev-finder/TRACK.md).
+      // Live tracking stream for primary.html (tracker/TRACK.md).
       '/track': {
         target: process.env.CLIO_TRACKER_URL ?? 'http://127.0.0.1:8790',
         changeOrigin: true,

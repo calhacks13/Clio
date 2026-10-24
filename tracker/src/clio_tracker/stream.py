@@ -1,7 +1,9 @@
-"""One /track connection: read messages as they come, segment only the newest frame.
+"""One /track connection: read messages as they come, track only the newest frame.
+
+From the jev finder, unchanged but for the tracker it drives (track.py).
 
 The page sends a frame only after the answer to the previous one (or after 500 ms), so normally
-one frame waits at a time. When segmentation falls behind, a newer frame replaces the waiting
+one frame waits at a time. When tracking falls behind, a newer frame replaces the waiting
 one, which gets no answer. Targets apply in order before the next frame is segmented.
 """
 
@@ -16,9 +18,9 @@ from fastapi import WebSocket
 from fastapi.concurrency import run_in_threadpool
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
-from .tracker import BadMessage, FrameHeader, TargetBox, Tracker, parse_command, parse_frame
+from .track import BadMessage, FrameHeader, StreamTracker, TargetBox, parse_command, parse_frame
 
-log = logging.getLogger("jev_finder")
+log = logging.getLogger("clio_tracker")
 
 
 @dataclass
@@ -54,7 +56,7 @@ class Inbox:
         return commands, frame
 
 
-async def run_stream(websocket: WebSocket, tracker: Tracker) -> None:
+async def run_stream(websocket: WebSocket, tracker: StreamTracker) -> None:
     await websocket.send_text(json.dumps({"type": "ready", "model": tracker.label}))
     inbox = Inbox()
     reader = asyncio.create_task(read(websocket, inbox))
@@ -70,7 +72,7 @@ async def run_stream(websocket: WebSocket, tracker: Tracker) -> None:
             await websocket.send_text(json.dumps(answer))
             answered += 1
     except (WebSocketDisconnect, WebSocketDisconnected, OSError):
-        pass  # the page went away while a frame was being segmented; other errors reach the server
+        pass  # the page went away while a frame was being tracked; other errors reach the server
     finally:
         reader.cancel()
         log.info("Track stream closed: %d frames answered, %d dropped", answered, inbox.dropped)

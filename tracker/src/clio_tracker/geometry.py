@@ -12,6 +12,7 @@ import cv2
 import numpy as np
 
 PAD_VALUE = 114  # YOLO's gray letterbox padding
+CONTACT_BAND = 0.03
 
 
 @dataclass(frozen=True)
@@ -118,10 +119,13 @@ def _unit(v: float) -> float:
 
 @dataclass(frozen=True)
 class Shape:
-    """A mask turned into what Clio draws and lifts: one outer contour and its deepest point."""
+    """A mask turned into what Clio draws and lifts: one outer contour and two points."""
 
     outline: list[list[float]] | None  # normalized [x, y] points, not closed
     point: list[float]  # normalized; the mask's pole of inaccessibility, else the box center
+    # The middle of the mask's lowest edge, where the object most likely rests on a surface
+    # (TRACK.md); None without a mask.
+    contact: list[float] | None = None
 
 
 def mask_shape(
@@ -164,10 +168,19 @@ def mask_shape(
     depth = cv2.distanceTransform(piece, cv2.DIST_L2, 3)
     py, px = np.unravel_index(int(np.argmax(depth)), depth.shape)
 
+    # The contact point, as the jev finder defined it: the middle of the piece's bottom 3% of
+    # rows (at least one), on the bottom pixel edge, so one stray pixel doesn't decide it.
+    rows = np.flatnonzero(piece.any(axis=1))
+    bottom = int(rows[-1])
+    band = max(1, round(CONTACT_BAND * (bottom - int(rows[0]) + 1)))
+    cols = np.nonzero(piece[bottom - band + 1 : bottom + 1])[1]
+    cx_px, cy_px = (cols.min() + cols.max() + 1) / 2, bottom + 1
+
     ox, oy = origin
     outline = [
         [_unit((ox + (x + 0.5) * scale) / width), _unit((oy + (y + 0.5) * scale) / height)]
         for x, y in poly.tolist()
     ]
     point = [_unit((ox + (px + 0.5) * scale) / width), _unit((oy + (py + 0.5) * scale) / height)]
-    return Shape(outline, point)
+    contact = [_unit((ox + cx_px * scale) / width), _unit((oy + cy_px * scale) / height)]
+    return Shape(outline, point, contact)

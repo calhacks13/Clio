@@ -1,9 +1,10 @@
-"""The camera frame as jev and SAM see it.
+"""The camera frame as jev and YOLOE see it (from the jev finder).
 
 jev takes JPEG or PNG with each side 256 to 1568 px and at least 78,400 px in area, at most
 16 MiB, and rejects anything else instead of resizing it. Frames are fitted the way
 `jevbench.core.prepare_image` does it: shrunk to fit 1568 px, short sides padded to 280 px.
-SAM runs on the fitted frame without the padding, so its mask is in 0..1 of the original frame.
+YOLOE runs on the fitted frame without the padding, so its outline is in 0..1 of the original
+frame.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import base64
 import binascii
 import io
+import sys
 from dataclasses import dataclass
 
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -37,7 +39,7 @@ class BadImage(ValueError):
 @dataclass(frozen=True)
 class Frame:
     image: Image.Image
-    """RGB, fitted within 1568 px, no padding. SAM runs on this."""
+    """RGB, fitted within 1568 px, no padding. YOLOE runs on this."""
     jpeg: bytes
     """What jev gets: the original JPEG when it already fits, else the padded frame re-encoded."""
     scale: float
@@ -60,8 +62,17 @@ class Frame:
         ]
 
 
+def plain_pil() -> None:
+    """Undo Ultralytics' PIL patch: on an image Pillow can't identify, it tries to install and
+    load a HEIF plugin instead of raising UnidentifiedImageError. Frames are JPEG, PNG or WebP."""
+    patches = sys.modules.get("ultralytics.utils.patches")
+    if patches is not None:
+        patches._pil_plugins_registered = True
+
+
 def decode_frame(mime_type: str, data: str) -> Frame:
     """Decodes a base64 image from a locate request and fits it to jev's size rules."""
+    plain_pil()
     expected = FORMATS.get(mime_type)
     if expected is None:
         raise BadImage(f"Unsupported image type {mime_type}: send image/jpeg, png or webp.")

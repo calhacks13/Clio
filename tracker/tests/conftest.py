@@ -8,15 +8,22 @@ under it, and outlines a thing as its box.
 
 from __future__ import annotations
 
+import base64
+import io
+import json
+import threading
 from collections import deque
 from concurrent.futures import Future
 from dataclasses import dataclass
 
+import httpx
 import numpy as np
 import pytest
+from PIL import Image
 
 from clio_tracker.geometry import Letterbox, Shape, iou
 from clio_tracker.identify import FrameImage, Identification, Query
+from clio_tracker.jev import JevClient
 from clio_tracker.vision import Encoding
 
 W, H = 960, 720
@@ -44,14 +51,24 @@ class Thing:
 
 
 class FakeVision:
+    """`scenes` are taken in order, one per encode. `world` instead picks the scene by the
+    frame's brightness (scene k is a frame filled with gray 10 * k), which survives JPEG, so a
+    frame encoded twice (a /track target) shows the same scene both times."""
+
     model = "fake-yoloe"
     backend = "fake"
 
     def __init__(self) -> None:
         self.scenes: deque[list[Thing]] = deque()
+        self.world: dict[int, list[Thing]] = {}
 
-    def encode(self, _rgb: np.ndarray | None = None, scene: list[Thing] | None = None) -> Encoding:
-        things = scene if scene is not None else self.scenes.popleft()
+    def encode(self, rgb: np.ndarray | None = None, scene: list[Thing] | None = None) -> Encoding:
+        if scene is not None:
+            things = scene
+        elif self.world and rgb is not None:
+            things = self.world.get(int(round(float(rgb.mean()) / 10)), [])
+        else:
+            things = self.scenes.popleft()
         enc = Encoding(
             letterbox=Letterbox(W, H, W, 1.0, 0, 0),
             boxes=np.array([t.box for t in things], dtype=np.float32).reshape(-1, 4),
@@ -83,7 +100,18 @@ class FakeVision:
     def shape(self, enc: Encoding, anchor: int, box: np.ndarray) -> Shape:
         x1, y1, x2, y2 = (float(v) for v in box)
         outline = [[x1 / W, y1 / H], [x2 / W, y1 / H], [x2 / W, y2 / H], [x1 / W, y2 / H]]
-        return Shape(outline, [(x1 + x2) / 2 / W, (y1 + y2) / 2 / H])
+        return Shape(outline, [(x1 + x2) / 2 / W, (y1 + y2) / 2 / H], [(x1 + x2) / 2 / W, y2 / H])
+
+    def outline_in_box(self, enc: Encoding, box: np.ndarray, min_iou: float = 0.5):
+        things = enc.things  # type: ignore[attr-defined]
+        if not things:
+            return None
+        overlaps = iou(np.array([t.box for t in things]), box)[:, 0]
+        i = int(np.argmax(overlaps))
+        if overlaps[i] < min_iou:
+            return None
+        found = np.array(things[i].box, dtype=np.float32)
+        return found, self.shape(enc, i, found)
 
 
 class FakeIdentifier:
@@ -137,6 +165,15 @@ def frame_image() -> FrameImage:
     return FrameImage(b"jpeg", "image/jpeg", np.zeros((H, W, 3), np.uint8))
 
 
+def scene_jpeg(k: int) -> bytes:
+    """A W x H JPEG that FakeVision.world reads as scene k."""
+    import cv2
+
+    ok, buf = cv2.imencode(".jpg", np.full((H, W, 3), 10 * k, np.uint8))
+    assert ok
+    return buf.tobytes()
+
+
 def norm_box(box) -> tuple[float, float, float, float]:
     x1, y1, x2, y2 = box
     return (x1 / W, y1 / H, x2 / W, y2 / H)
@@ -145,3 +182,72 @@ def norm_box(box) -> tuple[float, float, float, float]:
 @pytest.fixture
 def vision() -> FakeVision:
     return FakeVision()
+
+
+@pytest.fixture(autouse=True)
+def prohibit_real_network(monkeypatch):
+    def blocked(*args, **kwargs):
+        raise AssertionError("Tests must use a mock transport; external HTTP is disabled.")
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", blocked)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", blocked)
+
+
+class FakeJev:
+    """jev's API without the network (from the jev finder's tests). Every object is present
+    with `box` unless `answers` (by question key) says otherwise; `status` other than 200 fails
+    the request; a `hold` event keeps jev from answering until it is set. Records requests."""
+
+    def __init__(self):
+        self.answers: dict[str, dict] = {}
+        self.box = (0.3, 0.3, 0.7, 0.7)
+        self.status = 200
+        self.error: Exception | None = None
+        self.hold: threading.Event | None = None
+        self.requests: list[httpx.Request] = []
+
+    def present(self, key: str, noul: float, box=None) -> None:
+        self.answers[key] = {"noul": noul, "box": box}
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        if self.hold:
+            self.hold.wait(5)
+        if self.error:
+            raise self.error
+        if self.status != 200:
+            return httpx.Response(self.status, text="overloaded")
+        answers = {}
+        for name, question in json.loads(request.content)["questions"].items():
+            _, key = name.split("_", 1)
+            answer = self.answers.get(key, {})
+            if question["type"] == "noul":
+                answers[name] = {"type": "noul", "noul": answer.get("noul", 0.9)}
+            else:
+                left, top, right, bottom = answer.get("box") or self.box
+                coords = {"left": left, "top": top, "right": right, "bottom": bottom}
+                answers[name] = {"type": "box", "box": coords, "confidence": None}
+        return httpx.Response(200, json={"answers": answers, "usage": {"input_tokens": 3300}})
+
+    def body(self, index: int = -1) -> dict:
+        return json.loads(self.requests[index].content)
+
+    def client(self, timeout_s: float = 12.0) -> JevClient:
+        transport = httpx.MockTransport(self.handle)
+        return JevClient("test-key", timeout_s=timeout_s, transport=transport)
+
+
+def encode_image(size=(960, 720), fmt="JPEG", color=(90, 120, 160)) -> str:
+    buffer = io.BytesIO()
+    Image.new("RGB", size, color).save(buffer, fmt)
+    return base64.b64encode(buffer.getvalue()).decode()
+
+
+@pytest.fixture
+def fake_jev() -> FakeJev:
+    return FakeJev()
+
+
+@pytest.fixture
+def image_b64():
+    return encode_image

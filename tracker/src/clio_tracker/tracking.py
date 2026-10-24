@@ -45,6 +45,10 @@ class TrackerParams:
     reacquire_after_jev: float = 0.80  # right after jev placed it, but no track was there
     reacquire_when_absent: float = 0.93  # jev last said it is not in view
     reacquire_margin: float = 0.03  # over the next most similar track
+    # A track that started where the target was just lost (ByteTrack split it, e.g. a part and
+    # the whole swapping scores in a close-up) takes over at this lower appearance bar.
+    reacquire_nearby: float = 0.75
+    nearby_overlap: float = 0.6  # share of the smaller box inside the other
     learn_min_score: float = 0.35  # appearance learns only from confident sightings...
     learn_min_similarity: float = 0.80  # ...that still resemble jev's view
     learn_rate: float = 0.15
@@ -77,6 +81,8 @@ class _Fresh:
     at_edge: bool
     fills_view: bool
     size: tuple[int, int]  # the frame's width and height
+    frame_id: int  # ByteTrack's frame count at this sighting
+    by: str | None  # how the target had been picked: "jev" or "appearance"
 
 
 @dataclass
@@ -113,6 +119,9 @@ class ObjectTracker:
         self._last_t: float | None = None
         self._fps = 15.0
         self._applied_seq = -1
+        # Track ids that continued another's object (_continue_nearby): a late jev answer about
+        # the old id means the new one.
+        self._successor: dict[int, int] = {}
 
     # --- prompt ----------------------------------------------------------------------------
 
@@ -150,6 +159,9 @@ class ObjectTracker:
         if tid is not None and tid not in active and not self._alive(tid):
             self.target_id = tid = None
             self.target_by = None
+        if tid not in active:
+            # Missed on this frame: a track that just started where it was may be it.
+            tid = self._continue_nearby(enc, vision, active, boxes, t) or tid
         if tid is None:
             tid = self._reacquire(enc, vision, active, boxes, t)
 
@@ -202,7 +214,15 @@ class ObjectTracker:
         floor = 0.5 if self.target_by == "jev" else 0.35
         confidence = round(max(score, floor), 3)
         self._fresh = _Fresh(
-            t, box.copy(), shape, confidence, at_edge, area > 0.6, (lb.width, lb.height)
+            t,
+            box.copy(),
+            shape,
+            confidence,
+            at_edge,
+            area > 0.6,
+            (lb.width, lb.height),
+            self._tracks.frame_id,
+            self.target_by,
         )
         return Sighting(True, box, shape, confidence, "tracking", tid)
 
@@ -219,6 +239,35 @@ class ObjectTracker:
         shape = _moved(fresh.shape, fresh.box, box, fresh.size)
         confidence = round(fresh.confidence * (1 - 0.5 * age / window), 3)
         return Sighting(True, box, shape, confidence, "coasting", tid)
+
+    def _continue_nearby(
+        self,
+        enc: Encoding,
+        vision: YoloeVision,
+        active: dict[int, tuple[int, float]],
+        boxes: np.ndarray,
+        t: float,
+    ) -> int | None:
+        p, fresh = self.params, self._fresh
+        if fresh is None or self.absent or t - fresh.t > p.lost_s or self.prompt is None:
+            return None
+        born = {s.track_id: s.start_frame for s in self._tracks.tracked_stracks}
+        ids = [i for i in active if i != self.target_id and born.get(i, -1) >= fresh.frame_id]
+        if not ids:
+            return None
+        track_boxes = np.stack([boxes[active[i][0]] for i in ids])
+        near = _overlap(track_boxes, fresh.box) >= p.nearby_overlap
+        if not near.any():
+            return None
+        reference = self.running if self.running is not None else self.prompt
+        similarity = np.where(near, vision.prompts(enc, track_boxes) @ reference, -1.0)
+        best = int(np.argmax(similarity))
+        if similarity[best] < p.reacquire_nearby:
+            return None
+        if self.target_id is not None:
+            self._successor[self.target_id] = ids[best]
+        self.target_id, self.target_by = ids[best], fresh.by
+        return self.target_id
 
     def _reacquire(
         self,
@@ -296,6 +345,10 @@ class ObjectTracker:
             overlaps = iou(np.stack([snapshot[i] for i in ids]), box)[:, 0]
             k = int(np.argmax(overlaps))
             best_id, best_iou = ids[k], float(overlaps[k])
+            seen: set[int] = set()
+            while best_id in self._successor and best_id not in seen:
+                seen.add(best_id)
+                best_id = self._successor[best_id]
         if best_id is not None and best_iou >= self.params.match_iou and self._alive(best_id):
             self.target_id, self.target_by = best_id, "jev"
             self._pending = None
@@ -367,6 +420,16 @@ class _Detections:
         return _Detections(self.xyxy[mask], self.conf[mask])
 
 
+def _overlap(boxes: np.ndarray, box: np.ndarray) -> np.ndarray:
+    """For each of (N, 4) boxes, the share of the smaller of it and `box` inside the other."""
+    b = np.asarray(boxes, dtype=np.float32).reshape(-1, 4)
+    w = (np.minimum(b[:, 2], box[2]) - np.maximum(b[:, 0], box[0])).clip(0)
+    h = (np.minimum(b[:, 3], box[3]) - np.maximum(b[:, 1], box[1])).clip(0)
+    area = (b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1])
+    smaller = np.minimum(area, (box[2] - box[0]) * (box[3] - box[1]))
+    return np.where(smaller > 0, w * h / np.maximum(smaller, 1e-9), 0.0)
+
+
 def _unit(v: np.ndarray) -> np.ndarray:
     v = np.asarray(v, dtype=np.float32)
     return v / max(float(np.linalg.norm(v)), 1e-12)
@@ -389,4 +452,5 @@ def _moved(shape: Shape, old: np.ndarray, new: np.ndarray, size: tuple[int, int]
         return [round(float(q[0]), 4), round(float(q[1]), 4)]
 
     outline = [move(p) for p in shape.outline] if shape.outline else None
-    return Shape(outline, move(shape.point))
+    contact = move(shape.contact) if shape.contact else None
+    return Shape(outline, move(shape.point), contact)

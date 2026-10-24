@@ -1,3 +1,5 @@
+"""Fitting frames to jev's size rules (from the jev finder, unchanged)."""
+
 from __future__ import annotations
 
 import base64
@@ -6,7 +8,7 @@ import io
 import pytest
 from PIL import Image
 
-from jev_finder.images import BadImage, decode_frame, fit_frame
+from clio_tracker.images import BadImage, decode_frame, fit_frame
 
 
 def jev_image(frame) -> Image.Image:

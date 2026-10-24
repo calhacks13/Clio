@@ -28,7 +28,7 @@ class FakeSocket implements TrackerSocket {
   }
 
   /** The tracker accepts the connection and says it is ready. */
-  accept(model = 'edgetam'): void {
+  accept(model = 'yoloe-26l-seg'): void {
     this.readyState = 1;
     this.receive({ type: 'ready', model });
   }
@@ -59,7 +59,7 @@ const mask = {
   contact: [0.44, 0.76],
   score: 0.93,
   ms: { segment: 38, total: 46 },
-  model: 'edgetam',
+  model: 'yoloe-26l-seg',
 };
 
 function setup() {
@@ -86,9 +86,9 @@ function setup() {
 
 describe('parseTrackerMessage', () => {
   it('reads ready and mask messages', () => {
-    expect(parseTrackerMessage('{"type":"ready","model":"edgetam"}')).toEqual({
+    expect(parseTrackerMessage('{"type":"ready","model":"yoloe-26l-seg"}')).toEqual({
       type: 'ready',
-      model: 'edgetam',
+      model: 'yoloe-26l-seg',
     });
     expect(parseTrackerMessage(JSON.stringify(mask))).toMatchObject({
       seq: 41,
@@ -143,7 +143,7 @@ describe('TrackerClient', () => {
     expect(client.connected).toBe(false);
     sockets[0]?.accept();
     expect(client.connected).toBe(true);
-    expect(client.model).toBe('edgetam');
+    expect(client.model).toBe('yoloe-26l-seg');
     expect(connections).toEqual([true]);
     sockets[0]?.receive(mask);
     expect(masks.map((m) => m.seq)).toEqual([41]);

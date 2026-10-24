@@ -93,3 +93,53 @@ def bus_rgb():
 
     bgr = cv2.imread(str(Path(ultralytics.__file__).parent / "assets" / "bus.jpg"))
     return np.ascontiguousarray(bgr[..., ::-1])
+
+
+def test_track_stream_follows_a_target_given_once(bus_rgb):
+    """Peter's primary demo flow: one target over /track, then frames alone."""
+    from clio_tracker.track import FrameHeader, StreamTracker
+
+    vision = load_vision("yoloe-26s-seg", backend="torch")
+    tracker = StreamTracker(vision)
+    n = 45
+    hits, wrong, found = 0, 0, 0
+    for i in range(n):
+        frame, view = camera(bus_rgb, i, n)
+        ok, buf = cv2.imencode(".jpg", frame[..., ::-1])
+        if i == 1:  # jev's box arrives about one frame later, about frame 0
+            x0, y0, x1, y1 = project(PERSON, camera(bus_rgb, 0, n)[1])[0] / [*OUT, *OUT]
+            from clio_tracker.track import TargetBox
+
+            tracker.command(TargetBox(0, [x0, y0, x1, y1], "man"))
+        answer = tracker.step(FrameHeader(i, 1000.0 + 66 * i, *OUT), buf.tobytes())
+        if i < 1 or not answer["found"]:
+            continue
+        found += 1
+        box = np.array(answer["box"]) * [*OUT, *OUT]
+        hits += iou(box, project(PERSON, view)[0])[0, 0] > 0.6
+        wrong += iou(box, project(OTHERS, view)).max() > 0.5
+        assert answer["outline"] and answer["contact"] and answer["name"] == "man"
+    assert found == n - 1 and wrong == 0 and hits >= 0.9 * (n - 1)
+
+
+def test_locate_outlines_jevs_box_with_yoloe(bus_rgb):
+    from clio_tracker.finder import Finder
+    from clio_tracker.identify import JevIdentifier
+    from clio_tracker.jev import JevClient, fake_transport
+
+    h, w = bus_rgb.shape[:2]
+    box = (PERSON / [w, h, w, h]).tolist()
+    jev = JevIdentifier(JevClient("fake", transport=fake_transport(tuple(box))), "fake-jev")
+    finder = Finder(jev, load_vision("yoloe-26s-seg", backend="torch"))
+    ok, buf = cv2.imencode(".jpg", bus_rgb[..., ::-1])
+    import base64
+
+    answer, _ = finder.locate(
+        "image/jpeg",
+        base64.b64encode(buf.tobytes()).decode(),
+        [Query("man", "The man in the black jacket", "man")],
+    )
+    finder.close()
+    (d,) = answer["detections"]
+    assert d["found"] and d["outline"] and len(d["outline"]) >= 3
+    assert iou(np.array(d["box"]) * [w, h, w, h], PERSON)[0, 0] > 0.9

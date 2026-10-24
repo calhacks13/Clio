@@ -35,13 +35,14 @@ from typing import Protocol
 import numpy as np
 
 os.environ.setdefault("YOLO_VERBOSE", "False")
+os.environ.setdefault("YOLO_AUTOINSTALL", "False")
 
 import cv2  # noqa: E402
 import torch  # noqa: E402
 import torch.nn.functional as F  # noqa: E402
 from torch import nn  # noqa: E402
 
-from .geometry import Letterbox, Shape, letterbox, mask_shape  # noqa: E402
+from .geometry import Letterbox, Shape, iou, letterbox, mask_shape  # noqa: E402
 
 INPUT_SIZE = 640
 EMBED = 512
@@ -325,6 +326,24 @@ class YoloeVision:
         boxes = enc.letterbox.to_input(np.atleast_2d(boxes))
         masks = prompt_masks(boxes, enc.savpe_x.shape[1:])
         return self.savpe(enc.savpe_x, enc.savpe_y, masks)
+
+    def outline_in_box(
+        self, enc: Encoding, box: np.ndarray, min_iou: float = 0.5
+    ) -> tuple[np.ndarray, Shape] | None:
+        """The object inside a frame-pixel box (jev's), outlined: YOLOE's box and shape for it.
+
+        The box becomes a visual prompt on this frame; of the candidates that fill most of the
+        box, the one that scores highest against it is the object. None when no candidate does,
+        and the caller keeps the box alone. This is what SAM did with jev's box before.
+        """
+        scores = self.scores(enc, self.prompts(enc, box))[0]
+        boxes = enc.letterbox.to_frame(enc.boxes)
+        overlap = iou(boxes, box)[:, 0]
+        fit = np.where((overlap >= min_iou) & (scores >= 0.05), scores * overlap, 0.0)
+        if not fit.any():
+            return None
+        best = int(np.argmax(fit))
+        return boxes[best], self.shape(enc, best, boxes[best])
 
     def shape(self, enc: Encoding, anchor: int, box: np.ndarray) -> Shape:
         """The outline and point of candidate `anchor`, whose frame-pixel box is `box`."""

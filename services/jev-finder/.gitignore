@@ -1,9 +1,0 @@
-# Models fetched by `python -m jev_finder.setup_models`, the uv env and the key.
-models/
-.venv/
-.env
-*.pt
-*.safetensors
-__pycache__/
-.pytest_cache/
-.ruff_cache/

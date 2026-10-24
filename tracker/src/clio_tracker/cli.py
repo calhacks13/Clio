@@ -10,32 +10,43 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 
 from . import __version__
-from .config import ConfigError, Settings, load_settings
+from .bench import valid_box
+from .config import HOST, ConfigError, Settings, load_settings
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="clio-tracker", description=__doc__)
     parser.add_argument("--version", action="version", version=f"clio-tracker {__version__}")
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
-    p = sub.add_parser("serve", help="answer Clio's object finder requests (the default)")
-    p.set_defaults(run=_serve)
+    serve = sub.add_parser("serve", help="answer /locate and /track (the default)")
+    serve.set_defaults(run=_serve)
     p = sub.add_parser("export", help="export the Core ML vision graph now, not on first serve")
     p.set_defaults(run=_export)
     p = sub.add_parser("bench", help="time the vision graph and the per-object work")
     p.add_argument("--frames", type=int, default=50)
     p.set_defaults(run=_bench)
-    for p in sub.choices.values():
+    for p in (parser, *sub.choices.values()):
         p.add_argument("--model", help="YOLOE-26 seg checkpoint, e.g. yoloe-26s-seg")
         p.add_argument("--backend", choices=["auto", "coreml", "torch"])
         p.add_argument("--device", help="torch device: auto, mps, cuda or cpu")
+    for p in (parser, serve):
+        p.add_argument("--port", type=int, help="8790 by default, which Clio's server expects")
+        p.add_argument(
+            "--fake-jev",
+            nargs="?",
+            const="0.3,0.3,0.7,0.7",
+            metavar="LEFT,TOP,RIGHT,BOTTOM",
+            help="answer every object with this box instead of calling jev (no key, no cost)",
+        )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     try:
         settings = load_settings()
     except ConfigError as e:
         print(f"clio-tracker: {e}", file=sys.stderr)
         return 1
-    overrides = {k: getattr(args, k, None) for k in ("model", "backend", "device")}
+    overrides = {k: getattr(args, k, None) for k in ("model", "backend", "device", "port")}
     settings = Settings(**{**settings.__dict__, **{k: v for k, v in overrides.items() if v}})
     return getattr(args, "run", _serve)(settings, args)
 
@@ -46,64 +57,102 @@ def _vision(settings: Settings):
     return load_vision(settings.model, settings.backend, settings.device)
 
 
-def _identifier(settings: Settings):
+def _identifier(settings: Settings, fake_box: str | None):
+    """jev (or a fake one), else any finder at CLIO_TRACKER_IDENTIFIER_URL; None when neither."""
     from .identify import HttpIdentifier, JevIdentifier
+    from .jev import JevClient, fake_transport
 
+    if fake_box:
+        box = [float(v) for v in fake_box.split(",")]
+        if not valid_box(box):
+            raise ConfigError("--fake-jev takes a box LEFT,TOP,RIGHT,BOTTOM in 0..1")
+        client = JevClient("fake", transport=fake_transport(tuple(box)))
+        return JevIdentifier(client, "fake-jev")
+    if settings.jev_key:
+        client = JevClient(
+            settings.jev_key, settings.jev_model, settings.jev_url, settings.jev_timeout_s
+        )
+        return JevIdentifier(client)
     if settings.identifier_url:
         return HttpIdentifier(settings.identifier_url, settings.identifier_token)
-    if settings.jev_key:
-        return JevIdentifier(settings.jev_key, settings.jev_model, settings.jev_url)
     return None
 
 
-def _serve(settings: Settings, _args: argparse.Namespace) -> int:
+def _serve(settings: Settings, args: argparse.Namespace) -> int:
     import uvicorn
 
+    from .finder import Finder
     from .server import create_app
     from .session import Sessions, SessionSettings, TrackerSession
+    from .track import StreamTracker
 
-    identifier = _identifier(settings)
+    try:
+        identifier = _identifier(settings, getattr(args, "fake_jev", None))
+    except ConfigError as e:
+        print(f"clio-tracker: {e}", file=sys.stderr)
+        return 1
     if identifier is None:
         print(
-            "clio-tracker: nothing can name the target. Set TYPESAFE_API_KEY (jev) in .env, or "
-            "CLIO_TRACKER_IDENTIFIER_URL to an object finder such as Clio's "
-            "http://127.0.0.1:8787/api/vision/locate (Gemini; only while Clio's CLIO_VISION_URL "
-            "does not point back here).",
+            "clio-tracker: nothing can name the target. Set TYPESAFE_API_KEY (jev) in .env, run "
+            "with --fake-jev, or set CLIO_TRACKER_IDENTIFIER_URL to an object finder such as "
+            "Clio's http://127.0.0.1:8787/api/vision/locate (Gemini; only while Clio's "
+            "CLIO_VISION_URL does not point back here).",
             file=sys.stderr,
         )
         return 1
+    log = logging.getLogger("clio_tracker")
+    started = time.perf_counter()
     vision = _vision(settings)
+    loaded = time.perf_counter()
+    _warm_up(vision)
+    log.info(
+        "%s on %s: loaded in %.1f s, warmed up in %.1f s",
+        vision.model,
+        vision.backend,
+        loaded - started,
+        time.perf_counter() - loaded,
+    )
     session_settings = SessionSettings(
         identify_interval_s=settings.identify_interval_ms / 1000,
         identify_max_in_flight=settings.identify_max_in_flight,
     )
-    executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="identify")
+    executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="identify")
     sessions = Sessions(lambda: TrackerSession(vision, identifier, executor, session_settings))
+    finder = Finder(identifier, vision)
 
     def health() -> dict:
-        return {
-            "model": vision.model,
-            "backend": vision.backend,
-            "identifier": identifier.name,
-            "identifyIntervalMs": settings.identify_interval_ms,
-        }
+        return {"model": finder.model, "backend": vision.backend}
 
-    app = create_app(sessions, vision.model, settings.refresh_ms, health)
-    log = logging.getLogger("clio_tracker")
+    app = create_app(sessions, finder, lambda: StreamTracker(vision), settings.refresh_ms, health)
     log.info(
         "\n".join(
             [
-                f"Clio tracker {__version__}",
-                f"  http://{settings.host}:{settings.port}/locate",
+                f"Clio tracker {__version__}: {finder.model}",
+                f"  http://{HOST}:{settings.port}/locate and ws://{HOST}:{settings.port}/track",
                 f"  Vision: {vision.model} on {vision.backend}",
-                f"  Names the target: {identifier.name}, every "
-                f"{settings.identify_interval_ms} ms per object, at most "
-                f"{settings.identify_max_in_flight} in flight",
+                f"  Names the target: {identifier.name}; with a session, every "
+                f"{settings.identify_interval_ms} ms per object",
             ]
         )
     )
-    uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning")
+    try:
+        uvicorn.run(app, host=HOST, port=settings.port, log_level="warning")
+    finally:
+        finder.close()
+        executor.shutdown(wait=False, cancel_futures=True)
+        getattr(identifier, "close", lambda: None)()
     return 0
+
+
+def _warm_up(vision) -> None:
+    """The first passes compile (Core ML) or pick kernels (MPS): do them before the first frame."""
+    import numpy as np
+
+    for size in ((720, 960), (480, 640)):
+        frame = np.full((*size, 3), 128, dtype=np.uint8)
+        enc = vision.encode(frame)
+        box = np.array([size[1] * 0.25, size[0] * 0.25, size[1] * 0.75, size[0] * 0.75])
+        vision.outline_in_box(enc, box)
 
 
 def _export(settings: Settings, _args: argparse.Namespace) -> int:

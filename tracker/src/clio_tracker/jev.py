@@ -1,5 +1,7 @@
 """One jev request per frame: a Noul presence question and a Box question for every object.
 
+From the jev finder (services/jev-finder, before YOLOE replaced its EdgeTAM and SAM models).
+
 The request and the rules follow `jevbench.providers.Jev`, which the Jev fun benchmark measured:
 the model is pinned (Box needs jev-1.14.0), the danger-zone image header is sent, presence comes
 from Noul alone (Box always answers with some box), every box is checked with `valid_box`, and

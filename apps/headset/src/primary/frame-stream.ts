@@ -1,4 +1,4 @@
-// Camera frames for the tracker (services/jev-finder/TRACK.md), as fast as the Mac answers them:
+// Camera frames for the tracker (tracker/TRACK.md), as fast as the Mac answers them:
 // the next frame goes out once the result for the last one is back, or after RESULT_WAIT_MS if it
 // never comes. The Quest runs hot (it has shut down for heat), so the stream stays light: frames
 // shrunk to 640x480 and JPEG-encoded asynchronously off the render path, never more than one

@@ -26,7 +26,10 @@ the headset tracking/viewer and episode-server work.
 
 ## Tracker
 
-`tracker/` is the real-time object finder (Python + uv, its own `pyproject.toml`; outside the
-pnpm workspace and Biome, like `pipeline/`). Read `tracker/README.md` before changing how objects
-are found or followed. It reaches into YOLOE-26's head, so Ultralytics is pinned to a narrow range
-and `tracker/tests/test_vision.py` checks the split graph against Ultralytics' own forward pass.
+`tracker/` is the object finder and live tracker on port 8790 (Python + uv, its own
+`pyproject.toml`; outside the pnpm workspace and Biome, like `pipeline/`): `POST /locate` for
+Clio's server and `WS /track` for `apps/headset/primary.html` (`tracker/TRACK.md`). It replaced
+`services/jev-finder` (EdgeTAM and SAM 2.1) with YOLOE-26 and ByteTrack and kept its jev client
+and `/track` protocol. Read `tracker/README.md` before changing how objects are found or
+followed. It reaches into YOLOE-26's head, so Ultralytics is pinned to a narrow range and
+`tracker/tests/test_vision.py` checks the split graph against Ultralytics' own forward pass.

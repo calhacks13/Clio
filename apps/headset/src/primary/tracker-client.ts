@@ -6,7 +6,7 @@ import {
 import { z } from 'zod';
 import { createLogger } from '../core/log';
 
-// The live tracking stream (services/jev-finder/TRACK.md): camera frames go to the tracker on the
+// The live tracking stream (tracker/TRACK.md): camera frames go to the tracker on the
 // Mac, which segments the current target on every one and answers each with a mask; Gemini and
 // jev's answer, about once a second, tell it what the target is. The socket goes through the
 // page's own origin (Vite proxies /track to the tracker), and reconnects with backoff while open.

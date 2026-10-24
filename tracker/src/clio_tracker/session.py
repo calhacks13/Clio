@@ -31,7 +31,8 @@ log = logging.getLogger("clio_tracker")
 @dataclass(frozen=True)
 class SessionSettings:
     identify_interval_s: float = 1.0  # how often jev looks again at each object
-    identify_max_in_flight: int = 2  # jev takes 2 to 6 s, so a second call may overlap
+    # jev's client never overlaps billed calls; another identifier may allow more.
+    identify_max_in_flight: int = 1
     present_threshold: float = 0.5  # jev's Noul probability that counts as "in view"
     forget_after_s: float = 10.0  # an object nobody asks about is dropped after this
     tracker: TrackerParams = field(default_factory=TrackerParams)

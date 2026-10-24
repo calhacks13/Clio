@@ -1,3 +1,5 @@
+"""The jev client (from the jev finder, unchanged): the request, the gate, no retries."""
+
 from __future__ import annotations
 
 import base64
@@ -6,7 +8,7 @@ import threading
 import httpx
 import pytest
 
-from jev_finder.jev import (
+from clio_tracker.jev import (
     DEFAULT_MODEL,
     JevClient,
     JevError,

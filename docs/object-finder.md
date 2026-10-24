@@ -115,11 +115,15 @@ many milliseconds after each answer (never later than `?showRefresh`, and never 
 
 ## A tracking finder
 
-[tracker/](../tracker/README.md) answers this contract from tracking state instead of a fresh
-model call per request: YOLOE-26's vision graph and ByteTrack follow each object on every frame
-(about 35 ms a round trip on an M5), and jev is asked which object the words mean only about once
-a second, in the background. It replaces the jev + SAM 2.1 service on `:8790` and answers with
-`refreshMs: 50`, so outlines follow moving objects at around 10 to 15 frames a second.
+[tracker/](../tracker/README.md) serves this contract on `:8790` with jev and YOLOE-26 (it
+replaced the jev finder's EdgeTAM and SAM 2.1). A request without `session` is answered like any
+finder: one jev call, then YOLOE outlines each box jev found; the primary-object route sends
+those. A request with a `session` (the lesson's) is answered from tracking state instead:
+YOLOE-26 and ByteTrack follow each object on every frame (about 35 ms a round trip on an M5),
+jev is asked which object the words mean only about once a second, in the background, and the
+answer carries `refreshMs: 50`, so outlines follow moving objects at 10 to 15 frames a second.
+The primary demo page also streams frames to its WebSocket `/track`
+([tracker/TRACK.md](../tracker/TRACK.md)).
 
 ## Minimal adapter
 

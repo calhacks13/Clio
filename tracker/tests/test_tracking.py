@@ -194,3 +194,40 @@ def test_an_answer_about_a_frame_before_any_track_keeps_a_target_that_matches(vi
     tid = run.tracker.target_id
     assert run.jev(2, at(100)) == "kept: looks like it"
     assert run.tracker.target_id == tid
+
+
+def test_a_track_born_where_the_target_was_lost_continues_it(vision):
+    """In a close-up the whole object and one part of it can swap scores: ByteTrack then drops
+    the target's track and starts another where it was. That one carries on as the target,
+    though it looks only fairly like it, and a later jev answer about the old track means it."""
+    big = (0.0, 40.0, 600.0, 460.0)
+    part = (0.0, 40.0, 140.0, 120.0)  # inside the old box, too small to match it
+    run = Run(vision)
+    run.frame(Thing(big, A), Thing(at(700, 300), B))
+    run.jev(1, big)
+    for _ in range(3):
+        run.frame(Thing(big, A), Thing(at(700, 300), B))
+    before = run.seq
+    first = run.tracker.target_id
+    part_look = blend(A, appearance(8), 0.82)  # under the 0.88 bar for a stranger track
+    sightings = [run.frame(Thing(part, part_look), Thing(at(700, 300), B)) for _ in range(3)]
+    assert all(s.found for s in sightings)
+    assert sightings[-1].state == "tracking" and sightings[-1].track_id != first
+    assert iou(sightings[-1].box, part)[0, 0] > 0.8
+    assert run.jev(before, big) == "confirmed"  # resolved to the track that continued it
+
+
+def test_a_look_alike_already_there_does_not_take_over(vision):
+    """Only a track born after the target was last seen can continue it: a look-alike tracked
+    all along inside the target's box is not taken when the target disappears."""
+    big = (0.0, 40.0, 600.0, 460.0)
+    small = (20.0, 50.0, 140.0, 130.0)  # inside it, but too small for ByteTrack to match
+    run = Run(vision)
+    run.frame(Thing(big, A), Thing(small, B))
+    run.jev(1, big)
+    for _ in range(3):
+        run.frame(Thing(big, A), Thing(small, B))
+    target = run.tracker.target_id
+    gone = [run.frame(Thing(small, B)) for _ in range(5)]
+    assert all(s.track_id in (target, None) for s in gone)
+    assert not any(s.state == "tracking" for s in gone)
