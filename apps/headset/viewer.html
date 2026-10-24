@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clio Viewer</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #070b14;
+        --panel: #0f1728;
+        --panel-2: #17223a;
+        --panel-3: #1f2d4b;
+        --line: #22304c;
+        --text: #e8eefc;
+        --muted: #8ea0c2;
+        --accent: #4fe3ff;
+        --on-accent: #04121a;
+        --ok: #7dffa4;
+        --bad: #ff8a95;
+        --warn: #ffd23f;
+        --coach: #c4b5fd;
+        --learner: #ffb86b;
+        --left: #4fe3ff;
+        --right: #ff6fae;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      body {
+        display: grid;
+        grid-template-columns: 16rem minmax(0, 1fr) 22rem;
+        height: 100dvh;
+        overflow: hidden;
+        font-size: 0.875rem;
+        line-height: 1.4;
+      }
+
+      ::selection {
+        background: var(--accent);
+        color: var(--on-accent);
+      }
+
+      :focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      * {
+        scrollbar-width: thin;
+        scrollbar-color: var(--line) transparent;
+      }
+
+      button {
+        font: inherit;
+        color: inherit;
+        border: 0;
+        cursor: pointer;
+      }
+
+      h1,
+      h2,
+      p,
+      ol,
+      ul {
+        margin: 0;
+        padding: 0;
+      }
+
+      ol,
+      ul {
+        list-style: none;
+      }
+
+      /* ---- episode list ---- */
+
+      .episodes {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        background: var(--panel);
+        padding: 1.25rem 0.5rem 1rem;
+      }
+
+      .episodes h2 {
+        font-size: 0.95rem;
+        font-weight: 600;
+        padding: 0 0.75rem 0.75rem;
+      }
+
+      .list-note {
+        padding: 0.5rem 0.75rem;
+        color: var(--muted);
+      }
+
+      .list-note.error {
+        color: var(--bad);
+      }
+
+      #episode-list {
+        display: grid;
+        gap: 2px;
+        overflow-y: auto;
+        min-height: 0;
+      }
+
+      .episode {
+        display: grid;
+        gap: 0.15rem;
+        width: 100%;
+        padding: 0.6rem 0.75rem;
+        border-radius: 0.5rem;
+        background: var(--panel);
+        text-align: left;
+        transition: background-color 150ms ease-out;
+      }
+
+      .episode:hover {
+        background: var(--panel-2);
+      }
+
+      .episode[aria-current="true"] {
+        background: var(--panel-3);
+      }
+
+      .episode-name {
+        font-weight: 600;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .episode[aria-current="true"] .episode-name {
+        color: var(--accent);
+      }
+
+      .episode-meta {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.75rem;
+        color: var(--muted);
+        font-size: 0.8rem;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .episode-status.live {
+        color: var(--ok);
+        font-weight: 600;
+      }
+
+      /* ---- 3D view and timeline ---- */
+
+      .stage {
+        display: grid;
+        grid-template-rows: minmax(0, 1fr) auto;
+        min-width: 0;
+        min-height: 0;
+      }
+
+      .view {
+        position: relative;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .view canvas {
+        display: block;
+      }
+
+      .labels {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+
+      .label {
+        padding: 0.15rem 0.4rem;
+        border-radius: 0.3rem;
+        background: var(--panel);
+        color: var(--text);
+        font-size: 0.72rem;
+        font-weight: 500;
+        white-space: nowrap;
+      }
+
+      .legend {
+        position: absolute;
+        left: 0.75rem;
+        bottom: 0.75rem;
+        display: flex;
+        gap: 0.9rem;
+        padding: 0.4rem 0.65rem;
+        border-radius: 0.4rem;
+        background: var(--panel);
+        color: var(--muted);
+        font-size: 0.75rem;
+        pointer-events: none;
+      }
+
+      .legend li {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+      }
+
+      .swatch {
+        width: 0.6rem;
+        height: 0.6rem;
+        border-radius: 2px;
+      }
+
+      .timeline {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.6rem 1rem;
+        background: var(--panel);
+      }
+
+      .icon {
+        display: grid;
+        place-items: center;
+        flex: none;
+        width: 2rem;
+        height: 2rem;
+        border-radius: 0.4rem;
+        background: var(--panel-3);
+        color: var(--text);
+        transition: background-color 150ms ease-out;
+      }
+
+      .icon:hover {
+        background: var(--line);
+      }
+
+      .icon svg {
+        width: 1rem;
+        height: 1rem;
+        fill: currentColor;
+      }
+
+      .icon .pause,
+      .icon.playing .play {
+        display: none;
+      }
+
+      .icon.playing .pause {
+        display: block;
+      }
+
+      .clock {
+        flex: none;
+        min-width: 3.4rem;
+        color: var(--muted);
+        font-size: 0.8rem;
+        font-variant-numeric: tabular-nums;
+      }
+
+      #duration {
+        text-align: right;
+      }
+
+      .track {
+        position: relative;
+        flex: 1;
+        height: 1.75rem;
+      }
+
+      /* Rail, fill and marks are inset by half the thumb, so they line up with where it travels. */
+      .rail,
+      .fill {
+        position: absolute;
+        left: 7px;
+        top: 50%;
+        height: 4px;
+        margin-top: -2px;
+        border-radius: 2px;
+        pointer-events: none;
+      }
+
+      .rail {
+        right: 7px;
+        background: var(--line);
+      }
+
+      .fill {
+        width: calc((100% - 14px) * var(--progress, 0));
+        background: var(--accent);
+      }
+
+      .marks {
+        position: absolute;
+        inset: 0 7px;
+        pointer-events: none;
+      }
+
+      .mark {
+        position: absolute;
+        top: 50%;
+        width: 2px;
+        height: 12px;
+        margin: -6px 0 0 -1px;
+        border-radius: 1px;
+        background: var(--text);
+      }
+
+      .mark.mistake {
+        background: var(--bad);
+      }
+
+      #scrub {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        appearance: none;
+        background: transparent;
+        cursor: pointer;
+      }
+
+      #scrub::-webkit-slider-thumb {
+        appearance: none;
+        width: 14px;
+        height: 14px;
+        border: 2px solid var(--panel);
+        border-radius: 50%;
+        background: var(--accent);
+      }
+
+      #scrub::-moz-range-thumb {
+        width: 14px;
+        height: 14px;
+        border: 2px solid var(--panel);
+        border-radius: 50%;
+        background: var(--accent);
+      }
+
+      #scrub::-moz-range-track {
+        background: transparent;
+      }
+
+      .live {
+        flex: none;
+        padding: 0.4rem 0.8rem;
+        border-radius: 0.4rem;
+        background: var(--panel-3);
+        color: var(--text);
+        font-weight: 600;
+        transition: background-color 150ms ease-out;
+      }
+
+      .live:hover {
+        background: var(--line);
+      }
+
+      .live[aria-pressed="true"] {
+        background: var(--accent);
+        color: var(--on-accent);
+      }
+
+      /* ---- lesson panel ---- */
+
+      .lesson {
+        display: grid;
+        grid-template-rows: auto auto minmax(0, 1fr);
+        min-height: 0;
+        background: var(--panel);
+        padding: 1.25rem 1.25rem 0;
+      }
+
+      .lesson h1 {
+        font-size: 1.1rem;
+        font-weight: 600;
+        line-height: 1.3;
+        text-wrap: balance;
+      }
+
+      .step {
+        display: grid;
+        gap: 0.35rem;
+        padding: 1rem 0 1.1rem;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .step-index {
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+
+      .instruction {
+        font-size: 1.1rem;
+        font-weight: 500;
+        line-height: 1.4;
+      }
+
+      .log {
+        display: flex;
+        flex-direction: column;
+        gap: 0.55rem;
+        overflow-y: auto;
+        padding: 1rem 0 1.25rem;
+      }
+
+      .entry {
+        display: grid;
+        grid-template-columns: 3.4rem 4.6rem minmax(0, 1fr);
+        gap: 0.5rem;
+        font-size: 0.82rem;
+      }
+
+      .entry-time {
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .entry-label {
+        font-weight: 600;
+        color: var(--muted);
+      }
+
+      .entry.step .entry-label {
+        color: var(--accent);
+      }
+
+      .entry.done .entry-label {
+        color: var(--ok);
+      }
+
+      .entry.mistake .entry-label {
+        color: var(--bad);
+      }
+
+      .entry.coach .entry-label {
+        color: var(--coach);
+      }
+
+      .entry.learner .entry-label {
+        color: var(--learner);
+      }
+
+      .entry.finder .entry-label {
+        color: var(--warn);
+      }
+
+      @media (max-width: 1100px) {
+        body {
+          grid-template-columns: 13rem minmax(0, 1fr) 18rem;
+        }
+      }
+
+      @media (max-width: 820px) {
+        body {
+          grid-template-columns: minmax(0, 1fr);
+          grid-template-rows: auto 65dvh auto;
+          height: auto;
+          overflow: auto;
+        }
+
+        #episode-list {
+          max-height: 9rem;
+        }
+
+        .lesson {
+          padding-bottom: 1rem;
+        }
+      }
+
+    </style>
+  </head>
+  <body>
+    <aside class="episodes">
+      <h2>Episodes</h2>
+      <p id="list-note" class="list-note" hidden></p>
+      <ol id="episode-list"></ol>
+    </aside>
+
+    <main class="stage">
+      <div id="view" class="view">
+        <ul class="legend">
+          <li><i class="swatch" style="background: var(--left)"></i>Left hand</li>
+          <li><i class="swatch" style="background: var(--right)"></i>Right hand</li>
+          <li><i class="swatch" style="background: var(--warn)"></i>Detection</li>
+        </ul>
+      </div>
+      <div class="timeline">
+        <button id="play" class="icon" type="button" aria-label="Play">
+          <svg class="play" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.5v11l9-5.5z" /></svg>
+          <svg class="pause" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M4 2.5h3v11H4zM9 2.5h3v11H9z" />
+          </svg>
+        </button>
+        <span id="clock" class="clock">0:00.0</span>
+        <div class="track">
+          <div class="rail"></div>
+          <div id="fill" class="fill"></div>
+          <div id="marks" class="marks"></div>
+          <input id="scrub" type="range" min="0" max="0" step="any" value="0" aria-label="Time" />
+        </div>
+        <span id="duration" class="clock">0:00.0</span>
+        <button id="live" class="live" type="button" aria-pressed="true" hidden>Live</button>
+      </div>
+    </main>
+
+    <aside class="lesson">
+      <h1 id="title">Clio Viewer</h1>
+      <section class="step">
+        <p id="step-index" class="step-index"></p>
+        <p id="instruction" class="instruction"></p>
+      </section>
+      <ol id="log" class="log"></ol>
+    </aside>
+
+    <script type="module" src="/src/viewer/main.ts"></script>
+  </body>
+</html>

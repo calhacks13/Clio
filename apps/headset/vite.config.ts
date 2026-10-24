@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 import { defineConfig } from 'vite';
 
@@ -31,5 +32,18 @@ export default defineConfig({
       '/gemini': { target: server, changeOrigin: true, ws: true },
     },
   },
-  build: { target: 'es2022', sourcemap: true },
+  build: {
+    target: 'es2022',
+    sourcemap: true,
+    // hello.html: bare WebXR smoke test. tracking.html: what the headset tracks (hands, surfaces,
+    // room mesh). viewer.html: laptop page that replays or follows a recorded episode live.
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        hello: fileURLToPath(new URL('./hello.html', import.meta.url)),
+        tracking: fileURLToPath(new URL('./tracking.html', import.meta.url)),
+        viewer: fileURLToPath(new URL('./viewer.html', import.meta.url)),
+      },
+    },
+  },
 });
