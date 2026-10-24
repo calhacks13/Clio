@@ -1,34 +1,35 @@
 {"t":0,"type":"procedure.started","procedureId":"shirt-fold","version":1,"stepCount":5}
+{"t":0,"type":"step.entered","stepId":"lay-flat","index":0,"instruction":"Lay the shirt flat in the outline, face up, collar on the left.","targets":[]}
 {"t":0,"type":"coach.narration","kind":"step","text":"[app] Step 1/5: \"Lay the shirt flat in the outline, face up, collar on the left.\" Notes: Ask them to say ready when it is flat. You may also see it in the camera frames. This step needs your judgment: call advance_step with the reason when you see it done. Tell them what to do in under 15 words."}
 {"t":0,"type":"transcript","role":"coach","text":"Lay the shirt flat in the outline, face up, collar on the left.","final":true}
-{"t":0,"type":"step.entered","stepId":"lay-flat","index":0,"instruction":"Lay the shirt flat in the outline, face up, collar on the left.","targets":[]}
 {"t":1000,"type":"step.completed","stepId":"lay-flat","index":0,"by":"user","forced":false,"durationMs":1000}
+{"t":1000,"type":"step.entered","stepId":"pinch-shoulder","index":1,"instruction":"With your left hand, pinch the shirt at the shoulder dot.","targets":["shoulder"]}
 {"t":1000,"type":"coach.narration","kind":"step","text":"[app] Step 1 done (user confirmed). Step 2/5: \"With your left hand, pinch the shirt at the shoulder dot.\" Targets: shoulder dot. Tell them what to do in under 15 words."}
 {"t":1000,"type":"transcript","role":"coach","text":"With your left hand, pinch the shirt at the shoulder dot.","final":true}
-{"t":1000,"type":"step.entered","stepId":"pinch-shoulder","index":1,"instruction":"With your left hand, pinch the shirt at the shoulder dot.","targets":["shoulder"]}
-{"t":2800,"type":"coach.narration","kind":"pinch","text":"[app] left hand pinched near shoulder dot (2 cm)."}
 {"t":2800,"type":"hand.pinch","hand":"left","phase":"start","point":[0.143,0.0152,-0.1851],"nearest":{"objectId":"shoulder","distance":0.0163}}
+{"t":2800,"type":"coach.narration","kind":"pinch","text":"[app] left hand pinched near shoulder dot (2 cm)."}
 {"t":2800,"type":"step.completed","stepId":"pinch-shoulder","index":1,"by":"check","forced":false,"durationMs":1800}
+{"t":2800,"type":"step.entered","stepId":"pinch-middle","index":2,"instruction":"Keep holding. With your right hand, pinch the middle dot.","targets":["middle"]}
 {"t":2800,"type":"coach.narration","kind":"step","text":"[app] Step 2 done (detected). Step 3/5: \"Keep holding. With your right hand, pinch the middle dot.\" Targets: middle dot. Notes: This is where the planted demo mistake happens: pinching too close to the near edge. Tell them what to do in under 15 words."}
 {"t":2800,"type":"transcript","role":"coach","text":"Keep holding. With your right hand, pinch the middle dot.","final":true}
-{"t":2800,"type":"step.entered","stepId":"pinch-middle","index":2,"instruction":"Keep holding. With your right hand, pinch the middle dot.","targets":["middle"]}
 {"t":4300,"type":"hand.pinch","hand":"right","phase":"start","point":[0.397,0.0152,-0.0901],"nearest":{"objectId":"middle","distance":0.0913}}
+{"t":4633.33,"type":"mistake.detected","stepId":"pinch-middle","kind":"pinch_too_low","message":"Slide your right hand up to the dot.","source":"rule"}
 {"t":4633.33,"type":"coach.narration","kind":"mistake","text":"[app] Mistake \"pinch_too_low\": Slide your right hand up to the dot. Correct them now in a few words."}
 {"t":4633.33,"type":"transcript","role":"coach","text":"Slide your right hand up to the dot.","final":true}
-{"t":4633.33,"type":"mistake.detected","stepId":"pinch-middle","kind":"pinch_too_low","message":"Slide your right hand up to the dot.","source":"rule"}
 {"t":5333.33,"type":"hand.pinch","hand":"right","phase":"end","point":[0.3921,0.0205,-0.0985],"nearest":{"objectId":"middle","distance":0.0844}}
-{"t":6300,"type":"coach.narration","kind":"pinch","text":"[app] right hand pinched near middle dot (2 cm)."}
 {"t":6300,"type":"hand.pinch","hand":"right","phase":"start","point":[0.397,0.0152,-0.1851],"nearest":{"objectId":"middle","distance":0.0163}}
+{"t":6300,"type":"coach.narration","kind":"pinch","text":"[app] right hand pinched near middle dot (2 cm)."}
 {"t":6300,"type":"step.completed","stepId":"pinch-middle","index":2,"by":"check","forced":false,"durationMs":3500}
+{"t":6300,"type":"step.entered","stepId":"cross-to-hem","index":3,"instruction":"Cross your left hand over your right and pinch the hem dot.","targets":["hem"]}
 {"t":6300,"type":"coach.narration","kind":"step","text":"[app] Step 3 done (detected). Step 4/5: \"Cross your left hand over your right and pinch the hem dot.\" Targets: hem dot. Notes: Hardest step. Tracking can flicker while the hands cross, so the radii are loose on purpose. Offer show_demo early. Tell them what to do in under 15 words."}
 {"t":6300,"type":"transcript","role":"coach","text":"Cross your left hand over your right and pinch the hem dot.","final":true}
-{"t":6300,"type":"step.entered","stepId":"cross-to-hem","index":3,"instruction":"Cross your left hand over your right and pinch the hem dot.","targets":["hem"]}
 {"t":6300,"type":"coach.tool_call","callId":"synth-1","name":"show_demo","args":{}}
 {"t":6300,"type":"demo.playback","stepId":"cross-to-hem","clipId":"synth:shirt-fold/cross-to-hem","phase":"start"}
 {"t":6300,"type":"coach.tool_result","callId":"synth-1","name":"show_demo","ok":true,"result":{"playing":true,"source":"synthesized","seconds":4}}
 {"t":8166.67,"type":"step.completed","stepId":"cross-to-hem","index":3,"by":"check","forced":false,"durationMs":1866.6667}
+{"t":8166.67,"type":"step.entered","stepId":"lift-and-fold","index":4,"instruction":"Lift both hands, uncross them, and lay the shirt down folded.","targets":[]}
 {"t":8166.67,"type":"demo.playback","stepId":"cross-to-hem","clipId":"synth:shirt-fold/cross-to-hem","phase":"end"}
 {"t":8166.67,"type":"coach.narration","kind":"step","text":"[app] Step 4 done (detected). Step 5/5: \"Lift both hands, uncross them, and lay the shirt down folded.\" Notes: Celebrate when it is done. If the fold is messy, offer to go again. This step needs your judgment: call advance_step with the reason when you see it done. Tell them what to do in under 15 words."}
 {"t":8166.67,"type":"transcript","role":"coach","text":"Lift both hands, uncross them, and lay the shirt down folded.","final":true}
-{"t":8166.67,"type":"step.entered","stepId":"lift-and-fold","index":4,"instruction":"Lift both hands, uncross them, and lay the shirt down folded.","targets":[]}
 {"t":11200,"type":"step.completed","stepId":"lift-and-fold","index":4,"by":"user","forced":false,"durationMs":3033.3333}
+{"t":11200,"type":"procedure.completed","durationMs":11200}

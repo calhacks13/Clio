@@ -166,6 +166,16 @@ describe('LessonController', () => {
     expect(lesson.phase).toBe('done');
   });
 
+  it('records the event that ends the procedure as the last event of the episode', async () => {
+    const { lesson, sink } = setup();
+    await lesson.handlers().start_lesson({ goal: 'add wiper fluid' });
+    await lesson.handlers().advance_step({ reason: 'holding it' });
+    await lesson.stop('learner took the headset off');
+    const [episode] = sink.episodes.values();
+    const types = episode?.batches.flatMap((b) => b.events).map((e) => e.type) ?? [];
+    expect(types.at(-1)).toBe('procedure.aborted');
+  });
+
   it('records coach-flagged mistakes against the current step', async () => {
     const { lesson, bus } = setup();
     const mistakes: string[] = [];

@@ -48,4 +48,13 @@ describe('Emitter', () => {
     e.emit('pong', { s: 'x' });
     expect(seen).toEqual(['ping', 'pong']);
   });
+
+  it('shows wildcard observers an event before any handler reacts to it', () => {
+    const e = new Emitter<Events>();
+    const observed: string[] = [];
+    e.onAny((type) => observed.push(String(type)));
+    e.on('ping', () => e.emit('pong', { s: 'reaction' }));
+    e.emit('ping', { n: 1 });
+    expect(observed).toEqual(['ping', 'pong']);
+  });
 });

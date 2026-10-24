@@ -82,6 +82,18 @@ describe('OverlayModel', () => {
     expect(later.toast).toBeNull();
   });
 
+  it('shows the procedure title for saved lessons that skipped planning', () => {
+    const { bus, model } = setup();
+    bus.emit('step.entered', {
+      t: 0,
+      stepId: 'open',
+      index: 0,
+      instruction: 'Open the cap.',
+      targets: ['cap'],
+    });
+    expect(model.snapshot(1).title).toBe('Refill');
+  });
+
   it('lists missing objects until they are found', () => {
     const { bus, model } = setup();
     bus.emit('object.missing', { t: 0, objectIds: ['cap', 'jug'] });

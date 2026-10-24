@@ -1,5 +1,5 @@
-// A small typed, synchronous event emitter. Synchronous dispatch keeps event order identical to
-// emission order, which the recorder relies on. A throwing handler never breaks the others.
+// A small typed, synchronous event emitter. Synchronous dispatch, observers first, keeps the
+// recorded order causal. A throwing handler never breaks the others.
 
 type Handler<T> = (payload: T) => void;
 type AnyHandler<E> = <K extends keyof E>(type: K, payload: E[K]) => void;
@@ -34,12 +34,16 @@ export class Emitter<E extends object> {
     return () => this.anyHandlers.delete(handler);
   }
 
+  /**
+   * Wildcard observers (the recorder, logging) see the event first, then handlers react. Otherwise
+   * an event emitted in reaction (a narration of a step) would be observed before its cause, and a
+   * handler that ends the recording would stop it before the ending event was observed.
+   */
   emit<K extends keyof E>(type: K, payload: E[K]): void {
-    const set = this.handlers.get(type);
-    if (set) {
-      for (const handler of [...set]) this.safely(type, () => (handler as Handler<E[K]>)(payload));
-    }
-    for (const handler of [...this.anyHandlers]) this.safely(type, () => handler(type, payload));
+    const observers = [...this.anyHandlers];
+    const handlers = [...(this.handlers.get(type) ?? [])];
+    for (const observe of observers) this.safely(type, () => observe(type, payload));
+    for (const handler of handlers) this.safely(type, () => (handler as Handler<E[K]>)(payload));
   }
 
   private safely(type: keyof E, fn: () => void): void {

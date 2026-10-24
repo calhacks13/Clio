@@ -138,7 +138,7 @@ export class OverlayModel {
     if (this.caption && this.caption.until <= t) this.caption = null;
     return {
       phase: this.phase,
-      title: this.title,
+      title: this.title ?? this.view.procedure()?.title ?? null,
       instruction: this.instruction && { ...this.instruction, progress: this.progress },
       highlights: [...this.highlights],
       toast: this.toast && { kind: this.toast.kind, text: this.toast.text },
