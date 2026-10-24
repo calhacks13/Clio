@@ -9,12 +9,15 @@ import {
   Vector3,
 } from 'three';
 import type { Text } from 'troika-three-text';
+import { panelPlace } from '../adapters/render/in-view';
+import { drawOnTop } from '../adapters/render/on-top';
 import { makeText, setText } from '../adapters/render/text';
 import { HAND_COLORS } from './palette';
 
 // A small panel of live counts, a meter ahead of the head and a little below the line of sight.
-// It trails the head (exponential follow on the horizontal heading) so it stays readable without
-// sitting in the way. The numbers refresh a few times a second: troika re-lays out on each change.
+// It trails the head (exponential follow on the horizontal heading, rising to stay in view when
+// looking down: in-view.ts) so it stays readable without sitting in the way. The numbers refresh
+// a few times a second: troika re-lays out on each change.
 
 export interface TrackingStats {
   fps: number;
@@ -54,12 +57,12 @@ function roundedRect(w: number, h: number, r: number): Shape {
 }
 
 const target = new Vector3();
-const heading = new Vector3();
 
 export class TrackingHud {
   readonly object = new Group();
   private readonly values: Text[] = [];
-  private readonly forward = new Vector3(0, 0, -1);
+  /** The last heading followed (unit [x, z] on the floor). */
+  private heading: [number, number] = [0, -1];
   private placed = false;
   private nextRefresh = 0;
 
@@ -86,6 +89,9 @@ export class TrackingHud {
       this.values.push(value);
       this.object.add(value, label);
     });
+    // Over the room and the hands (on-top.ts): the panel, then its text.
+    for (const child of this.object.children) child.renderOrder = child === panel ? 0 : 1;
+    drawOnTop(this.object);
     this.object.visible = false;
   }
 
@@ -97,11 +103,17 @@ export class TrackingHud {
     stats: TrackingStats,
   ): void {
     this.object.visible = true;
-    // Looking straight up or down has no heading; keep the last one.
-    heading.set(0, 0, -1).applyQuaternion(orientation).setY(0);
-    if (heading.lengthSq() > 1e-4) this.forward.copy(heading).normalize();
-    target.copy(head).addScaledVector(this.forward, DISTANCE);
-    target.y = head.y - DROP;
+    const place = panelPlace(
+      {
+        p: [head.x, head.y, head.z],
+        q: [orientation.x, orientation.y, orientation.z, orientation.w],
+      },
+      DISTANCE,
+      DROP,
+      this.heading,
+    );
+    this.heading = place.heading;
+    target.set(...place.point);
     if (this.placed) this.object.position.lerp(target, 1 - Math.exp(-dt / FOLLOW_MS));
     else this.object.position.copy(target);
     this.placed = true;

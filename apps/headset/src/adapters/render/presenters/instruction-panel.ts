@@ -1,11 +1,15 @@
 import { Group, Mesh, MeshBasicMaterial, PlaneGeometry, Quaternion, Vector3 } from 'three';
-import { rotateVec, yawOnly } from '../../../core/math';
+import { rotateVec } from '../../../core/math';
 import { jointPosition } from '../../../domain/hands/features';
+import { facingEye, panelPlace } from '../in-view';
+import { drawOnTop } from '../on-top';
 import type { PresentContext, Presenter } from '../presenter';
 import { makeText, setText } from '../text';
 
 // The floating instruction card. It lazily follows the learner's gaze (re-centering only when it
-// drifts out of view), shows the current step, progress, coach captions and corrections, and has a
+// drifts out of view), up and down as well as around: looking down at the work, it rises to stay
+// just above the line of sight (in-view.ts), and it draws over the glow and the hands
+// (on-top.ts). It shows the current step, progress, coach captions and corrections, and has a
 // touchable "Done" button so a learner can confirm a step even when voice fails.
 
 const W = 0.44;
@@ -35,6 +39,9 @@ export class InstructionPanelPresenter implements Presenter {
     opacity: 0.85,
   });
   private readonly target = new Vector3();
+  private readonly facing = new Quaternion();
+  /** The last heading followed (unit [x, z] on the floor). */
+  private heading: [number, number] = [0, -1];
   private initialized = false;
   private lastPress = Number.NEGATIVE_INFINITY;
 
@@ -66,6 +73,16 @@ export class InstructionPanelPresenter implements Presenter {
       this.bar,
       this.button,
     );
+    // Over the glow and the hands (on-top.ts), layered by renderOrder: the card, then the bar and
+    // the text, then the button and its label.
+    bg.renderOrder = 0;
+    this.bar.renderOrder = 1;
+    for (const text of [this.header, this.instruction, this.detail, this.status]) {
+      text.renderOrder = 2;
+    }
+    buttonBg.renderOrder = 3;
+    buttonLabel.renderOrder = 4;
+    drawOnTop(this.object);
   }
 
   update(ctx: PresentContext): void {
@@ -111,21 +128,21 @@ export class InstructionPanelPresenter implements Presenter {
   }
 
   private follow(ctx: PresentContext): void {
-    const yaw = yawOnly(ctx.head.q);
-    const ahead = rotateVec(yaw, [0, 0, -FOLLOW_DISTANCE]);
-    this.target.set(
-      ctx.head.p[0] + ahead[0],
-      ctx.head.p[1] - FOLLOW_DROP,
-      ctx.head.p[2] + ahead[2],
-    );
+    // Ahead on the heading and a little below the line of sight, but never out of view: looking
+    // down at the table it rises to stay just above the gaze (in-view.ts).
+    const place = panelPlace(ctx.head, FOLLOW_DISTANCE, FOLLOW_DROP, this.heading);
+    this.heading = place.heading;
+    this.target.set(...place.point);
     if (!this.initialized || this.object.position.distanceTo(this.target) > RECENTER_BEYOND) {
       this.initialized = true;
       this.object.position.copy(this.target);
+      this.object.quaternion.set(...facingEye(place.heading, place.elevation));
     } else {
       this.object.position.lerp(this.target, Math.min(1, ctx.dt / 600));
     }
-    // A plane faces +z; the head's yaw turns +z back toward the learner.
-    this.object.quaternion.slerp(new Quaternion(...yaw), Math.min(1, ctx.dt / 300));
+    // A plane faces +z: turned to the heading and tilted toward the eye.
+    this.facing.set(...facingEye(place.heading, place.elevation));
+    this.object.quaternion.slerp(this.facing, Math.min(1, ctx.dt / 300));
   }
 
   /** Index fingertip (either hand) touching the button, in world space. */
