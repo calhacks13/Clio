@@ -1,6 +1,6 @@
 import type { WebGLRenderer } from 'three';
 import { depthSensingInit, disableXrDepthOcclusion } from './depth-sensing';
-import { keepNearPlane } from './near-plane';
+import { installNearPlaneDebug, keepNearPlane } from './near-plane';
 
 // Starts an immersive-ar (passthrough) session and hands it to three.js. Every feature beyond
 // local-floor is optional, so the app degrades instead of refusing to start. The near plane stays
@@ -55,7 +55,7 @@ export async function startArSession(
     ...(depth ? { depthSensing: depth.depthSensing } : {}),
   } as XRSessionInit);
   renderer.xr.setReferenceSpaceType('local-floor');
-  keepNearPlane(session);
+  installNearPlaneDebug(keepNearPlane(session));
   await renderer.xr.setSession(session);
   const space = renderer.xr.getReferenceSpace();
   if (!space) throw new Error('No local-floor reference space.');

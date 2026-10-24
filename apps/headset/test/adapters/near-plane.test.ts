@@ -27,12 +27,18 @@ describe('keepNearPlane', () => {
   it('wraps the session so later render states keep the near plane, until restored', () => {
     const update = vi.fn();
     const session = { updateRenderState: update };
-    const restore = keepNearPlane(session);
+    const hold = keepNearPlane(session);
+    expect(hold.near).toBe(NEAR_PLANE_M);
     // What three's WebXRManager.updateCamera sends once the depth map reports depthNear 0.1.
     session.updateRenderState({ depthNear: 0.1, depthFar: 50 });
     expect(update).toHaveBeenLastCalledWith({ depthNear: NEAR_PLANE_M, depthFar: 50 });
     expect(update.mock.contexts[0]).toBe(session);
-    restore();
+    // window.__nearPlane.set(): another limit, applied at once and to later states.
+    hold.set(0.05);
+    expect(update).toHaveBeenLastCalledWith({ depthNear: 0.05 });
+    session.updateRenderState({ depthNear: 0.1 });
+    expect(update).toHaveBeenLastCalledWith({ depthNear: 0.05 });
+    hold.restore();
     expect(session.updateRenderState).toBe(update);
   });
 });

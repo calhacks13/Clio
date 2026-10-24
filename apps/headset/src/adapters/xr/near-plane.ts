@@ -22,18 +22,47 @@ export function clampNear(state: XRRenderStateInit | undefined, near: number): X
   return { ...state, depthNear: near };
 }
 
+/** A session's near plane held by keepNearPlane. */
+export interface NearPlaneHold {
+  /** The most the near plane may be (m). */
+  readonly near: number;
+  /** Hold it at `near` (m) from now on, and apply that at once (a live switch). */
+  set(near: number): void;
+  /** Give the session its own updateRenderState back. */
+  restore(): void;
+}
+
 /**
  * Every later updateRenderState on `session` keeps depthNear at most `near` (m). Call before
- * handing the session to three.js. Returns a function that restores the original method.
+ * handing the session to three.js.
  */
-export function keepNearPlane(session: RenderStateSession, near = NEAR_PLANE_M): () => void {
+export function keepNearPlane(session: RenderStateSession, near = NEAR_PLANE_M): NearPlaneHold {
   const original = session.updateRenderState;
+  let limit = near;
   session.updateRenderState = function (this: RenderStateSession, state?: XRRenderStateInit) {
-    original.call(this, clampNear(state, near));
+    original.call(this, clampNear(state, limit));
   };
-  return () => {
-    session.updateRenderState = original;
+  return {
+    get near() {
+      return limit;
+    },
+    set(next: number) {
+      limit = next;
+      original.call(session, { depthNear: next });
+    },
+    restore() {
+      session.updateRenderState = original;
+    },
   };
+}
+
+/**
+ * window.__nearPlane for DevTools on the headset: `near` (m), and set(m) to try another live,
+ * e.g. set(0.1) for the plane three would have used.
+ */
+export function installNearPlaneDebug(hold: NearPlaneHold): void {
+  if (typeof window === 'undefined') return;
+  (window as unknown as { __nearPlane: NearPlaneHold }).__nearPlane = hold;
 }
 
 /**
