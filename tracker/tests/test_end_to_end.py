@@ -14,7 +14,7 @@ from clio_tracker.geometry import iou
 from clio_tracker.identify import FrameImage, Identification, Query
 from clio_tracker.session import SessionSettings, TrackerSession
 from clio_tracker.vision import load_vision
-from conftest import Clock, ManualExecutor
+from conftest import Clock, ManualExecutor, models_under_test
 
 pytestmark = pytest.mark.model
 PERSON = np.array([221.52, 405.8, 344.98, 857.54], dtype=np.float32)  # in bus.jpg pixels
@@ -58,8 +58,7 @@ def project(box: np.ndarray, view: np.ndarray) -> np.ndarray:
     return b.clip([0, 0, 0, 0], [OUT[0], OUT[1], OUT[0], OUT[1]])
 
 
-def test_follows_the_named_person_through_a_pan_without_jev(bus_rgb):
-    vision = load_vision("yoloe-26s-seg", backend="torch")
+def test_follows_the_named_person_through_a_pan_without_jev(bus_rgb, vision):
     clock = Clock()
     n = 45
     first, view = camera(bus_rgb, 0, n)
@@ -85,6 +84,12 @@ def test_follows_the_named_person_through_a_pan_without_jev(bus_rgb):
     assert hits >= 0.9 * (n - 2)
 
 
+@pytest.fixture(scope="module", params=models_under_test())
+def vision(request):
+    """Each size the way it runs on a Mac: Core ML on the Neural Engine, else PyTorch."""
+    return load_vision(request.param, backend="auto")
+
+
 @pytest.fixture(scope="module")
 def bus_rgb():
     from pathlib import Path
@@ -95,11 +100,10 @@ def bus_rgb():
     return np.ascontiguousarray(bgr[..., ::-1])
 
 
-def test_track_stream_follows_a_target_given_once(bus_rgb):
+def test_track_stream_follows_a_target_given_once(bus_rgb, vision):
     """Peter's primary demo flow: one target over /track, then frames alone."""
     from clio_tracker.track import FrameHeader, StreamTracker
 
-    vision = load_vision("yoloe-26s-seg", backend="torch")
     tracker = StreamTracker(vision)
     n = 45
     hits, wrong, found = 0, 0, 0
@@ -122,7 +126,7 @@ def test_track_stream_follows_a_target_given_once(bus_rgb):
     assert found == n - 1 and wrong == 0 and hits >= 0.9 * (n - 1)
 
 
-def test_locate_outlines_jevs_box_with_yoloe(bus_rgb):
+def test_locate_outlines_jevs_box_with_yoloe(bus_rgb, vision):
     from clio_tracker.finder import Finder
     from clio_tracker.identify import JevIdentifier
     from clio_tracker.jev import JevClient, fake_transport
@@ -130,7 +134,7 @@ def test_locate_outlines_jevs_box_with_yoloe(bus_rgb):
     h, w = bus_rgb.shape[:2]
     box = (PERSON / [w, h, w, h]).tolist()
     jev = JevIdentifier(JevClient("fake", transport=fake_transport(tuple(box))), "fake-jev")
-    finder = Finder(jev, load_vision("yoloe-26s-seg", backend="torch"))
+    finder = Finder(jev, vision)
     ok, buf = cv2.imencode(".jpg", bus_rgb[..., ::-1])
     import base64
 

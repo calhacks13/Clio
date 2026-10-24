@@ -75,7 +75,7 @@ From the environment, then `tracker/.env`, then the repo's `.env`.
 | `TYPESAFE_API_KEY`                    |                         | jev's key. It stays in this process and is never logged.                                |
 | `CLIO_TRACKER_IDENTIFIER_URL`         |                         | Without a jev key: any finder that speaks Clio's contract names the targets instead.    |
 | `--fake-jev [L,T,R,B]`                | `0.3,0.3,0.7,0.7`       | Every object present at this box; no key, no cost.                                      |
-| `CLIO_TRACKER_MODEL`, `--model`       | `yoloe-26l-seg`         | Any `yoloe-26{n,s,m,l,x}-seg` checkpoint (not `-pf`: those have no SAVPE).              |
+| `CLIO_TRACKER_MODEL`, `--model`       | `l`                     | The size: `s`, `m` or `l` (also `n`, `x`, or a name such as `yoloe-26s-seg`). See below. |
 | `CLIO_TRACKER_BACKEND`, `--backend`   | `auto`                  | `coreml` (Apple Neural Engine) or `torch` (MPS, CUDA or CPU).                           |
 | `CLIO_TRACKER_IDENTIFY_INTERVAL_MS`   | `1000`                  | With a session: how often jev looks again at each object.                               |
 | `CLIO_TRACKER_IDENTIFY_MAX_IN_FLIGHT` | `1`                     | jev calls in flight. jev's client never overlaps billed calls.                          |
@@ -87,6 +87,44 @@ From the environment, then `tracker/.env`, then the repo's `.env`.
 `uv run --project tracker clio-tracker bench` times the graph and the per-object work here;
 `clio-tracker export` converts for Core ML ahead of time; `clio-tracker jitter` measures how
 steady `/track`'s answers are ([Measured](#measured)).
+
+## Sizes
+
+Each size goes through the same steps: the vision half of the checkpoint, split the same way
+(`tests/test_vision.py` checks each against Ultralytics' own forward pass), the same Core ML
+conversion, the same tracker. `pnpm tracker:export` downloads and converts all three ahead of
+time.
+
+| Command            | Size | Port | Used for                                                           |
+| ------------------ | ---- | ---- | ------------------------------------------------------------------ |
+| `pnpm tracker`     | l    | 8790 | everything: Clio's server and Vite's `/track` proxy expect 8790    |
+| `pnpm tracker:s`   | s    | 8791 | comparing on the headset, beside l                                 |
+| `pnpm tracker:m`   | m    | 8792 | comparing on the headset, beside l                                 |
+
+To compare, run all three, forward the extra ports to the Quest
+(`adb reverse tcp:8791 tcp:8791` and `adb reverse tcp:8792 tcp:8792`), and open
+`primary.html?tracker=8791`, or switch live in AR with `__setTracker(8792)` in the page's
+console (`__setTracker(null)` goes back to l through Vite). Gemini and jev keep going through
+l's `/locate`; only the frame-by-frame tracking moves. To run a smaller size on its own, use
+`pnpm tracker --model s`.
+
+| Size | Weights | Core ML package | A frame on the Neural Engine | On PyTorch (MPS, fp16) | Person on the bus pan (median IoU) |
+| ---- | ------- | --------------- | ---------------------------- | ---------------------- | ---------------------------------- |
+| `s`  | 31 MB   | 24 MB           | 16 to 19 ms                  | 37 to 51 ms            | 0.94                               |
+| `m`  | 70 MB   | 56 MB           | 28 to 44 ms                  | 50 to 98 ms            | 0.94                               |
+| `l`  | 79 MB   | 64 MB           | 27 to 37 ms                  | 55 to 204 ms           | 0.96 to 0.97                       |
+
+A frame is everything but decoding the JPEG: fitting it to the model's input, the graph, and
+copying out every candidate's box, features and mask data. Following one object adds 1 to 4 ms. Times are medians from several runs on an M5 (24 GB)
+that was running other jobs at the same time (load average 6 to 22), so they vary. The Core ML
+graph alone takes about 18 ms for both m and l: on this Mac's Neural Engine, m is no faster
+than l. Every layer of all three runs on the Neural Engine (Core ML's compute plan).
+
+All three tracked their target on every frame of the test pans (the bus person through Clio's
+session mode and over `/track`; the caliper close-up, 228 of 228 frames for s and m, 226 plus
+2 coasting for l), never on another person, and outlined jev's box for `/locate`. Those scenes
+are large, distinct objects, so they don't tell the sizes apart on small or unusual parts; that
+is untested. Use l unless the frame rate matters more: s answers about twice as fast.
 
 ## How it works
 
@@ -222,7 +260,8 @@ still matches the truth at IoU 0.875 against 0.885.
 
 ```bash
 cd tracker
-uv run pytest -q                 # all; the "model" ones load real YOLOE-26 weights
+uv run pytest -q                 # all; the "model" ones load real YOLOE-26 weights:
+                                 # s, plus m and l when downloaded (CLIO_TRACKER_TEST_MODELS=s,m,l)
 uv run pytest -q -m "not model"  # logic only: synthetic scenes, fake jev, no network
 uv run ruff check src tests
 ```

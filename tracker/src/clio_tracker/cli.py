@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import __version__
 from .bench import valid_box
-from .config import HOST, ConfigError, Settings, load_settings
+from .config import HOST, MODELS, ConfigError, Settings, load_settings, model_name
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -21,7 +21,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
     serve = sub.add_parser("serve", help="answer /locate and /track (the default)")
     serve.set_defaults(run=_serve)
-    p = sub.add_parser("export", help="export the Core ML vision graph now, not on first serve")
+    p = sub.add_parser("export", help="export Core ML vision graphs now, not on first serve")
+    p.add_argument(
+        "models", nargs="*", metavar="MODEL", help="s, m, l, ... (default: the configured one)"
+    )
     p.set_defaults(run=_export)
     p = sub.add_parser("bench", help="time the vision graph and the per-object work")
     p.add_argument("--frames", type=int, default=50)
@@ -45,7 +48,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     p.set_defaults(run=_jitter)
     for p in (parser, *sub.choices.values()):
-        p.add_argument("--model", help="YOLOE-26 seg checkpoint, e.g. yoloe-26s-seg")
+        p.add_argument(
+            "--model",
+            type=model_name,
+            help=f"YOLOE-26 size or checkpoint: {', '.join(MODELS)} (default l), or yoloe-26s-seg",
+        )
         p.add_argument("--backend", choices=["auto", "coreml", "torch"])
         p.add_argument("--device", help="torch device: auto, mps, cuda or cpu")
     for p in (parser, serve):
@@ -174,7 +181,7 @@ def _warm_up(vision) -> None:
         vision.outline_in_box(enc, box)
 
 
-def _export(settings: Settings, _args: argparse.Namespace) -> int:
+def _export(settings: Settings, args: argparse.Namespace) -> int:
     from .coreml import CoreMLGraph, coreml_available
     from .vision import default_models_dir, load_yoloe
 
@@ -185,10 +192,9 @@ def _export(settings: Settings, _args: argparse.Namespace) -> int:
         return 1
     models = default_models_dir()
     models.mkdir(parents=True, exist_ok=True)
-    graph = CoreMLGraph.load_or_export(
-        load_yoloe(models / f"{settings.model}.pt"), models / settings.model
-    )
-    print(f"{graph.path}")
+    for name in [model_name(m) for m in args.models] or [settings.model]:
+        graph = CoreMLGraph.load_or_export(load_yoloe(models / f"{name}.pt"), models / name)
+        print(f"{graph.path}")
     return 0
 
 

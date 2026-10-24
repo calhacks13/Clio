@@ -11,6 +11,14 @@ from .jev import DEFAULT_ENDPOINT, DEFAULT_MODEL, DEFAULT_TIMEOUT_S
 TRACKER_DIR = Path(__file__).resolve().parents[2]
 REPO_ROOT = TRACKER_DIR.parent
 HOST = "127.0.0.1"  # never anything else: see server.py
+# Short names for the YOLOE-26 text/visual-prompt segmentation checkpoints, smallest first.
+MODELS = {size: f"yoloe-26{size}-seg" for size in "nsmlx"}
+
+
+def model_name(name: str) -> str:
+    """`s`, `yoloe-26s-seg` or `yoloe-26s-seg.pt`: the checkpoint's name, `yoloe-26s-seg`."""
+    name = name.strip().removesuffix(".pt")
+    return MODELS.get(name.lower(), name)
 
 
 @dataclass(frozen=True)
@@ -74,7 +82,7 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         raise ConfigError(f"CLIO_TRACKER_IDENTIFIER_URL={identifier_url!r} is not an http(s) URL")
     return Settings(
         port=whole("CLIO_TRACKER_PORT", 8790, 1, 65535),
-        model=text_or("CLIO_TRACKER_MODEL", "yoloe-26l-seg").removesuffix(".pt"),
+        model=model_name(text_or("CLIO_TRACKER_MODEL", "l")),
         backend=backend,
         device=text_or("CLIO_TRACKER_DEVICE", "auto"),
         jev_key=text("TYPESAFE_API_KEY"),
