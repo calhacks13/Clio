@@ -156,8 +156,10 @@ phrase and description the plan gives each of a step's objects. In objects mode 
 jev itself, as `POST /locate` with a session does ([README.md](README.md#how-it-works)): jev
 places the objects about once a second (`CLIO_TRACKER_IDENTIFY_INTERVAL_MS`), all that are due
 in one background call and sooner for an object that is new, lost or in doubt, never more
-than one call at a time and never retried. YOLOE-26 and ByteTrack follow every object on every frame, with one
-YOLOE pass for all of them. Each connection in objects mode has a tracking session of its own.
+than one call at a time. A failed call is not retried: jev is next asked after the interval,
+then twice as long after each further failure, up to 16 s, and the first answer brings back the
+usual pace. YOLOE-26 and ByteTrack follow every object on every frame, with one YOLOE pass for
+all of them. Each connection in objects mode has a tracking session of its own.
 
 The connection switches to objects mode on its first `objects` message and back to target mode
 on a `target`; either way, what the other mode followed is dropped. Frames, backpressure and

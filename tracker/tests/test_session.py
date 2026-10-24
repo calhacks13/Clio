@@ -122,6 +122,62 @@ def test_an_identifier_failure_is_logged_once_and_tracking_continues(setup, capl
     assert sum("HTTP 529" in r.message for r in caplog.records) == 1
 
 
+def asked_at(jev, executor, clock, frame, frames: int) -> list[float]:
+    """Streams frames of the cup, jev's calls run at once: when each call went out."""
+    times: list[float] = []
+    for _ in range(frames):
+        frame(Thing(at(100), A))
+        executor.run_all()
+        times.extend([clock.t] * (len(jev.calls) - len(times)))
+    return times
+
+
+def gaps(times: list[float]) -> list[float]:
+    return [b - a for a, b in zip(times[:-1], times[1:], strict=True)]
+
+
+def test_a_failing_identifier_is_asked_less_often_not_on_every_frame(setup, caplog):
+    _, jev, executor, clock, frame = setup
+    jev.answers.extend([RuntimeError("HTTP 429")] * 50)  # fails at once, every time
+    with caplog.at_level(logging.INFO, logger="clio_tracker"):
+        times = asked_at(jev, executor, clock, frame, 20 * 15)  # 20 s at 15 fps, never placed
+    # The interval after the first failure, then twice as long each time (plus the frame that
+    # notices the failure).
+    assert gaps(times) == pytest.approx([1, 2, 4, 8], abs=0.15)
+    assert sum("HTTP 429" in r.message for r in caplog.records) == 1
+
+
+def test_the_wait_while_the_identifier_fails_is_capped(vision):
+    clock, jev, executor = Clock(), FakeIdentifier(), ManualExecutor()
+    settings = SessionSettings(identify_backoff_max_s=3.0)
+    session = TrackerSession(vision, jev, executor, settings, clock)
+    jev.answers.extend([RuntimeError("HTTP 503")] * 50)
+
+    def frame(*things: Thing):
+        clock.t += 1 / 25
+        vision.scenes.append(list(things))
+        session.locate(frame_image(), [CUP])
+
+    times = asked_at(jev, executor, clock, frame, 16 * 25)  # 16 s at 25 fps
+    assert gaps(times) == pytest.approx([1, 2, 3, 3, 3, 3], abs=0.1)
+
+
+def test_the_first_answer_after_failures_ends_the_wait(setup, caplog):
+    _, jev, executor, clock, frame = setup
+    down, placed = RuntimeError("HTTP 429"), {"cup": (0.9, norm_box(at(100)))}
+    jev.answers.extend([down] * 3 + [placed, down] + [placed] * 3)
+    with caplog.at_level(logging.INFO, logger="clio_tracker"):
+        times = asked_at(jev, executor, clock, frame, 10 * 15)
+        (d,) = frame(Thing(at(100), A))
+    # Three failures, the answer that places the cup, its next look a plain interval later, and
+    # when that one fails, the interval again: the wait started over.
+    assert gaps(times) == pytest.approx([1, 2, 4, 1, 1], abs=0.15)
+    assert d["found"]
+    told = [r.message for r in caplog.records if "429" in r.message or "answers again" in r.message]
+    assert len(told) == 4  # each outage once, as it starts and as it ends
+    assert "answers again, after 3 failed" in told[1] and "after 1 failed" in told[3]
+
+
 def test_objects_nobody_asks_about_are_forgotten(setup):
     session, _, _, _, frame = setup
     frame(Thing(at(100), A))
