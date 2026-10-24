@@ -5,7 +5,9 @@ header, the JPEG), `target` and `clear` commands, and one `mask` answer per fram
 YOLOE and ByteTrack replace EdgeTAM: each frame is one pass through the vision graph and one
 ObjectTracker step (tracking.py). A target is jev's box on a frame the page streamed a moment
 ago; that frame is kept, so the box becomes the object's visual prompt on the very frame jev
-looked at and is matched to the track that was there, as in the HTTP tracker.
+looked at and is matched to the track that was there, as in the HTTP tracker. A target that is
+one part of an object (`"part": true`, or a box lying inside what it would be matched to and
+covering less than half of it) is followed by part.py instead, never as the whole object.
 """
 
 from __future__ import annotations
@@ -21,7 +23,9 @@ from time import perf_counter
 import cv2
 import numpy as np
 
-from .geometry import normalize_box
+from .geometry import iou, normalize_box
+from .motion import CameraMotion, warp_box
+from .part import PartTracker, is_part
 from .tracking import ObjectTracker, Sighting, TrackerParams
 from .vision import YoloeVision
 
@@ -51,6 +55,7 @@ class TargetBox:
     seq: int
     box: list[float]
     name: str | None
+    part: bool = False  # the box is one part of the object (a label, a button), not all of it
 
 
 def parse_frame(data: bytes) -> tuple[FrameHeader, bytes]:
@@ -95,7 +100,10 @@ def parse_command(text: str) -> TargetBox | None:
         raise BadMessage("The target box must be in 0..1 with left < right and top < bottom.")
     if name is not None and not isinstance(name, str):
         raise BadMessage("The target name must be a string.")
-    return TargetBox(seq, [x0, y0, x1, y1], name)
+    part = message.get("part")
+    if part is not None and not isinstance(part, bool):
+        raise BadMessage("The target's part must be true or false.")
+    return TargetBox(seq, [x0, y0, x1, y1], name, bool(part))
 
 
 class StreamTracker:
@@ -107,20 +115,28 @@ class StreamTracker:
         self.label = vision.model
         self.name: str | None = None
         self.object: ObjectTracker | None = None
+        self.part: PartTracker | None = None  # while the target is one part of the object
         self.frames: OrderedDict[int, bytes] = OrderedDict()
         self.waiting: TargetBox | None = None  # a target whose frame hasn't arrived
         self.t = 0.0  # the newest frame's capture time (s, page clock)
+        self.camera = CameraMotion()  # how the picture moved since the frame before
+        # Every few seconds: frames answered, by state, and the mean tracker time, so a slow or
+        # lossy stream shows in the log rather than only on the headset.
+        self._states: dict[str, int] = {}
+        self._window_ms = 0.0
+        self._window_start = perf_counter()
 
     def command(self, target: TargetBox | None) -> None:
         """Applies a target (or `clear` as None) before the next frame."""
         if target is None:
             if self.name:
                 log.info("Track: clear %s", self.name)
-            self.object, self.name, self.waiting = None, None, None
+            self.object, self.part, self.name, self.waiting = None, None, None, None
             return
         if self.object is None or _norm(target.name) != _norm(self.name):
             # Another object was named: follow it from scratch.
             self.object = ObjectTracker("target", target.name, self.params)
+            self.part = None
             self.name = target.name
         jpeg = self.frames.get(target.seq)
         if jpeg is None:
@@ -138,20 +154,25 @@ class StreamTracker:
         ms: dict[str, float] = {}
         self._keep(header.seq, jpeg)
         self.t = header.t / 1000
-        if self.object is None:
-            return self._answer(header, None, ms, started)
         try:
             rgb = decode_jpeg(jpeg)
         except BadMessage as e:
             log.warning("Frame %d: %s", header.seq, e)
+            self.camera.update(None, header.seq)
             return self._answer(header, None, ms, started)
+        # Measured on every frame, also before there is a target: the first target is jev's box
+        # on a frame from a second or two ago, carried to now by this.
+        camera = self.camera.update(rgb, header.seq)
         ms["decode"] = _ms(started)
+        if self.object is None:
+            return self._answer(header, None, ms, started)
         segmenting = perf_counter()
         enc = self.vision.encode(rgb)
         if self.waiting is not None:
             self._identify(self.waiting, enc, header.seq)
             self.waiting = None
-        sighting = self.object.step(enc, header.seq, self.t, self.vision)
+        follower = self.part or self.object
+        sighting = follower.step(enc, header.seq, self.t, self.vision, camera)
         ms["segment"] = _ms(segmenting)
         return self._answer(
             header, sighting, ms, started, (enc.letterbox.width, enc.letterbox.height)
@@ -160,10 +181,54 @@ class StreamTracker:
     def _identify(self, target: TargetBox, enc, seq: int) -> None:
         assert self.object is not None
         lb = enc.letterbox
-        box = np.asarray(target.box, dtype=np.float32) * [lb.width, lb.height, lb.width, lb.height]
+        size = np.array([lb.width, lb.height, lb.width, lb.height], dtype=np.float32)
+        box = (np.asarray(target.box, dtype=np.float32) * size).astype(np.float32)
         appearance = self.vision.prompts(enc, box)[0]
-        change = self.object.identified(seq, self.t, True, box.astype(np.float32), appearance)
+        carry = self.camera.since(seq)
+        if target.part or self._is_part(seq, box, carry, enc, appearance):
+            if self.part is None:
+                self.part = PartTracker("target", target.name, self.params)
+            change = self.part.identified(seq, self.t, True, box, enc, self.vision, carry)
+        else:
+            if self.part is not None:
+                # The whole object again: what followed the object holding the part goes on.
+                if self.part.parent is not None:
+                    self.object = self.part.parent
+                self.part = None
+            change = self.object.identified(seq, self.t, True, box, appearance, carry)
         log.info("Track: %s on frame %d: %s", self.name or "the target", target.seq, change)
+
+    def _is_part(self, seq: int, box: np.ndarray, carry, enc, appearance: np.ndarray) -> bool:
+        """A box not flagged as a part is one when it would land on something it is a part of."""
+        if self.part is not None:
+            parent = self.part.parent
+            held_by = parent.box_on(seq) if parent is not None else None
+            if held_by is not None:
+                return is_part(box, held_by, self.params)
+            # Nothing holds the part we follow: the same part again, where it is now.
+            now = self.part.box
+            if now is not None and float(iou(warp_box(box, carry), now)[0, 0]) >= 0.3:
+                return True
+        assert self.object is not None
+        return self.object.container(seq, box, carry, enc, self.vision, appearance) is not None
+
+    def _summarize(self, state: str, total_ms: float) -> None:
+        self._states[state] = self._states.get(state, 0) + 1
+        self._window_ms += total_ms
+        elapsed = perf_counter() - self._window_start
+        if elapsed < 3:
+            return
+        frames = sum(self._states.values())
+        counts = ", ".join(f"{k} {v}" for k, v in sorted(self._states.items()))
+        log.info(
+            "Stream: %.1f frames/s, %.1f ms each (%s)",
+            frames / elapsed,
+            self._window_ms / frames,
+            counts,
+        )
+        self._states.clear()
+        self._window_ms = 0.0
+        self._window_start = perf_counter()
 
     def _keep(self, seq: int, jpeg: bytes) -> None:
         self.frames[seq] = jpeg
@@ -180,6 +245,7 @@ class StreamTracker:
     ) -> dict:
         ms["total"] = _ms(started)
         state = sighting.state if sighting else "idle"
+        self._summarize(state, ms["total"])
         if sighting is None or not sighting.found or sighting.box is None or size is None:
             sighting = None
         shape = sighting.shape if sighting else None
@@ -208,7 +274,8 @@ def decode_jpeg(jpeg: bytes) -> np.ndarray:
     bgr = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
     if bgr is None or bgr.size == 0:
         raise BadMessage("The frame is not a readable JPEG.")
-    return np.ascontiguousarray(bgr[..., ::-1])
+    # cvtColor, not bgr[..., ::-1] copied: the same pixels, 0.05 ms against 0.8 ms at 640x480.
+    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
 
 def _norm(name: str | None) -> str:

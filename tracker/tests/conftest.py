@@ -24,7 +24,7 @@ from PIL import Image
 from clio_tracker.geometry import Letterbox, Shape, iou
 from clio_tracker.identify import FrameImage, Identification, Query
 from clio_tracker.jev import JevClient
-from clio_tracker.vision import Encoding
+from clio_tracker.vision import Encoding, MaskCrop
 
 W, H = 960, 720
 
@@ -101,6 +101,12 @@ class FakeVision:
         x1, y1, x2, y2 = (float(v) for v in box)
         outline = [[x1 / W, y1 / H], [x2 / W, y1 / H], [x2 / W, y2 / H], [x1 / W, y2 / H]]
         return Shape(outline, [(x1 + x2) / 2 / W, (y1 + y2) / 2 / H], [(x1 + x2) / 2 / W, y2 / H])
+
+    def mask(self, enc: Encoding, anchor: int, box: np.ndarray) -> MaskCrop:
+        """The box filled, at 2 frame pixels per mask pixel."""
+        x1, y1, x2, y2 = (float(v) for v in box)
+        rows, cols = max(1, int(np.ceil((y2 - y1) / 2))), max(1, int(np.ceil((x2 - x1) / 2)))
+        return MaskCrop(np.full((rows, cols), 10.0, np.float32), (x1, y1), 2.0)
 
     def outline_in_box(self, enc: Encoding, box: np.ndarray, min_iou: float = 0.5):
         things = enc.things  # type: ignore[attr-defined]

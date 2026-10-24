@@ -22,6 +22,7 @@ import numpy as np
 
 from .geometry import normalize_box
 from .identify import FrameImage, Identification, Identifier, Query
+from .motion import CameraMotion
 from .tracking import ObjectTracker, Sighting, TrackerParams
 from .vision import Encoding, YoloeVision
 
@@ -78,6 +79,7 @@ class TrackerSession:
         self._frames: dict[int, Encoding] = {}  # frames jev is looking at
         self._done: queue.SimpleQueue[_Ask] = queue.SimpleQueue()
         self._identifier_down = False
+        self._camera = CameraMotion()
 
     @property
     def in_flight(self) -> int:
@@ -92,7 +94,8 @@ class TrackerSession:
             seq = self._seq
             self._apply_answers(encoded)
             trackers = [self._tracker_for(q, encoded) for q in queries]
-            sightings = [tr.step(enc, seq, encoded, self.vision) for tr in trackers]
+            camera = self._camera.update(image.rgb, seq)
+            sightings = [tr.step(enc, seq, encoded, self.vision, camera) for tr in trackers]
             self._ask(image, enc, seq, encoded, queries, trackers)
             self._forget(encoded)
             done = self._clock()
@@ -195,7 +198,7 @@ class TrackerSession:
             size = np.array([lb.width, lb.height, lb.width, lb.height], dtype=np.float32)
             box = np.asarray(answer.box, dtype=np.float32) * size
             appearance = self.vision.prompts(enc, box)[0]
-        change = tr.identified(ask.seq, now, present, box, appearance)
+        change = tr.identified(ask.seq, now, present, box, appearance, self._camera.since(ask.seq))
         seen = (
             f"in view ({answer.present:.2f})" if present else f"not in view ({answer.present:.2f})"
         )

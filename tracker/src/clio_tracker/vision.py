@@ -66,6 +66,19 @@ class Encoding:
         return self.boxes.shape[0]
 
 
+@dataclass(frozen=True)
+class MaskCrop:
+    """One candidate's mask logits (> 0 inside) over a patch of the frame: the patch's pixel
+    (0, 0) sits at `origin` in frame pixels, and each of its pixels is `scale` frame pixels."""
+
+    logits: np.ndarray
+    origin: tuple[float, float]
+    scale: float
+
+
+OUTSIDE = -20.0  # the logit of a mask pixel outside the candidate's box
+
+
 class Graph(Protocol):
     """A compiled vision graph: a (1, 3, S, S) RGB tensor in 0..1 to the six named outputs."""
 
@@ -224,7 +237,10 @@ class PromptClassifier:
         for where, P, c, s, o in self.scales:
             w = s * (e @ P)  # (Q, C3)
             b = s * (e @ c) + o  # (Q,)
-            out[:, where] = (w @ features[:, where] + b[:, None]).astype(np.float32)
+            # float32 here: in float64 the (C3, N) features would be copied up first, 1 ms a
+            # frame against 0.06 ms, for no difference past the fifth decimal.
+            w32, b32 = w.astype(np.float32), b.astype(np.float32)
+            out[:, where] = w32 @ features[:, where] + b32[:, None]
         return _sigmoid(out)
 
 
@@ -347,6 +363,12 @@ class YoloeVision:
 
     def shape(self, enc: Encoding, anchor: int, box: np.ndarray) -> Shape:
         """The outline and point of candidate `anchor`, whose frame-pixel box is `box`."""
+        crop = self.mask(enc, anchor, box)
+        lb = enc.letterbox
+        return mask_shape(crop.logits > 0, crop.origin, crop.scale, lb.width, lb.height, box)
+
+    def mask(self, enc: Encoding, anchor: int, box: np.ndarray) -> MaskCrop:
+        """Candidate `anchor`'s mask logits around its frame-pixel box `box`, cut to the box."""
         lb = enc.letterbox
         stride = self.size / enc.protos.shape[1]  # model-input pixels per prototype pixel
         b = lb.to_input(box)
@@ -361,15 +383,15 @@ class YoloeVision:
         logits = cv2.resize(
             logits, ((x2 - x1) * up, (y2 - y1) * up), interpolation=cv2.INTER_LINEAR
         )
-        mask = logits > 0
         # Like Ultralytics' crop_mask: nothing outside the box.
         ox, oy = x1 * up, y1 * up
-        cols = np.arange(mask.shape[1]) + ox + 0.5
-        rows = np.arange(mask.shape[0]) + oy + 0.5
-        mask &= (cols[None, :] >= b[0]) & (cols[None, :] <= b[2])
-        mask &= (rows[:, None] >= b[1]) & (rows[:, None] <= b[3])
+        cols = np.arange(logits.shape[1]) + ox + 0.5
+        rows = np.arange(logits.shape[0]) + oy + 0.5
+        inside = (cols[None, :] >= b[0]) & (cols[None, :] <= b[2])
+        inside = inside & (rows[:, None] >= b[1]) & (rows[:, None] <= b[3])
+        logits = np.where(inside, logits, OUTSIDE).astype(np.float32, copy=False)
         origin = ((ox - lb.left) / lb.gain, (oy - lb.top) / lb.gain)
-        return mask_shape(mask, origin, 1.0 / lb.gain, lb.width, lb.height, box)
+        return MaskCrop(logits, origin, 1.0 / lb.gain)
 
 
 def load_vision(

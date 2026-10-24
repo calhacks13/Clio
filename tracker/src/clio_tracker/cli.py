@@ -8,6 +8,7 @@ import sys
 import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from . import __version__
 from .bench import valid_box
@@ -25,6 +26,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     p = sub.add_parser("bench", help="time the vision graph and the per-object work")
     p.add_argument("--frames", type=int, default=50)
     p.set_defaults(run=_bench)
+    p = sub.add_parser("jitter", help="measure how steady /track's answers are (jitter.py)")
+    p.add_argument("--seconds", type=float, default=12.0, help="length of each sequence")
+    p.add_argument("--scene", action="append", help="only this scene (repeatable)")
+    p.add_argument("--baseline", type=Path, help="another clio_tracker package to compare")
+    p.add_argument("--json", type=Path, help="write every number here")
+    p.add_argument(
+        "--no-part-flag",
+        dest="flag_parts",
+        action="store_false",
+        help="part scenes leave out the target's part flag (it is told apart by itself)",
+    )
+    p.add_argument(
+        "--set",
+        action="append",
+        metavar="NAME=VALUE",
+        help="try a TrackerParams setting (smooth.NAME for SmoothParams)",
+    )
+    p.set_defaults(run=_jitter)
     for p in (parser, *sub.choices.values()):
         p.add_argument("--model", help="YOLOE-26 seg checkpoint, e.g. yoloe-26s-seg")
         p.add_argument("--backend", choices=["auto", "coreml", "torch"])
@@ -174,7 +193,6 @@ def _export(settings: Settings, _args: argparse.Namespace) -> int:
 
 
 def _bench(settings: Settings, args: argparse.Namespace) -> int:
-    from pathlib import Path
 
     import cv2
     import numpy as np
@@ -205,3 +223,18 @@ def _bench(settings: Settings, args: argparse.Namespace) -> int:
     print(f"  encode p50 {np.median(encode):.1f} ms, p95 {np.percentile(encode, 95):.1f} ms")
     print(f"  track one object p50 {np.median(step):.1f} ms, p95 {np.percentile(step, 95):.1f} ms")
     return 0
+
+
+def _jitter(settings: Settings, args: argparse.Namespace) -> int:
+    from .jitter import run
+
+    return run(
+        settings.model,
+        settings.backend,
+        args.seconds,
+        args.baseline,
+        args.scene,
+        args.json,
+        args.set,
+        args.flag_parts,
+    )

@@ -131,7 +131,7 @@ class Shape:
 def mask_shape(
     mask: np.ndarray,
     origin: tuple[float, float],
-    scale: float,
+    scale: float | tuple[float, float],
     width: int,
     height: int,
     box: np.ndarray,
@@ -139,9 +139,10 @@ def mask_shape(
 ) -> Shape:
     """Outline and point of a boolean mask whose pixel (0, 0) sits at `origin` in frame pixels.
 
-    `scale` is frame pixels per mask pixel. Only the largest connected piece is kept, because a
-    Clio outline is one closed polygon.
+    `scale` is frame pixels per mask pixel (or per column and per row). Only the largest
+    connected piece is kept, because a Clio outline is one closed polygon.
     """
+    sx, sy = scale if isinstance(scale, tuple) else (scale, scale)
     cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
     center = [_unit(cx / width), _unit(cy / height)]
     m = mask.astype(np.uint8)
@@ -178,9 +179,9 @@ def mask_shape(
 
     ox, oy = origin
     outline = [
-        [_unit((ox + (x + 0.5) * scale) / width), _unit((oy + (y + 0.5) * scale) / height)]
+        [_unit((ox + (x + 0.5) * sx) / width), _unit((oy + (y + 0.5) * sy) / height)]
         for x, y in poly.tolist()
     ]
-    point = [_unit((ox + (px + 0.5) * scale) / width), _unit((oy + (py + 0.5) * scale) / height)]
-    contact = [_unit((ox + cx_px * scale) / width), _unit((oy + cy_px * scale) / height)]
+    point = [_unit((ox + (px + 0.5) * sx) / width), _unit((oy + (py + 0.5) * sy) / height)]
+    contact = [_unit((ox + cx_px * sx) / width), _unit((oy + cy_px * sy) / height)]
     return Shape(outline, point, contact)

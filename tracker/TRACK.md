@@ -32,6 +32,13 @@ JPEG bytes.
 
 - `seq` is the frame the box was measured on; `box` is `[left, top, right, bottom]`, normalized
   0..1, origin top left.
+- `part` (optional, default `false`): the box is one part of the main object (`?focus=part`: a
+  label, a button, a wheel), not all of it. See [Following a part](#following-a-part). Pages that
+  never send it keep working.
+
+```json
+{ "type": "target", "seq": 52, "box": [0.4, 0.45, 0.52, 0.5], "name": "vernier scale of caliper", "part": true }
+```
 - `{ "type": "clear" }` drops the target.
 
 **Backpressure:** the page sends the next frame only after the result for the previous one arrives
@@ -81,17 +88,51 @@ without an answer; the connection stays open.
 
 The tracker keeps the last 300 frames it was sent. When a target arrives, it runs YOLOE on the
 very frame jev measured, so jev's box becomes the object's visual prompt as jev saw it, and
-compares the box with the tracks on that frame: a track it overlaps by IoU 0.3 or more is the
-target (the same one: kept; another one: the target moves to it). When no track was there, the
-target is the track that turns up near jev's box and looks most like it. A target whose frame
-was never sent applies to the next frame, as if measured on it. A target with another `name`
-starts over.
+compares the box with the tracks on that frame: a track it overlaps by IoU 0.3 or more, or one
+of the two inside the other (a part and its whole), is the target (the same one: kept; another
+one: the target moves to it). When no track was there, jev's box is carried to the newest frame
+by the camera's motion since (the tracker measures it on every frame it is sent, also before the
+first target), and the candidate filling it becomes the target on the next frame. A target whose
+frame was never sent applies to the next frame, as if measured on it. A target with another
+`name` starts over.
+
+A box with no `part` flag that would land on something it is only a part of (it covers less than
+half of that track's or candidate's box and lies at least 80% inside it, and is not cut by the
+frame's edge, as an object partly out of view is) is followed as a part too; a later box that is the whole object again goes back to following the object, on the track
+that held the part.
+
+## Following a part
+
+Followed like an object, a part ends up as its whole: YOLOE proposes whole objects far more
+often than their parts (a micrometer's thimble has no candidate of its own), and the part's
+visual prompt resembles its whole's, so the part's box was placed on, confirmed as or
+re-acquired as the whole object's track, whose mask came back. A part target is never matched
+to a track (`part.py`):
+
+- The object holding the part is followed as an object of its own, the **parent**: on jev's
+  frame, the candidate holding the part box that scores best against its own view (an object's
+  own box scores 0.9 or more, a box over pieces of several things next to nothing). It may be
+  the part itself when YOLOE proposes it (a name plate).
+- The part box rides on the parent's tracked box (translation and scale on each axis; along an
+  axis where the parent's box is cut by the frame edge, its free side carries the part). With
+  no parent in sight, the camera's motion carries it (`state: "coasting"`, for up to 6 s after
+  jev's last answer).
+- `outline` is the parent's mask inside the part box, so it follows the object's edges where the
+  part meets them; when that mask hardly covers the part box, the part box as a rounded
+  rectangle. `point` and `contact` are the part's. `box` is the part box.
+- Each new answer re-seeds the part box where jev put it; it is never snapped to the parent.
 
 ## Between jev's answers
 
 Each frame is one pass through YOLOE-26 and one ByteTrack step over the candidates the target's
-prompt scores ([README.md](README.md#how-it-works)). The prompt keeps learning the object's look
-from confident sightings that still resemble jev's view. A target not seen on a frame coasts at
-its predicted box for 0.35 s (1 s when it left by the frame's edge or filled it), then reads as
-lost; its track survives 1 s more, and a lost target is found again by appearance, not by
-whichever look-alike scores highest.
+prompt scores ([README.md](README.md#how-it-works)), with every track moved by the camera's
+motion first. The prompt keeps learning the object's look from confident sightings that still
+resemble jev's view. A target ByteTrack misses continues on a weaker candidate on its predicted
+box; otherwise it coasts at its predicted box for 0.5 s (1 s when it was at the frame's edge or
+filled it), then reads as lost, and at once when the prediction leaves the view. Its track
+survives 3 s, so after a glance away it comes back as the same object; a target with no track is
+found again by appearance, not by whichever look-alike scores highest.
+
+The `box`, `outline`, `point` and `contact` sent back are steadied over frames in the scene's
+frame of reference (`smooth.py`): the camera's motion is followed exactly, the object's own
+motion with a lag of a few pixels, and a one-frame glitch in the mask does not show.

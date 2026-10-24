@@ -123,7 +123,7 @@ def test_a_target_leaving_by_the_edge_is_held_longer(vision):
 
 def test_a_dropped_track_is_reacquired_by_appearance_not_by_score(vision):
     run = locked(vision)
-    for _ in range(40):  # 2.7 s away: the track is dropped
+    for _ in range(60):  # 4 s away: the track is dropped
         run.frame(Thing(at(500), B))
     assert run.tracker.target_id is None
     # The look-alike is alone and scores well, but does not look like the target.
@@ -153,7 +153,7 @@ def test_appearance_follows_a_turning_object_but_not_a_sudden_swap(vision):
 def test_jev_saying_absent_releases_the_target_and_raises_the_bar(vision):
     near = blend(A, appearance(4), 0.9)  # close enough to re-acquire normally, not after "absent"
     normally = locked(vision)
-    for _ in range(40):
+    for _ in range(60):
         normally.frame(Thing(at(500), B))
     s = [normally.frame(Thing(at(300), near), Thing(at(500), B)) for _ in range(2)][-1]
     assert s.found
@@ -161,7 +161,7 @@ def test_jev_saying_absent_releases_the_target_and_raises_the_bar(vision):
     run = locked(vision)
     assert run.jev(run.seq, None, present=False) == "absent"
     assert run.tracker.target_id is None
-    for _ in range(40):
+    for _ in range(60):
         run.frame(Thing(at(500), B))
     s = [run.frame(Thing(at(300), near), Thing(at(500), B)) for _ in range(2)][-1]
     assert not s.found and s.state == "absent"
@@ -231,3 +231,136 @@ def test_a_look_alike_already_there_does_not_take_over(vision):
     gone = [run.frame(Thing(small, B)) for _ in range(5)]
     assert all(s.track_id in (target, None) for s in gone)
     assert not any(s.state == "tracking" for s in gone)
+
+
+# --- steadier tracking: weak sightings, camera motion, jev's box at once ---------------------
+
+
+class MovingRun(Run):
+    """A Run whose frames can say how the camera moved since the frame before."""
+
+    def frame(self, *things: Thing, camera=None):
+        self.seq += 1
+        self.t += 1 / FPS
+        enc = self.vision.encode(scene=list(things))
+        self.encodings[self.seq] = enc
+        return self.tracker.step(enc, self.seq, self.t, self.vision, camera)
+
+    def jev(self, seq: int, box, present: bool = True, carry=None) -> str:
+        enc = self.encodings[seq]
+        box = np.asarray(box, dtype=np.float32)
+        look = self.vision.prompts(enc, box)[0]
+        return self.tracker.identified(seq, self.t, present, box, look, carry)
+
+
+def pan(dx: float, dy: float = 0.0) -> np.ndarray:
+    return np.array([[1.0, 0, dx], [0, 1.0, dy]])
+
+
+def moved(box, dx: float, dy: float = 0.0) -> tuple[float, ...]:
+    return (box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy)
+
+
+def locked_moving(vision, x=100) -> MovingRun:
+    run = MovingRun(vision)
+    run.frame(Thing(at(x), A), Thing(at(500), B))
+    run.jev(1, at(x))
+    for _ in range(3):
+        run.frame(Thing(at(x), A), Thing(at(500), B))
+    assert run.tracker.target_id is not None
+    return run
+
+
+def test_a_weak_sighting_on_the_predicted_box_continues_the_target(vision):
+    """YOLOE's score for the object dips under ByteTrack's floor for a few frames (blur, glare):
+    the target continues on it where it was predicted, instead of coasting and being lost."""
+    run = locked_moving(vision)
+    tid = run.tracker.target_id
+    dim = blend(A, appearance(11), 0.64)  # scores about 0.08, under ByteTrack's 0.10
+    for _ in range(10):
+        s = run.frame(Thing(at(102), dim), Thing(at(500), B))
+        assert s.found and s.state == "tracking" and s.track_id == tid
+    s = run.frame(Thing(at(104), A), Thing(at(500), B))
+    assert s.state == "tracking" and s.track_id == tid
+
+
+def test_a_weak_candidate_away_from_the_prediction_is_not_taken(vision):
+    run = locked_moving(vision)
+    dim = blend(A, appearance(11), 0.64)
+    s = run.frame(Thing(at(260), dim), Thing(at(500), B))  # no overlap with where it was
+    assert s.state == "coasting"
+
+
+def test_the_camera_motion_keeps_the_track_through_a_fast_glance(vision):
+    """The whole picture jumps 160 px in one frame: with the camera's motion the track's
+    prediction jumps too, so it is the same track; without it, the target is missed."""
+    run = locked_moving(vision)
+    tid = run.tracker.target_id
+    s = run.frame(Thing(at(260), A), Thing(at(660), B), camera=pan(160))
+    assert s.state == "tracking" and s.track_id == tid
+
+    blind = locked_moving(vision)
+    s = blind.frame(Thing(at(260), A), Thing(at(660), B))
+    assert s.state != "tracking" or s.track_id != blind.tracker.target_id
+
+
+def test_a_target_out_of_view_is_not_drawn_and_comes_back_as_the_same_track(vision):
+    run = locked_moving(vision, x=300)
+    tid = run.tracker.target_id
+    # A glance to the right: the object leaves the view by the left edge.
+    gone = [run.frame(camera=pan(-400))] + [run.frame(camera=pan(0)) for _ in range(20)]
+    assert all(not g.found and g.state == "lost" for g in gone)
+    back = run.frame(Thing(at(300), A), camera=pan(400))
+    assert back.found and back.state == "tracking" and back.track_id == tid
+
+
+def test_jev_box_with_no_track_is_followed_from_the_next_frame(vision):
+    """The object scores under ByteTrack's bar for a new track (0.45): jev's box is enough to
+    start one, at once."""
+    run = MovingRun(vision)
+    run.frame(Thing(at(100), A), Thing(at(500), B))
+    run.frame(Thing(at(100), A), Thing(at(500), B))
+    seen_now = blend(A, appearance(12), 0.75)  # scores about 0.34 against jev's view
+    run.frame(Thing(at(100), seen_now), Thing(at(500), B))
+    assert run.jev(1, at(100)) == "placed"
+    s = run.frame(Thing(at(100), seen_now), Thing(at(500), B))
+    assert s.found and s.state == "tracking" and iou(s.box, at(100))[0, 0] > 0.9
+    assert run.tracker.target_by == "jev" and not run.tracker.wants_jev_now
+
+
+def test_jev_box_is_carried_to_where_its_object_is_now(vision):
+    """jev answers about frame 1 four frames later; the camera has turned since, moving
+    everything 40 px a frame. Its box is carried along, so it lands on its object."""
+    run = MovingRun(vision)
+    run.frame(Thing(at(100), A), Thing(at(400), B))
+    for k in range(1, 5):
+        run.frame(Thing(at(100 + 40 * k), A), Thing(at(400 + 40 * k), B), camera=pan(40))
+    assert run.jev(1, at(100), carry=pan(160)) == "placed"
+    s = run.frame(Thing(at(300), A), Thing(at(600), B), camera=pan(40))
+    assert s.found and iou(s.box, at(300))[0, 0] > 0.9
+
+
+def test_jev_box_around_a_part_of_the_target_confirms_it(vision):
+    """jev boxes the whole object while YOLOE follows a part of it inside (IoU under 0.3):
+    the same object, not a new placement."""
+    big = (100.0, 100.0, 500.0, 500.0)
+    part = (120.0, 120.0, 300.0, 300.0)  # IoU 0.2 with the whole, all inside it
+    run = MovingRun(vision)
+    run.frame(Thing(part, A), Thing(at(700, 100), B))
+    run.jev(1, part)
+    for _ in range(3):
+        run.frame(Thing(part, A), Thing(at(700, 100), B))
+    assert run.jev(run.seq, big) == "confirmed"
+
+
+def test_old_views_still_score_after_a_poor_one(vision):
+    """jev's latest view of the object is a poor one (half out of frame, say): it becomes the
+    anchor, but the object still scores against jev's earlier views."""
+    run = locked_moving(vision)
+    odd = blend(A, appearance(13), 0.5)
+    box = np.asarray(at(100), dtype=np.float32)
+    assert run.tracker.identified(run.seq, run.t, True, box, odd) == "confirmed"
+    assert float(run.tracker.prompt @ A) < 0.95  # the prompt alone has moved off the object
+    for _ in range(3):
+        s = run.frame(Thing(at(100), A), Thing(at(500), B))
+    assert s.found and s.state == "tracking" and s.track_id == run.tracker.target_id
