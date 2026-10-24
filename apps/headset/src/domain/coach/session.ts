@@ -133,6 +133,9 @@ export class CoachSession {
       bus.on('step.looks_done', ({ image }) => {
         if (image) agent.pushImage(image);
       }),
+      bus.on('step.looks_wrong', ({ image }) => {
+        if (image) agent.pushImage(image);
+      }),
     ];
     this.offs.push(this.narrator.attach());
 

@@ -156,10 +156,28 @@ A step is done when one of these says so:
 
 **The step watcher** is the coach's second pair of eyes. Gemini Live only takes a turn when the
 learner speaks; camera frames never prompt it. So a step finished in silence would go unnoticed.
-While a step has focus and nobody is talking, the watcher sends a fresh 1024 px frame plus the
-step's text and `doneWhen` to `POST /api/plans/check` (the planner's model) every 6 s. When it
-answers `done`, the coach gets the frame and "[app] Step watcher: … looks done (what it saw)", and
-decides. The watcher suggests; it never completes a step. Every answer is recorded.
+While a step has focus and nobody has spoken for 1 s, the watcher asks `POST /api/plans/check`
+(the planner's model, Robotics-ER 2) about it, and asks again 1 s after each answer, about every
+2.5 s. Each question carries:
+- a fresh 1024 px frame, and the frame taken when the step gained focus, so the model compares
+  the start with now (how Robotics-ER is trained to detect success);
+- the step's text and `doneWhen`;
+- what the step's objects look like (each show item's description, else the object's detector
+  query, else its name) and its mistake rules' messages, as mix-ups that look like success.
+
+The model points at the object the learner is acting on and checks it is the right one, so the
+milk doesn't pass for the yogurt drink. It answers `done`, `not_done` or `unsure` (unsure when the
+object is out of view, blurred or hidden), a short observation, `progress` (0 to 100), `wrong`
+when the learner did something else ("picked up the milk, not the yogurt drink"), and the object
+that decided it. It thinks at level low, about 1.6 s an answer: on our hard cases minimal was
+0.5 s faster but once took the dropper for the knife and called that step done.
+
+Two answers in a row must agree before the coach hears anything. Two `done`s: the coach gets the
+frame and "[app] Step watcher: … looks done (what it saw)", and decides; the watcher then leaves
+the step alone for 20 s. Two answers that say the learner did something else: the coach gets the
+frame and what went wrong, in words, and decides whether to correct them (once per 20 s a step).
+The watcher suggests; it never completes a step. After 3 failures in a row it pauses for 30 s.
+Every answer is recorded, with its progress, what went wrong and the deciding object's point.
 
 `forced` keeps its meaning on main: the step's full success check, with every position, had not
 passed when it was completed. Under coach authority the runner evaluates the check twice: once on
@@ -187,7 +205,8 @@ trusted positions, and the coach hears only:
 - the plan, step briefings, and plan changes;
 - step completions, the Done button, and the stuck timer;
 - mistakes from rules, which saw only trusted positions;
-- the step watcher, which looks at raw frames only.
+- the step watcher, which looks at raw frames only, as text and the frame it judged (never its
+  points).
 
 It never hears positions, distances, pinches, detections, missing or registered objects, or whether
 an object has been found. It is told only what the learner can see: whether a highlight or a
@@ -207,7 +226,9 @@ changing it.
 - Every plan change is an `annotation` with label `plan.updated` and data
   `{ rev, op, by, stepId?, reason?, callId?, plan }`, where `plan` is a full snapshot. Rev 0 is
   recorded when the lesson starts.
-- Every step-watcher answer is an `annotation` with label `step.watch`.
+- Every step-watcher answer is an `annotation` with label `step.watch` and data `{ stepId,
+  verdict, observation, model, latencyMs, progress?, wrong?, evidence? }`, where `evidence` is
+  `{ label, point }` with the point in 0..1 of the newest frame. A failed look records `error`.
 - Every narration is a `coach.narration` event, recorded when it reaches the model, not when it's
   queued. A stale briefing dropped at delivery is an `annotation` with label
   `coach.narration_dropped`.

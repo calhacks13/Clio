@@ -467,6 +467,36 @@ describe('POST /api/plans/check', () => {
     expect(planner.checks).toEqual([check()]);
   });
 
+  it('passes the start of the step, the looks and the mix-ups on, and answers what went wrong', async () => {
+    const planner = checkingPlanner(
+      JSON.stringify({
+        evidence: { label: 'red cap', point: [300, 700] },
+        observation: 'They opened the red coolant cap.',
+        wrong: 'opened the red coolant cap, not the blue one',
+        progress: 10,
+        verdict: 'not_done',
+      }),
+    );
+    const h = await harness({ planner, now: steppingClock('2026-10-24T03:15:02.000Z', 250) });
+    const request = check({
+      before: [IMAGE],
+      objects: [{ id: 'cap', label: 'blue cap', look: 'blue flip cap with a windshield symbol' }],
+      confusions: ['Opening the red coolant cap instead'],
+    });
+    const { res, body } = await postCheck(h, request);
+    expect(res.status).toBe(200);
+    expect(StepCheckResponseSchema.parse(body)).toEqual({
+      verdict: 'not_done',
+      observation: 'They opened the red coolant cap.',
+      progress: 10,
+      wrong: 'opened the red coolant cap, not the blue one',
+      evidence: { label: 'red cap', point: [0.7, 0.3] },
+      model: 'planner-test',
+      latencyMs: 250,
+    });
+    expect(planner.checks).toEqual([request]);
+  });
+
   it('answers 502 when the model call fails', async () => {
     const h = await harness({ planner: checkingPlanner(new Error('deadline exceeded')) });
     const { res, body } = await postCheck(h, check());

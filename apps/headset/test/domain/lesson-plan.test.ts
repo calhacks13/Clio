@@ -478,7 +478,7 @@ describe('coach authority', () => {
 });
 
 describe('the step watcher', () => {
-  it('suggests a step that looks done after a quiet spell, while Gemini is in charge', async () => {
+  it('suggests a step that looks done twice in a row, while Gemini is in charge', async () => {
     const checks: StepCheckRequest[] = [];
     const checker: StepChecker = {
       check: async (req) => {
@@ -496,12 +496,19 @@ describe('the step watcher', () => {
     await lesson.settled();
     expect(checks).toEqual([]); // the coach is not connected yet
     bus.emit('coach.status', { t: clock.now(), state: 'ready' });
-    lesson.tick(clock.advance(100)); // first sight of the step starts its clock
-    lesson.tick(clock.advance(6000));
+    lesson.tick(clock.advance(100)); // first sight of the step: the frame it starts from
     await lesson.settled();
+    lesson.tick(clock.advance(1000));
+    await lesson.settled();
+    expect(suggested).toEqual([]); // once is not enough
+    lesson.tick(clock.advance(1000));
+    await lesson.settled();
+    expect(checks).toHaveLength(2);
     expect(checks[0]).toMatchObject({
       goal: 'add wiper fluid',
       step: { id: 'open', instruction: 'Unscrew the blue cap.', doneWhen: 'the blue cap is off' },
+      before: [{ mimeType: 'image/jpeg', data: 'AAAA' }],
+      objects: [{ id: 'cap', label: 'blue cap', look: 'blue cap' }],
     });
     expect(suggested).toEqual(['open:the cap is off:AAAA']);
     expect(annotations.find((a) => a.label === 'step.watch')?.data).toMatchObject({
@@ -509,6 +516,80 @@ describe('the step watcher', () => {
       verdict: 'done',
     });
     expect(lesson.currentStep()?.id).toBe('open');
+  });
+
+  it("tells the watcher what the step's objects look like and the mistakes to tell apart", async () => {
+    const fridge = parseProcedure({
+      ...plan,
+      objects: [
+        {
+          id: 'yogurt',
+          label: 'yogurt drink',
+          placement: { method: 'detect' },
+          tracking: { query: 'yogurt drink bottle' },
+        },
+        {
+          id: 'fridge',
+          label: 'fridge',
+          placement: { method: 'detect' },
+          tracking: { query: 'white fridge with its door open' },
+        },
+        { id: 'milk', label: 'milk', placement: { method: 'detect' } },
+        { id: 'zone', label: 'shelf zone', hidden: true, placement: { method: 'detect' } },
+      ],
+      steps: [
+        {
+          id: 'take',
+          instruction: 'Take the yogurt drink off the shelf.',
+          doneWhen: 'the yogurt drink is in their hand',
+          targets: ['fridge', 'yogurt', 'zone', 'milk'],
+          show: [
+            {
+              object: 'yogurt',
+              phrase: 'yogurt drink',
+              description: 'small white bottle with a pink cap, left of the milk',
+            },
+          ],
+          success: { type: 'confirm' },
+          mistakes: [
+            {
+              kind: 'took_milk',
+              message: 'That is the milk. Take the small bottle with the pink cap.',
+              when: { type: 'hand_near', object: 'milk' },
+            },
+          ],
+        },
+      ],
+    });
+    const checks: StepCheckRequest[] = [];
+    const checker: StepChecker = {
+      check: async (req) => {
+        checks.push(req);
+        return { verdict: 'not_done', observation: 'not yet', model: 'm', latencyMs: 5 };
+      },
+    };
+    const planner: LessonPlanner = {
+      plan: async () => ({ planId: 'fridge', procedure: fridge, warnings: [] }),
+    };
+    const { bus, clock, lesson, begin } = setup({ ...gemini, checker, planner });
+    await begin('get a yogurt drink');
+    bus.emit('coach.status', { t: clock.now(), state: 'ready' });
+    lesson.tick(clock.advance(100));
+    await lesson.settled();
+    lesson.tick(clock.advance(1000));
+    await lesson.settled();
+    expect(checks[0]?.objects).toEqual([
+      {
+        id: 'yogurt',
+        label: 'yogurt drink',
+        look: 'small white bottle with a pink cap, left of the milk',
+      },
+      { id: 'fridge', label: 'fridge', look: 'white fridge with its door open' },
+      { id: 'milk', label: 'milk', look: 'milk' },
+    ]);
+    expect(checks[0]?.confusions).toEqual([
+      'That is the milk. Take the small bottle with the pink cap.',
+    ]);
   });
 });
 
