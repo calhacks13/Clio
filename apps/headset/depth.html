@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clio Depth</title>
+    <style>
+      :root {
+        --bg: #0b1016;
+        --accent: #4fe3ff;
+        --on-accent: #04121a;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        overflow: hidden;
+      }
+      #enter {
+        position: fixed;
+        left: 50%;
+        bottom: 48px;
+        transform: translateX(-50%);
+        padding: 18px 40px;
+        border: 0;
+        border-radius: 12px;
+        background: var(--accent);
+        color: var(--on-accent);
+        font: 600 20px system-ui, sans-serif;
+      }
+      #enter:disabled {
+        background: #3a4651;
+        color: #9aa7b2;
+      }
+    </style>
+  </head>
+  <body>
+    <button id="enter" type="button" disabled>Enter AR</button>
+    <script type="module" src="/src/depth-test/main.ts"></script>
+  </body>
+</html>

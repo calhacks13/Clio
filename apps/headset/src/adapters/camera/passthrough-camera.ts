@@ -5,6 +5,7 @@ import type { PlanImageSource } from '../../domain/session/lesson-controller';
 import type { CameraModel } from '../../domain/world/camera-model';
 import type { CameraFrame, CameraFrameSource } from '../../domain/world/grounding';
 import { cameraModelFromSettings, defaultQuestCameraModel } from './calibration';
+import { applyStoredCalibration, loadStoredCalibration } from './stored-calibration';
 
 // Quest Browser exposes the headset's front RGB cameras through getUserMedia (Browser 40.1+). We
 // ask for the environment-facing camera explicitly: the "facing front" device is the avatar selfie
@@ -14,6 +15,10 @@ import { cameraModelFromSettings, defaultQuestCameraModel } from './calibration'
 // Known issue (Sept 2026, Browser ~150): the headset-camera permission prompt may never appear;
 // grant it over adb (docs/dev-setup.md). On desktop any webcam works, which is handy for testing
 // grounding with the emulator.
+//
+// open({ storedCalibration: true }) puts calibrate.html's saved camera pose on the model when it
+// was made for the same model (the default guess, or the same lens metadata; stored-calibration.ts).
+// calibrate.html itself opens the camera without it.
 
 const log = createLogger('camera');
 const isQuest = () => /OculusBrowser|Quest/.test(navigator.userAgent);
@@ -27,13 +32,16 @@ export class PassthroughCamera implements CameraFrameSource, CoachFrameSource, P
     private readonly video: HTMLVideoElement,
     private readonly stream: MediaStream,
     private readonly reported: Record<string, unknown>,
+    storedCalibration: boolean,
   ) {
     const width = video.videoWidth || Number(reported.width) || 1280;
     const height = video.videoHeight || Number(reported.height) || 960;
     const fromBrowser = cameraModelFromSettings(reported, { width, height });
-    this.calibration = fromBrowser ?? defaultQuestCameraModel(width, height);
+    const model = fromBrowser ?? defaultQuestCameraModel(width, height);
+    const stored = storedCalibration ? loadStoredCalibration() : null;
+    this.calibration = applyStoredCalibration(model, fromBrowser ? 'lens' : 'default', stored);
     log.info(
-      `${width}x${height}, calibration from ${fromBrowser ? 'browser lens metadata' : 'Quest 3 defaults'}`,
+      `${width}x${height}, calibration from ${fromBrowser ? 'browser lens metadata' : 'Quest 3 defaults'}${this.calibration === model ? '' : ', with the stored calibration'}`,
     );
     const track = (now: number, meta: VideoFrameCallbackMetadata) => {
       this.lastFrameT = meta.captureTime ?? meta.expectedDisplayTime ?? now;
@@ -42,7 +50,9 @@ export class PassthroughCamera implements CameraFrameSource, CoachFrameSource, P
     if ('requestVideoFrameCallback' in video) video.requestVideoFrameCallback(track);
   }
 
-  static async open(): Promise<PassthroughCamera | null> {
+  static async open(
+    options: { storedCalibration?: boolean } = {},
+  ): Promise<PassthroughCamera | null> {
     if (!navigator.mediaDevices?.getUserMedia) return null;
     const size = { width: { ideal: 1280 }, height: { ideal: 960 } };
     let stream: MediaStream;
@@ -64,7 +74,7 @@ export class PassthroughCamera implements CameraFrameSource, CoachFrameSource, P
     const track = stream.getVideoTracks()[0];
     const settings = (track?.getSettings() ?? {}) as Record<string, unknown>;
     log.info(`camera settings: ${JSON.stringify(settings)}`);
-    return new PassthroughCamera(video, stream, settings);
+    return new PassthroughCamera(video, stream, settings, options.storedCalibration ?? false);
   }
 
   /** Raw MediaTrackSettings, including Quest's experimental lens fields when present. */

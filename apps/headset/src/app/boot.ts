@@ -58,7 +58,9 @@ export async function boot(root: HTMLElement): Promise<void> {
       await speaker.unlock();
       status.textContent = 'Requesting microphone and camera…';
       if (config.coach === 'gemini') await MicCapture.requestPermission();
-      const camera = config.camera ? await PassthroughCamera.open() : null;
+      const camera = config.camera
+        ? await PassthroughCamera.open({ storedCalibration: true })
+        : null;
       const procedureId = $<HTMLSelectElement>('#procedure').value;
       const procedure: Procedure | null = procedureId ? await api.procedure(procedureId) : null;
       const goal = $<HTMLInputElement>('#goal').value.trim() || null;
