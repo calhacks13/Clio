@@ -27,6 +27,7 @@ import {
   type DepthSampler,
   depthSensingInit,
   disableXrDepthOcclusion,
+  depthUsageOf,
   preferDepthSensing,
 } from '../adapters/xr/depth-sensing';
 import { poseFromMatrix } from '../adapters/xr/frame-sampler';
@@ -825,7 +826,8 @@ async function enterAr(): Promise<void> {
     createDepthSampler(started, {
       space,
       gl: renderer.getContext() as WebGL2RenderingContext,
-      binding: started.depthUsage === 'gpu-optimized' ? renderer.xr.getBinding() : null,
+      // Not started.depthUsage: it throws when the runtime refused depth sensing.
+      binding: depthUsageOf(started) === 'gpu-optimized' ? renderer.xr.getBinding() : null,
       // IWER encodes window depth without a far plane (depth-sensing.ts, decodeFarPlane).
       windowFar: params.get('emulate') === '1' ? 'infinite' : 'reported',
     });

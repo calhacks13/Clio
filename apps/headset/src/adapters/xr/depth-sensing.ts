@@ -283,6 +283,24 @@ export function depthSensingInit(usage: XRDepthUsage[] = ['cpu-optimized', 'gpu-
 }
 
 /**
+ * The session's depth usage, or null without depth sensing. Reading session.depthUsage on a
+ * session that did not enable the feature throws (the spec's InvalidStateError; Quest Browser does
+ * when the runtime refused it or it was not asked for), and inside an XR frame that would stop the
+ * render loop, so the feature list is checked first; a runtime that lists no features (IWER) gets
+ * the benefit of the doubt.
+ */
+export function depthUsageOf(session: XRSession | null | undefined): XRDepthUsage | null {
+  if (!session) return null;
+  const features = session.enabledFeatures;
+  if (features && !features.includes('depth-sensing')) return null;
+  try {
+    return session.depthUsage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * three.js (0.186) turns on depth occlusion by itself whenever the session has gpu-optimized
  * depth (Quest offers nothing else): every frame it draws the sensed depth into the depth buffer
  * before the scene, so anything with depthTest (outlines, labels, panels) disappears wherever a
