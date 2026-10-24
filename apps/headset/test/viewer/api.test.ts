@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { type Fetch, NdjsonTail } from '../../src/viewer/api';
+import {
+  episodeTails,
+  type Fetch,
+  getEpisode,
+  listEpisodes,
+  NdjsonTail,
+} from '../../src/viewer/api';
 
 /** A server that answers each read with the given body chunks and headers, and logs the URLs. */
 function fakeServer(responses: { chunks: string[]; next?: number; status?: number }[]) {
@@ -95,5 +101,80 @@ describe('NdjsonTail', () => {
     await expect(tail.read()).rejects.toThrow(/HTTP 500/);
     await tail.read();
     expect(urls).toEqual(['/x?from=0', '/x?from=8', '/x?from=8']);
+  });
+
+  it('starts from a given offset', async () => {
+    const { urls, fetchFn } = fakeServer([{ chunks: ['{"t":9}\n'], next: 108 }]);
+    const tail = new NdjsonTail('/x', fetchFn, { from: 100 });
+    expect(tail.offset).toBe(100);
+    expect(await tail.read()).toEqual([{ t: 9 }]);
+    expect(urls).toEqual(['/x?from=100']);
+    expect(tail.offset).toBe(108);
+  });
+
+  it('joining inside a line, drops it once and keeps every whole line after it', async () => {
+    const { urls, fetchFn } = fakeServer([
+      // From the middle of a line, cut again between chunks, with a multi-byte character in it.
+      { chunks: ['"é","t":7}', '\n{"t":8}\n{"t"', ':9}\n'], next: 1000 },
+      { chunks: ['{"t":10}\n'], next: 1009 },
+    ]);
+    const tail = new NdjsonTail('/x', fetchFn, { from: 975, skipFirstLine: true });
+    expect(await tail.read()).toEqual([{ t: 8 }, { t: 9 }]);
+    // Later reads start on a line boundary: nothing more is dropped.
+    expect(await tail.read()).toEqual([{ t: 10 }]);
+    expect(urls).toEqual(['/x?from=975', '/x?from=1000']);
+    expect(tail.corrupt).toBe(0);
+  });
+
+  it('keeps waiting to drop the partial line until a line break arrives', async () => {
+    const { urls, fetchFn } = fakeServer([
+      { chunks: ['abc'] },
+      { chunks: [] },
+      { chunks: ['abcdef\n{"t":1}\n'] },
+      { chunks: ['{"t":2}\n'] },
+    ]);
+    const tail = new NdjsonTail('/x', fetchFn, { from: 50, skipFirstLine: true });
+    expect(await tail.read()).toEqual([]);
+    expect(await tail.read()).toEqual([]);
+    expect(await tail.read()).toEqual([{ t: 1 }]);
+    expect(await tail.read()).toEqual([{ t: 2 }]);
+    expect(urls).toEqual(['/x?from=50', '/x?from=50', '/x?from=50', '/x?from=65']);
+  });
+
+  it('counts lines that are not JSON', async () => {
+    const { fetchFn } = fakeServer([
+      { chunks: ['{"t":1}\nnot json\n'], next: 17 },
+      { chunks: ['{oops\n'], next: 23 },
+    ]);
+    const tail = new NdjsonTail('/x', fetchFn);
+    expect(await tail.read()).toEqual([{ t: 1 }]);
+    await tail.read();
+    expect(tail.corrupt).toBe(2);
+  });
+});
+
+describe('reading through another base path', () => {
+  it('puts every read under the base', async () => {
+    const urls: string[] = [];
+    const fetchFn: Fetch = async (url) => {
+      urls.push(url);
+      if (url.endsWith('/episodes')) return Response.json({ episodes: [] });
+      if (url.includes('?from=')) return new Response('', { headers: { 'x-next-from': '0' } });
+      return new Response('{}', { status: 404 });
+    };
+    expect(await listEpisodes(fetchFn, '/api/clio')).toEqual([]);
+    await expect(getEpisode('ep-1', undefined, fetchFn, '/api/clio')).rejects.toThrow(/404/);
+    const tails = episodeTails('ep-1', fetchFn, '/api/clio');
+    await tails.frames.read();
+    await tails.objects.read();
+    await listEpisodes(fetchFn);
+    expect(urls).toEqual([
+      '/api/clio/episodes',
+      '/api/clio/episodes/ep-1',
+      '/api/clio/episodes/ep-1/frames?from=0',
+      '/api/clio/episodes/ep-1/objects?from=0',
+      '/api/episodes',
+    ]);
+    expect(tails.events.url).toBe('/api/clio/episodes/ep-1/events');
   });
 });

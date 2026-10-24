@@ -7,6 +7,8 @@ export interface PinchTransition {
   phase: 'start' | 'end';
   point: Vec3;
   t: number;
+  /** Set on an end caused by the hand being lost (past the grace period), not by opening. */
+  dropout?: true;
 }
 
 export interface PinchThresholds {
@@ -41,7 +43,7 @@ export class PinchDetector {
       const grace = this.thresholds.dropoutGraceMs ?? 150;
       if (!this.pinching[hand] || t - this.lastSeen[hand] < grace) return null;
       this.pinching[hand] = false;
-      return { hand, phase: 'end', point: this.last[hand], t };
+      return { hand, phase: 'end', point: this.last[hand], t, dropout: true };
     }
     const point = pinchPoint(sample);
     this.last[hand] = point;

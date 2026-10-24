@@ -1,5 +1,6 @@
 import {
   clipIdFor,
+  EPISODE_FEATURE,
   EPISODE_SCHEMA_ID,
   type EpisodeCreate,
   type EpisodeMode,
@@ -509,6 +510,7 @@ export class LessonController {
       coach: context.coach,
       device: context.device,
       app: context.app,
+      features: [EPISODE_FEATURE.objectFlags, EPISODE_FEATURE.objectGrasp],
     };
   }
 

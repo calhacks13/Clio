@@ -78,7 +78,10 @@ export class EpisodeRecorder {
       }),
       bus.on('objects.updated', ({ t: at, objects }) => {
         if (objects.length > 0) {
-          this.objects.push({ t: qTime(at - this.startT), objects: objects.map(quantizeObject) });
+          this.objects.push({
+            t: qTime(at - this.startT),
+            objects: objects.map((o) => quantizeObject(o, this.startT, at)),
+          });
         }
       }),
     ];

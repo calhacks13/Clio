@@ -22,6 +22,8 @@ export interface AppConfig {
   autoDemo: boolean;
   /** Pinch two corners to calibrate the table before the lesson. */
   calibrate: boolean;
+  /** auto: snap the workspace to the detected table when the session starts. off: in front. */
+  table: 'auto' | 'off';
   /** Gemini prebuilt voice name. */
   voice: string | null;
   /** How often to look again at what the step shows, in ms (0: only when the step starts). */
@@ -39,6 +41,7 @@ const DEFAULTS: AppConfig = {
   camera: true,
   autoDemo: true,
   calibrate: false,
+  table: 'auto',
   voice: null,
   showRefreshMs: 3000,
 };
@@ -73,6 +76,7 @@ export function readConfig(search: string): AppConfig {
     camera: flag(q.get('camera'), DEFAULTS.camera),
     autoDemo: flag(q.get('autoDemo'), DEFAULTS.autoDemo),
     calibrate: flag(q.get('calibrate'), DEFAULTS.calibrate),
+    table: oneOf(q.get('table'), ['auto', 'off'], DEFAULTS.table),
     voice: text(q.get('voice')),
     showRefreshMs: millis(q.get('showRefresh'), DEFAULTS.showRefreshMs),
   };

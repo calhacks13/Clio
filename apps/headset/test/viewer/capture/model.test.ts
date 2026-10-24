@@ -5,7 +5,9 @@ import {
   entityAt,
   graspMarks,
   HAND_BONES,
+  type HeldSpan,
   heldAt,
+  heldSpanAt,
   type Location,
   ORIENTATION_VALID,
   POSITION_TRACKED,
@@ -33,7 +35,13 @@ function pose(t: number, at: Vec3 | null, flags = VALID, id = 'cup'): PoseSample
   };
 }
 
-function event(t: number, kind: CaptureEvent['event'], ids: string[]): CaptureEvent {
+function event(
+  t: number,
+  kind: CaptureEvent['event'],
+  ids: string[],
+  origin: CaptureEvent['origin'] = 'synthetic',
+  details: Record<string, unknown> = {},
+): CaptureEvent {
   return {
     kind: 'event',
     t_us: t,
@@ -41,8 +49,8 @@ function event(t: number, kind: CaptureEvent['event'], ids: string[]): CaptureEv
     source_id: 'test',
     event: kind,
     entity_ids: ids,
-    origin: 'synthetic',
-    details: {},
+    origin,
+    details,
   };
 }
 
@@ -81,6 +89,16 @@ describe('Series', () => {
     expect(series.at(100)?.t_us).toBe(100);
     expect(series.at(199)?.t_us).toBe(100);
     expect(series.at(5000)?.t_us).toBe(200);
+  });
+
+  it('drops the samples before a time and says how many', () => {
+    const series = seriesOf(pose(0, [0, 0, 0]), pose(100, [1, 0, 0]), pose(200, [2, 0, 0]));
+    expect(series.dropBefore(100)).toBe(1);
+    expect(series.samples.map((s) => s.t_us)).toEqual([100, 200]);
+    expect(series.dropBefore(50)).toBe(0);
+    expect(series.dropBefore(1000)).toBe(2);
+    expect(series.samples).toEqual([]);
+    expect(series.dropBefore(1000)).toBe(0);
   });
 });
 
@@ -158,6 +176,90 @@ describe('validSpans', () => {
       [40, 100],
     ]);
     expect(validSpans(undefined, 100)).toEqual([]);
+  });
+});
+
+describe('held spans', () => {
+  it('opens on a grasp and closes on a release, by hand or by object', () => {
+    const capture = withHands();
+    capture.addEvent(event(10, 'grasp', ['right_hand', 'cup'], 'inferred', { grip: 'pinch' }));
+    capture.addEvent(event(20, 'grasp', ['left_hand', 'lid'], 'runtime', { grip: 'fist' }));
+    capture.addEvent(event(30, 'release', ['right_hand', 'cup']));
+    expect(capture.heldSpans('cup')).toEqual([
+      {
+        entityId: 'cup',
+        hand: 'right',
+        startUs: 10,
+        endUs: 30,
+        origin: 'inferred',
+        grip: 'pinch',
+      },
+    ]);
+    expect(capture.heldSpans('lid')).toEqual([
+      { entityId: 'lid', hand: 'left', startUs: 20, endUs: null, origin: 'runtime', grip: 'fist' },
+    ]);
+    capture.addEvent(event(40, 'release', ['left_hand']));
+    expect(capture.heldSpans('lid')[0]?.endUs).toBe(40);
+    expect(capture.heldSpans('mug')).toEqual([]);
+    // Held from the grasp up to, not including, the release.
+    expect(heldSpanAt(capture, 'cup', 9)).toBeNull();
+    expect(heldSpanAt(capture, 'cup', 10)?.hand).toBe('right');
+    expect(heldSpanAt(capture, 'cup', 29)?.hand).toBe('right');
+    expect(heldSpanAt(capture, 'cup', 30)).toBeNull();
+  });
+
+  it('hands an object over when another hand grasps it', () => {
+    const capture = withHands();
+    capture.addEvent(event(10, 'grasp', ['right_hand', 'cup']));
+    capture.addEvent(event(15, 'grasp', ['right_hand', 'cup']));
+    capture.addEvent(event(20, 'grasp', ['left_hand', 'cup']));
+    expect(capture.heldSpans('cup').map((s) => [s.hand, s.startUs, s.endUs])).toEqual([
+      ['right', 10, 20],
+      ['left', 20, null],
+    ]);
+    expect(heldAt(capture, 20)).toEqual(new Map([['cup', 'left_hand']]));
+  });
+
+  it('replays grasps that arrive late in time order', () => {
+    const capture = withHands();
+    capture.addEvent(event(30, 'release', ['right_hand', 'cup']));
+    capture.addEvent(event(10, 'grasp', ['right_hand', 'cup']));
+    expect(capture.heldSpans('cup').map((s) => [s.startUs, s.endUs])).toEqual([[10, 30]]);
+  });
+
+  it('merges spans an adapter worked out from samples, by start time', () => {
+    const capture = withHands();
+    capture.addEvent(event(50, 'grasp', ['right_hand', 'cup']));
+    const carry: HeldSpan = {
+      entityId: 'cup',
+      hand: null,
+      startUs: 10,
+      endUs: 20,
+      origin: 'inferred',
+      grip: null,
+    };
+    capture.setSampleHeldSpans('cup', [carry]);
+    expect(capture.heldSpans('cup').map((s) => s.startUs)).toEqual([10, 50]);
+    expect(heldSpanAt(capture, 'cup', 15)).toBe(carry);
+    expect(heldSpanAt(capture, 'cup', 30)).toBeNull();
+    // The hand of an inferred carry is not known.
+    expect(heldAt(capture, 15)).toEqual(new Map([['cup', null]]));
+    capture.setSampleHeldSpans('cup', []);
+    expect(capture.heldSpans('cup').map((s) => s.startUs)).toEqual([50]);
+  });
+
+  it('finds an earlier span that is still open past a later, shorter one', () => {
+    const capture = withHands();
+    const span = (startUs: number, endUs: number | null): HeldSpan => ({
+      entityId: 'cup',
+      hand: null,
+      startUs,
+      endUs,
+      origin: 'inferred',
+      grip: null,
+    });
+    capture.setSampleHeldSpans('cup', [span(0, 100), span(10, 20)]);
+    expect(heldSpanAt(capture, 'cup', 50)?.startUs).toBe(0);
   });
 });
 

@@ -10,13 +10,16 @@ export class SpeakerOutput implements VoiceOutput {
   private readonly sources = new Set<AudioBufferSourceNode>();
   private nextStart = 0;
 
+  /** Muted: the coach still runs, but nothing reaches the speakers (desktop and emulator runs). */
+  constructor(private readonly muted = false) {}
+
   /** AudioContexts start suspended until a user gesture; call from a click handler. */
   async unlock(): Promise<void> {
     await this.ctx.resume();
   }
 
   play(pcm: Int16Array, sampleRate: number): void {
-    if (pcm.length === 0) return;
+    if (this.muted || pcm.length === 0) return;
     const buffer = this.ctx.createBuffer(1, pcm.length, sampleRate);
     buffer.copyToChannel(int16ToFloat32(pcm), 0);
     const source = this.ctx.createBufferSource();
@@ -31,7 +34,7 @@ export class SpeakerOutput implements VoiceOutput {
   }
 
   say(text: string): void {
-    if (!('speechSynthesis' in window)) return;
+    if (this.muted || !('speechSynthesis' in window)) return;
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = 1.05;
     speechSynthesis.speak(utterance);

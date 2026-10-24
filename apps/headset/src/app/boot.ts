@@ -50,7 +50,11 @@ export async function boot(root: HTMLElement): Promise<void> {
     const status = $<HTMLElement>('#status');
     button.disabled = true;
     try {
-      const speaker = new SpeakerOutput();
+      // The coach speaks only from the headset; elsewhere (the Mac, the emulator) it is silent
+      // unless ?audio=1 asks for sound.
+      const speaker = new SpeakerOutput(
+        !isQuest() && new URLSearchParams(location.search).get('audio') !== '1',
+      );
       await speaker.unlock();
       status.textContent = 'Requesting microphone and camera…';
       if (config.coach === 'gemini') await MicCapture.requestPermission();

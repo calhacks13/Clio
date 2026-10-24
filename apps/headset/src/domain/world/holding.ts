@@ -1,4 +1,4 @@
-import type { Handedness, ObjectSpec } from '@clio/protocol';
+import type { GripKind, Handedness, ObjectSpec, ReleaseReason } from '@clio/protocol';
 import type { Pose } from '../../core/math';
 import { gripClosure, palmPoint, wristPose } from '../hands/features';
 import type { PinchTransition } from '../hands/pinch-detector';
@@ -34,7 +34,10 @@ export class GraspTracker {
     this.o = { pinchReach: 0.04, palmReach: 0.06, closedBelow: 0.045, openAbove: 0.06, ...options };
   }
 
-  /** Handle a pinch transition. Returns the ids of objects released (so they can be re-located). */
+  /**
+   * Handle a pinch transition. Returns the ids of objects released (so they can be re-located). A
+   * pinch that ended because the hand was lost releases with reason `hand_lost`.
+   */
   onPinch(transition: PinchTransition, frame: TrackedFrame): string[] {
     const hand = handOf(frame, transition.hand);
     if (transition.phase === 'start') {
@@ -44,12 +47,13 @@ export class GraspTracker {
           transition.point,
           wristPose(hand),
           this.o.pinchReach,
+          'pinch',
           transition.t,
         );
       return [];
     }
     if (this.fist[transition.hand]) return [];
-    return this.release(transition.hand, transition.t);
+    return this.release(transition.hand, transition.dropout ? 'hand_lost' : 'opened', transition.t);
   }
 
   /** Per frame: fist grasps, then move held objects with their wrists. Returns released ids. */
@@ -63,10 +67,17 @@ export class GraspTracker {
       wrists[which] = wrist;
       const closure = gripClosure(hand);
       if (!this.fist[which] && closure < this.o.closedBelow) {
-        this.fist[which] = this.pickUp(which, palmPoint(hand), wrist, this.o.palmReach, frame.t);
+        this.fist[which] = this.pickUp(
+          which,
+          palmPoint(hand),
+          wrist,
+          this.o.palmReach,
+          'fist',
+          frame.t,
+        );
       } else if (this.fist[which] && closure > this.o.openAbove) {
         this.fist[which] = false;
-        released.push(...this.release(which, frame.t));
+        released.push(...this.release(which, 'opened', frame.t));
       }
     }
     this.registry.updateHeld(wrists, frame.t);
@@ -78,6 +89,7 @@ export class GraspTracker {
     point: Pose['p'],
     wrist: Pose,
     reach: number,
+    grip: GripKind,
     t: number,
   ): boolean {
     let best: { id: string; d: number } | null = null;
@@ -90,12 +102,12 @@ export class GraspTracker {
       );
       if (d <= est.spec.radius + reach && (!best || d < best.d)) best = { id: est.id, d };
     }
-    return best ? this.registry.attach(best.id, hand, wrist, t) : false;
+    return best ? this.registry.attach(best.id, hand, wrist, t, grip) : false;
   }
 
-  private release(hand: Handedness, t: number): string[] {
+  private release(hand: Handedness, reason: ReleaseReason, t: number): string[] {
     const held = this.registry.heldBy(hand);
-    for (const id of held) this.registry.detach(id, t);
+    for (const id of held) this.registry.detach(id, t, reason);
     return held;
   }
 }

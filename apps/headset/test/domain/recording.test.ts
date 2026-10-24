@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ManualClock } from '../../src/core/clock';
 import { Emitter } from '../../src/core/emitter';
 import type { AppEvents } from '../../src/domain/events';
+import { quantizeObject } from '../../src/domain/recording/quantize';
 import { EpisodeRecorder } from '../../src/domain/recording/recorder';
 import { MemoryEpisodeSink, SinkError } from '../../src/domain/recording/sink';
 import { EpisodeUploader } from '../../src/domain/recording/uploader';
@@ -155,6 +156,37 @@ describe('EpisodeRecorder', () => {
     ]);
   });
 
+  it('records location flags, the holding hand and a rebased observation time', async () => {
+    const { bus, recorder, sink } = setup();
+    recorder.start(meta, 1000);
+    const state = {
+      id: 'jug',
+      position: [0.3, 0, 0] as [number, number, number],
+      orientation: null,
+      confidence: 0.8,
+      source: 'detector' as const,
+      locationFlags: 10,
+      heldBy: null,
+    };
+    bus.emit('objects.updated', {
+      t: 2500,
+      objects: [
+        { ...state, observedT: 1180.123456 },
+        { ...state, id: 'cup', observedT: 2499.5, heldBy: 'left', locationFlags: 2 },
+      ],
+    });
+    await recorder.stop('completed', { stepsCompleted: 0, stepsTotal: 0 }, 2600);
+    expect(sink.only().batches.flatMap((b) => b.objects)).toEqual([
+      {
+        t: 1500,
+        objects: [
+          { ...state, observedT: 180.12 },
+          { ...state, id: 'cup', heldBy: 'left', locationFlags: 2 },
+        ],
+      },
+    ]);
+  });
+
   it('cuts a batch every N frames and numbers batches in order', async () => {
     const { recorder, sink } = setup(new MemoryEpisodeSink(), {
       batchFrames: 2,
@@ -179,6 +211,24 @@ describe('EpisodeRecorder', () => {
     bus.emit('annotation', { t: 1200, label: 'late' });
     expect(sink.only().batches.flatMap((b) => b.events)).toEqual([]);
     expect(recorder.recording).toBe(false);
+  });
+});
+
+describe('quantizeObject', () => {
+  const state = {
+    id: 'jug',
+    position: [0.1, 0.2, 0.3] as [number, number, number],
+    orientation: null,
+    confidence: 1,
+    source: 'layout' as const,
+  };
+
+  it('leaves out the optional fields of a legacy state', () => {
+    expect(quantizeObject(state, 1000, 1500)).toEqual(state);
+  });
+
+  it('keeps an observation time from before the episode as a negative time', () => {
+    expect(quantizeObject({ ...state, observedT: 400 }, 1000, 1500).observedT).toBe(-600);
   });
 });
 

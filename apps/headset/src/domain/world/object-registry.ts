@@ -1,4 +1,12 @@
-import type { Handedness, ObjectSpec, ObjectState, PlacementMethod } from '@clio/protocol';
+import {
+  type GripKind,
+  type Handedness,
+  LOCATION_FLAG,
+  type ObjectSpec,
+  type ObjectState,
+  type PlacementMethod,
+  type ReleaseReason,
+} from '@clio/protocol';
 import {
   composePose,
   distance,
@@ -12,7 +20,8 @@ import type { AppBus } from '../events';
 // Where every object of the current procedure is, in the workspace frame, and how sure we are.
 // Estimates come from the layout, a pinch, the camera (detector or marker), or the hand holding the
 // object: while an object is held it rides with the wrist, which is tracked at frame rate and is far
-// more reliable than any camera estimate.
+// more reliable than any camera estimate. Grasps and releases are announced on the bus, and every
+// recorded state says how valid it is (location flags), who holds it and when it was measured.
 
 export interface ObjectEstimate {
   id: string;
@@ -21,7 +30,7 @@ export interface ObjectEstimate {
   orientation: Quat | null;
   confidence: number;
   source: PlacementMethod;
-  /** When this estimate was last updated (performance.now ms). */
+  /** When this estimate was last measured (performance.now ms); for a detection, its frame time. */
   t: number;
   heldBy: Handedness | null;
 }
@@ -36,8 +45,29 @@ export interface Observation {
 
 interface Grip {
   hand: Handedness;
+  grip: GripKind;
   /** Object pose in the wrist frame at the moment of grasping. */
   wristFromObject: Pose;
+  /** False while the holding hand's wrist is untracked: the object stays where it was last seen. */
+  wristTracked: boolean;
+}
+
+const MEASURED_SOURCES = new Set<PlacementMethod>(['detector', 'marker']);
+
+/**
+ * How valid an estimate is (`LOCATION_FLAG` bits). Camera estimates are measured; layout, pinch and
+ * manual placements and held objects are valid but carried over; a held object whose wrist is lost
+ * has no valid pose at all. Orientation is measured only by markers.
+ */
+function locationFlags(est: ObjectEstimate, grip: Grip | undefined): number {
+  if (grip && !grip.wristTracked) return 0;
+  const measured = !grip && MEASURED_SOURCES.has(est.source);
+  let flags = LOCATION_FLAG.positionValid | (measured ? LOCATION_FLAG.positionTracked : 0);
+  if (est.orientation) {
+    flags |= LOCATION_FLAG.orientationValid;
+    if (measured && est.source === 'marker') flags |= LOCATION_FLAG.orientationTracked;
+  }
+  return flags;
 }
 
 export class ObjectRegistry {
@@ -45,12 +75,21 @@ export class ObjectRegistry {
   private readonly estimates = new Map<string, ObjectEstimate>();
   private readonly grips = new Map<string, Grip>();
   private readonly changed = new Set<string>();
+  /** Latest time seen on the bus or in a frame, so late camera answers are announced in order. */
+  private now = Number.NEGATIVE_INFINITY;
 
-  constructor(private readonly bus: AppBus) {}
+  constructor(private readonly bus: AppBus) {
+    bus.onAny((_type, payload) => this.advance((payload as { t: number }).t));
+  }
 
-  /** Replace the object set (new or revised plan). Layout objects are placed immediately. */
+  /**
+   * Replace the object set (new or revised plan). Layout objects are placed immediately. Held
+   * objects are let go (`plan_changed`).
+   */
   load(objects: readonly ObjectSpec[], t: number): void {
+    this.advance(t);
     const previous = new Map(this.estimates);
+    const held = [...this.grips];
     this.specs.clear();
     this.estimates.clear();
     this.grips.clear();
@@ -60,7 +99,9 @@ export class ObjectRegistry {
       const kept = previous.get(spec.id);
       if (kept) {
         // A revised plan keeps what we already know about objects it still uses.
-        this.estimates.set(spec.id, { ...kept, spec, heldBy: null });
+        const wasHeld = kept.heldBy !== null;
+        this.estimates.set(spec.id, { ...kept, spec, heldBy: null, ...(wasHeld ? { t } : {}) });
+        if (wasHeld) this.changed.add(spec.id);
       } else if (spec.placement.method === 'layout') {
         this.set(spec.id, {
           position: [...spec.placement.position],
@@ -69,6 +110,17 @@ export class ObjectRegistry {
           t,
         });
       }
+    }
+    for (const [id, grip] of held) {
+      const position = previous.get(id)?.position;
+      if (!position) continue;
+      this.bus.emit('object.released', {
+        t,
+        objectId: id,
+        hand: grip.hand,
+        reason: 'plan_changed',
+        position,
+      });
     }
   }
 
@@ -98,44 +150,75 @@ export class ObjectRegistry {
   }
 
   /**
-   * Record an observation. Returns false when ignored: an unknown object, one that is held, or a
-   * camera guess about an object still at its measured layout position (taped spots are more
-   * precise than a lifted detection; once the object has been carried, the layout is stale).
+   * Record an observation. Returns false when ignored: an unknown object, one that is held, an
+   * answer about a moment older than what we already know (a slow camera answer that arrives after
+   * the object was carried), or a camera guess about an object still at its measured layout
+   * position (taped spots are more precise than a lifted detection; once the object has been
+   * carried, the layout is stale).
    */
   observe(id: string, obs: Observation): boolean {
     if (!this.specs.has(id) || this.grips.has(id)) return false;
-    if (obs.source === 'detector' && this.estimates.get(id)?.source === 'layout') return false;
+    const est = this.estimates.get(id);
+    if (est && obs.t < est.t) return false;
+    if (obs.source === 'detector' && est?.source === 'layout') return false;
     this.set(id, obs);
     return true;
   }
 
-  attach(id: string, hand: Handedness, wrist: Pose, t: number): boolean {
+  /** Attach an object to a hand (it then rides with the wrist). False if unknown or already held. */
+  attach(id: string, hand: Handedness, wrist: Pose, t: number, grip: GripKind = 'pinch'): boolean {
     const est = this.estimates.get(id);
-    if (!est) return false;
+    if (!est || this.grips.has(id)) return false;
     const objectPose: Pose = { p: est.position, q: est.orientation ?? [0, 0, 0, 1] };
-    this.grips.set(id, { hand, wristFromObject: composePose(invertPose(wrist), objectPose) });
+    this.grips.set(id, {
+      hand,
+      grip,
+      wristFromObject: composePose(invertPose(wrist), objectPose),
+      wristTracked: true,
+    });
     this.estimates.set(id, { ...est, heldBy: hand, t });
     this.changed.add(id);
+    this.bus.emit('object.grasped', { t, objectId: id, hand, grip, position: est.position });
     return true;
   }
 
-  detach(id: string, t: number): void {
-    if (!this.grips.delete(id)) return;
+  detach(id: string, t: number, reason: ReleaseReason = 'opened'): void {
+    const grip = this.grips.get(id);
+    if (!grip) return;
+    this.grips.delete(id);
     const est = this.estimates.get(id);
-    if (est) this.estimates.set(id, { ...est, heldBy: null, t });
+    if (!est) return;
+    this.estimates.set(id, { ...est, heldBy: null, t });
     this.changed.add(id);
+    this.bus.emit('object.released', {
+      t,
+      objectId: id,
+      hand: grip.hand,
+      reason,
+      position: est.position,
+    });
   }
 
   heldBy(hand: Handedness): string[] {
     return [...this.grips].filter(([, g]) => g.hand === hand).map(([id]) => id);
   }
 
-  /** Move held objects with their hands' wrists (workspace frame). */
+  /**
+   * Move held objects with their hands' wrists (workspace frame). A held object whose wrist is
+   * missing stays put; that is recorded once, as a state without valid flags.
+   */
   updateHeld(wrists: Partial<Record<Handedness, Pose>>, t: number): void {
+    this.advance(t);
     for (const [id, grip] of this.grips) {
       const wrist = wrists[grip.hand];
       const est = this.estimates.get(id);
-      if (!wrist || !est) continue;
+      if (!est) continue;
+      if (!wrist) {
+        if (grip.wristTracked) this.changed.add(id);
+        grip.wristTracked = false;
+        continue;
+      }
+      grip.wristTracked = true;
       const pose = composePose(wrist, grip.wristFromObject);
       this.estimates.set(id, {
         ...est,
@@ -164,18 +247,25 @@ export class ObjectRegistry {
     return best;
   }
 
-  /** Object states that changed since the last call, for the objects.ndjson stream. */
+  /**
+   * Object states that changed since the last call, for the objects.ndjson stream. Like every
+   * time on the bus, `observedT` is performance.now ms here; the recorder rebases it.
+   */
   drainChanges(): ObjectState[] {
     const out: ObjectState[] = [];
     for (const id of this.changed) {
       const est = this.estimates.get(id);
       if (!est) continue;
+      const flags = locationFlags(est, this.grips.get(id));
       out.push({
         id,
         position: est.position,
-        orientation: est.orientation,
+        orientation: flags & LOCATION_FLAG.orientationValid ? est.orientation : null,
         confidence: est.confidence,
         source: est.source,
+        locationFlags: flags,
+        heldBy: est.heldBy,
+        observedT: est.t,
       });
     }
     this.changed.clear();
@@ -198,12 +288,17 @@ export class ObjectRegistry {
     });
     this.changed.add(id);
     if (!previous || previous.source !== obs.source) {
+      // A slow camera answer is announced when it arrives; its frame time stays in the estimate.
       this.bus.emit('object.registered', {
-        t: obs.t,
+        t: Math.max(obs.t, this.now),
         objectId: id,
         position: obs.position,
         method: obs.source,
       });
     }
+  }
+
+  private advance(t: number): void {
+    if (t > this.now) this.now = t;
   }
 }

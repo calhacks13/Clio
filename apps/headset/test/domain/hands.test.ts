@@ -56,6 +56,15 @@ describe('PinchDetector', () => {
     const end = d.update('left', null, 200);
     expect(end?.phase).toBe('end');
     expect(end?.t).toBe(200);
+    expect(end?.dropout).toBe(true);
+  });
+
+  it('marks only a dropout end as one', () => {
+    const d = new PinchDetector({ startDistance: 0.02, endDistance: 0.035 });
+    d.update('left', tips(0.01), 0);
+    const end = d.update('left', tips(0.04), 10);
+    expect(end?.phase).toBe('end');
+    expect(end).not.toHaveProperty('dropout');
   });
 
   it('reports where the pinch happened', () => {

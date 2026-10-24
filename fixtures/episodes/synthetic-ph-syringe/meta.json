@@ -1,0 +1,803 @@
+{
+  "schema": "clio.episode/1",
+  "mode": "learn",
+  "procedure": {
+    "id": "ph-indicator",
+    "version": 1,
+    "title": "Test an acid and a base with red-cabbage indicator"
+  },
+  "plan": {
+    "schema": "clio.procedure/1",
+    "id": "ph-indicator",
+    "version": 1,
+    "origin": {
+      "kind": "curated"
+    },
+    "title": "Test an acid and a base with red-cabbage indicator",
+    "summary": "A five-step lab protocol: dispense indicator into three cups, acidify A, basify B, keep C as the control.",
+    "domain": "lab",
+    "workspace": {
+      "size": [
+        0.6,
+        0.4
+      ],
+      "marker": {
+        "family": "aruco_4x4_50",
+        "id": 0,
+        "sizeM": 0.05,
+        "offset": [
+          0,
+          0,
+          0
+        ]
+      },
+      "notes": "Work on a dark rimmed tray. Tape marker 0 at the tray's near-left corner (that corner is the origin), then calibrate by pinching the near-left and near-right corners. Tape spots for the cups (front row) and bottles (back row) at the layout positions. Stick markers 1-7 (ArUco 4x4_50, printed at 4 cm, 3 cm on the syringe) on the props, facing you."
+    },
+    "objects": [
+      {
+        "id": "cup_a",
+        "label": "cup A",
+        "kind": "container",
+        "radius": 0.04,
+        "hidden": false,
+        "placement": {
+          "method": "layout",
+          "position": [
+            0.15,
+            0.07,
+            -0.12
+          ]
+        },
+        "tracking": {
+          "marker": {
+            "family": "aruco_4x4_50",
+            "id": 1,
+            "sizeM": 0.04,
+            "offset": [
+              0,
+              0.03,
+              -0.035
+            ]
+          },
+          "query": "white paper cup with a large letter A",
+          "moves": false
+        }
+      },
+      {
+        "id": "cup_b",
+        "label": "cup B",
+        "kind": "container",
+        "radius": 0.04,
+        "hidden": false,
+        "placement": {
+          "method": "layout",
+          "position": [
+            0.3,
+            0.07,
+            -0.12
+          ]
+        },
+        "tracking": {
+          "marker": {
+            "family": "aruco_4x4_50",
+            "id": 2,
+            "sizeM": 0.04,
+            "offset": [
+              0,
+              0.03,
+              -0.035
+            ]
+          },
+          "query": "white paper cup with a large letter B",
+          "moves": false
+        }
+      },
+      {
+        "id": "cup_c",
+        "label": "cup C",
+        "kind": "container",
+        "radius": 0.04,
+        "hidden": false,
+        "placement": {
+          "method": "layout",
+          "position": [
+            0.45,
+            0.07,
+            -0.12
+          ]
+        },
+        "tracking": {
+          "marker": {
+            "family": "aruco_4x4_50",
+            "id": 3,
+            "sizeM": 0.04,
+            "offset": [
+              0,
+              0.03,
+              -0.035
+            ]
+          },
+          "query": "white paper cup with a large letter C",
+          "moves": false
+        }
+      },
+      {
+        "id": "indicator",
+        "label": "indicator bottle",
+        "kind": "container",
+        "description": "Purple red-cabbage juice.",
+        "radius": 0.035,
+        "hidden": false,
+        "placement": {
+          "method": "layout",
+          "position": [
+            0.12,
+            0.14,
+            -0.28
+          ]
+        },
+        "tracking": {
+          "marker": {
+            "family": "aruco_4x4_50",
+            "id": 4,
+            "sizeM": 0.04,
+            "offset": [
+              0,
+              0.08,
+              -0.03
+            ]
+          },
+          "query": "squeeze bottle labeled INDICATOR",
+          "moves": false
+        }
+      },
+      {
+        "id": "vinegar",
+        "label": "vinegar bottle",
+        "kind": "container",
+        "radius": 0.035,
+        "hidden": false,
+        "placement": {
+          "method": "layout",
+          "position": [
+            0.3,
+            0.14,
+            -0.28
+          ]
+        },
+        "tracking": {
+          "marker": {
+            "family": "aruco_4x4_50",
+            "id": 5,
+            "sizeM": 0.04,
+            "offset": [
+              0,
+              0.08,
+              -0.03
+            ]
+          },
+          "query": "squeeze bottle labeled VINEGAR",
+          "moves": false
+        }
+      },
+      {
+        "id": "base",
+        "label": "baking-soda bottle",
+        "kind": "container",
+        "radius": 0.035,
+        "hidden": false,
+        "placement": {
+          "method": "layout",
+          "position": [
+            0.48,
+            0.14,
+            -0.28
+          ]
+        },
+        "tracking": {
+          "marker": {
+            "family": "aruco_4x4_50",
+            "id": 6,
+            "sizeM": 0.04,
+            "offset": [
+              0,
+              0.08,
+              -0.03
+            ]
+          },
+          "query": "squeeze bottle labeled BASE",
+          "moves": false
+        }
+      },
+      {
+        "id": "syringe",
+        "label": "syringe",
+        "kind": "tool",
+        "description": "10 mL oral syringe; marker 7 is a small flag on the barrel.",
+        "radius": 0.02,
+        "hidden": false,
+        "placement": {
+          "method": "layout",
+          "position": [
+            0.54,
+            0.01,
+            -0.06
+          ]
+        },
+        "tracking": {
+          "marker": {
+            "family": "aruco_4x4_50",
+            "id": 7,
+            "sizeM": 0.03,
+            "offset": [
+              0,
+              0,
+              0
+            ]
+          },
+          "query": "plastic oral syringe",
+          "moves": true
+        }
+      }
+    ],
+    "steps": [
+      {
+        "id": "draw-indicator",
+        "instruction": "Fill the syringe with purple indicator from the indicator bottle.",
+        "targets": [
+          "indicator",
+          "syringe"
+        ],
+        "hand": "either",
+        "show": [
+          {
+            "object": "syringe",
+            "phrase": "oral syringe",
+            "description": "Clear plastic 10 mL oral syringe with a small paper flag on its barrel, lying at the front right of the tray"
+          },
+          {
+            "object": "indicator",
+            "phrase": "indicator squeeze bottle",
+            "description": "Squeeze bottle of purple red-cabbage juice labeled INDICATOR, at the back left of the tray"
+          }
+        ],
+        "success": {
+          "type": "any",
+          "of": [
+            {
+              "type": "object_near",
+              "object": "syringe",
+              "target": "indicator",
+              "radius": 0.08,
+              "dwellMs": 1200
+            },
+            {
+              "type": "hand_near",
+              "object": "indicator",
+              "hand": "either",
+              "point": "pinch",
+              "radius": 0.08,
+              "dwellMs": 1800
+            }
+          ]
+        },
+        "mistakes": [],
+        "coachNotes": "Dip the syringe tip into the bottle and pull the plunger back. The hand_near fallback covers lost tracking."
+      },
+      {
+        "id": "dispense-indicator",
+        "instruction": "Squirt a little indicator into cups A, B, and C.",
+        "targets": [
+          "cup_a",
+          "cup_b",
+          "cup_c"
+        ],
+        "hand": "either",
+        "show": [
+          {
+            "object": "cup_a",
+            "phrase": "paper cup A",
+            "description": "White paper cup with a large letter A on it, on the left of the tray, in the front row"
+          },
+          {
+            "object": "cup_b",
+            "phrase": "paper cup B",
+            "description": "White paper cup with a large letter B on it, in the middle of the tray, in the front row"
+          },
+          {
+            "object": "cup_c",
+            "phrase": "paper cup C",
+            "description": "White paper cup with a large letter C on it, on the right of the tray, in the front row"
+          }
+        ],
+        "success": {
+          "type": "sequence",
+          "of": [
+            {
+              "type": "any",
+              "of": [
+                {
+                  "type": "object_near",
+                  "object": "syringe",
+                  "target": "cup_a",
+                  "radius": 0.06,
+                  "dwellMs": 600
+                },
+                {
+                  "type": "hand_near",
+                  "object": "cup_a",
+                  "hand": "either",
+                  "point": "pinch",
+                  "radius": 0.06,
+                  "dwellMs": 800
+                }
+              ]
+            },
+            {
+              "type": "any",
+              "of": [
+                {
+                  "type": "object_near",
+                  "object": "syringe",
+                  "target": "cup_b",
+                  "radius": 0.06,
+                  "dwellMs": 600
+                },
+                {
+                  "type": "hand_near",
+                  "object": "cup_b",
+                  "hand": "either",
+                  "point": "pinch",
+                  "radius": 0.06,
+                  "dwellMs": 800
+                }
+              ]
+            },
+            {
+              "type": "any",
+              "of": [
+                {
+                  "type": "object_near",
+                  "object": "syringe",
+                  "target": "cup_c",
+                  "radius": 0.06,
+                  "dwellMs": 600
+                },
+                {
+                  "type": "hand_near",
+                  "object": "cup_c",
+                  "hand": "either",
+                  "point": "pinch",
+                  "radius": 0.06,
+                  "dwellMs": 800
+                }
+              ]
+            }
+          ]
+        },
+        "mistakes": [],
+        "stuckAfterMs": 20000
+      },
+      {
+        "id": "acid-to-a",
+        "instruction": "Now add vinegar to cup A.",
+        "targets": [
+          "vinegar",
+          "cup_a"
+        ],
+        "hand": "either",
+        "show": [
+          {
+            "object": "vinegar",
+            "phrase": "vinegar squeeze bottle",
+            "description": "Squeeze bottle labeled VINEGAR, in the middle of the back row of the tray"
+          },
+          {
+            "object": "cup_a",
+            "phrase": "paper cup A",
+            "description": "White paper cup with a large letter A on it, on the left of the tray, in the front row, with a little purple liquid in it"
+          }
+        ],
+        "success": {
+          "type": "sequence",
+          "of": [
+            {
+              "type": "any",
+              "of": [
+                {
+                  "type": "object_near",
+                  "object": "syringe",
+                  "target": "vinegar",
+                  "radius": 0.06,
+                  "dwellMs": 1000
+                },
+                {
+                  "type": "hand_near",
+                  "object": "vinegar",
+                  "hand": "either",
+                  "point": "pinch",
+                  "radius": 0.06,
+                  "dwellMs": 1200
+                }
+              ]
+            },
+            {
+              "type": "any",
+              "of": [
+                {
+                  "type": "object_near",
+                  "object": "syringe",
+                  "target": "cup_a",
+                  "radius": 0.06,
+                  "dwellMs": 700
+                },
+                {
+                  "type": "hand_near",
+                  "object": "cup_a",
+                  "hand": "either",
+                  "point": "pinch",
+                  "radius": 0.06,
+                  "dwellMs": 900
+                }
+              ]
+            },
+            {
+              "type": "confirm",
+              "by": "either",
+              "prompt": "Cup A turned pink"
+            }
+          ]
+        },
+        "mistakes": [
+          {
+            "kind": "wrong_cup",
+            "message": "That's cup B. Vinegar goes in cup A.",
+            "when": {
+              "type": "any",
+              "of": [
+                {
+                  "type": "object_near",
+                  "object": "syringe",
+                  "target": "cup_b",
+                  "radius": 0.06,
+                  "dwellMs": 500
+                },
+                {
+                  "type": "hand_near",
+                  "object": "cup_b",
+                  "hand": "either",
+                  "point": "pinch",
+                  "radius": 0.06,
+                  "dwellMs": 700
+                }
+              ]
+            },
+            "cooldownMs": 4000
+          }
+        ],
+        "coachNotes": "The planted demo mistake: the vinegar heads for cup B. Confirm once you see pink in cup A or the user says it changed."
+      },
+      {
+        "id": "base-to-b",
+        "instruction": "Add baking-soda water to cup B.",
+        "targets": [
+          "base",
+          "cup_b"
+        ],
+        "hand": "either",
+        "show": [
+          {
+            "object": "base",
+            "phrase": "baking soda squeeze bottle",
+            "description": "Squeeze bottle labeled BASE, at the back right of the tray"
+          },
+          {
+            "object": "cup_b",
+            "phrase": "paper cup B",
+            "description": "White paper cup with a large letter B on it, in the middle of the tray, in the front row, with a little purple liquid in it"
+          }
+        ],
+        "success": {
+          "type": "sequence",
+          "of": [
+            {
+              "type": "any",
+              "of": [
+                {
+                  "type": "object_near",
+                  "object": "syringe",
+                  "target": "base",
+                  "radius": 0.06,
+                  "dwellMs": 1000
+                },
+                {
+                  "type": "hand_near",
+                  "object": "base",
+                  "hand": "either",
+                  "point": "pinch",
+                  "radius": 0.06,
+                  "dwellMs": 1200
+                }
+              ]
+            },
+            {
+              "type": "any",
+              "of": [
+                {
+                  "type": "object_near",
+                  "object": "syringe",
+                  "target": "cup_b",
+                  "radius": 0.06,
+                  "dwellMs": 700
+                },
+                {
+                  "type": "hand_near",
+                  "object": "cup_b",
+                  "hand": "either",
+                  "point": "pinch",
+                  "radius": 0.06,
+                  "dwellMs": 900
+                }
+              ]
+            },
+            {
+              "type": "confirm",
+              "by": "either",
+              "prompt": "Cup B turned blue-green"
+            }
+          ]
+        },
+        "mistakes": [
+          {
+            "kind": "wrong_cup",
+            "message": "Careful, that's cup A. The base goes in cup B.",
+            "when": {
+              "type": "any",
+              "of": [
+                {
+                  "type": "object_near",
+                  "object": "syringe",
+                  "target": "cup_a",
+                  "radius": 0.06,
+                  "dwellMs": 500
+                },
+                {
+                  "type": "hand_near",
+                  "object": "cup_a",
+                  "hand": "either",
+                  "point": "pinch",
+                  "radius": 0.06,
+                  "dwellMs": 700
+                }
+              ]
+            },
+            "cooldownMs": 4000
+          },
+          {
+            "kind": "touched_control",
+            "message": "Leave cup C alone. It's our control.",
+            "when": {
+              "type": "any",
+              "of": [
+                {
+                  "type": "object_near",
+                  "object": "syringe",
+                  "target": "cup_c",
+                  "radius": 0.06,
+                  "dwellMs": 500
+                },
+                {
+                  "type": "hand_near",
+                  "object": "cup_c",
+                  "hand": "either",
+                  "point": "pinch",
+                  "radius": 0.06,
+                  "dwellMs": 700
+                }
+              ]
+            },
+            "cooldownMs": 4000
+          }
+        ]
+      },
+      {
+        "id": "compare",
+        "instruction": "Leave cup C purple and compare all three colors.",
+        "targets": [
+          "cup_a",
+          "cup_b",
+          "cup_c"
+        ],
+        "hand": "either",
+        "show": [
+          {
+            "object": "cup_a",
+            "phrase": "paper cup A",
+            "description": "White paper cup with a large letter A on it, on the left of the tray, in the front row, now holding pink liquid"
+          },
+          {
+            "object": "cup_b",
+            "phrase": "paper cup B",
+            "description": "White paper cup with a large letter B on it, in the middle of the tray, in the front row, now holding green liquid"
+          },
+          {
+            "object": "cup_c",
+            "phrase": "paper cup C",
+            "description": "White paper cup with a large letter C on it, on the right of the tray, in the front row, still holding purple liquid"
+          }
+        ],
+        "success": {
+          "type": "confirm",
+          "by": "either",
+          "prompt": "The user has compared the colors"
+        },
+        "mistakes": [],
+        "coachNotes": "Explain in one breath: acid turns the indicator pink, base turns it blue-green, and C stays purple as the control."
+      }
+    ],
+    "coach": {
+      "persona": "A calm lab instructor who keeps things safe and quick.",
+      "notes": "Mention the cup letter every time. Never guess where the syringe is; trust the [app] messages."
+    }
+  },
+  "operator": {
+    "role": "learner"
+  },
+  "space": {
+    "frame": "workspace",
+    "units": "m",
+    "upAxis": "+y",
+    "worldFromWorkspace": [
+      -0.32,
+      0.76,
+      -0.38,
+      0,
+      0.06994284733753277,
+      0,
+      0.9975510002532796
+    ],
+    "calibration": "pinch_two_corners",
+    "anchored": false
+  },
+  "hands": {
+    "joints": [
+      "wrist",
+      "thumb-metacarpal",
+      "thumb-phalanx-proximal",
+      "thumb-phalanx-distal",
+      "thumb-tip",
+      "index-finger-metacarpal",
+      "index-finger-phalanx-proximal",
+      "index-finger-phalanx-intermediate",
+      "index-finger-phalanx-distal",
+      "index-finger-tip",
+      "middle-finger-metacarpal",
+      "middle-finger-phalanx-proximal",
+      "middle-finger-phalanx-intermediate",
+      "middle-finger-phalanx-distal",
+      "middle-finger-tip",
+      "ring-finger-metacarpal",
+      "ring-finger-phalanx-proximal",
+      "ring-finger-phalanx-intermediate",
+      "ring-finger-phalanx-distal",
+      "ring-finger-tip",
+      "pinky-finger-metacarpal",
+      "pinky-finger-phalanx-proximal",
+      "pinky-finger-phalanx-intermediate",
+      "pinky-finger-phalanx-distal",
+      "pinky-finger-tip"
+    ],
+    "jointFields": [
+      "px",
+      "py",
+      "pz",
+      "qx",
+      "qy",
+      "qz",
+      "qw",
+      "radius"
+    ]
+  },
+  "objects": [
+    {
+      "id": "cup_a",
+      "label": "cup A",
+      "position": [
+        0.15,
+        0.07,
+        -0.12
+      ],
+      "radius": 0.04,
+      "method": "layout"
+    },
+    {
+      "id": "cup_b",
+      "label": "cup B",
+      "position": [
+        0.3,
+        0.07,
+        -0.12
+      ],
+      "radius": 0.04,
+      "method": "layout"
+    },
+    {
+      "id": "cup_c",
+      "label": "cup C",
+      "position": [
+        0.45,
+        0.07,
+        -0.12
+      ],
+      "radius": 0.04,
+      "method": "layout"
+    },
+    {
+      "id": "indicator",
+      "label": "indicator bottle",
+      "position": [
+        0.12,
+        0.14,
+        -0.28
+      ],
+      "radius": 0.035,
+      "method": "layout"
+    },
+    {
+      "id": "vinegar",
+      "label": "vinegar bottle",
+      "position": [
+        0.3,
+        0.14,
+        -0.28
+      ],
+      "radius": 0.035,
+      "method": "layout"
+    },
+    {
+      "id": "base",
+      "label": "baking-soda bottle",
+      "position": [
+        0.48,
+        0.14,
+        -0.28
+      ],
+      "radius": 0.035,
+      "method": "layout"
+    },
+    {
+      "id": "syringe",
+      "label": "syringe",
+      "position": [
+        0.54,
+        0.01,
+        -0.06
+      ],
+      "radius": 0.02,
+      "method": "layout"
+    }
+  ],
+  "coach": {
+    "kind": "scripted"
+  },
+  "device": {
+    "userAgent": "clio-synth",
+    "emulated": true,
+    "xrFeatures": [
+      "hand-tracking"
+    ]
+  },
+  "app": {
+    "version": "synthetic"
+  },
+  "features": [
+    "object.flags",
+    "object.grasp"
+  ],
+  "clock": {
+    "timeline": "performance.now",
+    "startEpochMs": 1792818000000
+  },
+  "episodeId": "ep-synthetic-ph-syringe",
+  "createdAt": "2026-10-24T05:00:00.000Z"
+}

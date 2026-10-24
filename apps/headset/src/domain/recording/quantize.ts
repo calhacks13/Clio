@@ -44,7 +44,11 @@ export function quantizeDeep<T>(value: T): T {
   return value;
 }
 
-export function quantizeObject(o: ObjectState): ObjectState {
+/**
+ * One object state for objects.ndjson, recorded at `t` (performance.now ms). `observedT` arrives in
+ * performance.now ms too: it is rebased onto `startT`, and left out when within 1 ms of `t`.
+ */
+export function quantizeObject(o: ObjectState, startT: number, t: number): ObjectState {
   return {
     id: o.id,
     position: [q4(o.position[0]), q4(o.position[1]), q4(o.position[2])],
@@ -56,5 +60,10 @@ export function quantizeObject(o: ObjectState): ObjectState {
     ],
     confidence: q4(o.confidence),
     source: o.source,
+    ...(o.locationFlags === undefined ? {} : { locationFlags: o.locationFlags }),
+    ...(o.heldBy === undefined ? {} : { heldBy: o.heldBy }),
+    ...(o.observedT === undefined || Math.abs(o.observedT - t) < 1
+      ? {}
+      : { observedT: qTime(o.observedT - startT) }),
   };
 }

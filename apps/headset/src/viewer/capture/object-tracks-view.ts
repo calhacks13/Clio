@@ -23,7 +23,7 @@ import {
   type Entity,
   entityAt,
   graspMarks,
-  heldAt,
+  heldSpanAt,
   type Lane,
   trail,
   validSpans,
@@ -31,9 +31,10 @@ import {
 
 // Draws a Capture's objects as time series: each object at its pose at the viewed time, with a trail
 // of its recent path, faded while its position is not valid (drawn where it was last seen), and
-// ringed while a hand holds it (from grasp and release events). `object` is in the capture's world
-// frame (ROS REP-103: z up, meters), so put it in a z-up scene. Objects that appear while a live
-// recording streams in are added on the next update.
+// ringed while a hand holds it (its held spans). Without a known orientation an object is drawn
+// unrotated, with `userData.orientationKnown` false. Hidden objects are not drawn. `object` is in
+// the capture's world frame (ROS REP-103: z up, meters), so put it in a z-up scene. Objects that
+// appear while a live recording streams in are added on the next update.
 
 const PALETTE = [
   '#ffb347',
@@ -85,8 +86,9 @@ export class ObjectTracksView {
 
   update(tUs: number): void {
     this.#sync();
-    const held = heldAt(this.model, tUs);
-    for (const track of this.#tracks.values()) this.#place(track, tUs, held.has(track.entity.id));
+    for (const track of this.#tracks.values()) {
+      this.#place(track, tUs, heldSpanAt(this.model, track.entity.id, tUs) !== null);
+    }
   }
 
   /** One lane per object, in the order objects appeared. */
@@ -95,16 +97,16 @@ export class ObjectTracksView {
     const end = this.model.endUs;
     return [...this.#tracks.values()]
       .filter((t) => t.entity.role === 'object')
-      .map(({ entity, color }) => ({
-        entityId: entity.id,
-        label: entity.name,
-        validSpans:
-          entity.motion === 'static'
-            ? [[0, end]]
-            : validSpans(this.model.poses.get(entity.id), end),
-        marks: graspMarks(this.model, entity.id),
-        color,
-      }));
+      .map(({ entity, color }) => {
+        const series = this.model.poses.get(entity.id);
+        return {
+          entityId: entity.id,
+          label: entity.name,
+          validSpans: entity.motion === 'static' && !series ? [[0, end]] : validSpans(series, end),
+          marks: graspMarks(this.model, entity.id),
+          color,
+        };
+      });
   }
 
   dispose(): void {
@@ -116,7 +118,7 @@ export class ObjectTracksView {
 
   #sync(): void {
     for (const entity of this.model.entities.values()) {
-      if (this.#tracks.has(entity.id)) continue;
+      if (this.#tracks.has(entity.id) || entity.extensions?.hidden) continue;
       const drawn =
         entity.role === 'object' || (this.#environment && entity.role === 'environment');
       if (drawn) this.#tracks.set(entity.id, this.#build(entity));
@@ -190,6 +192,7 @@ export class ObjectTracksView {
       group.quaternion.set(...entity.pose.rotation);
     }
     group.visible = entity.motion === 'static' && entity.pose !== null;
+    group.userData.orientationKnown = group.visible;
     this.object.add(group, trailLine);
     return { entity, color, group, bodyMaterials, trail: trailLine, held, label };
   }
@@ -197,14 +200,18 @@ export class ObjectTracksView {
   #place(track: Track, tUs: number, held: boolean): void {
     const { entity, group } = track;
     track.held.visible = held;
-    if (entity.motion === 'static') return;
+    // A static entity stands at its pose; one without a pose (a Clio point) has samples.
+    if (entity.motion === 'static' && entity.pose) return;
     const series = this.model.poses.get(entity.id);
     const at = series ? entityAt(series, tUs) : null;
     group.visible = !!at?.position;
     track.trail.visible = group.visible;
     if (!series || !at?.position) return;
     group.position.set(...at.position);
+    // An unknown orientation never keeps one from another time (seeking back, say).
     if (at.rotation) group.quaternion.set(...at.rotation);
+    else group.quaternion.identity();
+    group.userData.orientationKnown = at.rotation !== null;
     const opacity = at.lost ? LOST_OPACITY : 1;
     for (const m of track.bodyMaterials) m.opacity = opacity;
     if (track.label) track.label.material.opacity = opacity;

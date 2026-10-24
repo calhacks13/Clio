@@ -1,8 +1,9 @@
 // The viewer's data model, shaped after Quest Capture v1: entities (scene.json), a pose time series
-// for every tracked entity (objects and the headset), a hand series per side, and event annotations.
-// Field names follow the format, so package records parse straight in; Clio episodes are converted
-// into it by from-clio.ts. World frame: ROS REP-103 (x forward, y left, z up), meters. Time: integer
-// microseconds since the recording started. Pure: no DOM, fetch or three.js.
+// for every tracked entity (objects and the headset), a hand series per side, and event annotations,
+// plus the spans in which each object was held. Field names follow the format, so package records
+// parse straight in; Clio episodes are converted into it by from-clio.ts. World frame: ROS REP-103
+// (x forward, y left, z up), meters. Time: integer microseconds since the recording started. Pure:
+// no DOM, fetch or three.js.
 
 export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number];
@@ -25,6 +26,8 @@ export interface Pose {
 }
 
 export type EntityRole = 'object' | 'environment' | 'headset' | 'hand';
+/** What a procedure plan calls an object. Items, tools and containers can be carried. */
+export type ObjectKind = 'item' | 'tool' | 'container' | 'point' | 'region';
 export type Geometry =
   | { type: 'none' }
   | { type: 'box'; size: Vec3; color: string }
@@ -38,7 +41,12 @@ export interface Entity {
   geometry: Geometry;
   /** Static entities only; a tracked entity's pose comes from its samples. */
   pose: Pose | null;
-  extensions?: { radius_m?: number };
+  extensions?: {
+    radius_m?: number;
+    kind?: ObjectKind;
+    /** Kept in the model but never drawn (a plan's hidden zone, such as a mistake region). */
+    hidden?: boolean;
+  };
 }
 
 export type EstimateType =
@@ -90,6 +98,8 @@ export interface HandSample {
   positions: Float32Array;
   radii: Float32Array;
   flags: Uint8Array;
+  /** Thumb tip to index tip in meters, or null when the hand was not tracked or not measured. */
+  pinch_m: number | null;
 }
 
 export type EventKind =
@@ -141,12 +151,54 @@ export class Series<T extends Timed> {
     return this.samples[this.indexAt(t)] ?? null;
   }
 
+  /** Forgets every sample before `t` (to bound a long live recording) and returns how many. */
+  dropBefore(t: number): number {
+    let lo = 0;
+    let hi = this.samples.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if ((this.samples[mid] as T).t_us < t) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo > 0) this.samples.splice(0, lo);
+    return lo;
+  }
+
   get endUs(): number {
     return this.samples.at(-1)?.t_us ?? 0;
   }
 }
 
 const has = (flags: number, bit: number) => (flags & bit) === bit;
+
+/**
+ * Where the recording's world sits, as the source recorded it (not converted to ROS). For a Clio
+ * episode: the workspace W (y up, origin at the calibrated table corner) in WebXR local-floor
+ * space.
+ */
+export interface CaptureSpace {
+  /** [px, py, pz, qx, qy, qz, qw] */
+  worldFromWorkspace: [number, number, number, number, number, number, number];
+  calibration: string;
+  anchored: boolean;
+}
+
+/**
+ * A stretch of time an object was held. `endUs` is null while it is still held. The object counts
+ * as held from `startUs` up to, not including, `endUs`.
+ */
+export interface HeldSpan {
+  entityId: string;
+  /** Null when the hand is not known (a fist carry inferred from the object's motion). */
+  hand: Handedness | null;
+  startUs: number;
+  endUs: number | null;
+  /** `runtime`: recorded as grasp and release by the headset; `inferred`: worked out afterwards. */
+  origin: 'inferred' | 'runtime';
+  grip: 'pinch' | 'fist' | null;
+}
+
+const NO_SPANS: readonly HeldSpan[] = Object.freeze([]);
 
 /** One recording: what a Capture v1 package holds, growing while a live episode streams in. */
 export class Capture {
@@ -159,6 +211,21 @@ export class Capture {
   readonly events = new Series<CaptureEvent>();
   /** Known once the recording is finished. */
   durationUs: number | null = null;
+  /** Null when the source does not record it (Capture packages place everything in ROS already). */
+  space: CaptureSpace | null = null;
+
+  /** Held spans from grasp and release events, per object. */
+  readonly #graspSpans = new Map<string, HeldSpan[]>();
+  /** Held spans an adapter worked out from an object's samples, per object. */
+  readonly #sampleSpans = new Map<string, readonly HeldSpan[]>();
+  /** Both, by start time, built on first use. */
+  readonly #spans = new Map<string, readonly HeldSpan[]>();
+  /** The open span of each held object, and the hand entity holding it. */
+  readonly #open = new Map<string, { span: HeldSpan; hand: string }>();
+  readonly #holder = new WeakMap<HeldSpan, string>();
+  readonly #handSide = new Map<string, Handedness>();
+  /** The time of the newest grasp or release applied; an earlier one means replaying them all. */
+  #graspsUntil = Number.NEGATIVE_INFINITY;
 
   constructor(public task: string) {}
 
@@ -177,10 +244,113 @@ export class Capture {
 
   addHand(sample: HandSample): void {
     this.hands[sample.handedness].add(sample);
+    if (!this.#handSide.has(sample.entity_id))
+      this.#handSide.set(sample.entity_id, sample.handedness);
   }
 
+  /** Grasp and release events also open and close held spans. */
   addEvent(event: CaptureEvent): void {
     this.events.add(event);
+    if (event.event !== 'grasp' && event.event !== 'release') return;
+    if (event.t_us >= this.#graspsUntil) {
+      this.#graspsUntil = event.t_us;
+      this.#applyGrasp(event);
+      return;
+    }
+    // Arrived late: replay every grasp and release in time order.
+    this.#graspSpans.clear();
+    this.#open.clear();
+    this.#spans.clear();
+    for (const e of this.events.samples) {
+      if (e.event === 'grasp' || e.event === 'release') this.#applyGrasp(e);
+    }
+  }
+
+  /** The object's held spans by start time: recorded or inferred grasps, and inferred carries. */
+  heldSpans(entityId: string): readonly HeldSpan[] {
+    let spans = this.#spans.get(entityId);
+    if (!spans) {
+      const fromGrasps = this.#graspSpans.get(entityId) ?? NO_SPANS;
+      const fromSamples = this.#sampleSpans.get(entityId) ?? NO_SPANS;
+      spans =
+        fromSamples.length === 0
+          ? fromGrasps
+          : [...fromGrasps, ...fromSamples].sort((a, b) => a.startUs - b.startUs);
+      this.#spans.set(entityId, spans);
+    }
+    return spans;
+  }
+
+  /** Ids of the objects that have held spans. */
+  heldEntityIds(): string[] {
+    return [...new Set([...this.#graspSpans.keys(), ...this.#sampleSpans.keys()])];
+  }
+
+  /**
+   * Replaces the held spans worked out from an object's samples rather than from grasp and release
+   * events (a carry with no grasp recorded). The adapter keeps them from overlapping grasp spans.
+   */
+  setSampleHeldSpans(entityId: string, spans: readonly HeldSpan[]): void {
+    if (spans.length === 0) this.#sampleSpans.delete(entityId);
+    else this.#sampleSpans.set(entityId, spans);
+    this.#spans.delete(entityId);
+  }
+
+  /** The entity id of the hand holding during a span, when known. */
+  holderOf(span: HeldSpan): string | null {
+    const holder = this.#holder.get(span);
+    if (holder !== undefined) return holder;
+    if (span.hand === null) return null;
+    for (const [id, side] of this.#handSide) if (side === span.hand) return id;
+    return null;
+  }
+
+  #sideOf(handId: string): Handedness | null {
+    const side = this.#handSide.get(handId);
+    if (side) return side;
+    if (/left/i.test(handId)) return 'left';
+    return /right/i.test(handId) ? 'right' : null;
+  }
+
+  #applyGrasp(e: CaptureEvent): void {
+    const isHand = (id: string) => this.entities.get(id)?.role === 'hand';
+    const hand = e.entity_ids.find(isHand) ?? null;
+    const objects = e.entity_ids.filter((id) => !isHand(id));
+    if (e.event === 'grasp') {
+      if (!hand) return;
+      for (const id of objects) {
+        const open = this.#open.get(id);
+        if (open?.hand === hand) continue;
+        if (open) open.span.endUs = e.t_us;
+        const grip = e.details.grip;
+        const span: HeldSpan = {
+          entityId: id,
+          hand: this.#sideOf(hand),
+          startUs: e.t_us,
+          endUs: null,
+          origin: e.origin === 'inferred' ? 'inferred' : 'runtime',
+          grip: grip === 'pinch' || grip === 'fist' ? grip : null,
+        };
+        this.#holder.set(span, hand);
+        this.#open.set(id, { span, hand });
+        const spans = this.#graspSpans.get(id);
+        if (spans) spans.push(span);
+        else this.#graspSpans.set(id, [span]);
+        this.#spans.delete(id);
+      }
+      return;
+    }
+    // A release names its objects, or only the hand: then everything that hand holds.
+    const released =
+      objects.length > 0
+        ? objects
+        : [...this.#open].filter(([, open]) => open.hand === hand).map(([id]) => id);
+    for (const id of released) {
+      const open = this.#open.get(id);
+      if (!open) continue;
+      open.span.endUs = e.t_us;
+      this.#open.delete(id);
+    }
   }
 
   /** The newest time recorded on any stream, or the duration once finished. */
@@ -267,27 +437,35 @@ export function trail(
   return lines;
 }
 
-/** Which hand holds which object at `t`: grasp and release events replayed in order. */
-export function heldAt(capture: Capture, t: number): Map<string, string> {
-  const held = new Map<string, string>();
-  const last = capture.events.indexAt(t);
-  for (let i = 0; i <= last; i++)
-    applyGrasp(capture, held, capture.events.samples[i] as CaptureEvent);
-  return held;
+/** The span in which the object is held at `t`, or null when nothing holds it then. */
+export function heldSpanAt(capture: Capture, entityId: string, t: number): HeldSpan | null {
+  const spans = capture.heldSpans(entityId);
+  let lo = 0;
+  let hi = spans.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if ((spans[mid] as HeldSpan).startUs <= t) lo = mid + 1;
+    else hi = mid;
+  }
+  // The newest span started by `t` usually decides; an earlier, longer one can still be open.
+  for (let i = lo - 1; i >= 0; i--) {
+    const span = spans[i] as HeldSpan;
+    if (span.endUs === null || t < span.endUs) return span;
+  }
+  return null;
 }
 
-function applyGrasp(capture: Capture, held: Map<string, string>, e: CaptureEvent): void {
-  if (e.event !== 'grasp' && e.event !== 'release') return;
-  const isHand = (id: string) => capture.entities.get(id)?.role === 'hand';
-  const hand = e.entity_ids.find(isHand) ?? null;
-  const objects = e.entity_ids.filter((id) => !isHand(id));
-  if (e.event === 'grasp') {
-    if (hand) for (const id of objects) held.set(id, hand);
-  } else if (objects.length > 0) {
-    for (const id of objects) held.delete(id);
-  } else {
-    for (const [id, by] of held) if (by === hand) held.delete(id);
+/**
+ * Which hand holds which object at `t`: object id to the hand's entity id, or to null when the hand
+ * is not known.
+ */
+export function heldAt(capture: Capture, t: number): Map<string, string | null> {
+  const held = new Map<string, string | null>();
+  for (const id of capture.heldEntityIds()) {
+    const span = heldSpanAt(capture, id, t);
+    if (span) held.set(id, capture.holderOf(span));
   }
+  return held;
 }
 
 /** One object's timeline lane: when its position was valid, and its grasp and release marks. */

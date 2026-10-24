@@ -148,8 +148,154 @@ describe('ObjectRegistry', () => {
         orientation: null,
         confidence: 0.7,
         source: 'detector',
+        locationFlags: 10,
+        heldBy: null,
+        observedT: 5,
       },
     ]);
     expect(registry.drainChanges()).toEqual([]);
+  });
+
+  it('says how valid each estimate is', () => {
+    const { registry } = setup();
+    const flags = () =>
+      Object.fromEntries(registry.drainChanges().map((s) => [s.id, s.locationFlags]));
+    expect(flags()).toEqual({ cup: 2, zone: 2 });
+    registry.observe('jug', {
+      position: [0.3, 0.1, -0.3],
+      confidence: 1,
+      source: 'detector',
+      t: 1,
+    });
+    expect(flags()).toEqual({ jug: 10 });
+    const q = quatFromAxisAngle([0, 1, 0], 0.3);
+    registry.observe('jug', {
+      position: [0.3, 0.1, -0.3],
+      orientation: q,
+      confidence: 1,
+      source: 'marker',
+      t: 2,
+    });
+    expect(flags()).toEqual({ jug: 15 });
+    registry.observe('jug', { position: [0.3, 0.1, -0.3], confidence: 1, source: 'pinch', t: 3 });
+    expect(flags()).toEqual({ jug: 2 });
+  });
+
+  it('marks a held object as carried, and as lost while its wrist is untracked', () => {
+    const { registry } = setup();
+    registry.observe('jug', {
+      position: [0.3, 0.1, -0.3],
+      orientation: [0, 0, 0, 1],
+      confidence: 1,
+      source: 'marker',
+      t: 0,
+    });
+    registry.drainChanges();
+    const wrist = { p: [0.3, 0.1, -0.2] as [number, number, number], q: [0, 0, 0, 1] as const };
+    registry.attach('jug', 'right', { ...wrist, q: [...wrist.q] }, 1);
+    registry.updateHeld({ right: { ...wrist, q: [...wrist.q] } }, 2);
+    expect(registry.drainChanges()).toEqual([
+      expect.objectContaining({ locationFlags: 3, heldBy: 'right', observedT: 2 }),
+    ]);
+    // The wrist drops out: one state with nothing valid (and no orientation), at the last place.
+    registry.updateHeld({}, 3);
+    expect(registry.drainChanges()).toEqual([
+      expect.objectContaining({
+        position: [0.3, 0.1, -0.3],
+        orientation: null,
+        locationFlags: 0,
+        heldBy: 'right',
+        observedT: 2,
+      }),
+    ]);
+    registry.updateHeld({}, 4);
+    expect(registry.drainChanges()).toEqual([]);
+    // Back: carried again, with its orientation.
+    registry.updateHeld({ right: { ...wrist, q: [...wrist.q] } }, 5);
+    expect(registry.drainChanges()).toEqual([
+      expect.objectContaining({ orientation: [0, 0, 0, 1], locationFlags: 3, observedT: 5 }),
+    ]);
+  });
+
+  it('announces grasps and releases with the grip, the reason and where the object was', () => {
+    const { bus, registry } = setup();
+    const seen: string[] = [];
+    bus.on('object.grasped', (e) => seen.push(`grasped ${e.objectId} ${e.hand} ${e.grip} @${e.t}`));
+    bus.on('object.released', (e) =>
+      seen.push(`released ${e.objectId} ${e.hand} ${e.reason} ${e.position.join(',')} @${e.t}`),
+    );
+    const wrist = { p: [0.1, 0.07, -0.1] as [number, number, number], q: [0, 0, 0, 1] as const };
+    expect(registry.attach('cup', 'left', { ...wrist, q: [...wrist.q] }, 1, 'fist')).toBe(true);
+    expect(registry.attach('cup', 'right', { ...wrist, q: [...wrist.q] }, 2)).toBe(false);
+    registry.updateHeld({ left: { p: [0.2, 0.07, -0.1], q: [0, 0, 0, 1] } }, 3);
+    registry.detach('cup', 4, 'hand_lost');
+    registry.detach('cup', 5);
+    expect(seen).toEqual([
+      'grasped cup left fist @1',
+      'released cup left hand_lost 0.2,0.07,-0.2 @4',
+    ]);
+  });
+
+  it('lets go of held objects when a new plan is loaded', () => {
+    const { bus, registry } = setup();
+    const released: string[] = [];
+    bus.on('object.released', (e) => released.push(`${e.objectId}:${e.reason}@${e.t}`));
+    registry.attach('cup', 'right', { p: [0.1, 0.07, -0.1], q: [0, 0, 0, 1] }, 1);
+    registry.drainChanges();
+    registry.load(procedure.objects, 7);
+    expect(released).toEqual(['cup:plan_changed@7']);
+    expect(registry.heldBy('right')).toEqual([]);
+    expect(registry.drainChanges()).toEqual([
+      expect.objectContaining({ id: 'cup', heldBy: null, locationFlags: 2, observedT: 7 }),
+    ]);
+  });
+
+  it('drops a camera answer about a moment older than what it already knows', () => {
+    const { registry } = setup();
+    registry.observe('jug', {
+      position: [0.3, 0.1, -0.3],
+      confidence: 1,
+      source: 'detector',
+      t: 0,
+    });
+    registry.attach('jug', 'right', { p: [0.3, 0.1, -0.2], q: [0, 0, 0, 1] }, 10);
+    registry.updateHeld({ right: { p: [0.5, 0.1, -0.2], q: [0, 0, 0, 1] } }, 20);
+    registry.detach('jug', 30);
+    // Captured at 25 (still in the hand), answered after the release: stale.
+    expect(
+      registry.observe('jug', {
+        position: [0.4, 0.1, -0.3],
+        confidence: 1,
+        source: 'detector',
+        t: 25,
+      }),
+    ).toBe(false);
+    expect(registry.get('jug')?.position).toEqual([0.5, 0.1, -0.3]);
+    expect(
+      registry.observe('jug', {
+        position: [0.52, 0.1, -0.3],
+        confidence: 1,
+        source: 'detector',
+        t: 31,
+      }),
+    ).toBe(true);
+  });
+
+  it('announces a slow camera answer when it arrives, keeping its frame time in the estimate', () => {
+    const { bus, registry } = setup();
+    const times: number[] = [];
+    bus.on('object.registered', (e) => times.push(e.t));
+    registry.drainChanges();
+    registry.updateHeld({}, 1500);
+    registry.observe('jug', {
+      position: [0.3, 0.1, -0.3],
+      confidence: 1,
+      source: 'detector',
+      t: 300,
+    });
+    expect(times).toEqual([1500]);
+    expect(registry.drainChanges()).toEqual([
+      expect.objectContaining({ id: 'jug', observedT: 300 }),
+    ]);
   });
 });

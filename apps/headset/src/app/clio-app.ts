@@ -20,7 +20,7 @@ import {
 import { SceneRuntime } from '../adapters/render/scene-runtime';
 import { ScriptedAgent } from '../adapters/scripted/scripted-agent';
 import { WorkspaceAnchor } from '../adapters/xr/anchors';
-import { FrameSampler } from '../adapters/xr/frame-sampler';
+import { FrameSampler, poseFromMatrix } from '../adapters/xr/frame-sampler';
 import { XrPlaneSurfaces } from '../adapters/xr/planes';
 import { startArSession, type XrRuntime } from '../adapters/xr/xr-session';
 import { performanceClock } from '../core/clock';
@@ -42,6 +42,7 @@ import { ObjectGrounder } from '../domain/world/grounding';
 import { GraspTracker } from '../domain/world/holding';
 import { ObjectRegistry } from '../domain/world/object-registry';
 import { PoseHistory } from '../domain/world/pose-history';
+import { chooseTablePlane, fitTable, type TablePlane } from '../domain/world/table-snap';
 import { Workspace, workspaceInFrontOf } from '../domain/world/workspace';
 import type { AppConfig } from './config';
 
@@ -52,6 +53,8 @@ import type { AppConfig } from './config';
 const log = createLogger('app');
 const PINCH_NEAREST_M = 0.15;
 const RELOCATE_DELAY_MS = 600;
+/** How long after the session starts the workspace waits for a detected table. */
+const TABLE_WAIT_MS = 2000;
 
 export interface ClioAppOptions {
   config: AppConfig;
@@ -94,6 +97,8 @@ export class ClioApp {
   private lastT = 0;
   private kickedOff = false;
   private pendingAnchor: Pose | null = null;
+  /** Until this frame time, the workspace may still snap to a detected table. */
+  private tableDeadline: number | null = null;
 
   constructor(private readonly o: ClioAppOptions) {
     const { bus, clock } = this;
@@ -212,7 +217,7 @@ export class ClioApp {
     });
     this.overlay.setProgress(this.lesson.runnerState?.progress ?? 0);
     this.coach?.tick(t);
-    if (!this.kickedOff && !this.calibration) {
+    if (!this.kickedOff && !this.calibration && this.tableDeadline === null) {
       this.kickedOff = true;
       void this.kickoff();
     }
@@ -250,10 +255,15 @@ export class ClioApp {
             workspaceInFrontOf(world.head),
             this.calibration ? 'none' : 'default_in_front',
           );
+      if (!this.calibration && !this.anchor.active) {
+        if (this.o.config.table === 'auto') this.tableDeadline = world.t + TABLE_WAIT_MS;
+        else log.info('workspace: in front of the user (table=off)');
+      }
     } else if (this.anchor.active) {
       const refined = this.anchor.pose(frame, runtime.space);
       if (refined) this.workspace.update(refined, true);
     }
+    if (this.tableDeadline !== null) this.snapToTable(world, frame, runtime.space);
     if (this.pendingAnchor) {
       const pose = this.pendingAnchor;
       this.pendingAnchor = null;
@@ -262,6 +272,37 @@ export class ClioApp {
       });
     }
     return this.workspace;
+  }
+
+  /**
+   * Moves the workspace onto the detected table: at once for a plane labeled table or desk, else
+   * when the wait is over (the largest surface at table height, or the default in front).
+   */
+  private snapToTable(world: TrackedFrame, frame: XRFrame, space: XRReferenceSpace): void {
+    const deadline = this.tableDeadline;
+    if (deadline === null) return;
+    // One episode, one frame: the workspace never moves once recording has started.
+    if (this.recorder.recording) {
+      this.tableDeadline = null;
+      return;
+    }
+    const waited = world.t >= deadline;
+    const choice = chooseTablePlane(tablePlanes(frame, space), world.head);
+    if (choice && (choice.by === 'label' || waited)) {
+      const { pose, size } = fitTable(
+        choice.plane,
+        world.head,
+        this.o.procedure?.workspace.size[0],
+      );
+      this.workspace = new Workspace(pose, 'none');
+      this.tableDeadline = null;
+      const what = choice.by === 'label' ? choice.plane.label : 'largest surface';
+      const [w, d] = size.map((m) => m.toFixed(2));
+      log.info(`workspace: on the ${what} (${w} x ${d} m, ${pose.p[1].toFixed(2)} m up)`);
+    } else if (waited) {
+      this.tableDeadline = null;
+      log.info('workspace: in front of the user (no table plane in reach)');
+    }
   }
 
   private onPinch(transition: PinchTransition, local: TrackedFrame, workspace: Workspace): void {
@@ -368,4 +409,20 @@ export class ClioApp {
       app: { version: this.o.version },
     };
   }
+}
+
+/** Horizontal planes with their semantic labels (Quest's room setup), for the table snap. */
+function tablePlanes(frame: XRFrame, space: XRReferenceSpace): TablePlane[] {
+  const planes: TablePlane[] = [];
+  for (const plane of frame.detectedPlanes ?? []) {
+    if (plane.orientation !== 'horizontal' || plane.polygon.length < 3) continue;
+    const pose = frame.getPose(plane.planeSpace, space);
+    if (!pose) continue;
+    planes.push({
+      pose: poseFromMatrix(pose.transform.matrix),
+      polygon: plane.polygon.map((p) => [p.x, p.z] as const),
+      label: plane.semanticLabel ?? null,
+    });
+  }
+  return planes;
 }
