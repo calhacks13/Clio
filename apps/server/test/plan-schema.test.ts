@@ -47,7 +47,7 @@ function refsIn(schema: JsonSchema): string[] {
 const defs = (schema: JsonSchema) => schema.$defs as Record<string, JsonSchema>;
 const props = (schema: JsonSchema) => schema.properties as Record<string, JsonSchema>;
 
-describe.each(['plan', 'revision'] as const)('buildPlanJsonSchema(%s)', (kind) => {
+describe.each(['plan', 'first', 'revision'] as const)('buildPlanJsonSchema(%s)', (kind) => {
   const schema = buildPlanJsonSchema(kind);
 
   it('uses only the JSON Schema keywords Gemini supports', () => {
@@ -153,7 +153,7 @@ describe.each(['plan', 'revision'] as const)('buildPlanJsonSchema(%s)', (kind) =
   });
 });
 
-describe('plan vs revision', () => {
+describe('plan, first stage and revision', () => {
   it('asks a new plan for every top-level field, and 3 to 10 steps in words', () => {
     const schema = buildPlanJsonSchema('plan');
     expect(schema.required).toEqual([
@@ -161,14 +161,53 @@ describe('plan vs revision', () => {
       'summary',
       'workspace',
       'objects',
-      'steps',
+      'sightings',
       'warnings',
+      'steps',
     ]);
     expect(props(schema).steps).toEqual({
       type: 'array',
       items: { $ref: '#/$defs/step' },
       description: '3 to 10 steps',
     });
+  });
+
+  it('has a new plan point at its objects and list the hazards before it writes the steps', () => {
+    for (const kind of ['plan', 'first'] as const) {
+      const order = Object.keys(props(buildPlanJsonSchema(kind)));
+      expect(order.indexOf('sightings')).toBe(order.indexOf('objects') + 1);
+      expect(order.indexOf('warnings')).toBe(order.indexOf('sightings') + 1);
+    }
+    const sightings = props(buildPlanJsonSchema('plan')).sightings as JsonSchema;
+    const sighting = sightings.items as JsonSchema;
+    expect(sighting.required).toEqual(['object', 'view', 'point', 'box_2d']);
+    expect(props(sighting).view).toMatchObject({ type: 'integer', minimum: 1, maximum: 3 });
+    expect(props(sighting).point).toMatchObject({
+      type: 'array',
+      items: { type: 'integer', minimum: 0, maximum: 1000 },
+      minItems: 2,
+      maxItems: 2,
+    });
+    expect(props(sighting).box_2d).toMatchObject({ minItems: 4, maxItems: 4 });
+  });
+
+  it('asks a first stage for the whole lesson in outline, then its first step in full', () => {
+    const schema = buildPlanJsonSchema('first');
+    expect(Object.keys(props(schema)).slice(-3)).toEqual(['outline', 'firstStep', 'coach']);
+    expect(schema.required).toEqual([
+      'title',
+      'summary',
+      'workspace',
+      'objects',
+      'sightings',
+      'warnings',
+      'outline',
+      'firstStep',
+    ]);
+    expect(props(schema).firstStep).toEqual({ $ref: '#/$defs/step' });
+    const line = (props(schema).outline as JsonSchema).items as JsonSchema;
+    expect(line.required).toEqual(['id', 'instruction', 'doneWhen', 'targets']);
+    expect(Object.keys(props(line))).toEqual(['id', 'instruction', 'doneWhen', 'targets']);
   });
 
   it('asks a revision only for new objects, the remaining steps and warnings', () => {

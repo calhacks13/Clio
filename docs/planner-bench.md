@@ -116,6 +116,8 @@ time, and judges each run when the scenario has expectations.
 pnpm bench                                     # every scenario, the planner model, judged
 pnpm bench --model gemini-3.5-flash-lite --model gemini-3.8-flash --slow
 pnpm bench --tag hazard --repeat 3             # how steady are the answers?
+pnpm bench --staged                            # as the headset plans: stage first, then rest
+pnpm bench --staged --thinking first=low --thinking rest=high
 pnpm bench ph-lesson-cup-a-already-pink --no-judge
 pnpm bench --list
 pnpm bench --checks                            # every watcher test, the planner model
@@ -126,8 +128,12 @@ pnpm bench --checks --list
 
 No server is needed; the CLI reads `.env` like the server. It saves runs with their scenarios (or
 tests), so the page shows them too. For scenarios it ends with a table per model: runs, plans
-written, judged passes and median time. With `--checks` the table has looks, passes, the pass
-rate, passes by expected answer (done, not done, wrong) and the median time.
+written, judged passes, expectations met, and the median time until the lesson can start and until
+the plan is complete. `--staged` saves both stages as runs and judges the plan the learner ends up
+with: stage rest's steps, with the warnings of both stages, as the coach heard them.
+`--thinking <stage>=<level>` tries another thinking level for a stage (`default` is the model's
+own). With `--checks` the table has looks, passes, the pass rate, passes by expected answer (done,
+not done, wrong) and the median time.
 
 ## Scenes worth trying
 

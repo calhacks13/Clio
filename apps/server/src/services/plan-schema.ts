@@ -9,7 +9,8 @@ import { ACTION_VERB_NAMES } from '@clio/protocol';
 // enforced afterwards by safeParseProcedure, or asked for in the prompt.
 
 export type JsonSchema = { [keyword: string]: unknown };
-export type PlanSchemaKind = 'plan' | 'revision';
+/** plan: a whole plan. first: the first step in full plus an outline. revision: the rest of one. */
+export type PlanSchemaKind = 'plan' | 'first' | 'revision';
 
 const described = (schema: JsonSchema, description?: string): JsonSchema =>
   description ? { ...schema, description } : schema;
@@ -155,7 +156,7 @@ const DEFS: Record<string, JsonSchema> = {
       instruction: str('One imperative sentence, at most 15 words'),
       doneWhen: str(
         'The finished state as a camera or the learner would see it, one sentence of 3 to 200 ' +
-          'characters, e.g. "the blue cap is off"',
+          'characters that names how the right object looks, e.g. "the blue cap is off"',
       ),
       detail: str(),
       targets: arr(str(), { description: 'Ids of the objects this step touches or looks at' }),
@@ -181,12 +182,12 @@ const DEFS: Record<string, JsonSchema> = {
         obj(
           {
             kind: str('Lowercase slug label, e.g. "wrong_bottle"'),
-            message: str('A short spoken correction'),
+            message: str('A short spoken correction that says how to tell the right one apart'),
             when: ref('check'),
           },
           ['kind', 'message', 'when'],
         ),
-        { max: 2 },
+        { max: 2, description: 'Likely errors, a look-alike in view first' },
       ),
       coachNotes: str('One or two sentences of advice for the coach'),
       stuckAfterMs: int(5_000, 120_000, 'Offer help after this long'),
@@ -195,7 +196,58 @@ const DEFS: Record<string, JsonSchema> = {
   ),
 };
 
-const warnings = arr(str(), { max: 5, description: 'Safety caveats and setup assumptions' });
+const warnings = arr(str(), {
+  max: 5,
+  description: 'Every hazard in view first, then setup assumptions and other caveats',
+});
+
+/** Where the model saw each declared object, in Gemini's own [y, x] 0..1000 convention. */
+const sightings = arr(
+  obj(
+    {
+      object: objectId,
+      view: int(1, 3, 'Which camera view, numbered from 1 in the order attached'),
+      point: arr(int(0, 1000), { min: 2, max: 2, description: '[y, x] on the object, 0 to 1000' }),
+      box_2d: arr(int(0, 1000), {
+        min: 4,
+        max: 4,
+        description: '[ymin, xmin, ymax, xmax] around the object, 0 to 1000',
+      }),
+    },
+    ['object', 'view', 'point', 'box_2d'],
+  ),
+  { description: 'Each declared object you can see, once per view it is in; [] without views' },
+);
+
+/** A step of the first stage's outline: what it does and how it ends, without the AR fields. */
+const outlineStep = obj(
+  {
+    id: str('Lowercase slug, unique in the plan, e.g. "open-cap"'),
+    instruction: str('One imperative sentence, at most 15 words'),
+    doneWhen: str('The finished state as a camera would see it, naming how the right object looks'),
+    targets: arr(str(), { description: 'Ids of the objects this step touches or looks at' }),
+  },
+  ['id', 'instruction', 'doneWhen', 'targets'],
+);
+
+/** What every new plan starts with: what it is about, the scene, and the hazards in it. */
+const PLAN_HEAD: Record<string, JsonSchema> = {
+  title: str('Short lesson title'),
+  summary: str('One sentence: what the learner will do'),
+  domain: str('e.g. "car", "kitchen", "lab"'),
+  workspace: obj(
+    {
+      size: arr(num(0.1, 5), { min: 2, max: 2, description: '[width, depth] in meters' }),
+      notes: str('Setup notes for the learner'),
+    },
+    ['size'],
+  ),
+  objects: arr(ref('object'), { description: '1 to 16 objects' }),
+  sightings,
+  warnings,
+};
+const PLAN_HEAD_REQUIRED = ['title', 'summary', 'workspace', 'objects', 'sightings', 'warnings'];
+const coach = obj({ persona: str(), notes: str() }, []);
 
 export function buildPlanJsonSchema(kind: PlanSchemaKind): JsonSchema {
   if (kind === 'revision') {
@@ -211,26 +263,28 @@ export function buildPlanJsonSchema(kind: PlanSchemaKind): JsonSchema {
       $defs: DEFS,
     };
   }
+  if (kind === 'first') {
+    // The whole lesson in outline before the first step in detail, so the first step fits it.
+    return {
+      ...obj(
+        {
+          ...PLAN_HEAD,
+          outline: arr(outlineStep, {
+            description: 'Every step in order, 3 to 10, one line each; the first is firstStep',
+          }),
+          firstStep: ref('step'),
+          coach,
+        },
+        [...PLAN_HEAD_REQUIRED, 'outline', 'firstStep'],
+      ),
+      $defs: DEFS,
+    };
+  }
   return {
-    ...obj(
-      {
-        title: str('Short lesson title'),
-        summary: str('One sentence: what the learner will do'),
-        domain: str('e.g. "car", "kitchen", "lab"'),
-        workspace: obj(
-          {
-            size: arr(num(0.1, 5), { min: 2, max: 2, description: '[width, depth] in meters' }),
-            notes: str('Setup notes for the learner'),
-          },
-          ['size'],
-        ),
-        objects: arr(ref('object'), { description: '1 to 16 objects' }),
-        steps: arr(ref('step'), { description: '3 to 10 steps' }),
-        coach: obj({ persona: str(), notes: str() }, []),
-        warnings,
-      },
-      ['title', 'summary', 'workspace', 'objects', 'steps', 'warnings'],
-    ),
+    ...obj({ ...PLAN_HEAD, steps: arr(ref('step'), { description: '3 to 10 steps' }), coach }, [
+      ...PLAN_HEAD_REQUIRED,
+      'steps',
+    ]),
     $defs: DEFS,
   };
 }

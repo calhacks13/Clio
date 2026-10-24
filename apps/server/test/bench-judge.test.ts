@@ -45,6 +45,7 @@ describe('describePlan', () => {
         '   Done when: The blue cap is flipped open and the reservoir neck is visible.',
         '   Action: twist(washer_cap) ccw 0.5',
         '   Outlines: blue washer fluid cap',
+        '   Mistakes: wrong_cap: That is the coolant cap. Use the blue one.',
       ].join('\n'),
     );
     expect(text).toContain('   Action: pour(fluid_jug → washer_cap)');

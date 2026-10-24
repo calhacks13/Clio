@@ -4,6 +4,7 @@ import {
   type EpisodeEventPayload,
   type EpisodeEventType,
   type ObjectState,
+  type PlanStage,
   type Procedure,
 } from '@clio/protocol';
 import type { Emitter } from '../core/emitter';
@@ -38,6 +39,11 @@ export interface InternalEvents {
     procedure: Procedure;
     warnings: string[];
     revision: boolean;
+    /**
+     * first: the steps after the first are an outline, being written in full. rest: that full
+     * version replaced the outline (a revision). Absent for a plan written whole.
+     */
+    stage?: Exclude<PlanStage, 'full'>;
   }>;
   'plan.failed': Timed<{ goal: string; error: string; revision: boolean }>;
   /** Planning is taking longer than expected; the plan may still arrive. */

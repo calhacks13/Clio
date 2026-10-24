@@ -155,9 +155,12 @@ Once per XR frame:
 ```
  coach hears the goal ─► start_lesson(goal, template_id?)   [answers at once; coach keeps talking]
    ├─ draft:   a curated lesson (template_id), else camera snapshots + goal ─► POST /api/plans
-   │           ─► validated Procedure (+ warnings); slow (12 s)? the coach is told;
+   │           {stage: first} ─► validated Procedure: step 1 in full, the rest an outline
+   │           (+ warnings); slow (12 s)? the coach is told;
    │           failed or timed out (40 s)? the coach writes the steps with add_step
    ├─ ready:   [app] "Plan ready." + the recital
+   ├─ refine:  at once, fresh snapshots ─► POST /api/plans {stage: rest, revise} ─► the outline
+   │           steps nobody started are replaced; [app] "Plan refined." + the recital
    ├─ locate:  every unplaced object ─► Grounder (camera → /api/vision/locate → 3D) ─► registry
    │           still missing? shown on the HUD; the scripted coach asks the learner to look or pinch
    ├─ run:     ProcedureRunner + EpisodeRecorder (the episode embeds the full plan)

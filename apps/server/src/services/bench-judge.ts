@@ -66,6 +66,9 @@ export function describePlan(
     if (s.doneWhen) lines.push(`   Done when: ${s.doneWhen}`);
     if (s.action) lines.push(`   Action: ${describeAction(s.action)}`);
     if (s.show.length) lines.push(`   Outlines: ${s.show.map((item) => item.phrase).join(', ')}`);
+    if (s.mistakes.length) {
+      lines.push(`   Mistakes: ${s.mistakes.map((m) => `${m.kind}: ${m.message}`).join(' | ')}`);
+    }
     if (s.coachNotes) lines.push(`   Coach notes: ${s.coachNotes}`);
   });
   return lines.join('\n');

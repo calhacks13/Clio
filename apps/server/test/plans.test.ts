@@ -12,7 +12,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import type { Planner, PlannerRequest } from '../src/services/planner';
 import { type Harness, harness, steppingClock } from './harness';
-import { modelPlan, modelRevision } from './plan-fixtures';
+import { modelFirstStage, modelPlan, modelRevision } from './plan-fixtures';
 import { procedureInput, writeJson } from './procedure-fixtures';
 
 function scriptedPlanner(
@@ -411,6 +411,104 @@ describe('POST /api/plans with revise', () => {
     const h = await planHarness(scriptedPlanner(PLAN));
     expect((await postPlan(h, revise('nope'))).res.status).toBe(404);
     expect((await postPlan(h, revise('../../etc'))).res.status).toBe(400);
+  });
+});
+
+describe('POST /api/plans in two stages', () => {
+  const FIRST = JSON.stringify(modelFirstStage());
+  const first = { goal: 'Refill the washer fluid', images: [IMAGE, IMAGE], stage: 'first' };
+
+  it('starts with the first step in full, the rest in outline, and where it saw the objects', async () => {
+    const planner = scriptedPlanner(FIRST);
+    const h = await planHarness(planner);
+    const { res, body } = await postPlan(h, first);
+    expect(res.status).toBe(200);
+    const plan = PlanResponseSchema.parse(body);
+    expect(plan.planId).toBe('refill-the-washer-fluid');
+    expect(plan.outlineFrom).toBe(1);
+    expect(plan.procedure.steps.map((s) => [s.id, s.success.type, s.show.length])).toEqual([
+      ['open-cap', 'sequence', 1],
+      ['pour-fluid', 'confirm', 0],
+      ['close-cap', 'confirm', 0],
+    ]);
+    expect(plan.sightings).toEqual([
+      { objectId: 'washer_cap', view: 0, point: [0.25, 0.4], box: [0.23, 0.38, 0.27, 0.42] },
+      { objectId: 'fluid_jug', view: 1, point: [0.8, 0.6], box: [0.7, 0.5, 0.9, 0.7] },
+    ]);
+    expect(planner.requests).toEqual([
+      {
+        goal: 'Refill the washer fluid',
+        images: [IMAGE, IMAGE],
+        stage: 'first',
+        timeoutMs: 40_000,
+      },
+    ]);
+    expect(h.logger.lines).toContainEqual(
+      expect.stringMatching(/^info plan refill-the-washer-fluid \(stage first\): 3 steps/),
+    );
+    const stored = ProcedureSchema.parse(
+      JSON.parse(await h.readData('plans', 'refill-the-washer-fluid.json')),
+    );
+    expect(stored).toEqual(plan.procedure);
+  });
+
+  it('writes the outline in full as a revision, with a minute to think and retry', async () => {
+    const planner = scriptedPlanner(FIRST, JSON.stringify(modelRevision()));
+    const h = await planHarness(planner);
+    const started = PlanResponseSchema.parse((await postPlan(h, first)).body);
+    const { res, body } = await postPlan(h, {
+      goal: 'Refill the washer fluid',
+      images: [IMAGE],
+      stage: 'rest',
+      revise: {
+        planId: started.planId,
+        fromStepIndex: 1,
+        reason: 'Write the outline in full',
+        base: started.procedure,
+      },
+    });
+    expect(res.status).toBe(200);
+    const plan = PlanResponseSchema.parse(body);
+    expect(plan.planId).toBe('refill-the-washer-fluid-r1');
+    expect(plan.procedure.steps[0]).toEqual(started.procedure.steps[0]);
+    expect(plan).not.toHaveProperty('outlineFrom');
+    expect(plan).not.toHaveProperty('sightings');
+    expect(planner.requests[1]).toEqual({
+      goal: 'Refill the washer fluid',
+      images: [IMAGE],
+      stage: 'rest',
+      timeoutMs: 60_000,
+      revision: {
+        reason: 'Write the outline in full',
+        base: started.procedure,
+        fromStepIndex: 1,
+        skippedStepIds: [],
+      },
+    });
+  });
+
+  it('says where a whole plan saw its objects too', async () => {
+    const answer = { ...modelPlan(), sightings: modelFirstStage().sightings };
+    const h = await planHarness(scriptedPlanner(JSON.stringify(answer)));
+    const plan = PlanResponseSchema.parse(
+      (await postPlan(h, { goal: 'Refill the washer fluid', images: [IMAGE] })).body,
+    );
+    expect(plan.sightings?.map((s) => s.objectId)).toEqual(['washer_cap']);
+    expect(plan).not.toHaveProperty('outlineFrom');
+  });
+
+  it('answers 400 for a rest without a plan, or a first stage that revises', async () => {
+    const h = await planHarness(scriptedPlanner(FIRST));
+    const rest = await postPlan(h, { goal: 'Refill the washer fluid', stage: 'rest' });
+    expect(rest.res.status).toBe(400);
+    expect(ApiErrorSchema.parse(rest.body).error.code).toBe('invalid_stage');
+    const revising = await postPlan(h, {
+      goal: 'Refill the washer fluid',
+      stage: 'first',
+      revise: { planId: 'refill-the-washer-fluid', fromStepIndex: 1, reason: 'r' },
+    });
+    expect(revising.res.status).toBe(400);
+    expect(ApiErrorSchema.parse(revising.body).error.code).toBe('invalid_stage');
   });
 });
 

@@ -64,10 +64,52 @@ recital and in the recorded snapshots, not in the `Procedure`.
    them. When the workspace isn't calibrated, `adaptTemplate()` turns `layout` placements into
    `detect` for items, containers and tools (it keeps points and regions, which only exist on the
    taped mat). After that the coach adapts it like any other plan.
-2. **The planner** (`POST /api/plans`). It sees sharper frames than the coach (2 at 1024 px) and
-   writes the AR fields the coach shouldn't have to think about: outline descriptions, action
-   verbs, objects. Its schema now requires `doneWhen`. The server gives it 40 s, a retry included,
-   and the headset gives up at 45 s.
+2. **The planner** (`POST /api/plans`), in two stages. It sees sharper frames than the coach (2
+   at 1024 px) and writes the AR fields the coach shouldn't have to think about: outline
+   descriptions, action verbs, objects, mistakes. Its schema requires `doneWhen`.
+   - **Stage `first`** writes the whole lesson as an outline (instruction, done-when and objects
+     per step), then its first step in full, where it saw each object (`sightings`), and every
+     hazard in view. The lesson starts on it. The other steps are valid steps the coach or the
+     learner confirms by their done-when; they outline nothing yet. The server gives it 40 s, a
+     retry included, and the headset gives up at 45 s.
+   - **Stage `rest`** is asked at once, with fresh frames, while the lesson starts: a revision
+     of the first stage's plan from `outlineFrom` that writes the outline in full, with time to
+     think (60 s on the server, as nobody waits for it). When it lands it replaces the outline
+     steps nobody has started; the focused step and finished ones stay as they are, so nothing
+     restarts, and a step skipped meanwhile stays skipped. The coach hears "Plan refined" with the
+     recital, without being asked to speak. It is dropped when the plan moved on without it: a
+     new lesson, a `revise_plan`, or the coach adding or rewording a step.
+   - `stage: full` (the default) writes the whole plan in one call, for the bench and
+     `revise_plan`.
+
+   What the planner is told for Robotics-ER 2: plan from the scene as it is (a step already done
+   is not planned again); declare only what is in view and never point at what isn't; write
+   done-when states that name how the right object looks, never actions ("cup C has turned
+   green", not "baking soda is added"), so a look-alike can't pass them; make a look-alike mix-up
+   (the milk beside the yogurt drink) one of the step's `mistakes`; and start `warnings` with a
+   checklist of hazards in view (sharp, hot, electrical, glass, chemicals, machinery), each named
+   by how it looks and where it is, because hazard labels alone are unreliable.
+
+   Thinking per stage (`PLAN_THINKING` in `gemini-planner.ts`) was picked with `pnpm bench`
+   ([planner-bench.md](planner-bench.md)) on two synthetic scenes, the pH lesson with cup A
+   already pink and a knife on the table and a fridge with a yogurt drink beside the milk, 3 runs
+   each per setting, judged by `gemini-pro-latest` against 9 expectations. Medians; directional:
+
+   | Robotics-ER 2                                  | Lesson starts | Plan complete | Met       |
+   | ---------------------------------------------- | ------------- | ------------- | --------- |
+   | before: one whole plan, default thinking       | 16.4 s        | 16.4 s        | 16/27     |
+   | whole plan, minimal                            | 5.8 s         | 5.8 s         | 18/27     |
+   | whole plan, low (`full`, also `revise_plan`)   | 11.1 s        | 11.1 s        | 43/54     |
+   | whole plan, medium                             | 19.6 s        | 19.6 s        | 20/27     |
+   | first low, rest medium (the headset's default) | 8.1 to 8.8 s  | 20 to 21.5 s  | 68/81     |
+   | first low, rest high                           | 8.8 to 9.0 s  | 24 s          | 49/54     |
+   | first medium, rest high                        | 16.1 s        | 32.5 s        | 23/27     |
+   | first high, rest high                          | 22.5 s        | 39.5 s        | no better |
+
+   Most of the gain is the prompt; more thinking is not better on its own. The first stage at
+   high takes over 20 s for no better plan. The rest at high was no better than medium here, but
+   took up to 45 s, and a refinement that lands after the first step is done leaves the second
+   step an outline.
 3. **The coach itself.** If the planner fails or times out, the coach is told to write the steps
    with `add_step`. The lesson starts on the first `add_step`, and until then the HUD keeps its
    planning text. New steps go at the end of the list unless the coach says otherwise.
@@ -272,10 +314,12 @@ Version 1 leaves `packages/protocol/src/episode.ts` alone, because the tracking 
 changing it.
 - Every plan change is an `annotation` with label `plan.updated` and data
   `{ rev, op, by, stepId?, reason?, callId?, plan }`, where `plan` is a full snapshot. Rev 0 is
-  recorded when the lesson starts.
+  recorded when the lesson starts. A refined outline is op `refine`, next to a `plan.refined`
+  annotation (`{ from, to, kept }`); a dropped one is a `plan.refine_dropped` with the reason.
 - Every step-watcher answer is an `annotation` with label `step.watch` and data `{ stepId,
-  verdict, observation, model, latencyMs, progress?, wrong?, evidence? }`, where `evidence` is
-  `{ label, point }` with the point in 0..1 of the newest frame. A failed look records `error`.
+  verdict, observation, model, latencyMs, progress?, wrong?, evidence?, hazard? }`, where
+  `evidence` is `{ label, point }` with the point in 0..1 of the newest frame. A failed look
+  records `error`.
 - Every narration is a `coach.narration` event, recorded when it reaches the model, not when it's
   queued. A stale briefing dropped at delivery is an `annotation` with label
   `coach.narration_dropped`.
