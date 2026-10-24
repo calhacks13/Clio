@@ -1,5 +1,5 @@
 import type { GenerateContentParameters } from '@google/genai';
-import type { GenerateContentApi } from './gemini';
+import { type GenerateContentApi, type Thinking, thinkingConfig } from './gemini';
 import { PLANNER_SYSTEM_INSTRUCTION, plannerContents } from './plan-prompt';
 import { buildPlanJsonSchema } from './plan-schema';
 import type { Planner } from './planner';
@@ -7,8 +7,14 @@ import { STEP_CHECK_INSTRUCTION, stepCheckContents, stepCheckJsonSchema } from '
 
 /** A planner draft whose request sets no `timeoutMs`. */
 export const PLAN_TIMEOUT_MS = 45_000;
-/** One step check. The step watcher asks again a few seconds later anyway. */
-export const STEP_CHECK_TIMEOUT_MS = 8_000;
+/** One step check. The step watcher asks again as soon as it has an answer, so don't wait long. */
+export const STEP_CHECK_TIMEOUT_MS = 6_000;
+/**
+ * Measured on Robotics-ER 2 (docs/coach-plan.md, the step watcher): low never called a step done
+ * that wasn't, in about 1.6 s. Minimal, 0.5 s faster, once took the dropper for the knife and
+ * called that step done, said "not done" for an object out of view, and missed more mix-ups.
+ */
+export const STEP_CHECK_THINKING: Thinking = 'low';
 
 /** The planner on Gemini structured output: JSON constrained by the hand-built plan schema. */
 export function createGeminiPlanner(ai: GenerateContentApi, model: string): Planner {
@@ -38,6 +44,7 @@ export function createGeminiPlanner(ai: GenerateContentApi, model: string): Plan
             systemInstruction: STEP_CHECK_INSTRUCTION,
             responseMimeType: 'application/json',
             responseJsonSchema: stepCheckJsonSchema(),
+            ...thinkingConfig(model, STEP_CHECK_THINKING),
           },
         },
         STEP_CHECK_TIMEOUT_MS,

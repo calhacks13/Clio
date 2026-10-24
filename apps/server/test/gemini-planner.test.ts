@@ -4,6 +4,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
   createGeminiPlanner,
   PLAN_TIMEOUT_MS,
+  STEP_CHECK_THINKING,
   STEP_CHECK_TIMEOUT_MS,
 } from '../src/services/gemini-planner';
 import { buildPlanCandidate } from '../src/services/plan-build';
@@ -106,13 +107,13 @@ describe('createGeminiPlanner', () => {
     ]);
   });
 
-  it('gives a draft 45 s and a step check 8 s', async () => {
+  it('gives a draft 45 s and a step check 6 s', async () => {
     const timeouts = spyOnTimeouts();
     const planner = createGeminiPlanner(fakeAi('{}'), 'm');
     await planner.draft({ goal: 'Refill it', images: [] });
     await planner.checkStep?.(CHECK);
-    expect([PLAN_TIMEOUT_MS, STEP_CHECK_TIMEOUT_MS]).toEqual([45_000, 8_000]);
-    expect(timeouts.mock.calls).toEqual([[45_000], [8_000]]);
+    expect([PLAN_TIMEOUT_MS, STEP_CHECK_TIMEOUT_MS]).toEqual([45_000, 6_000]);
+    expect(timeouts.mock.calls).toEqual([[45_000], [6_000]]);
   });
 
   it('gives a draft the time its request has left when the request says', async () => {
@@ -131,7 +132,7 @@ describe('createGeminiPlanner', () => {
     await expect(planner.draft({ goal: 'Refill it', images: [] })).rejects.toThrow(
       'Gemini did not answer within 45 s',
     );
-    await expect(planner.checkStep?.(CHECK)).rejects.toThrow('Gemini did not answer within 8 s');
+    await expect(planner.checkStep?.(CHECK)).rejects.toThrow('Gemini did not answer within 6 s');
     await expect(
       planner.draft({ goal: 'Refill it', images: [], timeoutMs: 21_437 }),
     ).rejects.toThrow('Gemini did not answer within 21 s');
@@ -154,6 +155,19 @@ describe('createGeminiPlanner', () => {
         },
       },
     ]);
+  });
+
+  it('checks a step with low thinking on Gemini 3 models, Robotics-ER 2 among them', async () => {
+    expect(STEP_CHECK_THINKING).toBe('low');
+    for (const [model, level] of [
+      ['gemini-robotics-er-2-preview', 'LOW'],
+      ['gemini-3.5-flash-lite', 'LOW'],
+      ['gemini-2.5-flash', undefined],
+    ] as const) {
+      const ai = fakeAi('{}');
+      await createGeminiPlanner(ai, model).checkStep?.(CHECK);
+      expect(ai.calls[0]?.config?.thinkingConfig?.thinkingLevel).toBe(level);
+    }
   });
 
   it('asks for only the remaining steps when revising, with the revision schema', async () => {

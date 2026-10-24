@@ -161,8 +161,9 @@ Once per XR frame:
    │            and outlined (Spotlight, refreshed every few seconds) · demo auto-played
    ├─ edit:    add_step / update_step / complete_step / add_material ─► runner ─► plan.changed
    │           (recorded as plan.updated); each result repeats the plan
-   ├─ watch:   step watcher: frame + step + doneWhen ─► POST /api/plans/check every 6 s
-   │           ─► "looks done"? the coach gets the frame and decides
+   ├─ watch:   step watcher: frames from the step's start and now + step, looks, mix-ups
+   │           ─► POST /api/plans/check, again 1 s after each answer ─► "looks done" or "did
+   │           something else" twice in a row? the coach gets the frame and decides
    └─ revise_plan(reason) ─► POST /api/plans {revise: {planId, fromStepIndex, base}}
                              ─► runner.replacePlan (by step id)
 ```
@@ -284,10 +285,12 @@ step's briefing, so the coach never hears a step twice. Details are in
 
 **The step watcher** (`domain/session/step-watcher.ts`) is the coach's second pair of eyes.
 Gemini Live only takes a turn when someone speaks, so a step finished in silence would go
-unnoticed. While a step has focus and nobody is talking, the watcher sends a fresh 1024 px frame
-with the step's text and `doneWhen` to `POST /api/plans/check` every 6 s. When the answer is
-`done`, the coach gets the frame and a suggestion, and decides. The watcher never completes a step
-itself. Every answer is recorded as a `step.watch` annotation.
+unnoticed. While a step has focus and nobody is talking, the watcher sends a fresh 1024 px frame,
+the frame from when the step gained focus, the step's text and `doneWhen`, what its objects look
+like and its mistakes to `POST /api/plans/check`, and looks again 1 s after each answer (about
+every 2.5 s). When two answers in a row say `done`, or that the learner did something else (took
+the milk, not the yogurt drink), the coach gets the frame and a suggestion, and decides. The
+watcher never completes a step itself. Every answer is recorded as a `step.watch` annotation.
 
 **The perception boundary.** When the coach is Gemini in learn mode, it never hears positions,
 distances, pinches, detections, or missing and registered objects. It is told only what the
@@ -337,7 +340,7 @@ A stale briefing dropped at that point is a `coach.narration_dropped` annotation
 | `WS /gemini/*`                                                        | Gemini Live relay (allowlisted path, injects `GEMINI_API_KEY`)                             |
 | `POST /api/coach/token`                                               | ephemeral Live token (direct transport)                                                    |
 | `POST /api/plans`, `GET /api/plans/:id`                               | the planner: goal + images (+ revision) → validated `Procedure`, stored in `data/plans/`   |
-| `POST /api/plans/check`                                               | the step watcher: frames + step + `doneWhen` → `done`, `not_done` or `unsure`              |
+| `POST /api/plans/check`                                               | the step watcher: frames + step → `done`, `not_done` or `unsure`, progress, what was wrong |
 | `POST /api/vision/locate`                                             | the object finder: Gemini, or any HTTP finder at `CLIO_VISION_URL` (docs/object-finder.md) |
 | `GET /api/procedures[/:id]`                                           | curated (`procedures/`) + generated (`data/plans/`)                                        |
 | `POST /api/episodes` → `…/batches` → `…/finish`, `PUT …/media/:name`  | ingest (idempotent by `seq`)                                                               |

@@ -46,6 +46,16 @@ export interface InternalEvents {
   'plan.changed': Timed<{ rev: number; op: PlanOp; stepId: string | null }>;
   /** The step watcher thinks a step looks done (base64 JPEG it judged by). The coach decides. */
   'step.looks_done': Timed<{ stepId: string; observation: string; image: string | null }>;
+  /**
+   * The step watcher thinks the learner did something else instead, e.g. "picked up the milk,
+   * not the yogurt drink" (base64 JPEG it judged by). The coach decides whether to correct them.
+   */
+  'step.looks_wrong': Timed<{
+    stepId: string;
+    wrong: string;
+    observation: string;
+    image: string | null;
+  }>;
   'step.stuck': Timed<{ stepId: string; elapsedMs: number }>;
   'object.missing': Timed<{ objectIds: string[] }>;
   'objects.updated': Timed<{ objects: ObjectState[] }>;

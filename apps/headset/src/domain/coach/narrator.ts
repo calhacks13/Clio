@@ -124,6 +124,15 @@ export class Narrator {
           { stepId },
         );
       }),
+      b.on('step.looks_wrong', ({ t, stepId, wrong, observation }) => {
+        this.say(
+          t,
+          'looks_wrong',
+          `Step watcher: on "${this.instructionOf(stepId)}" they seem to have done something else: ${wrong} (${observation}). If you see it too, tell them in a few words what to do instead; if not, carry on without mentioning it.`,
+          true,
+          { stepId },
+        );
+      }),
       b.on('step.stuck', ({ t, stepId, elapsedMs }) => {
         const step = this.view.plan()?.steps.find((s) => s.id === stepId);
         const help = step?.demo

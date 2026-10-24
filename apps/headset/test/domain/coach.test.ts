@@ -331,6 +331,25 @@ describe('Narrator', () => {
     expect(out[0]?.text).toContain('carry on without mentioning it');
   });
 
+  it('tells the coach in words when the step watcher sees the learner do something else', () => {
+    const { b, out } = setup({ perception: 'trusted' });
+    b.emit('step.looks_wrong', {
+      t: 0,
+      stepId: 'acid',
+      wrong: 'poured vinegar into cup B, not cup A',
+      observation: 'cup B is turning pink',
+      image: null,
+    });
+    expect(out).toEqual([
+      {
+        kind: 'looks_wrong',
+        text: '[app] Step watcher: on "Add vinegar to cup A." they seem to have done something else: poured vinegar into cup B, not cup A (cup B is turning pink). If you see it too, tell them in a few words what to do instead; if not, carry on without mentioning it.',
+        reply: true,
+        data: { stepId: 'acid' },
+      },
+    ]);
+  });
+
   it('offers a demonstration to a stuck learner only when the step has one', () => {
     let plan = planView();
     const { b, out } = setup({}, () => plan);
@@ -1006,7 +1025,21 @@ describe('CoachSession', () => {
     await settle();
     b.emit('step.looks_done', { t: clock.now(), stepId: 'acid', observation: 'pink', image: null });
     await settle();
-    expect(order).toEqual(['image:j1', 'narration:looks_done', 'narration:looks_done']);
+    b.emit('step.looks_wrong', {
+      t: clock.now(),
+      stepId: 'acid',
+      wrong: 'used cup B',
+      observation: 'B is pink',
+      image: 'j2',
+    });
+    await settle();
+    expect(order).toEqual([
+      'image:j1',
+      'narration:looks_done',
+      'narration:looks_done',
+      'image:j2',
+      'narration:looks_wrong',
+    ]);
   });
 });
 

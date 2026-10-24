@@ -36,7 +36,7 @@ import type { Grounder } from '../world/grounding';
 import type { ObjectRegistry } from '../world/object-registry';
 import type { Workspace } from '../world/workspace';
 import { Spotlight } from './spotlight';
-import { type StepChecker, StepWatcher, type WatchTarget } from './step-watcher';
+import { type StepChecker, StepWatcher, stepLooks, type WatchTarget } from './step-watcher';
 import { adaptTemplate, isCalibrated, type TemplateSource } from './templates';
 
 // The application service for a lesson. The coach decides what the lesson is; this keeps track of
@@ -69,7 +69,7 @@ export interface LessonOptions {
   planImages?: number;
   /** How often to look again at what the current step shows (ms); 0 only looks on step entry. */
   showRefreshMs?: number;
-  /** How often the step watcher looks while a step waits (ms); 0 turns it off. */
+  /** The least time from the step watcher's last answer to its next look (ms); 0 turns it off. */
   watchMs?: number;
   /** Tell the coach planning is slow after this long (ms). */
   planSlowMs?: number;
@@ -126,7 +126,8 @@ const PLAN_SLOW_MS = 12_000;
 /** The planner and the step check take goals up to this long. */
 const GOAL_MAX = 300;
 const PLAN_TIMEOUT_MS = 45_000;
-const WATCH_MS = 6000;
+/** The step watcher looks again this soon after each answer, about every 2.5 s in all. */
+const WATCH_MS = 1000;
 /** Placements measured by something other than the camera's guess. */
 const TRUSTED_SOURCES: ReadonlySet<PlacementMethod> = new Set(['marker', 'pinch', 'manual']);
 /** Coach-written lessons have no measured layout; the same default the planner uses. */
@@ -222,7 +223,7 @@ export class LessonController {
             frames: deps.images,
             target: () => this.watchTarget(),
             enabled: () => this.authority() === 'coach',
-            options: { intervalMs: watchMs },
+            options: { gapMs: watchMs },
           })
         : null;
     bus.on('object.registered', ({ objectId, method }) => {
@@ -1006,8 +1007,9 @@ export class LessonController {
   }
 
   private watchTarget(): WatchTarget | null {
-    const step = this.activeRunner()?.state.step;
-    if (!step || this.planning) return null;
+    const state = this.activeRunner()?.state;
+    const step = state?.step;
+    if (!state || !step || this.planning) return null;
     return {
       lesson: this.lessonSeq,
       goal: this.goal,
@@ -1016,6 +1018,7 @@ export class LessonController {
         instruction: step.instruction,
         ...(step.doneWhen ? { doneWhen: step.doneWhen } : {}),
       },
+      ...stepLooks(step, state.procedure.objects),
     };
   }
 
