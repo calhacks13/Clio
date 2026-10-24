@@ -1,0 +1,252 @@
+{
+  "$schema": "../packages/protocol/schema/procedure.schema.json",
+  "schema": "clio.procedure/1",
+  "id": "ph-indicator",
+  "version": 1,
+  "title": "Test an acid and a base with red-cabbage indicator",
+  "summary": "A five-step lab protocol: dispense indicator into three cups, acidify A, basify B, keep C as the control.",
+  "domain": "lab",
+  "workspace": {
+    "size": [0.6, 0.4],
+    "marker": { "family": "aruco_4x4_50", "id": 0, "sizeM": 0.05 },
+    "notes": "Work on a dark rimmed tray. Tape marker 0 at the tray's near-left corner (that corner is the origin), then calibrate by pinching the near-left and near-right corners. Tape spots for the cups (front row) and bottles (back row) at the layout positions. Stick markers 1-7 (ArUco 4x4_50, printed at 4 cm, 3 cm on the syringe) on the props, facing you."
+  },
+  "objects": [
+    {
+      "id": "cup_a",
+      "label": "cup A",
+      "kind": "container",
+      "radius": 0.04,
+      "placement": { "method": "layout", "position": [0.15, 0.07, -0.12] },
+      "tracking": {
+        "marker": { "id": 1, "sizeM": 0.04, "offset": [0, 0.03, -0.035] },
+        "query": "white paper cup with a large letter A"
+      }
+    },
+    {
+      "id": "cup_b",
+      "label": "cup B",
+      "kind": "container",
+      "radius": 0.04,
+      "placement": { "method": "layout", "position": [0.3, 0.07, -0.12] },
+      "tracking": {
+        "marker": { "id": 2, "sizeM": 0.04, "offset": [0, 0.03, -0.035] },
+        "query": "white paper cup with a large letter B"
+      }
+    },
+    {
+      "id": "cup_c",
+      "label": "cup C",
+      "kind": "container",
+      "radius": 0.04,
+      "placement": { "method": "layout", "position": [0.45, 0.07, -0.12] },
+      "tracking": {
+        "marker": { "id": 3, "sizeM": 0.04, "offset": [0, 0.03, -0.035] },
+        "query": "white paper cup with a large letter C"
+      }
+    },
+    {
+      "id": "indicator",
+      "label": "indicator bottle",
+      "kind": "container",
+      "radius": 0.035,
+      "description": "Purple red-cabbage juice.",
+      "placement": { "method": "layout", "position": [0.12, 0.14, -0.28] },
+      "tracking": {
+        "marker": { "id": 4, "sizeM": 0.04, "offset": [0, 0.08, -0.03] },
+        "query": "squeeze bottle labeled INDICATOR"
+      }
+    },
+    {
+      "id": "vinegar",
+      "label": "vinegar bottle",
+      "kind": "container",
+      "radius": 0.035,
+      "placement": { "method": "layout", "position": [0.3, 0.14, -0.28] },
+      "tracking": {
+        "marker": { "id": 5, "sizeM": 0.04, "offset": [0, 0.08, -0.03] },
+        "query": "squeeze bottle labeled VINEGAR"
+      }
+    },
+    {
+      "id": "base",
+      "label": "baking-soda bottle",
+      "kind": "container",
+      "radius": 0.035,
+      "placement": { "method": "layout", "position": [0.48, 0.14, -0.28] },
+      "tracking": {
+        "marker": { "id": 6, "sizeM": 0.04, "offset": [0, 0.08, -0.03] },
+        "query": "squeeze bottle labeled BASE"
+      }
+    },
+    {
+      "id": "syringe",
+      "label": "syringe",
+      "kind": "tool",
+      "radius": 0.02,
+      "description": "10 mL oral syringe; marker 7 is a small flag on the barrel.",
+      "placement": { "method": "layout", "position": [0.54, 0.01, -0.06] },
+      "tracking": {
+        "marker": { "id": 7, "sizeM": 0.03 },
+        "query": "plastic oral syringe",
+        "moves": true
+      }
+    }
+  ],
+  "steps": [
+    {
+      "id": "draw-indicator",
+      "instruction": "Fill the syringe with purple indicator from the indicator bottle.",
+      "targets": ["indicator", "syringe"],
+      "success": {
+        "type": "any",
+        "of": [
+          {
+            "type": "object_near",
+            "object": "syringe",
+            "target": "indicator",
+            "radius": 0.08,
+            "dwellMs": 1200
+          },
+          { "type": "hand_near", "object": "indicator", "radius": 0.08, "dwellMs": 1800 }
+        ]
+      },
+      "coachNotes": "Dip the syringe tip into the bottle and pull the plunger back. The hand_near fallback covers lost tracking."
+    },
+    {
+      "id": "dispense-indicator",
+      "instruction": "Squirt a little indicator into cups A, B, and C.",
+      "targets": ["cup_a", "cup_b", "cup_c"],
+      "success": {
+        "type": "sequence",
+        "of": [
+          {
+            "type": "any",
+            "of": [
+              { "type": "object_near", "object": "syringe", "target": "cup_a", "dwellMs": 600 },
+              { "type": "hand_near", "object": "cup_a", "dwellMs": 800 }
+            ]
+          },
+          {
+            "type": "any",
+            "of": [
+              { "type": "object_near", "object": "syringe", "target": "cup_b", "dwellMs": 600 },
+              { "type": "hand_near", "object": "cup_b", "dwellMs": 800 }
+            ]
+          },
+          {
+            "type": "any",
+            "of": [
+              { "type": "object_near", "object": "syringe", "target": "cup_c", "dwellMs": 600 },
+              { "type": "hand_near", "object": "cup_c", "dwellMs": 800 }
+            ]
+          }
+        ]
+      },
+      "stuckAfterMs": 20000
+    },
+    {
+      "id": "acid-to-a",
+      "instruction": "Now add vinegar to cup A.",
+      "targets": ["vinegar", "cup_a"],
+      "success": {
+        "type": "sequence",
+        "of": [
+          {
+            "type": "any",
+            "of": [
+              { "type": "object_near", "object": "syringe", "target": "vinegar", "dwellMs": 1000 },
+              { "type": "hand_near", "object": "vinegar", "dwellMs": 1200 }
+            ]
+          },
+          {
+            "type": "any",
+            "of": [
+              { "type": "object_near", "object": "syringe", "target": "cup_a", "dwellMs": 700 },
+              { "type": "hand_near", "object": "cup_a", "dwellMs": 900 }
+            ]
+          },
+          { "type": "confirm", "by": "either", "prompt": "Cup A turned pink" }
+        ]
+      },
+      "mistakes": [
+        {
+          "kind": "wrong_cup",
+          "message": "That's cup B. Vinegar goes in cup A.",
+          "when": {
+            "type": "any",
+            "of": [
+              { "type": "object_near", "object": "syringe", "target": "cup_b", "dwellMs": 500 },
+              { "type": "hand_near", "object": "cup_b", "dwellMs": 700 }
+            ]
+          }
+        }
+      ],
+      "coachNotes": "The planted demo mistake: the vinegar heads for cup B. Confirm once you see pink in cup A or the user says it changed."
+    },
+    {
+      "id": "base-to-b",
+      "instruction": "Add baking-soda water to cup B.",
+      "targets": ["base", "cup_b"],
+      "success": {
+        "type": "sequence",
+        "of": [
+          {
+            "type": "any",
+            "of": [
+              { "type": "object_near", "object": "syringe", "target": "base", "dwellMs": 1000 },
+              { "type": "hand_near", "object": "base", "dwellMs": 1200 }
+            ]
+          },
+          {
+            "type": "any",
+            "of": [
+              { "type": "object_near", "object": "syringe", "target": "cup_b", "dwellMs": 700 },
+              { "type": "hand_near", "object": "cup_b", "dwellMs": 900 }
+            ]
+          },
+          { "type": "confirm", "by": "either", "prompt": "Cup B turned blue-green" }
+        ]
+      },
+      "mistakes": [
+        {
+          "kind": "wrong_cup",
+          "message": "Careful, that's cup A. The base goes in cup B.",
+          "when": {
+            "type": "any",
+            "of": [
+              { "type": "object_near", "object": "syringe", "target": "cup_a", "dwellMs": 500 },
+              { "type": "hand_near", "object": "cup_a", "dwellMs": 700 }
+            ]
+          }
+        },
+        {
+          "kind": "touched_control",
+          "message": "Leave cup C alone. It's our control.",
+          "when": {
+            "type": "any",
+            "of": [
+              { "type": "object_near", "object": "syringe", "target": "cup_c", "dwellMs": 500 },
+              { "type": "hand_near", "object": "cup_c", "dwellMs": 700 }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "compare",
+      "instruction": "Leave cup C purple and compare all three colors.",
+      "targets": ["cup_a", "cup_b", "cup_c"],
+      "success": {
+        "type": "confirm",
+        "by": "either",
+        "prompt": "The user has compared the colors"
+      },
+      "coachNotes": "Explain in one breath: acid turns the indicator pink, base turns it blue-green, and C stays purple as the control."
+    }
+  ],
+  "coach": {
+    "persona": "A calm lab instructor who keeps things safe and quick.",
+    "notes": "Mention the cup letter every time. Never guess where the syringe is; trust the [app] messages."
+  }
+}

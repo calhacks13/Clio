@@ -19,13 +19,44 @@ export const ObjectPlacementSchema = z.discriminatedUnion('method', [
     .describe('The user registers it by pinching at it during setup.'),
 ]);
 
+export const MarkerSpecSchema = z
+  .object({
+    family: z.enum(['aruco_4x4_50', 'apriltag_36h11']).default('aruco_4x4_50'),
+    id: z.number().int().nonnegative(),
+    sizeM: z.number().positive().max(0.5).describe('Printed black-square edge length in meters'),
+    offset: Vec3Schema.default([0, 0, 0]).describe(
+      "The object's reference point in the marker frame (meters)",
+    ),
+  })
+  .describe('A printed fiducial stuck to the object (or taped at the workspace origin).');
+
+export const TrackingSpecSchema = z
+  .object({
+    marker: MarkerSpecSchema.optional(),
+    query: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Open-vocabulary detector prompt, e.g. "white paper cup with a big letter A"'),
+    moves: z
+      .boolean()
+      .default(false)
+      .describe('Expected to move during the task, so it is tracked continuously'),
+  })
+  .describe('How the camera can find this object. Without it the object stays where placed.');
+
 export const ObjectSpecSchema = z.object({
   id: SlugSchema,
   label: z.string().min(1).describe('Spoken and displayed name, e.g. "cup A"'),
   kind: z.enum(['point', 'item', 'container', 'tool', 'region']).default('item'),
   description: z.string().optional(),
   radius: z.number().positive().max(0.5).default(0.03).describe('Approximate size in meters'),
+  hidden: z
+    .boolean()
+    .default(false)
+    .describe('Not drawn; used only by checks (e.g. mistake zones)'),
   placement: ObjectPlacementSchema,
+  tracking: TrackingSpecSchema.optional(),
 });
 
 export const MistakeRuleSchema = z.object({
@@ -66,6 +97,9 @@ const ProcedureObjectSchema = z.object({
     size: z
       .tuple([z.number().positive(), z.number().positive()])
       .describe('[width along +x, depth along -z] in meters'),
+    marker: MarkerSpecSchema.optional().describe(
+      'Taped at the origin corner, axes aligned with the workspace; enables marker calibration',
+    ),
     notes: z.string().optional(),
   }),
   objects: z.array(ObjectSpecSchema),
@@ -90,6 +124,29 @@ export const ProcedureSchema = ProcedureObjectSchema.superRefine((p, ctx) => {
     }
     objectIds.add(o.id);
   });
+
+  const markerOwners = new Map<string, string>();
+  const claimMarker = (
+    marker: MarkerSpec | undefined,
+    owner: string,
+    path: (string | number)[],
+  ) => {
+    if (!marker) return;
+    const key = `${marker.family}:${marker.id}`;
+    const other = markerOwners.get(key);
+    if (other) {
+      ctx.addIssue({
+        code: 'custom',
+        path,
+        message: `Fiducial marker ${marker.id} is used by both "${other}" and "${owner}"`,
+      });
+    }
+    markerOwners.set(key, owner);
+  };
+  claimMarker(p.workspace.marker, 'workspace', ['workspace', 'marker']);
+  for (const [i, o] of p.objects.entries()) {
+    claimMarker(o.tracking?.marker, o.id, ['objects', i, 'tracking', 'marker']);
+  }
 
   const stepIds = new Set<string>();
   p.steps.forEach((step, i) => {
@@ -119,6 +176,8 @@ export const ProcedureSchema = ProcedureObjectSchema.superRefine((p, ctx) => {
   });
 });
 
+export type MarkerSpec = z.output<typeof MarkerSpecSchema>;
+export type TrackingSpec = z.output<typeof TrackingSpecSchema>;
 export type ObjectPlacement = z.output<typeof ObjectPlacementSchema>;
 export type ObjectSpec = z.output<typeof ObjectSpecSchema>;
 export type MistakeRule = z.output<typeof MistakeRuleSchema>;

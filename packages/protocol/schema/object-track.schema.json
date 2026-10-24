@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "t": {
+      "type": "number",
+      "minimum": 0
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "position": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "items": false,
+            "minItems": 3,
+            "maxItems": 3,
+            "description": "Reference point, workspace frame"
+          },
+          "orientation": {
+            "anyOf": [
+              {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "items": false,
+                "minItems": 4,
+                "maxItems": 4,
+                "description": "Unit quaternion [x, y, z, w]"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Known only for marker-tracked objects"
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "layout",
+              "pinch",
+              "marker",
+              "detector",
+              "manual"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "position",
+          "orientation",
+          "confidence",
+          "source"
+        ],
+        "additionalProperties": false
+      },
+      "description": "Every object whose estimate changed"
+    }
+  },
+  "required": [
+    "t",
+    "objects"
+  ],
+  "additionalProperties": false,
+  "description": "One tracker update (objects.ndjson line), typically 5–30 Hz",
+  "$id": "https://clio.dev/schema/object-track.schema.json",
+  "title": "Clio objects.ndjson line"
+}

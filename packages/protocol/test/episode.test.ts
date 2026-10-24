@@ -4,6 +4,7 @@ import {
   EpisodeEventSchema,
   FrameRecordSchema,
   jointOffset,
+  ObjectTrackRecordSchema,
 } from '../src/index';
 
 const hand = (n = 200) => ({ joints: new Array(n).fill(0), pinch: 0.03 });
@@ -65,5 +66,34 @@ describe('episode events', () => {
 
   it('rejects a batch with a negative sequence number', () => {
     expect(EpisodeBatchSchema.safeParse({ seq: -1, frames: [], events: [] }).success).toBe(false);
+  });
+});
+
+describe('object tracks', () => {
+  const track = {
+    t: 40,
+    objects: [
+      {
+        id: 'syringe',
+        position: [0.2, 0.05, -0.1],
+        orientation: [0, 0, 0, 1],
+        confidence: 0.9,
+        source: 'marker',
+      },
+    ],
+  };
+
+  it('carries object tracks in a batch alongside frames and events', () => {
+    const b = EpisodeBatchSchema.parse({ seq: 0, frames: [], events: [], objects: [track] });
+    expect(b.objects[0]?.objects[0]?.id).toBe('syringe');
+  });
+
+  it('treats a batch without object tracks as having none', () => {
+    expect(EpisodeBatchSchema.parse({ seq: 1, frames: [], events: [] }).objects).toEqual([]);
+  });
+
+  it('rejects a confidence outside 0..1', () => {
+    const bad = { ...track, objects: [{ ...track.objects[0], confidence: 1.5 }] };
+    expect(ObjectTrackRecordSchema.safeParse(bad).success).toBe(false);
   });
 });

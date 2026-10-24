@@ -319,6 +319,7 @@
           "enum": [
             "layout",
             "pinch",
+            "marker",
             "detector",
             "manual"
           ]

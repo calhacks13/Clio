@@ -1,0 +1,142 @@
+{
+  "$schema": "../packages/protocol/schema/procedure.schema.json",
+  "schema": "clio.procedure/1",
+  "id": "shirt-fold",
+  "version": 1,
+  "title": "Fold a T-shirt in two seconds",
+  "summary": "The Japanese pinch-and-cross fold: three pinch points on one line, one crossover, one lift.",
+  "domain": "household",
+  "workspace": {
+    "size": [0.8, 0.6],
+    "notes": "Tape an 80 x 60 cm outline. Calibrate by pinching its near-left corner, then its near-right corner. Lay the shirt face up inside it with the collar on the LEFT. The dot positions are first guesses for an adult M shirt: tune them on site."
+  },
+  "objects": [
+    {
+      "id": "shoulder",
+      "label": "shoulder dot",
+      "kind": "point",
+      "radius": 0.025,
+      "description": "On the near shoulder, halfway between the collar and the sleeve seam.",
+      "placement": { "method": "layout", "position": [0.14, 0.0, -0.18] }
+    },
+    {
+      "id": "middle",
+      "label": "middle dot",
+      "kind": "point",
+      "radius": 0.025,
+      "description": "Halfway down the shirt, in line with the shoulder dot.",
+      "placement": { "method": "layout", "position": [0.4, 0.0, -0.18] }
+    },
+    {
+      "id": "hem",
+      "label": "hem dot",
+      "kind": "point",
+      "radius": 0.025,
+      "description": "On the bottom hem, in line with the other two dots.",
+      "placement": { "method": "layout", "position": [0.68, 0.0, -0.18] }
+    },
+    {
+      "id": "middle_low_zone",
+      "label": "below the middle dot",
+      "kind": "region",
+      "radius": 0.06,
+      "hidden": true,
+      "description": "Mistake zone: a right-hand pinch here means the middle pinch is too close to you.",
+      "placement": { "method": "layout", "position": [0.4, 0.0, -0.08] }
+    }
+  ],
+  "steps": [
+    {
+      "id": "lay-flat",
+      "instruction": "Lay the shirt flat in the outline, face up, collar on the left.",
+      "success": {
+        "type": "confirm",
+        "by": "either",
+        "prompt": "The shirt lies flat inside the outline with the collar on the left"
+      },
+      "coachNotes": "Ask them to say ready when it is flat. You may also see it in the camera frames."
+    },
+    {
+      "id": "pinch-shoulder",
+      "instruction": "With your left hand, pinch the shirt at the shoulder dot.",
+      "targets": ["shoulder"],
+      "hand": "left",
+      "success": { "type": "pinch_near", "object": "shoulder", "hand": "left", "radius": 0.05 },
+      "mistakes": [
+        {
+          "kind": "wrong_hand",
+          "message": "Use your left hand for the shoulder dot.",
+          "when": { "type": "pinch_near", "object": "shoulder", "hand": "right", "radius": 0.05 }
+        }
+      ],
+      "stuckAfterMs": 12000
+    },
+    {
+      "id": "pinch-middle",
+      "instruction": "Keep holding. With your right hand, pinch the middle dot.",
+      "targets": ["middle"],
+      "hand": "right",
+      "success": {
+        "type": "all",
+        "of": [
+          { "type": "pinch_near", "object": "shoulder", "hand": "left", "radius": 0.07 },
+          { "type": "pinch_near", "object": "middle", "hand": "right", "radius": 0.05 }
+        ]
+      },
+      "mistakes": [
+        {
+          "kind": "pinch_too_low",
+          "message": "Slide your right hand up to the dot.",
+          "when": {
+            "type": "pinch_near",
+            "object": "middle_low_zone",
+            "hand": "right",
+            "radius": 0.06,
+            "dwellMs": 300
+          }
+        }
+      ],
+      "coachNotes": "This is where the planted demo mistake happens: pinching too close to the near edge.",
+      "stuckAfterMs": 12000
+    },
+    {
+      "id": "cross-to-hem",
+      "instruction": "Cross your left hand over your right and pinch the hem dot.",
+      "detail": "Your left hand keeps holding the shoulder fabric and brings it to the hem.",
+      "targets": ["hem"],
+      "hand": "left",
+      "success": {
+        "type": "all",
+        "of": [
+          { "type": "pinch_near", "object": "hem", "hand": "left", "radius": 0.07 },
+          { "type": "pinch_near", "object": "middle", "hand": "right", "radius": 0.08 }
+        ]
+      },
+      "coachNotes": "Hardest step. Tracking can flicker while the hands cross, so the radii are loose on purpose. Offer show_demo early.",
+      "stuckAfterMs": 15000
+    },
+    {
+      "id": "lift-and-fold",
+      "instruction": "Lift both hands, uncross them, and lay the shirt down folded.",
+      "hand": "both",
+      "success": {
+        "type": "sequence",
+        "of": [
+          {
+            "type": "all",
+            "of": [
+              { "type": "lift", "hand": "left", "height": 0.2 },
+              { "type": "lift", "hand": "right", "height": 0.2 }
+            ]
+          },
+          { "type": "confirm", "by": "either", "prompt": "The shirt is folded and lying flat" }
+        ]
+      },
+      "coachNotes": "Celebrate when it is done. If the fold is messy, offer to go again."
+    }
+  ],
+  "coach": {
+    "persona": "Upbeat and brief, like a friend showing off a party trick.",
+    "notes": "Say each instruction in under 12 words. Never guess where the hands are; trust the [app] messages."
+  }
+}

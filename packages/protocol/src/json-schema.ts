@@ -6,6 +6,7 @@ import {
   EpisodeFinishSchema,
   EpisodeMetaSchema,
   FrameRecordSchema,
+  ObjectTrackRecordSchema,
 } from './episode';
 import { ProcedureSchema } from './procedure';
 
@@ -40,6 +41,12 @@ export function buildJsonSchemas(): Record<string, object> {
       'episode-event.schema.json',
       'Clio events.ndjson line',
       EpisodeEventSchema,
+      'output',
+    ),
+    exportSchema(
+      'object-track.schema.json',
+      'Clio objects.ndjson line',
+      ObjectTrackRecordSchema,
       'output',
     ),
     exportSchema('episode-batch.schema.json', 'Clio episode batch', EpisodeBatchSchema, 'output'),

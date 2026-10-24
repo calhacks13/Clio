@@ -44,6 +44,7 @@ describe('procedures', () => {
     });
     expect(p.steps[0]?.mistakes).toEqual([]);
     expect(p.objects[1]?.kind).toBe('item');
+    expect(p.objects[1]?.hidden).toBe(false);
   });
 
   it('accepts nested composite checks', () => {
@@ -113,5 +114,60 @@ describe('procedures', () => {
     const r = safeParseProcedure(withStep({ targets: ['cup_z'] }));
     expect(r.ok).toBe(false);
     expect(r.ok ? '' : r.error).toMatch(/cup_z/);
+  });
+});
+
+describe('object tracking specs', () => {
+  it('lets an object declare a fiducial marker and a detector query', () => {
+    const p = parseProcedure({
+      ...base,
+      objects: [
+        {
+          ...base.objects[0],
+          tracking: { marker: { id: 7, sizeM: 0.04 }, query: 'white paper cup labeled A' },
+        },
+        base.objects[1],
+      ],
+    });
+    expect(p.objects[0]?.tracking).toEqual({
+      marker: { family: 'aruco_4x4_50', id: 7, sizeM: 0.04, offset: [0, 0, 0] },
+      query: 'white paper cup labeled A',
+      moves: false,
+    });
+    expect(p.objects[1]?.tracking).toBeUndefined();
+  });
+
+  it('rejects two objects sharing one marker', () => {
+    const marked = (id: string) => ({
+      id,
+      label: id,
+      placement: { method: 'register' },
+      tracking: { marker: { id: 3, sizeM: 0.04 } },
+    });
+    expect(() => parseProcedure({ ...base, objects: [marked('cup_a'), marked('cup_b')] })).toThrow(
+      /marker 3 is used by both "cup_a" and "cup_b"/,
+    );
+  });
+});
+
+describe('object-centric checks', () => {
+  it('references both the moving object and its target', () => {
+    const p = parseProcedure(
+      withStep({ success: { type: 'object_near', object: 'cup_b', target: 'cup_a' } }),
+    );
+    const success = p.steps[0]?.success;
+    expect(success).toEqual({
+      type: 'object_near',
+      object: 'cup_b',
+      target: 'cup_a',
+      radius: 0.06,
+      dwellMs: 500,
+    });
+    expect(success && checkObjectRefs(success)).toEqual(['cup_b', 'cup_a']);
+  });
+
+  it('rejects an undeclared target object', () => {
+    const bad = withStep({ success: { type: 'object_near', object: 'cup_a', target: 'sink' } });
+    expect(() => parseProcedure(bad)).toThrow(/sink/);
   });
 });

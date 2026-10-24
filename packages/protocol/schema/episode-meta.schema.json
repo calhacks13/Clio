@@ -138,6 +138,7 @@
           "type": "string",
           "enum": [
             "pinch_two_corners",
+            "workspace_marker",
             "persisted_anchor",
             "default_in_front",
             "none"
@@ -220,6 +221,7 @@
             "enum": [
               "layout",
               "pinch",
+              "marker",
               "detector",
               "manual"
             ]

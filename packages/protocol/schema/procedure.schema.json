@@ -46,6 +46,58 @@
           "maxItems": 2,
           "description": "[width along +x, depth along -z] in meters"
         },
+        "marker": {
+          "description": "Taped at the origin corner, axes aligned with the workspace; enables marker calibration",
+          "type": "object",
+          "properties": {
+            "family": {
+              "default": "aruco_4x4_50",
+              "type": "string",
+              "enum": [
+                "aruco_4x4_50",
+                "apriltag_36h11"
+              ]
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "sizeM": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 0.5,
+              "description": "Printed black-square edge length in meters"
+            },
+            "offset": {
+              "default": [
+                0,
+                0,
+                0
+              ],
+              "description": "The object's reference point in the marker frame (meters)",
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "items": false,
+              "minItems": 3,
+              "maxItems": 3
+            }
+          },
+          "required": [
+            "id",
+            "sizeM"
+          ]
+        },
         "notes": {
           "type": "string"
         }
@@ -88,6 +140,11 @@
             "type": "number",
             "exclusiveMinimum": 0,
             "maximum": 0.5
+          },
+          "hidden": {
+            "default": false,
+            "description": "Not drawn; used only by checks (e.g. mistake zones)",
+            "type": "boolean"
           },
           "placement": {
             "oneOf": [
@@ -141,6 +198,74 @@
                 "description": "The user registers it by pinching at it during setup."
               }
             ]
+          },
+          "tracking": {
+            "type": "object",
+            "properties": {
+              "marker": {
+                "type": "object",
+                "properties": {
+                  "family": {
+                    "default": "aruco_4x4_50",
+                    "type": "string",
+                    "enum": [
+                      "aruco_4x4_50",
+                      "apriltag_36h11"
+                    ]
+                  },
+                  "id": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "sizeM": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 0.5,
+                    "description": "Printed black-square edge length in meters"
+                  },
+                  "offset": {
+                    "default": [
+                      0,
+                      0,
+                      0
+                    ],
+                    "description": "The object's reference point in the marker frame (meters)",
+                    "type": "array",
+                    "prefixItems": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ],
+                    "items": false,
+                    "minItems": 3,
+                    "maxItems": 3
+                  }
+                },
+                "required": [
+                  "id",
+                  "sizeM"
+                ],
+                "description": "A printed fiducial stuck to the object (or taped at the workspace origin)."
+              },
+              "query": {
+                "description": "Open-vocabulary detector prompt, e.g. \"white paper cup with a big letter A\"",
+                "type": "string",
+                "minLength": 1
+              },
+              "moves": {
+                "default": false,
+                "description": "Expected to move during the task, so it is tracked continuously",
+                "type": "boolean"
+              }
+            },
+            "description": "How the camera can find this object. Without it the object stays where placed."
           }
         },
         "required": [
@@ -412,6 +537,43 @@
             "type"
           ],
           "description": "A point on the hand is at least `height` meters above the workspace surface."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "object_near"
+            },
+            "object": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+              "description": "The (usually tracked, moving) object"
+            },
+            "target": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+              "description": "Where it should be, e.g. a cup or a bottle"
+            },
+            "radius": {
+              "default": 0.06,
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 0.5
+            },
+            "dwellMs": {
+              "default": 500,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "type",
+            "object",
+            "target"
+          ],
+          "description": "One object's reference point stays within `radius` of another's (needs tracking)."
         },
         {
           "type": "object",

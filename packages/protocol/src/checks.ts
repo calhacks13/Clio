@@ -49,6 +49,16 @@ export const LiftCheckSchema = z
   })
   .describe('A point on the hand is at least `height` meters above the workspace surface.');
 
+export const ObjectNearCheckSchema = z
+  .object({
+    type: z.literal('object_near'),
+    object: SlugSchema.describe('The (usually tracked, moving) object'),
+    target: SlugSchema.describe('Where it should be, e.g. a cup or a bottle'),
+    radius: radius(0.06),
+    dwellMs: dwell(500),
+  })
+  .describe("One object's reference point stays within `radius` of another's (needs tracking).");
+
 export const ConfirmCheckSchema = z
   .object({
     type: z.literal('confirm'),
@@ -67,9 +77,16 @@ export const ElapsedCheckSchema = z
 export type PinchNearCheck = z.output<typeof PinchNearCheckSchema>;
 export type HandNearCheck = z.output<typeof HandNearCheckSchema>;
 export type LiftCheck = z.output<typeof LiftCheckSchema>;
+export type ObjectNearCheck = z.output<typeof ObjectNearCheckSchema>;
 export type ConfirmCheck = z.output<typeof ConfirmCheckSchema>;
 export type ElapsedCheck = z.output<typeof ElapsedCheckSchema>;
-export type LeafCheck = PinchNearCheck | HandNearCheck | LiftCheck | ConfirmCheck | ElapsedCheck;
+export type LeafCheck =
+  | PinchNearCheck
+  | HandNearCheck
+  | LiftCheck
+  | ObjectNearCheck
+  | ConfirmCheck
+  | ElapsedCheck;
 
 export type CompositeCheck =
   | { type: 'all'; of: Check[] }
@@ -85,6 +102,7 @@ export type CheckInput =
   | z.input<typeof PinchNearCheckSchema>
   | z.input<typeof HandNearCheckSchema>
   | z.input<typeof LiftCheckSchema>
+  | z.input<typeof ObjectNearCheckSchema>
   | z.input<typeof ConfirmCheckSchema>
   | z.input<typeof ElapsedCheckSchema>
   | CompositeCheckInput;
@@ -95,6 +113,7 @@ export const CheckSchema: z.ZodType<Check, CheckInput> = z
       PinchNearCheckSchema,
       HandNearCheckSchema,
       LiftCheckSchema,
+      ObjectNearCheckSchema,
       ConfirmCheckSchema,
       ElapsedCheckSchema,
       AllCheckSchema,
@@ -119,6 +138,7 @@ export const CHECK_TYPES = [
   'pinch_near',
   'hand_near',
   'lift',
+  'object_near',
   'confirm',
   'elapsed',
   'all',
@@ -131,6 +151,7 @@ export function checkObjectRefs(check: Check): string[] {
   const seen = new Set<string>();
   const visit = (c: Check): void => {
     if ('object' in c) seen.add(c.object);
+    if ('target' in c) seen.add(c.target);
     if ('of' in c) for (const child of c.of) visit(child);
   };
   visit(check);

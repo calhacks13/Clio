@@ -26,6 +26,7 @@ data/
 │   ├── meta.json        EpisodeMeta: written once when the episode is created
 │   ├── frames.ndjson    one FrameRecord per line, in time order
 │   ├── events.ndjson    one EpisodeEvent per line, in time order
+│   ├── objects.ndjson   one ObjectTrackRecord per tracker update, in time order
 │   ├── finish.json      EpisodeFinish: written when the headset finishes the episode
 │   ├── batches.json     server bookkeeping: received batch seqs (for idempotency and gap reports)
 │   └── media/<name>     optional uploads, e.g. egocentric.webm (see media.started events)
@@ -87,6 +88,33 @@ Every event has `t` and `type`.
 | `media.started`                             | `name, mimeType`                                                   | aligns `media/<name>` with `t`                                             |
 | `annotation`                                | `label, data?`                                                     | free-form labels (an escape hatch, so you don't have to change the schema) |
 
+## `objects.ndjson`: `ObjectTrackRecord` (one per tracker update, typically 5–30 Hz)
+
+```json
+{
+  "t": 1250.0,
+  "objects": [
+    {
+      "id": "syringe",
+      "position": [0.21, 0.05, -0.1],
+      "orientation": [0, 0, 0, 1],
+      "confidence": 0.92,
+      "source": "marker"
+    }
+  ]
+}
+```
+
+- Each line lists the objects whose estimate **changed** in that update. To reconstruct the state at
+  time `t`, start from `meta.objects` and apply every line up to `t`.
+- `position` is the object's reference point (rim center, bottle mouth, tool tip) in `W`.
+- `orientation` is set only for marker-tracked objects; it's `null` for detector or layout estimates.
+- `source` is one of `layout`, `pinch`, `marker`, `detector` or `manual`. `confidence` is in 0..1.
+
+Marker frame (used by `tracking.marker.offset` in procedures): the origin is the marker's center,
++x points to the marker's right, +y toward its top edge, and +z comes out of the printed face toward
+the viewer. Meters.
+
 ## `finish.json`: `EpisodeFinish`
 
 `{ durationMs, outcome (completed|aborted|interrupted), stepsCompleted, stepsTotal, batches }`. If
@@ -95,7 +123,7 @@ Every event has `t` and `type`.
 ## Ingest protocol (headset → server)
 
 1. `POST /api/episodes` with the meta minus `episodeId` and `createdAt`. The response is `{ episodeId }`.
-2. `POST /api/episodes/:id/batches` with `{ seq, frames, events }`. `seq` starts at 0 and goes
+2. `POST /api/episodes/:id/batches` with `{ seq, frames, events, objects }`. `seq` starts at 0 and goes
    up by one. The headset sends batches one at a time and in order, retrying until each is
    acknowledged. The server appends in arrival order. A repeated `seq` returns
    `{ ok: true, duplicate: true }` and is not appended twice.
