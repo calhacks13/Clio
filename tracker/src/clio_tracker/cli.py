@@ -13,6 +13,7 @@ from pathlib import Path
 from . import __version__
 from .bench import valid_box
 from .config import HOST, MODELS, ConfigError, Settings, load_settings, model_name
+from .segment import SEGMENTERS
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -55,6 +56,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         p.add_argument("--backend", choices=["auto", "coreml", "torch"])
         p.add_argument("--device", help="torch device: auto, mps, cuda or cpu")
+        p.add_argument(
+            "--segmenter",
+            choices=["auto", "none", *SEGMENTERS],
+            help="what cuts the outline: SAM 2.1 small or large, or none for YOLOE's own mask",
+        )
     for p in (parser, serve):
         p.add_argument("--port", type=int, help="8790 by default, which Clio's server expects")
         p.add_argument(
@@ -72,7 +78,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ConfigError as e:
         print(f"clio-tracker: {e}", file=sys.stderr)
         return 1
-    overrides = {k: getattr(args, k, None) for k in ("model", "backend", "device", "port")}
+    overrides = {
+        k: getattr(args, k, None) for k in ("model", "backend", "device", "segmenter", "port")
+    }
     settings = Settings(**{**settings.__dict__, **{k: v for k, v in overrides.items() if v}})
     return getattr(args, "run", _serve)(settings, args)
 

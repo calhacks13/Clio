@@ -15,6 +15,8 @@ dependencies = [
     "uvicorn>=0.30",
     "httpx>=0.28",
     "pillow>=11",
+    # SAM 2.1 (Sam2Model) cuts the glow's outline; see segment.py.
+    "transformers>=5.20,<6",
     # uvicorn's WebSocket support for /track.
     "websockets>=13",
 ]
@@ -36,7 +38,7 @@ build-backend = "uv_build"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
-markers = ["model: loads the real YOLOE-26 weights (downloaded on first use)"]
+markers = ["model: loads real model weights, YOLOE-26 or SAM 2.1 (downloaded on first use)"]
 
 [tool.ruff]
 line-length = 100

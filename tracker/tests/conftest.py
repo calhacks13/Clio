@@ -24,6 +24,7 @@ from PIL import Image
 from clio_tracker.geometry import Letterbox, Shape, iou
 from clio_tracker.identify import FrameImage, Identification, Query
 from clio_tracker.jev import JevClient
+from clio_tracker.segment import SegEncoding
 from clio_tracker.vision import Encoding, MaskCrop
 
 W, H = 960, 720
@@ -135,6 +136,25 @@ class FakeVision:
         return found, self.shape(enc, i, found)
 
 
+class FakeSegmenter:
+    """Stands in for SAM 2.1: every box is its own mask, filled, at one frame pixel per mask
+    pixel. Records every `mask_in_box` call as (frame width, frame height, box)."""
+
+    name = "fake-segmenter"
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, int, tuple]] = []
+
+    def encode(self, rgb: np.ndarray) -> SegEncoding:
+        return SegEncoding(rgb.shape[1], rgb.shape[0], None)
+
+    def mask_in_box(self, enc: SegEncoding, box: np.ndarray) -> MaskCrop:
+        self.calls.append((enc.width, enc.height, tuple(box)))
+        x1, y1, x2, y2 = (float(v) for v in box)
+        rows, cols = max(1, int(np.ceil(y2 - y1))), max(1, int(np.ceil(x2 - x1)))
+        return MaskCrop(np.full((rows, cols), 10.0, np.float32), (x1, y1), 1.0)
+
+
 class FakeIdentifier:
     """Answers from a script: each call pops the next {id: (present, normalized box)}."""
 
@@ -203,6 +223,11 @@ def norm_box(box) -> tuple[float, float, float, float]:
 @pytest.fixture
 def vision() -> FakeVision:
     return FakeVision()
+
+
+@pytest.fixture
+def segmenter() -> FakeSegmenter:
+    return FakeSegmenter()
 
 
 @pytest.fixture(autouse=True)
