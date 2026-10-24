@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "clio.clip/1"
+    },
+    "clipId": {
+      "type": "string"
+    },
+    "procedureId": {
+      "type": "string"
+    },
+    "procedureVersion": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "stepId": {
+      "type": "string"
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "episodeId": {
+          "type": "string"
+        },
+        "startT": {
+          "type": "number",
+          "minimum": 0
+        },
+        "endT": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "episodeId",
+        "startT",
+        "endT"
+      ],
+      "additionalProperties": false
+    },
+    "durationMs": {
+      "type": "number",
+      "minimum": 0
+    },
+    "frames": {
+      "minItems": 2,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "t": {
+            "type": "number",
+            "minimum": 0,
+            "description": "ms since clip start"
+          },
+          "left": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "joints": {
+                    "minItems": 200,
+                    "maxItems": 200,
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    },
+                    "description": "25 joints × [px, py, pz, qx, qy, qz, qw, radius], WebXR joint order, workspace frame"
+                  },
+                  "pinch": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Thumb-tip to index-tip distance in meters; the gripper-aperture proxy"
+                  }
+                },
+                "required": [
+                  "joints",
+                  "pinch"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "right": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "joints": {
+                    "minItems": 200,
+                    "maxItems": 200,
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    },
+                    "description": "25 joints × [px, py, pz, qx, qy, qz, qw, radius], WebXR joint order, workspace frame"
+                  },
+                  "pinch": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Thumb-tip to index-tip distance in meters; the gripper-aperture proxy"
+                  }
+                },
+                "required": [
+                  "joints",
+                  "pinch"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "t",
+          "left",
+          "right"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "clipId",
+    "procedureId",
+    "procedureVersion",
+    "stepId",
+    "source",
+    "durationMs",
+    "frames"
+  ],
+  "additionalProperties": false,
+  "$id": "https://clio.dev/schema/demo-clip.schema.json",
+  "title": "Clio demo clip"
+}

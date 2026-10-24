@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "t": {
+      "type": "number",
+      "minimum": 0,
+      "description": "ms since episode start"
+    },
+    "head": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "items": false,
+      "minItems": 7,
+      "maxItems": 7,
+      "description": "Viewer pose, workspace frame"
+    },
+    "left": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "joints": {
+              "minItems": 200,
+              "maxItems": 200,
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "description": "25 joints × [px, py, pz, qx, qy, qz, qw, radius], WebXR joint order, workspace frame"
+            },
+            "pinch": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Thumb-tip to index-tip distance in meters; the gripper-aperture proxy"
+            }
+          },
+          "required": [
+            "joints",
+            "pinch"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "right": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "joints": {
+              "minItems": 200,
+              "maxItems": 200,
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "description": "25 joints × [px, py, pz, qx, qy, qz, qw, radius], WebXR joint order, workspace frame"
+            },
+            "pinch": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Thumb-tip to index-tip distance in meters; the gripper-aperture proxy"
+            }
+          },
+          "required": [
+            "joints",
+            "pinch"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "t",
+    "head",
+    "left",
+    "right"
+  ],
+  "additionalProperties": false,
+  "$id": "https://clio.dev/schema/frame-record.schema.json",
+  "title": "Clio frames.ndjson line"
+}

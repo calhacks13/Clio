@@ -1,0 +1,320 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "clio.episode/1"
+    },
+    "episodeId": {
+      "type": "string"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "learn",
+        "record_demo",
+        "free"
+      ]
+    },
+    "procedure": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "title"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "operator": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": [
+            "learner",
+            "expert",
+            "collector"
+          ]
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "role"
+      ],
+      "additionalProperties": false
+    },
+    "clock": {
+      "type": "object",
+      "properties": {
+        "timeline": {
+          "type": "string",
+          "const": "performance.now"
+        },
+        "startEpochMs": {
+          "type": "number",
+          "description": "Wall-clock ms at t = 0"
+        }
+      },
+      "required": [
+        "timeline",
+        "startEpochMs"
+      ],
+      "additionalProperties": false
+    },
+    "space": {
+      "type": "object",
+      "properties": {
+        "frame": {
+          "type": "string",
+          "const": "workspace"
+        },
+        "units": {
+          "type": "string",
+          "const": "m"
+        },
+        "upAxis": {
+          "type": "string",
+          "const": "+y"
+        },
+        "worldFromWorkspace": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "items": false,
+          "minItems": 7,
+          "maxItems": 7,
+          "description": "Workspace pose in WebXR local-floor space"
+        },
+        "calibration": {
+          "type": "string",
+          "enum": [
+            "pinch_two_corners",
+            "persisted_anchor",
+            "default_in_front",
+            "none"
+          ]
+        },
+        "anchored": {
+          "type": "boolean",
+          "description": "Workspace pose tracked by a WebXR anchor"
+        }
+      },
+      "required": [
+        "frame",
+        "units",
+        "upAxis",
+        "worldFromWorkspace",
+        "calibration",
+        "anchored"
+      ],
+      "additionalProperties": false
+    },
+    "hands": {
+      "type": "object",
+      "properties": {
+        "joints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Joint order used by HandSample.joints"
+        },
+        "jointFields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Values per joint"
+        }
+      },
+      "required": [
+        "joints",
+        "jointFields"
+      ],
+      "additionalProperties": false
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "position": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "items": false,
+            "minItems": 3,
+            "maxItems": 3,
+            "description": "[x, y, z] in meters"
+          },
+          "radius": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "layout",
+              "pinch",
+              "detector",
+              "manual"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "position",
+          "radius",
+          "method"
+        ],
+        "additionalProperties": false
+      },
+      "description": "Object placements when the episode started"
+    },
+    "coach": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "gemini",
+            "scripted",
+            "none"
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "transport": {
+          "type": "string",
+          "enum": [
+            "relay",
+            "direct"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "device": {
+      "type": "object",
+      "properties": {
+        "userAgent": {
+          "type": "string"
+        },
+        "emulated": {
+          "type": "boolean"
+        },
+        "xrFeatures": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "userAgent",
+        "emulated",
+        "xrFeatures"
+      ],
+      "additionalProperties": false
+    },
+    "app": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "version"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema",
+    "episodeId",
+    "createdAt",
+    "mode",
+    "procedure",
+    "operator",
+    "clock",
+    "space",
+    "hands",
+    "objects",
+    "coach",
+    "device",
+    "app"
+  ],
+  "additionalProperties": false,
+  "$id": "https://clio.dev/schema/episode-meta.schema.json",
+  "title": "Clio episode meta.json"
+}

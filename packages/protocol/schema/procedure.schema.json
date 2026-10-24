@@ -1,0 +1,529 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "clio.procedure/1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+    },
+    "version": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "domain": {
+      "type": "string"
+    },
+    "workspace": {
+      "type": "object",
+      "properties": {
+        "size": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[width along +x, depth along -z] in meters"
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "size"
+      ]
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Spoken and displayed name, e.g. \"cup A\""
+          },
+          "kind": {
+            "default": "item",
+            "type": "string",
+            "enum": [
+              "point",
+              "item",
+              "container",
+              "tool",
+              "region"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "radius": {
+            "default": 0.03,
+            "description": "Approximate size in meters",
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 0.5
+          },
+          "placement": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "method": {
+                    "type": "string",
+                    "const": "layout"
+                  },
+                  "position": {
+                    "type": "array",
+                    "prefixItems": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ],
+                    "items": false,
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "description": "Fixed position in the workspace frame (meters)"
+                  }
+                },
+                "required": [
+                  "method",
+                  "position"
+                ],
+                "description": "Placed automatically from the layout, e.g. a dot on a taped outline."
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "method": {
+                    "type": "string",
+                    "const": "register"
+                  },
+                  "prompt": {
+                    "description": "e.g. \"Touch the vinegar bottle and pinch\"",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "method"
+                ],
+                "description": "The user registers it by pinching at it during setup."
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "placement"
+        ]
+      }
+    },
+    "steps": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+          },
+          "instruction": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Imperative sentence, spoken and shown. This is the language label for the step."
+          },
+          "detail": {
+            "type": "string"
+          },
+          "targets": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+            }
+          },
+          "hand": {
+            "default": "either",
+            "type": "string",
+            "enum": [
+              "left",
+              "right",
+              "either",
+              "both"
+            ]
+          },
+          "success": {
+            "$ref": "#/$defs/Check"
+          },
+          "mistakes": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+                  "description": "Machine label, e.g. \"wrong_cup\""
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "The correction, e.g. \"That is cup B. Vinegar goes in A.\""
+                },
+                "when": {
+                  "$ref": "#/$defs/Check"
+                },
+                "cooldownMs": {
+                  "default": 4000,
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "kind",
+                "message",
+                "when"
+              ]
+            }
+          },
+          "demo": {
+            "description": "Override the default clip id \"<procedureId>/<stepId>\"",
+            "type": "object",
+            "properties": {
+              "clipId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "clipId"
+            ]
+          },
+          "coachNotes": {
+            "type": "string"
+          },
+          "stuckAfterMs": {
+            "description": "Nudge the coach after this long",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "id",
+          "instruction",
+          "success"
+        ]
+      }
+    },
+    "coach": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "persona": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "id",
+    "version",
+    "title",
+    "summary",
+    "workspace",
+    "objects",
+    "steps"
+  ],
+  "$defs": {
+    "Check": {
+      "description": "A success condition or mistake trigger",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "pinch_near"
+            },
+            "object": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+            },
+            "hand": {
+              "default": "either",
+              "type": "string",
+              "enum": [
+                "left",
+                "right",
+                "either"
+              ]
+            },
+            "radius": {
+              "default": 0.04,
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 0.5
+            },
+            "dwellMs": {
+              "default": 0,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "type",
+            "object"
+          ],
+          "description": "The hand is pinching and its pinch point is within `radius` of the object."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "hand_near"
+            },
+            "object": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+            },
+            "hand": {
+              "default": "either",
+              "type": "string",
+              "enum": [
+                "left",
+                "right",
+                "either"
+              ]
+            },
+            "point": {
+              "default": "pinch",
+              "type": "string",
+              "enum": [
+                "pinch",
+                "index_tip",
+                "thumb_tip",
+                "palm",
+                "wrist"
+              ]
+            },
+            "radius": {
+              "default": 0.06,
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 0.5
+            },
+            "dwellMs": {
+              "default": 250,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "type",
+            "object"
+          ],
+          "description": "A point on the hand stays within `radius` of the object for `dwellMs`."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "lift"
+            },
+            "hand": {
+              "default": "either",
+              "type": "string",
+              "enum": [
+                "left",
+                "right",
+                "either"
+              ]
+            },
+            "point": {
+              "default": "wrist",
+              "type": "string",
+              "enum": [
+                "pinch",
+                "index_tip",
+                "thumb_tip",
+                "palm",
+                "wrist"
+              ]
+            },
+            "height": {
+              "default": 0.15,
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 1.5
+            },
+            "dwellMs": {
+              "default": 200,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "description": "A point on the hand is at least `height` meters above the workspace surface."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "confirm"
+            },
+            "by": {
+              "default": "either",
+              "type": "string",
+              "enum": [
+                "coach",
+                "user",
+                "either"
+              ]
+            },
+            "prompt": {
+              "description": "What must be verified, e.g. \"cup A turned pink\"",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "description": "Satisfied when the coach or user confirms (advance_step), e.g. visual judgments."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "elapsed"
+            },
+            "ms": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "type",
+            "ms"
+          ],
+          "description": "Satisfied once the step has been active for `ms`."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "all"
+            },
+            "of": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Check"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "of"
+          ],
+          "description": "Every child is satisfied in the same frame."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "any"
+            },
+            "of": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Check"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "of"
+          ],
+          "description": "At least one child is satisfied."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "sequence"
+            },
+            "of": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Check"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "of"
+          ],
+          "description": "Children are satisfied in order; each one latches once it passes."
+        }
+      ]
+    }
+  },
+  "$id": "https://clio.dev/schema/procedure.schema.json",
+  "title": "Clio procedure"
+}
