@@ -26,7 +26,8 @@ export function planRoutes({ planner, procedures, now, logger, limits }: ServerD
     const plan = await generatePlan({ planner, procedures, now }, body);
     const ms = Math.max(0, now().getTime() - started);
     const steps = plan.procedure.steps.length;
-    logger.info(`plan ${plan.planId}: ${steps} steps from "${body.goal}" in ${ms} ms`);
+    const stage = body.stage === 'full' ? '' : ` (stage ${body.stage})`;
+    logger.info(`plan ${plan.planId}${stage}: ${steps} steps from "${body.goal}" in ${ms} ms`);
     return c.json(plan satisfies PlanResponse);
   });
 

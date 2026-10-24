@@ -123,6 +123,8 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message : String
 /** A pinch this close to a placed object is about that object, not a registration. */
 const NEAR_KNOWN_OBJECT_M = 0.08;
 const PLAN_SLOW_MS = 12_000;
+/** Why a stage "rest" request revises the plan, as the planner and the episode see it. */
+const REFINE_REASON = 'Write the outline steps in full while the learner does the first step';
 /** The planner and the step check take goals up to this long. */
 const GOAL_MAX = 300;
 const PLAN_TIMEOUT_MS = 45_000;
@@ -344,6 +346,8 @@ export class LessonController {
       callId?: string;
       /** Announce the plan (plan.ready, with these warnings) once the lesson exists. */
       announce?: string[];
+      /** Announce it as the first stage of a plan, whose outline is being written in full. */
+      outline?: boolean;
       /** The start_lesson this run belongs to; a newer one cancels it. */
       attempt?: number;
     } = {},
@@ -378,6 +382,7 @@ export class LessonController {
         procedure,
         warnings: opts.announce,
         revision: false,
+        ...(opts.outline ? { stage: 'first' as const } : {}),
       });
     }
     this.setPhase('lesson');
@@ -463,8 +468,9 @@ export class LessonController {
   }
 
   async stop(reason: string): Promise<void> {
-    // Give up on a plan in flight rather than waiting for it and starting a lesson nobody sees.
-    if (this.planning || this.draft) {
+    // Give up on a plan in flight rather than waiting for it and starting a lesson nobody sees,
+    // and on the rest of a plan still being written.
+    if (this.planning || this.draft || this.abandons.size > 0) {
       this.planning = null;
       this.draft = null;
       this.attempt++;
@@ -507,8 +513,9 @@ export class LessonController {
             const procedure = adaptTemplate(template, calibrated);
             return { planId: template.id, procedure, warnings: [] };
           }
+          // The first step in full and the rest as an outline, so the lesson starts quickly.
           const images = await this.captureImages();
-          return planner.plan({ goal, ...(context ? { context } : {}), images });
+          return planner.plan({ goal, ...(context ? { context } : {}), images, stage: 'first' });
         })(),
       );
     } catch (err) {
@@ -520,8 +527,18 @@ export class LessonController {
     if (attempt !== this.attempt) return;
     // Still "planning" until the lesson has started, so nothing else starts or edits it meanwhile.
     if (this.planning) this.planning.landed = true;
+    const from = draft.outlineFrom ?? draft.procedure.steps.length;
+    const outline = from < draft.procedure.steps.length;
+    const started = this.run(draft.procedure, draft.planId, {
+      goal,
+      announce: draft.warnings,
+      outline,
+      attempt,
+    });
+    // The outline is written in full at once, while the lesson starts and the learner works.
+    if (outline) this.track(this.refine(draft, { goal, context, from, attempt }, started));
     try {
-      await this.run(draft.procedure, draft.planId, { goal, announce: draft.warnings, attempt });
+      await started;
     } finally {
       if (attempt === this.attempt) this.planning = null;
     }
@@ -533,7 +550,7 @@ export class LessonController {
     attempt: number,
     callId: string | undefined,
   ): Promise<void> {
-    const { bus, clock, planner } = this.deps;
+    const { planner } = this.deps;
     const { procedure, statuses } = runner.state;
     const kept = procedure.steps.filter((s) => statuses[s.id] !== 'todo');
     const todo = procedure.steps.filter((s) => statuses[s.id] === 'todo');
@@ -569,31 +586,128 @@ export class LessonController {
     const fresh = response.procedure.steps
       .slice(kept.length)
       .filter((s) => !(asked.has(s.id) && now[s.id] !== 'todo'));
-    const merged = this.mergeRevision(runner, fresh, response);
+    const done = runner.state.procedure.steps.filter((s) => now[s.id] !== 'todo');
+    const merged = this.mergeRevision(runner, done, fresh, response);
     if (!merged.ok) {
       this.failPlanning(this.goal, merged.error, true);
       return;
     }
+    this.swapPlan(runner, merged.procedure, response, {
+      op: 'revise',
+      label: 'plan.revised',
+      data: { kept: kept.length, reason },
+      details: { reason, ...(callId ? { callId } : {}) },
+      warnings: response.warnings,
+    });
+  }
+
+  /**
+   * Stage rest of a two-stage plan: while the lesson starts and the learner works on the first
+   * step, the planner writes the outline steps in full from fresh camera views. They replace the
+   * outline steps nobody has started; the focused step and finished ones stay as they are. The
+   * refinement is dropped when the plan moved on without it: a new lesson, a re-plan, or the coach
+   * changing the steps itself.
+   */
+  private async refine(
+    draft: PlanResponse,
+    ask: { goal: string; context: string | undefined; from: number; attempt: number },
+    started: Promise<unknown>,
+  ): Promise<void> {
+    const { goal, context, from, attempt } = ask;
+    const outlined = JSON.stringify(draft.procedure.steps);
+    let response: PlanResponse;
+    try {
+      const images = await this.cancellable(this.captureImages());
+      response = await this.cancellable(
+        this.deps.planner.plan({
+          goal,
+          ...(context ? { context } : {}),
+          images,
+          stage: 'rest',
+          revise: {
+            planId: draft.planId,
+            fromStepIndex: from,
+            reason: REFINE_REASON,
+            base: draft.procedure,
+          },
+        }),
+      );
+      await started;
+    } catch (err) {
+      if (attempt === this.attempt) this.refineDropped(errorText(err));
+      return;
+    }
+    const runner = this.activeRunner();
+    if (attempt !== this.attempt || !runner || this.planId !== draft.planId) return;
+    const { procedure, statuses } = runner.state;
+    if (JSON.stringify(procedure.steps) !== outlined) {
+      this.refineDropped('the coach changed the steps meanwhile');
+      return;
+    }
+    const focus = runner.state.step?.id;
+    const kept = procedure.steps.filter(
+      (s, i) => i < from || statuses[s.id] !== 'todo' || s.id === focus,
+    );
+    const keep = new Set(kept.map((s) => s.id));
+    const fresh = response.procedure.steps.slice(from).filter((s) => !keep.has(s.id));
+    const merged = this.mergeRevision(runner, kept, fresh, response);
+    if (!merged.ok) {
+      this.refineDropped(merged.error);
+      return;
+    }
+    const announced = new Set(draft.warnings);
+    this.swapPlan(runner, merged.procedure, response, {
+      op: 'refine',
+      label: 'plan.refined',
+      data: { kept: kept.length },
+      details: { reason: REFINE_REASON },
+      warnings: response.warnings.filter((w) => !announced.has(w)),
+      stage: 'rest',
+    });
+  }
+
+  /** The outline stays as it is: the coach and the learner can work from it. */
+  private refineDropped(reason: string): void {
+    const { bus, clock } = this.deps;
+    bus.emit('annotation', { t: clock.now(), label: 'plan.refine_dropped', data: { reason } });
+  }
+
+  /** Swaps in the planner's plan as one recorded change and announces it to the coach. */
+  private swapPlan(
+    runner: ProcedureRunner,
+    procedure: Procedure,
+    response: PlanResponse,
+    change: {
+      op: 'revise' | 'refine';
+      label: string;
+      data: Record<string, unknown>;
+      details: Record<string, string>;
+      warnings: string[];
+      stage?: 'rest';
+    },
+  ): void {
+    const { bus, clock } = this.deps;
     const t = clock.now();
-    for (const spec of merged.procedure.objects) this.deps.registry.add(spec, t);
+    for (const spec of procedure.objects) this.deps.registry.add(spec, t);
     // One op, so a revision that leaves nothing to do records itself before the lesson finishes.
     this.op(() => {
       bus.emit('annotation', {
         t,
-        label: 'plan.revised',
-        data: { from: this.planId, to: response.planId, kept: kept.length, reason },
+        label: change.label,
+        data: { from: this.planId, to: response.planId, ...change.data },
       });
-      runner.replacePlan(merged.procedure, t);
-      for (const step of merged.procedure.steps) this.usedIds.add(step.id);
+      runner.replacePlan(procedure, t);
+      for (const step of procedure.steps) this.usedIds.add(step.id);
       for (const id of this.notes.keys()) if (!runner.statusOf(id)) this.notes.delete(id);
       this.planId = response.planId;
-      this.changed('revise', 'planner', { reason, ...(callId ? { callId } : {}) });
+      this.changed(change.op, 'planner', change.details);
       bus.emit('plan.ready', {
         t,
         planId: response.planId,
-        procedure: merged.procedure,
-        warnings: response.warnings,
+        procedure,
+        warnings: change.warnings,
         revision: true,
+        ...(change.stage ? { stage: change.stage } : {}),
       });
       return { ok: true, result: null };
     });
@@ -601,18 +715,20 @@ export class LessonController {
   }
 
   /**
-   * The revision lands on the plan as it is now: every step done or skipped meanwhile stays, then
-   * the planner's new steps. A new step never takes an id the lesson used for something else.
+   * A revision lands on the plan as it is now: the `kept` steps stay as they are, then the
+   * planner's new steps replace all the others. A new step never takes an id the lesson used for
+   * something else, but may take the id of a step it replaces.
    */
   private mergeRevision(
     runner: ProcedureRunner,
+    kept: readonly Step[],
     fresh: readonly Step[],
     response: PlanResponse,
   ): { ok: true; procedure: Procedure } | { ok: false; error: string } {
-    const { procedure, statuses } = runner.state;
-    const kept = procedure.steps.filter((s) => statuses[s.id] !== 'todo');
-    const todo = new Set(procedure.steps.filter((s) => statuses[s.id] === 'todo').map((s) => s.id));
-    const taken = new Set([...this.usedIds].filter((id) => !todo.has(id)));
+    const { procedure } = runner.state;
+    const keep = new Set(kept.map((s) => s.id));
+    const replaced = new Set(procedure.steps.filter((s) => !keep.has(s.id)).map((s) => s.id));
+    const taken = new Set([...this.usedIds].filter((id) => !replaced.has(id)));
     const steps = fresh.map((s) => {
       const id = uniqueId(s.id, taken);
       taken.add(id);

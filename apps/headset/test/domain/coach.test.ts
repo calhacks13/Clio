@@ -276,6 +276,35 @@ describe('Narrator', () => {
     expect(out[1]?.text).not.toContain('Caveats');
   });
 
+  it('says a first-stage plan is partly an outline, and shares its refinement quietly', () => {
+    const { b, out } = setup();
+    const recital = recitePlan(planView());
+    b.emit('plan.ready', {
+      t: 0,
+      planId: 'p1',
+      procedure,
+      warnings: [],
+      revision: false,
+      stage: 'first',
+    });
+    b.emit('plan.ready', {
+      t: 1,
+      planId: 'p1-r1',
+      procedure,
+      warnings: ['Cup B is cracked.'],
+      revision: true,
+      stage: 'rest',
+    });
+    expect(out[0]).toMatchObject({ kind: 'plan', reply: false });
+    expect(out[0]?.text).toBe(
+      `[app] Plan ready. ${recital}\nThe steps after the first are an outline; the full plan follows as "Plan refined".`,
+    );
+    expect(out[1]).toMatchObject({ kind: 'plan_refined', reply: false });
+    expect(out[1]?.text).toBe(
+      `[app] Plan refined: the later steps are written in full now. ${recital}\nCaveats: Cup B is cracked.`,
+    );
+  });
+
   it('asks a Gemini coach to write the plan itself when planning fails', () => {
     const trusted = setup({ perception: 'trusted' });
     trusted.b.emit('plan.failed', { t: 0, goal: 'g', error: 'timed out', revision: false });

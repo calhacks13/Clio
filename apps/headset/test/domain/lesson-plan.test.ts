@@ -2,12 +2,13 @@ import {
   type CalibrationMethod,
   type CoachToolArgs,
   type CoachToolName,
+  type PlanRequest,
   type PlanResponse,
   type Procedure,
   parseProcedure,
   type StepCheckRequest,
 } from '@clio/protocol';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ManualClock } from '../../src/core/clock';
 import { Emitter } from '../../src/core/emitter';
 import type { ToolOutcome } from '../../src/domain/coach/toolbox';
@@ -415,6 +416,251 @@ describe('re-planning', () => {
       close: 'todo',
     });
     expect(lesson.currentStep()?.id).toBe('bottle');
+  });
+});
+
+describe('two-stage plans', () => {
+  // Stage first: the first step in full, the others an outline the coach or learner confirms.
+  const outlined = parseProcedure({
+    ...plan,
+    steps: [
+      plan.steps[0],
+      {
+        id: 'pour',
+        instruction: 'Pour fluid into the reservoir.',
+        doneWhen: 'the reservoir is full',
+        targets: ['jug', 'tank'],
+        success: { type: 'confirm', prompt: 'the reservoir is full' },
+      },
+      {
+        id: 'close',
+        instruction: 'Screw the cap back on.',
+        doneWhen: 'the blue cap is on the reservoir',
+        targets: ['cap'],
+        success: { type: 'confirm', prompt: 'the blue cap is on the reservoir' },
+      },
+    ],
+  });
+  const first: PlanResponse = {
+    planId: 'refill-fluid',
+    procedure: outlined,
+    warnings: ['A knife lies next to the jug: keep hands away from it.'],
+    outlineFrom: 1,
+    sightings: [],
+  };
+  // Stage rest: the outline written in full, with a step the outline didn't have.
+  const rest: PlanResponse = {
+    planId: 'refill-fluid-r1',
+    procedure: parseProcedure({
+      ...outlined,
+      id: 'refill-fluid-r1',
+      objects: [
+        ...outlined.objects,
+        {
+          id: 'rag',
+          label: 'rag',
+          placement: { method: 'detect' },
+          tracking: { query: 'blue rag' },
+        },
+      ],
+      steps: [
+        outlined.steps[0],
+        {
+          id: 'pour',
+          instruction: 'Pour the blue fluid into the reservoir.',
+          doneWhen: 'blue fluid reaches the top line of the white reservoir',
+          targets: ['jug', 'tank'],
+          action: { verb: 'pour', object: 'jug', target: 'tank' },
+          show: [{ object: 'jug', phrase: 'fluid jug', description: 'Blue jug of washer fluid' }],
+          success: { type: 'confirm', prompt: 'blue fluid reaches the top line' },
+          mistakes: [
+            {
+              kind: 'wrong_tank',
+              message: 'That is the coolant tank; the washer tank has the windshield symbol.',
+              when: { type: 'hand_near', object: 'cap', dwellMs: 700 },
+            },
+          ],
+        },
+        {
+          id: 'close',
+          instruction: 'Screw the blue cap back on.',
+          doneWhen: 'the blue cap sits flat on the reservoir',
+          targets: ['cap'],
+          success: { type: 'confirm', prompt: 'the blue cap sits flat on the reservoir' },
+        },
+        {
+          id: 'wipe',
+          instruction: 'Wipe any drips off the tank.',
+          doneWhen: 'no blue fluid on the tank',
+          targets: ['rag', 'tank'],
+          success: { type: 'confirm', prompt: 'no blue fluid on the tank' },
+        },
+      ],
+    }),
+    warnings: ['A knife lies next to the jug: keep hands away from it.', 'Wear gloves.'],
+  };
+
+  /**
+   * A planner whose stage rest answers when the test says (at once by default). Only the first
+   * lesson comes in two stages; a re-plan or a later lesson gets the whole plan.
+   */
+  function stagedPlanner({ held = false } = {}) {
+    const requests: PlanRequest[] = [];
+    let answer: (r: PlanResponse) => void = () => {};
+    const later = new Promise<PlanResponse>((r) => (answer = r));
+    if (!held) answer(rest);
+    const planner: LessonPlanner = {
+      plan: async (req) => {
+        requests.push(req);
+        if (req.stage === 'rest') return later;
+        const starts = requests.filter((r) => r.stage === 'first').length;
+        if (req.revise || starts > 1) return { planId: 'whole', procedure: plan, warnings: [] };
+        return first;
+      },
+    };
+    return { planner, requests, answer: (r: PlanResponse = rest) => answer(r) };
+  }
+
+  function watch(bus: ReturnType<typeof setup>['bus']) {
+    const ready: { stage?: string; revision: boolean; warnings: string[] }[] = [];
+    bus.on('plan.ready', ({ stage, revision, warnings }) =>
+      ready.push({ ...(stage ? { stage } : {}), revision, warnings }),
+    );
+    const entered: string[] = [];
+    bus.on('step.entered', ({ stepId }) => entered.push(stepId));
+    return { ready, entered };
+  }
+
+  const ids = (lesson: LessonController) => lesson.procedure?.steps.map((s) => s.id);
+
+  it('starts on the first stage and swaps in the rest without restarting the step', async () => {
+    const staged = stagedPlanner();
+    const { bus, lesson, registry, updates, begin } = setup({ planner: staged.planner });
+    const { ready, entered } = watch(bus);
+    await begin();
+    expect(staged.requests).toEqual([
+      {
+        goal: 'add wiper fluid',
+        images: [{ mimeType: 'image/jpeg', data: 'AAAA' }],
+        stage: 'first',
+      },
+      {
+        goal: 'add wiper fluid',
+        images: [{ mimeType: 'image/jpeg', data: 'AAAA' }],
+        stage: 'rest',
+        revise: {
+          planId: 'refill-fluid',
+          fromStepIndex: 1,
+          reason: 'Write the outline steps in full while the learner does the first step',
+          base: outlined,
+        },
+      },
+    ]);
+    expect(ids(lesson)).toEqual(['open', 'pour', 'close', 'wipe']);
+    expect(lesson.procedure?.steps[1]).toEqual(rest.procedure.steps[1]);
+    expect(lesson.currentStep()?.id).toBe('open');
+    expect(entered).toEqual(['open']);
+    expect(registry.spec('rag')?.label).toBe('rag');
+    expect(ready).toEqual([
+      { stage: 'first', revision: false, warnings: first.warnings },
+      { stage: 'rest', revision: true, warnings: ['Wear gloves.'] },
+    ]);
+    expect(updates().map((u) => [u.op, u.by])).toEqual([
+      ['start', 'planner'],
+      ['refine', 'planner'],
+    ]);
+    expect(lesson.view().plan()?.steps[1]?.instruction).toBe(
+      'Pour the blue fluid into the reservoir.',
+    );
+  });
+
+  it('keeps the steps finished or started while the rest was being written', async () => {
+    const staged = stagedPlanner({ held: true });
+    const { bus, lesson, tool } = setup({ planner: staged.planner });
+    const { entered } = watch(bus);
+    await tool('start_lesson', { goal: 'add wiper fluid' });
+    await vi.waitFor(() => expect(lesson.phase).toBe('lesson'));
+    await tool('complete_step', { step_id: 'open', reason: 'cap off', evidence: 'seen' });
+    expect(lesson.currentStep()?.id).toBe('pour');
+    staged.answer();
+    await lesson.settled();
+    expect(ids(lesson)).toEqual(['open', 'pour', 'close', 'wipe']);
+    expect(lesson.procedure?.steps[1]).toEqual(outlined.steps[1]);
+    expect(lesson.procedure?.steps[2]).toEqual(rest.procedure.steps[2]);
+    expect(lesson.runnerState?.statuses).toEqual({
+      open: 'done',
+      pour: 'todo',
+      close: 'todo',
+      wipe: 'todo',
+    });
+    expect(entered).toEqual(['open', 'pour']);
+  });
+
+  it('drops the rest when the coach changed the steps meanwhile, and says why', async () => {
+    const staged = stagedPlanner({ held: true });
+    const { lesson, tool, annotations } = setup({ planner: staged.planner });
+    await tool('start_lesson', { goal: 'add wiper fluid' });
+    await vi.waitFor(() => expect(lesson.phase).toBe('lesson'));
+    await tool('add_step', { text: 'Check the level.', done_when: 'fluid at the line' });
+    staged.answer();
+    await lesson.settled();
+    expect(ids(lesson)).toEqual(['open', 'pour', 'close', 'check-the-level']);
+    expect(annotations.filter((a) => a.label === 'plan.refine_dropped')).toEqual([
+      { label: 'plan.refine_dropped', data: { reason: 'the coach changed the steps meanwhile' } },
+    ]);
+  });
+
+  it('keeps the outline, quietly, when the rest cannot be written', async () => {
+    const { bus, lesson, annotations, begin } = setup({
+      planner: {
+        plan: async (req) => {
+          if (req.stage === 'rest') throw new Error('quota exceeded');
+          return first;
+        },
+      },
+    });
+    const { ready } = watch(bus);
+    await begin();
+    expect(lesson.procedure?.steps).toEqual(outlined.steps);
+    expect(lesson.phase).toBe('lesson');
+    expect(ready.map((r) => r.stage)).toEqual(['first']);
+    expect(annotations.filter((a) => a.label === 'plan.refine_dropped')).toEqual([
+      { label: 'plan.refine_dropped', data: { reason: 'quota exceeded' } },
+    ]);
+  });
+
+  it('drops the rest after a re-plan or a new lesson, and never waits for it to stop', async () => {
+    const replanned = stagedPlanner({ held: true });
+    const a = setup({ planner: replanned.planner });
+    await a.tool('start_lesson', { goal: 'add wiper fluid' });
+    await vi.waitFor(() => expect(a.lesson.phase).toBe('lesson'));
+    expect(a.result(await a.tool('revise_plan', { reason: 'no jug' }))).toEqual({
+      status: 'replanning',
+    });
+    await vi.waitFor(() => expect(a.updates().at(-1)?.op).toBe('revise'));
+    replanned.answer();
+    await a.lesson.settled();
+    expect(ids(a.lesson)).toEqual(['open', 'pour', 'close']);
+    expect(a.lesson.procedure?.steps[1]).toEqual(plan.steps[1]);
+
+    const restarted = stagedPlanner({ held: true });
+    const b = setup({ planner: restarted.planner });
+    await b.tool('start_lesson', { goal: 'add wiper fluid' });
+    await vi.waitFor(() => expect(b.lesson.phase).toBe('lesson'));
+    await b.tool('start_lesson', { goal: 'add wiper fluid again' });
+    restarted.answer();
+    await b.lesson.settled();
+    expect(ids(b.lesson)).toEqual(['open', 'pour', 'close']);
+    expect(b.updates().map((u) => u.op)).toEqual(['start', 'start']);
+
+    const stopped = stagedPlanner({ held: true });
+    const c = setup({ planner: stopped.planner });
+    await c.tool('start_lesson', { goal: 'add wiper fluid' });
+    await vi.waitFor(() => expect(c.lesson.phase).toBe('lesson'));
+    await c.lesson.stop('headset off');
+    stopped.answer();
+    await c.lesson.settled();
+    expect(ids(c.lesson)).toEqual(['open', 'pour', 'close']);
   });
 });
 

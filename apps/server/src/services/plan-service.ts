@@ -1,6 +1,7 @@
 import {
   type PlanRequestSchema,
   type PlanResponse,
+  type PlanSighting,
   type Procedure,
   safeParseProcedure,
 } from '@clio/protocol';
@@ -9,7 +10,12 @@ import { ApiError, notFound, upstreamFailed } from '../errors';
 import { describeError } from '../log';
 import type { ProcedureStore } from '../storage/procedure-store';
 import { parseModelJson } from './model-json';
-import { buildPlanCandidate, type Candidate, mergeRevision } from './plan-build';
+import {
+  buildFirstStageCandidate,
+  buildPlanCandidate,
+  type Candidate,
+  mergeRevision,
+} from './plan-build';
 import { goalIdCandidates, revisionIdCandidates, slugFromGoal } from './plan-ids';
 import type { Planner, PlannerRequest } from './planner';
 
@@ -17,6 +23,10 @@ import type { Planner, PlannerRequest } from './planner';
 // readable errors, and store the plan under a fresh id. Revisions keep the steps already done or
 // skipped, of the plan as the headset sends it (`revise.base`, with the coach's edits) or as
 // stored. The draft and its retry share one time budget.
+//
+// A plan comes whole (stage full) or in two stages: stage first writes the first step in full and
+// the rest as an outline, so the lesson starts quickly; stage rest then writes the outline in full
+// as a revision of that plan, while the learner works on the first step (docs/coach-plan.md).
 
 export type PlanRequestBody = z.output<typeof PlanRequestSchema>;
 
@@ -33,32 +43,59 @@ export interface PlanServiceDeps {
  * coach's call, which also covers capturing and uploading the camera views), so this answers first.
  */
 export const PLAN_BUDGET_MS = 40_000;
+/** Stage rest: nobody waits for it, so it has time to think and still retry. */
+export const REST_BUDGET_MS = 60_000;
 /** With less of the budget left than this, an invalid draft fails instead of being retried. */
 export const MIN_RETRY_MS = 10_000;
 
-type Checked =
-  | { ok: true; procedure: Procedure; warnings: string[] }
-  | { ok: false; error: string };
+interface Drafted {
+  procedure: Procedure;
+  warnings: string[];
+  sightings: PlanSighting[];
+  outlineFrom?: number;
+}
+
+type Checked = ({ ok: true } & Drafted) | { ok: false; error: string };
 
 export async function generatePlan(
   deps: PlanServiceDeps,
   body: PlanRequestBody,
 ): Promise<PlanResponse> {
   const { planner, procedures } = deps;
+  const { stage } = body;
+  if (stage === 'rest' && !body.revise) {
+    throw new ApiError(400, 'invalid_stage', 'Stage "rest" needs revise: the plan to write out');
+  }
+  if (stage === 'first' && body.revise) {
+    throw new ApiError(400, 'invalid_stage', 'Stage "first" starts a plan; it cannot revise one');
+  }
   const started = deps.now();
   const createdAt = started.toISOString();
-  const deadline = started.getTime() + (deps.budgetMs ?? PLAN_BUDGET_MS);
+  const budget = deps.budgetMs ?? (stage === 'rest' ? REST_BUDGET_MS : PLAN_BUDGET_MS);
+  const deadline = started.getTime() + budget;
   const timeLeft = () => deadline - deps.now().getTime();
   const request: PlannerRequest = { goal: body.goal, images: body.images };
   if (body.context) request.context = body.context;
+  if (stage !== 'full') request.stage = stage;
 
   if (!body.revise) {
-    const ctx = { id: slugFromGoal(body.goal), goal: body.goal, model: planner.model, createdAt };
-    const draft = await draftValidPlan(planner, request, timeLeft, (output) =>
-      buildPlanCandidate(output, ctx),
-    );
+    const ctx = {
+      id: slugFromGoal(body.goal),
+      goal: body.goal,
+      model: planner.model,
+      createdAt,
+      views: body.images.length,
+    };
+    const build = stage === 'first' ? buildFirstStageCandidate : buildPlanCandidate;
+    const draft = await draftValidPlan(planner, request, timeLeft, (output) => build(output, ctx));
     const saved = await procedures.savePlan(draft.procedure, goalIdCandidates(ctx.id));
-    return { planId: saved.id, procedure: saved, warnings: draft.warnings };
+    return {
+      planId: saved.id,
+      procedure: saved,
+      warnings: draft.warnings,
+      ...(draft.outlineFrom === undefined ? {} : { outlineFrom: draft.outlineFrom }),
+      sightings: draft.sightings,
+    };
   }
 
   const { planId, fromStepIndex, reason, skippedStepIds = [] } = body.revise;
@@ -93,7 +130,7 @@ async function draftValidPlan(
   request: PlannerRequest,
   timeLeft: () => number,
   build: (output: unknown) => Candidate,
-): Promise<{ procedure: Procedure; warnings: string[] }> {
+): Promise<Drafted> {
   const first = await ask(planner, { ...request, timeoutMs: timeLeft() });
   const checked = check(first, build);
   if (checked.ok) return checked;
@@ -121,10 +158,10 @@ async function draftValidPlan(
 function check(text: string, build: (output: unknown) => Candidate): Checked {
   const json = parseModelJson(text);
   if (!json.ok) return json;
-  const { candidate, warnings } = build(json.value);
+  const { candidate, ...beside } = build(json.value);
   const parsed = safeParseProcedure(candidate);
   return parsed.ok
-    ? { ok: true, procedure: parsed.procedure, warnings }
+    ? { ok: true, procedure: parsed.procedure, ...beside }
     : { ok: false, error: parsed.error };
 }
 

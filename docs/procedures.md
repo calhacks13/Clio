@@ -10,6 +10,12 @@ start a lesson from one (`start_lesson` with `template_id`). Both use the same s
 (a step can't target an object that wasn't declared). Whoever wrote the first draft, the coach
 edits the plan as the lesson goes ([coach-plan.md](coach-plan.md)).
 
+The planner writes a lesson in two stages, so it can start quickly. The first stage's plan has
+its first step in full and the others as an outline: an instruction, a `doneWhen`, the `targets`
+and a `confirm` check whose prompt is the `doneWhen`, with nothing to `show` yet. While the
+learner does the first step, the second stage rewrites the outline steps in full as a revision
+(`<id>-r1`, `origin.revisionOf`). Both are ordinary procedures.
+
 To get editor autocomplete, add `"$schema": "../packages/protocol/schema/procedure.schema.json"`.
 `pnpm test` validates every file in `procedures/`.
 
@@ -120,6 +126,9 @@ completion against it, and so does the step watcher, which sends a camera frame 
 - Name real things by how they look and where they are. The camera doesn't see AR dots or
   outlines: write "the left hand pinches the near shoulder, halfway between the collar and the
   sleeve seam", not "at the shoulder dot".
+- Say what tells the right object apart from a look-alike in view, so the look-alike can't pass:
+  "the small bottle with the pink cap and the DRINKING YOGURT label is in the learner's hand",
+  not "the learner has the drink" (which the milk beside it would pass too).
 - Write steps so each one ends in a visible state. When it can't be seen (a click, work out of
   view), say what the learner will notice, so the coach can ask.
 - A `confirm` check's `prompt` says the same thing as `doneWhen`.
@@ -176,7 +185,8 @@ coach, `record_demo`, or while the Gemini connection is down) checks see every p
 A mistake fires on its rising edge, then waits `cooldownMs` before it can fire again. It's recorded
 as `mistake.detected`, and the coach is told to correct the learner. A Gemini coach is told only
 while it is in charge, when the rule saw only trusted positions. Give it a dwell so that passing by
-doesn't count.
+doesn't count. When a look-alike is in view, the planner makes taking it a step's first mistake,
+and its message says how to tell the two apart.
 
 ## Coach hints
 

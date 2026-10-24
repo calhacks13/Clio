@@ -16,13 +16,13 @@ import {
 } from '@clio/protocol';
 import { describe, expect, it } from 'vitest';
 import type { BenchDeps } from '../src/deps';
-import type { BenchModels } from '../src/services/bench';
+import { type BenchModels, restPlanRequest } from '../src/services/bench';
 import type { BenchJudge, JudgeRequest } from '../src/services/bench-judge';
 import type { Planner, PlannerRequest } from '../src/services/planner';
 import { BenchStore } from '../src/storage/bench-store';
 import { ProcedureStore } from '../src/storage/procedure-store';
 import { type Harness, harness, steppingClock, tempDir } from './harness';
-import { modelPlan } from './plan-fixtures';
+import { modelFirstStage, modelPlan, modelRevision } from './plan-fixtures';
 
 // The planner bench's routes on real stores in a temp dir, with scripted planner and judge models.
 
@@ -243,6 +243,34 @@ describe('POST /api/bench/plan', () => {
       'open-cap',
       'close-cap',
     ]);
+  });
+
+  it('plans in two stages as the headset does, and records the stage, outline and sightings', async () => {
+    const models = fakeModels({
+      plans: [JSON.stringify(modelFirstStage()), JSON.stringify(modelRevision())],
+    });
+    const h = await benchHarness(models);
+    const body = { goal: 'Refill the washer fluid', images: [IMAGE], stage: 'first' as const };
+    const first = BenchRunSchema.parse(await json(h.request('POST', BenchPaths.plan, body)));
+    expect(first.request).toEqual({ goal: 'Refill the washer fluid', stage: 'first', views: 1 });
+    expect(first.result).toMatchObject({
+      ok: true,
+      outlineFrom: 1,
+      sightings: [{ objectId: 'washer_cap', view: 0, point: [0.25, 0.4] }],
+    });
+
+    const rest = restPlanRequest({ ...body, stage: 'first' }, first);
+    expect(rest).toMatchObject({
+      goal: 'Refill the washer fluid',
+      images: [IMAGE],
+      stage: 'rest',
+      revise: { planId: 'refill-the-washer-fluid', fromStepIndex: 1 },
+    });
+    const second = BenchRunSchema.parse(await json(h.request('POST', BenchPaths.plan, rest)));
+    expect(second.request).toMatchObject({ stage: 'rest', revise: { fromStepIndex: 1 } });
+    expect(second.result.ok && second.result.planId).toBe('refill-the-washer-fluid-r1');
+    expect(models.plannerRequests.map((r) => r.stage)).toEqual(['first', 'rest']);
+    expect(restPlanRequest({ ...body, stage: 'first' }, second)).toBeNull();
   });
 
   it('gives slow models a longer budget when asked, and records it', async () => {

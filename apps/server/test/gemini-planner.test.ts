@@ -1,8 +1,10 @@
 import { ACTION_VERBS, safeParseProcedure } from '@clio/protocol';
 import type { GenerateContentParameters } from '@google/genai';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { thinkingConfig } from '../src/services/gemini';
 import {
   createGeminiPlanner,
+  PLAN_THINKING,
   PLAN_TIMEOUT_MS,
   STEP_CHECK_TIMEOUT_MS,
 } from '../src/services/gemini-planner';
@@ -247,6 +249,108 @@ describe('createGeminiPlanner', () => {
     ]);
   });
 
+  it('thinks as hard as each stage needs, and lets the bench choose', async () => {
+    const er = 'gemini-robotics-er-2-preview';
+    const ai = fakeAi('{}');
+    const planner = createGeminiPlanner(ai, er);
+    const revision = { reason: 'r', base, fromStepIndex: 1, skippedStepIds: [] };
+    await planner.draft({ goal: 'Refill it', images: [] });
+    await planner.draft({ goal: 'Refill it', images: [], stage: 'first' });
+    await planner.draft({ goal: 'Refill it', images: [], stage: 'rest', revision });
+    await planner.draft({ goal: 'Refill it', images: [], revision });
+    expect(ai.calls.map((c) => c.config?.thinkingConfig)).toEqual(
+      [PLAN_THINKING.full, PLAN_THINKING.first, PLAN_THINKING.rest, PLAN_THINKING.full].map(
+        (level) => (level ? thinkingConfig(er, level).thinkingConfig : undefined),
+      ),
+    );
+    expect(ai.calls.map((c) => c.config?.responseJsonSchema)).toEqual([
+      buildPlanJsonSchema('plan'),
+      buildPlanJsonSchema('first'),
+      buildPlanJsonSchema('revision'),
+      buildPlanJsonSchema('revision'),
+    ]);
+
+    const tuned = fakeAi('{}');
+    const bench = createGeminiPlanner(tuned, er, { thinking: { first: 'minimal', full: null } });
+    await bench.draft({ goal: 'Refill it', images: [], stage: 'first' });
+    await bench.draft({ goal: 'Refill it', images: [] });
+    expect(tuned.calls.map((c) => c.config?.thinkingConfig)).toEqual([
+      thinkingConfig(er, 'minimal').thinkingConfig,
+      undefined,
+    ]);
+  });
+
+  it('asks a first stage for the lesson in outline and its first step in full', () => {
+    const contents = plannerContents({
+      goal: 'Refill the washer fluid',
+      images: [IMAGE, IMAGE],
+      stage: 'first',
+    });
+    expect(contents[0]?.parts?.at(-1)?.text).toBe(
+      [
+        'Goal: Refill the washer fluid',
+        "Attached: 2 current camera views from the learner's headset, numbered 1 to 2 in order.",
+        'The lesson starts as soon as you answer. Its later steps are written in full ' +
+          'afterwards, while the learner works on the first one. So:',
+        '- `outline`: every step of the lesson in order, 3 to 10, one line each (id, ' +
+          'instruction, doneWhen, targets). outline[0] is the first step.',
+        '- `firstStep`: that first step written in full, with the same id as outline[0].',
+        'Get the first step right: it starts from the scene as it is now, it names the right ' +
+          'object so that a look-alike cannot pass for it, and its doneWhen is a state the ' +
+          'camera will see.',
+        'Write the lesson plan as JSON.',
+      ].join('\n'),
+    );
+    const retry = plannerContents({
+      goal: 'Refill the washer fluid',
+      images: [],
+      stage: 'first',
+      retry: { previousText: '{}', errors: '✖ Invalid input at steps[2].targets[0]' },
+    });
+    expect(retry.at(-1)?.parts?.[0]?.text).toBe(
+      'Your JSON did not pass validation. Fix these errors and return the complete corrected JSON:\n' +
+        '✖ Invalid input at steps[2].targets[0]\n' +
+        'Paths refer to the plan built from your answer: steps[0] is firstStep, and every later ' +
+        'steps[n] is outline[n].',
+    );
+  });
+
+  it('asks stage rest to write the outline in full, keeping the step under way', () => {
+    const contents = plannerContents({
+      goal: 'Refill the washer fluid',
+      context: 'It is a 2015 Civic.',
+      images: [IMAGE],
+      stage: 'rest',
+      revision: { reason: 'r', base, fromStepIndex: 1, skippedStepIds: [] },
+    });
+    expect(contents[0]?.parts?.at(-1)?.text).toBe(
+      [
+        'Write the rest of a lesson plan in full while the learner works on its first step.',
+        'Goal: Refill the washer fluid',
+        'What the learner said about their setup: It is a 2015 Civic.',
+        'Under way or done (they stay as they are; do not repeat them):',
+        '1. open-cap: Flip open the blue washer fluid cap. Done when: The blue cap is flipped ' +
+          'open and the reservoir neck is visible. Uses: washer_cap.',
+        'The outline of the remaining steps, written quickly so the lesson could start. It is ' +
+          'the intended shape of the lesson: write every step in full, keeping its id and its ' +
+          'place, and change it only where the camera views show it is wrong, incomplete or ' +
+          'unsafe:',
+        '2. pour-fluid: Pour the fluid into the reservoir. Done when: The blue fluid reaches ' +
+          'the top mark on the reservoir. Uses: fluid_jug, washer_cap.',
+        '3. close-cap: Close the washer fluid cap. Done when: The blue cap is shut flat on the ' +
+          'reservoir. Uses: washer_cap.',
+        'Objects already declared (reuse these ids; declare a new object only if a new step needs it):',
+        '- washer_cap (washer cap): blue cap with a windshield symbol',
+        '- coolant_cap (coolant cap): yellow cap with a warning symbol',
+        '- fluid_jug (fluid jug): blue plastic jug of washer fluid',
+        "Attached: 1 current camera view from the learner's headset.",
+        'Return only the remaining steps, in full, and any NEW objects. New step ids must not ' +
+          'be: open-cap. Write `warnings` as for a new plan, hazards in view first, without ' +
+          'mentioning the outline or the step under way.',
+      ].join('\n'),
+    );
+  });
+
   it('fails when Gemini returns no text', async () => {
     const planner = createGeminiPlanner(fakeAi(undefined), 'm');
     await expect(planner.draft({ goal: 'Refill it', images: [] })).rejects.toThrow(/empty/);
@@ -288,6 +392,27 @@ describe('PLANNER_SYSTEM_INSTRUCTION', () => {
     '"the blue cap is off and lying on the fender"',
     'ends in a visible state',
     'make `prompt` match `doneWhen`',
+    // Written for Robotics-ER 2: the scene as it is, look-alikes, hazards, and only what is there.
+    'as things stand now',
+    'do not plan that step again',
+    'Declare only objects you can see',
+    '`sightings`',
+    '`point` [y, x]',
+    'must not be pointed at',
+    'a milk carton beside a yogurt drink',
+    'make the mix-up one of its `mistakes`',
+    'Name what tells the right object apart',
+    'Describe a state, never an action',
+    'not "baking soda is added"',
+    'must not pass a look-alike',
+    'not inside an opaque bottle, syringe or box',
+    'Looking, comparing or checking is not a step of its own',
+    'close a door, lid or cap that the task opens or uses',
+    'Taking or using a look-alike',
+    '`warnings` start with every hazard you can see',
+    'sharp tools (knives, blades, scissors, needles)',
+    'hot things (kettles, stoves, pans, irons)',
+    'what it looks like, where it is, and what to do',
   ])('covers %j', (phrase) => {
     expect(PLANNER_SYSTEM_INSTRUCTION).toContain(phrase);
   });

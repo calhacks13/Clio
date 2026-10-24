@@ -60,10 +60,18 @@ export class Narrator {
       b.on('coach.tool_result', ({ callId }) => {
         this.briefingCalls.delete(callId);
       }),
-      b.on('plan.ready', ({ t, procedure, warnings, revision }) => {
+      b.on('plan.ready', ({ t, procedure, warnings, revision, stage }) => {
         const recital = this.recital(procedure);
         const caveats = warnings.length ? `\nCaveats: ${warnings.join(' ')}` : '';
-        if (revision) {
+        if (stage === 'rest') {
+          // The learner is busy with a step that didn't change: nothing to say out loud.
+          this.say(
+            t,
+            'plan_refined',
+            `Plan refined: the later steps are written in full now. ${recital}${caveats}`,
+            false,
+          );
+        } else if (revision) {
           this.say(
             t,
             'plan_revised',
@@ -71,7 +79,11 @@ export class Narrator {
             true,
           );
         } else {
-          this.say(t, 'plan', `Plan ready. ${recital}${caveats}`, false);
+          const outline =
+            stage === 'first'
+              ? '\nThe steps after the first are an outline; the full plan follows as "Plan refined".'
+              : '';
+          this.say(t, 'plan', `Plan ready. ${recital}${caveats}${outline}`, false);
         }
       }),
       b.on('plan.failed', ({ t, error, revision }) => {

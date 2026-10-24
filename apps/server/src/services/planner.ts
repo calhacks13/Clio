@@ -1,4 +1,4 @@
-import type { ImagePayload, Procedure, StepCheckRequest } from '@clio/protocol';
+import type { ImagePayload, PlanStage, Procedure, StepCheckRequest } from '@clio/protocol';
 
 // The planner port: one model call that turns a goal (plus camera views) into plan JSON. The
 // server validates, retries and stores the result (plan-service.ts); implementations only talk to
@@ -19,6 +19,11 @@ export interface PlannerRequest {
     fromStepIndex: number;
     skippedStepIds: readonly string[];
   };
+  /**
+   * full (the default): the whole plan. first: the first step in full and the rest as an outline,
+   * quickly. rest: write the outline steps of `revision.base` in full while the learner works.
+   */
+  stage?: PlanStage;
   /** The previous answer failed validation: show it and the errors, and ask for a fix. */
   retry?: { previousText: string; errors: string };
   /** How long this call may take: what is left of the request's budget. */

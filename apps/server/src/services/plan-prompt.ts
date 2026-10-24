@@ -2,7 +2,9 @@ import { ACTION_VERB_NAMES, ACTION_VERBS, type ActionVerb } from '@clio/protocol
 import type { Content, Part } from '@google/genai';
 import type { PlannerRequest } from './planner';
 
-// Pure: the planner's system instruction and conversation turns.
+// Pure: the planner's system instruction and conversation turns. One system instruction serves
+// every stage; what a stage asks for (the whole plan, the first step and an outline, or the rest
+// of an outline) is in the request turn.
 
 function verbLine(verb: ActionVerb): string {
   const spec: { object: string; target: string; means: string } = ACTION_VERBS[verb];
@@ -19,15 +21,38 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
     'each step is about, ghost hands demonstrate each step from its `action`, and every ' +
     'recorded frame is labeled with the active step to train robots.',
   '',
+  'THE SCENE',
+  '- Plan from the camera views, as things stand now. If the end state of a step is already ' +
+    'visible (a cup already pink, a cap already off), do not plan that step again: start from ' +
+    'there and say so in `warnings`.',
+  '- Declare only objects you can see in the views, plus anything the task needs that is not ' +
+    'in view; then say in `warnings` that the learner must fetch it.',
+  '- `sightings`: point at every declared object you can see, once for each view it is in: ' +
+    '`view` (numbered from 1 in the order the views are attached), `point` [y, x] on the object ' +
+    'and `box_2d` [ymin, xmin, ymax, xmax], integers from 0 to 1000. An object that is not in ' +
+    'view must not be pointed at: leave it out.',
+  '- Look-alikes: when something in view could be taken for what a step needs (a milk carton ' +
+    'beside a yogurt drink, three similar cups, two clear bottles), say how to tell them apart ' +
+    'in that step, and make the mix-up one of its `mistakes`.',
+  '- Without views, assume a typical home setup and leave `sightings` empty.',
+  '',
   'STEPS',
   '- 3 to 10 steps, in the order a person does them, with exactly one physical action per step.',
+  '- Every step changes something a camera can see. Looking, comparing or checking is not a ' +
+    'step of its own: put what to notice in the coachNotes of the step that causes it.',
+  '- Leave things as they should be: close a door, lid or cap that the task opens or uses, ' +
+    'unless the goal needs it open.',
   '- `instruction`: one short imperative sentence, at most 15 words, naming the action and the ' +
     'object, e.g. "Unscrew the blue washer fluid cap." It is spoken, shown in AR, and used as ' +
     "the robot's language label.",
   '- `doneWhen`: one sentence, an end state a camera can confirm, described as it will look ' +
-    'when the step is finished, e.g. "the blue cap is off and lying on the fender". The coach ' +
-    'and a camera check judge the step against it, so write each step so it ends in a visible ' +
-    'state.',
+    'when the step is finished, e.g. "the blue cap is off and lying on the fender". It must be ' +
+    'in sight: not inside an opaque bottle, syringe or box. Name what ' +
+    'tells the right object apart from anything similar in view: "the small pink bottle with ' +
+    'the foil lid is in the learner\'s hand, outside the fridge", not "the learner has the ' +
+    'drink". Describe a state, never an action: "the liquid in cup C has turned green", not ' +
+    '"baking soda is added". The coach and a camera check judge the step against it and must ' +
+    'not pass a look-alike, so write each step so it ends in a visible state.',
   "- `targets`: ids of the objects the step's hands touch or look at. `hand`: left, right, " +
     'either or both.',
   '- `action`: what the hands do, as one verb with its arguments (object = the thing acted on, ' +
@@ -51,7 +76,8 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
     'tracking is lost. Use loose radii (0.06 to 0.08 m) where hands cross or block each other.',
   '- `mistakes`: 0 to 2 plausible errors for the step, each a check that detects the error ' +
     '(e.g. hand_near the wrong bottle with dwellMs 700) and a short spoken `message` that ' +
-    'corrects it. `kind` is a lowercase label such as "wrong_cap".',
+    'corrects it and says how to tell the right one apart. Taking or using a look-alike that is ' +
+    'in view comes first. `kind` is a lowercase label such as "wrong_cap".',
   '- `coachNotes`: a sentence or two for the coach: what to watch for and how to help.',
   '',
   'SHOW',
@@ -73,8 +99,9 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
     'beside a yellow cap." Too vague: "The washer fluid cap."',
   '',
   'OBJECTS',
-  '- Declare every object that any step targets, acts on or checks, and nothing else. Ids are ' +
-    'lowercase slugs (a-z, 0-9, "_" or "-"), e.g. "washer_cap".',
+  '- Declare every object that any step targets, acts on or checks (a look-alike that a ' +
+    'mistake checks counts), and nothing else. Ids are lowercase slugs (a-z, 0-9, "_" or "-"), ' +
+    'e.g. "washer_cap".',
   '- `label`: a short spoken name, 1 to 3 words, e.g. "washer cap".',
   '- `placement.method` is always "detect": the headset camera finds the object. Add ' +
     '`placement.hint` with where to look when it helps.',
@@ -89,13 +116,16 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
     '[width, depth].',
   '',
   'SAFETY',
-  '- Never plan steps that touch hot surfaces, live electrical parts or sharp blades. Put ' +
-    'safety caveats and setup assumptions in `warnings`.',
+  '- `warnings` start with every hazard you can see in the views, whether or not the task uses ' +
+    'it. Check for each of these: sharp tools (knives, blades, scissors, needles), hot things ' +
+    '(kettles, stoves, pans, irons), live electrical parts (plugged-in appliances, bare ' +
+    'wires), glass that could break, harsh chemicals (bleach, cleaners, solvents) and moving ' +
+    'machinery. Give one line per hazard: what it looks like, where it is, and what to do, ' +
+    'e.g. "A knife with a long silver blade lies left of the cups: keep hands away from it." ' +
+    'Then setup assumptions and other caveats, at most 5 lines in all.',
+  '- Never plan steps that touch hot surfaces, live electrical parts or sharp blades.',
   '- If the task itself is unsafe, return a safe preparatory plan instead (for example: check, ' +
     'gather and lay out what is needed) and explain why in `warnings`.',
-  '',
-  'Use the camera views to choose the objects that are really there and describe them as they ' +
-    'look. Without views, assume a typical home setup.',
 ].join('\n');
 
 function viewsLine(count: number, revising: boolean): string {
@@ -104,17 +134,66 @@ function viewsLine(count: number, revising: boolean): string {
       ? 'No camera views are attached; assume the setup is unchanged.'
       : 'No camera views are attached; assume a typical home setup.';
   }
-  return `Attached: ${count} current camera view${count === 1 ? '' : 's'} from the learner's headset.`;
+  return count === 1
+    ? "Attached: 1 current camera view from the learner's headset."
+    : `Attached: ${count} current camera views from the learner's headset, numbered 1 to ${count} in order.`;
+}
+
+function goalLines(r: PlannerRequest): string[] {
+  const lines = [`Goal: ${r.goal}`];
+  if (r.context) lines.push(`What the learner said about their setup: ${r.context}`);
+  return lines;
 }
 
 function planText(r: PlannerRequest): string {
-  const lines = [`Goal: ${r.goal}`];
-  if (r.context) lines.push(`What the learner said about their setup: ${r.context}`);
-  lines.push(viewsLine(r.images.length, false), 'Write the lesson plan as JSON.');
-  return lines.join('\n');
+  return [
+    ...goalLines(r),
+    viewsLine(r.images.length, false),
+    'Write the lesson plan as JSON.',
+  ].join('\n');
 }
 
-function revisionText(r: PlannerRequest & { revision: NonNullable<PlannerRequest['revision']> }) {
+/** Stage first: the lesson starts on the answer, so the first step is the one to get right. */
+function firstStageText(r: PlannerRequest): string {
+  return [
+    ...goalLines(r),
+    viewsLine(r.images.length, false),
+    'The lesson starts as soon as you answer. Its later steps are written in full afterwards, ' +
+      'while the learner works on the first one. So:',
+    '- `outline`: every step of the lesson in order, 3 to 10, one line each (id, instruction, ' +
+      'doneWhen, targets). outline[0] is the first step.',
+    '- `firstStep`: that first step written in full, with the same id as outline[0].',
+    'Get the first step right: it starts from the scene as it is now, it names the right ' +
+      'object so that a look-alike cannot pass for it, and its doneWhen is a state the camera ' +
+      'will see.',
+    'Write the lesson plan as JSON.',
+  ].join('\n');
+}
+
+type Revising = PlannerRequest & { revision: NonNullable<PlannerRequest['revision']> };
+
+function stepLine(step: Revising['revision']['base']['steps'][number], n: number): string {
+  const doneWhen = step.doneWhen ? ` Done when: ${step.doneWhen.replace(/[.!]+$/, '')}.` : '';
+  const uses = step.targets.length ? ` Uses: ${step.targets.join(', ')}.` : '';
+  return `${n}. ${step.id}: ${step.instruction}${doneWhen}${uses}`;
+}
+
+function declaredObjects(r: Revising): string[] {
+  return [
+    'Objects already declared (reuse these ids; declare a new object only if a new step needs it):',
+    ...r.revision.base.objects.map(
+      (o) => `- ${o.id} (${o.label}): ${o.tracking?.query ?? o.description ?? o.label}`,
+    ),
+  ];
+}
+
+function newStepsLine(kept: readonly { id: string }[], what: string): string {
+  return `Return only ${what} and any NEW objects.${
+    kept.length ? ` New step ids must not be: ${kept.map((s) => s.id).join(', ')}.` : ''
+  }`;
+}
+
+function revisionText(r: Revising): string {
   const { base, fromStepIndex, reason, skippedStepIds } = r.revision;
   const steps = base.steps.map((s, i) => ({
     id: s.id,
@@ -125,8 +204,7 @@ function revisionText(r: PlannerRequest & { revision: NonNullable<PlannerRequest
   const done = kept.filter((s) => !skipped.has(s.id)).map((s) => s.line);
   const notDone = kept.filter((s) => skipped.has(s.id)).map((s) => s.line);
   const replaced = steps.slice(fromStepIndex).map((s) => s.line);
-  const lines = ['Revise a lesson that is in progress.', `Goal: ${r.goal}`];
-  if (r.context) lines.push(`What the learner said about their setup: ${r.context}`);
+  const lines = ['Revise a lesson that is in progress.', ...goalLines(r)];
   lines.push(
     `Why the plan must change: ${reason}`,
     'Steps already done (they stay as they are; do not repeat them):',
@@ -142,15 +220,38 @@ function revisionText(r: PlannerRequest & { revision: NonNullable<PlannerRequest
   lines.push(
     'The rest of the old plan, which you are replacing:',
     ...(replaced.length ? replaced : ['(none)']),
-    'Objects already declared (reuse these ids; declare a new object only if a new step needs it):',
-    ...base.objects.map(
-      (o) => `- ${o.id} (${o.label}): ${o.tracking?.query ?? o.description ?? o.label}`,
-    ),
+    ...declaredObjects(r),
     viewsLine(r.images.length, true),
-    'Return only the new remaining steps and any NEW objects.' +
-      (kept.length ? ` New step ids must not be: ${kept.map((s) => s.id).join(', ')}.` : ''),
+    newStepsLine(kept, 'the new remaining steps'),
   );
   return lines.join('\n');
+}
+
+/**
+ * Stage rest: the outline a stage "first" answer wrote quickly is the intended lesson; write its
+ * steps in full now, with time to think, while the learner does the first step.
+ */
+function restText(r: Revising): string {
+  const { base, fromStepIndex } = r.revision;
+  const kept = base.steps.slice(0, fromStepIndex);
+  const outline = base.steps.slice(fromStepIndex);
+  return [
+    'Write the rest of a lesson plan in full while the learner works on its first step.',
+    ...goalLines(r),
+    'Under way or done (they stay as they are; do not repeat them):',
+    ...(kept.length ? kept.map((s, i) => stepLine(s, i + 1)) : ['(none)']),
+    'The outline of the remaining steps, written quickly so the lesson could start. It is the ' +
+      'intended shape of the lesson: write every step in full, keeping its id and its place, ' +
+      'and change it only where the camera views show it is wrong, incomplete or unsafe:',
+    ...(outline.length
+      ? outline.map((s, i) => stepLine(s, fromStepIndex + i + 1))
+      : ['(none: finish the lesson)']),
+    ...declaredObjects(r),
+    viewsLine(r.images.length, true),
+    newStepsLine(kept, 'the remaining steps, in full,') +
+      ' Write `warnings` as for a new plan, hazards in view first, without mentioning the ' +
+      'outline or the step under way.',
+  ].join('\n');
 }
 
 function retryText(r: PlannerRequest & { retry: NonNullable<PlannerRequest['retry']> }): string {
@@ -163,8 +264,23 @@ function retryText(r: PlannerRequest & { retry: NonNullable<PlannerRequest['retr
     lines.push(
       `Paths refer to the merged plan: your first step is steps[${fromStepIndex}] and your first new object is objects[${base.objects.length}].`,
     );
+  } else if (r.stage === 'first') {
+    lines.push(
+      'Paths refer to the plan built from your answer: steps[0] is firstStep, and every later ' +
+        'steps[n] is outline[n].',
+    );
   }
   return lines.join('\n');
+}
+
+function requestText(request: PlannerRequest): string {
+  const { revision } = request;
+  if (revision) {
+    return request.stage === 'rest'
+      ? restText({ ...request, revision })
+      : revisionText({ ...request, revision });
+  }
+  return request.stage === 'first' ? firstStageText(request) : planText(request);
 }
 
 /** The conversation for one planner call: views first, then the request; plus the retry turns. */
@@ -172,9 +288,9 @@ export function plannerContents(request: PlannerRequest): Content[] {
   const parts: Part[] = request.images.map((image) => ({
     inlineData: { mimeType: image.mimeType, data: image.data },
   }));
-  const { revision, retry } = request;
-  parts.push({ text: revision ? revisionText({ ...request, revision }) : planText(request) });
+  parts.push({ text: requestText(request) });
   const contents: Content[] = [{ role: 'user', parts }];
+  const { retry } = request;
   if (retry) {
     contents.push(
       { role: 'model', parts: [{ text: retry.previousText }] },

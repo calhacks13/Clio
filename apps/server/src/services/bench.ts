@@ -12,7 +12,7 @@ import type { ProcedureStore } from '../storage/procedure-store';
 import { type BenchJudge, parseJudgement } from './bench-judge';
 import type { GenerateContentApi, ModelListApi } from './gemini';
 import { createGeminiJudge } from './gemini-judge';
-import { createGeminiPlanner } from './gemini-planner';
+import { createGeminiPlanner, type GeminiPlannerOptions } from './gemini-planner';
 import { generatePlan, type PlanRequestBody } from './plan-service';
 import type { Planner } from './planner';
 
@@ -25,7 +25,7 @@ export interface BenchModels {
   /** The model the headset plans with. */
   readonly plannerModel: string;
   readonly judgeModel: string;
-  planner(model: string): Planner;
+  planner(model: string, options?: GeminiPlannerOptions): Planner;
   judge(model: string): BenchJudge;
   /** Models this key can plan with, newest first. */
   list(): Promise<string[]>;
@@ -55,7 +55,7 @@ export function createBenchModels(
   return {
     plannerModel,
     judgeModel,
-    planner: (model) => createGeminiPlanner(ai, model),
+    planner: (model, options) => createGeminiPlanner(ai, model, options),
     judge: (model) => createGeminiJudge(ai, model),
     async list() {
       if (cached && Date.now() - cached.at < MODEL_LIST_TTL_MS) return cached.names;
@@ -92,13 +92,21 @@ export async function benchPlan(deps: BenchPlanDeps, body: PlanRequestBody): Pro
       { planner, procedures: deps.plans, now: deps.now, budgetMs: deps.budgetMs },
       body,
     );
-    result = { ok: true, planId: plan.planId, procedure: plan.procedure, warnings: plan.warnings };
+    const { planId, procedure, warnings, outlineFrom, sightings } = plan;
+    result = {
+      ok: true,
+      planId,
+      procedure,
+      warnings,
+      ...(outlineFrom === undefined ? {} : { outlineFrom }),
+      ...(sightings ? { sightings } : {}),
+    };
   } catch (error) {
     if (!(error instanceof ApiError)) throw error;
     result = { ok: false, code: error.code, message: error.message };
     if (error.details !== undefined) result.details = error.details;
   }
-  const { goal, context, revise, images } = body;
+  const { goal, context, revise, images, stage } = body;
   return {
     id: newRunId(started, deps.rand),
     createdAt: started.toISOString(),
@@ -111,6 +119,7 @@ export async function benchPlan(deps: BenchPlanDeps, body: PlanRequestBody): Pro
       goal,
       ...(context ? { context } : {}),
       ...(revise ? { revise: { fromStepIndex: revise.fromStepIndex, reason: revise.reason } } : {}),
+      ...(stage === 'full' ? {} : { stage }),
       views: images.length,
     },
     result,
@@ -132,17 +141,21 @@ function counting(inner: Planner) {
   return { planner, calls };
 }
 
-/** The scenario as the headset would have asked it. */
+/**
+ * The scenario as the headset would have asked it: the whole plan, or with `staged` its first
+ * stage (a re-plan scenario is always asked whole, as revise_plan does).
+ */
 export function scenarioPlanRequest(
   scenario: BenchScenario,
   images: ImagePayload[],
+  { staged = false } = {},
 ): PlanRequestBody {
   const { goal, context, revise } = scenario;
   return {
     goal,
     ...(context ? { context } : {}),
     images,
-    stage: 'full',
+    stage: staged && !revise ? 'first' : 'full',
     ...(revise
       ? {
           revise: {
@@ -154,6 +167,27 @@ export function scenarioPlanRequest(
           },
         }
       : {}),
+  };
+}
+
+/**
+ * After a stage first run with an outline, the stage rest request the headset sends while the
+ * learner does the first step; null when there is nothing to write out.
+ */
+export function restPlanRequest(first: PlanRequestBody, run: BenchRun): PlanRequestBody | null {
+  const { result } = run;
+  if (!result.ok || result.outlineFrom === undefined) return null;
+  return {
+    goal: first.goal,
+    ...(first.context ? { context: first.context } : {}),
+    images: first.images,
+    stage: 'rest',
+    revise: {
+      planId: result.planId,
+      fromStepIndex: result.outlineFrom,
+      reason: 'Write the outline steps in full while the learner does the first step',
+      base: result.procedure,
+    },
   };
 }
 

@@ -108,6 +108,28 @@ export const modelPlan = () => ({
   warnings: ['Make sure the engine is off and cool.'],
 });
 
+/**
+ * A first-stage answer (buildPlanJsonSchema('first')): where it saw the objects, every step in
+ * outline, then the first step in full. Points and boxes are Gemini's [y, x] in 0..1000.
+ */
+export const modelFirstStage = () => {
+  const { steps, ...plan } = modelPlan();
+  return {
+    ...plan,
+    sightings: [
+      { object: 'washer_cap', view: 1, point: [400, 250], box_2d: [380, 230, 420, 270] },
+      { object: 'fluid_jug', view: 2, point: [600, 800], box_2d: [500, 700, 700, 900] },
+    ],
+    outline: steps.map(({ id, instruction, doneWhen, targets }) => ({
+      id,
+      instruction,
+      doneWhen,
+      targets,
+    })),
+    firstStep: steps[0],
+  };
+};
+
 /** A revision answer: the remaining steps (reusing an id that is already taken) and one object. */
 export const modelRevision = () => ({
   objects: [

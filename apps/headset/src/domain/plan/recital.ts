@@ -14,6 +14,8 @@ export type PlanOp =
   | 'reopen'
   | 'complete'
   | 'revise'
+  /** The outline of a two-stage plan, written in full while the learner did the first step. */
+  | 'refine'
   | 'material';
 
 export interface PlanStepView {
