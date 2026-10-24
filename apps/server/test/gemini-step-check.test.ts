@@ -2,6 +2,7 @@ import type { GenerateContentParameters } from '@google/genai';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
   createGeminiStepChecker,
+  STEP_CHECK_QUICK_THINKING,
   STEP_CHECK_THINKING,
   STEP_CHECK_TIMEOUT_MS,
   STEP_CRITERIA_THINKING,
@@ -120,6 +121,18 @@ describe('createGeminiStepChecker', () => {
       thinking: 'minimal',
     }).check(CHECK);
     expect(ai.calls[0]?.config?.thinkingConfig?.thinkingLevel).toBe('MINIMAL');
+  });
+
+  it('thinks at minimal for a quick look', async () => {
+    expect(STEP_CHECK_QUICK_THINKING).toBe('minimal');
+    const ai = fakeAi('{}');
+    const checker = createGeminiStepChecker(ai, 'gemini-robotics-er-2-preview');
+    await checker.check({ ...CHECK, quick: true });
+    await checker.check({ ...CHECK, quick: false });
+    expect(ai.calls.map((c) => c.config?.thinkingConfig?.thinkingLevel)).toEqual([
+      'MINIMAL',
+      'LOW',
+    ]);
   });
 
   it('gives a check 6 s and the criteria 8 s, and says so when Gemini is late', async () => {

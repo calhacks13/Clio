@@ -164,6 +164,13 @@ export const StepCheckRequestSchema = z.object({
       'What must all be visible for done, from /api/plans/criteria, e.g. "cup A is pink". ' +
         'Each is judged on its own, and the step is done only when every one is met',
     ),
+  quick: z
+    .boolean()
+    .optional()
+    .describe(
+      'A quick look: less thinking, a sooner answer. The watcher uses one to notice a change ' +
+        'while the step is far from done, never to confirm one',
+    ),
 });
 export const StepCheckVerdictSchema = z.enum(['done', 'not_done', 'unsure']);
 export const StepCriterionMetSchema = z.enum(['yes', 'no', 'unsure']);

@@ -61,6 +61,8 @@ Options:
   --criteria <how>      With --checks: judge criteria the model writes first, from the views at
                         the start of the step (seen) or the words alone (words), or that it
                         writes in each answer (inline)
+  --quick               With --checks: ask as quick looks (minimal thinking), as the watcher
+                        does while a step is far from done
   --parallel <n>        With --checks: ask n looks at a time (default 1)
   --list                List the scenarios (or watcher tests) and exit
   -h, --help            Show this help`;
@@ -96,6 +98,7 @@ async function main(): Promise<void> {
       checks: { type: 'boolean' },
       criteria: { type: 'string' },
       parallel: { type: 'string' },
+      quick: { type: 'boolean' },
       list: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -112,6 +115,7 @@ async function main(): Promise<void> {
       thinking: values.thinking ?? [],
       criteria: values.criteria,
       parallel: values.parallel,
+      quick: values.quick ?? false,
     });
   }
   const store = new BenchStore(benchDir);
@@ -294,6 +298,7 @@ interface CheckOptions {
   thinking: string[];
   criteria: string | undefined;
   parallel: string | undefined;
+  quick: boolean;
 }
 
 /** `--thinking check=minimal --thinking criteria=low` for the watcher tests. */
@@ -312,8 +317,12 @@ function parseCheckThinking(args: readonly string[]): GeminiStepCheckerOptions {
 }
 
 /** How a run was asked, for its `variant`: empty when the headset's way. */
-function checkVariant(options: GeminiStepCheckerOptions, criteria: CriteriaMode | null): string {
-  const parts: string[] = [];
+function checkVariant(
+  options: GeminiStepCheckerOptions,
+  criteria: CriteriaMode | null,
+  quick: boolean,
+): string {
+  const parts: string[] = quick ? ['quick'] : [];
   if (options.thinking !== undefined) parts.push(`thinking ${options.thinking ?? 'default'}`);
   if (criteria) parts.push(`criteria ${criteria}`);
   if (criteria && criteria !== 'inline' && options.criteriaThinking !== undefined) {
@@ -351,7 +360,7 @@ async function runChecks(
     ...parseCheckThinking(options.thinking),
     ...(mode === 'inline' ? { inline: true } : {}),
   };
-  const variant = checkVariant(checkerOptions, mode);
+  const variant = checkVariant(checkerOptions, mode, options.quick);
 
   const models = createBenchModels(createGeminiClient(config.geminiApiKey), config);
   const checkModels = options.models.length ? options.models : [config.plannerModel];
@@ -410,6 +419,7 @@ async function runChecks(
           }
           const run = await runCheckTest({ checker, now }, test, frames, {
             criteria: given,
+            quick: options.quick,
             ...(variant ? { variant } : {}),
           });
           await store.addRun(test.id, run);

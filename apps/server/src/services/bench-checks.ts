@@ -88,6 +88,8 @@ export interface CheckRunDeps {
 export interface CheckRunOptions {
   /** The step's criteria, asked beforehand (askStepCriteria). */
   criteria?: readonly string[];
+  /** Ask it as a quick look, as the watcher does while a step is far from done. */
+  quick?: boolean;
   /** How it was asked, when not the headset's way, e.g. "thinking minimal". */
   variant?: string;
 }
@@ -102,7 +104,10 @@ export async function runCheckTest(
   const started = deps.now();
   let result: BenchCheckRun['result'];
   try {
-    const request = checkTestRequest(test, frames, options.criteria);
+    const request = {
+      ...checkTestRequest(test, frames, options.criteria),
+      ...(options.quick ? { quick: true } : {}),
+    };
     const { answer } = await askStepCheck(deps.checker, request, deps.now);
     result = { ok: true, answer };
   } catch (error) {
