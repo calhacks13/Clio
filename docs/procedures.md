@@ -10,11 +10,14 @@ start a lesson from one (`start_lesson` with `template_id`). Both use the same s
 (a step can't target an object that wasn't declared). Whoever wrote the first draft, the coach
 edits the plan as the lesson goes ([coach-plan.md](coach-plan.md)).
 
-The planner writes a lesson in two stages, so it can start quickly. The first stage's plan has
-its first step in full and the others as an outline: an instruction, a `doneWhen`, the `targets`
-and a `confirm` check whose prompt is the `doneWhen`, with nothing to `show` yet. While the
-learner does the first step, the second stage rewrites the outline steps in full as a revision
-(`<id>-r1`, `origin.revisionOf`). Both are ordinary procedures.
+The planner writes a lesson in two stages, so it can start quickly. The first stage writes the
+first step as a short card (its instruction, `doneWhen`, `targets`, action, what it shows and up
+to two mistakes) with only the objects that step uses and its look-alikes, and the other steps as
+an outline: an instruction each and a `confirm` check whose prompt is that instruction, with no
+`targets` and nothing to `show` yet. The server expands the card into an ordinary procedure
+([coach-plan.md](coach-plan.md)). While the learner does the first step, the second stage writes
+the outline steps in full as a revision (`<id>-r1`, `origin.revisionOf`), and the card's objects
+again in full, keeping their ids and labels.
 
 To get editor autocomplete, add `"$schema": "../packages/protocol/schema/procedure.schema.json"`.
 `pnpm test` validates every file in `procedures/`.

@@ -246,8 +246,11 @@ export class ClioApp {
   }
 
   async shutdown(reason: string): Promise<void> {
-    await this.lesson.stop(reason);
+    // The camera stream and the tracker's jev calls end with the session. Each answer sends the
+    // next frame, so waiting for the lesson to settle (an upload retries while the server is
+    // down) would keep them going without a frame of XR.
     this.live?.stop();
+    await this.lesson.stop(reason);
     await this.coach?.stop();
     this.scene.stop();
   }

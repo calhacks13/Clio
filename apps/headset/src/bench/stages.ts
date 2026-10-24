@@ -1,9 +1,9 @@
 import type { BenchRevise, BenchRun } from '@clio/protocol';
 
-// Pure: plans in two stages on the planner bench. Stage "first" writes step 1 in full and the
-// other steps as an outline, so a lesson can start quickly; stage "rest" then rewrites the outline
-// in full while the learner works on step 1. Each stage is a run of its own; these pair them up
-// again and say how long each took.
+// Pure: plans in two stages on the planner bench. Stage "first" writes step 1 as a short card and
+// the other steps as an outline, so a lesson can start quickly; stage "rest" then writes the
+// outline in full while the learner works on step 1. Each stage is a run of its own; these pair
+// them up again and say how long each took.
 
 /** What the bench tells the planner when it asks for the rest of a plan. */
 export const REFINE_REASON = 'Refine the outline while the learner does step 1';

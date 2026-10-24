@@ -16,6 +16,7 @@ import { Narrator } from '../../src/domain/coach/narrator';
 import type { LessonToolName, ToolOutcome } from '../../src/domain/coach/toolbox';
 import { DemoLibrary } from '../../src/domain/demo/demo-library';
 import type { AppEvents } from '../../src/domain/events';
+import { OverlayModel } from '../../src/domain/overlay/overlay-model';
 import { EpisodeRecorder } from '../../src/domain/recording/recorder';
 import { MemoryEpisodeSink } from '../../src/domain/recording/sink';
 import {
@@ -1209,6 +1210,24 @@ describe('review regressions', () => {
     await begin('fix my wiper');
     expect(lesson.phase).toBe('planning');
   });
+
+  it('records no placement in the next episode for an object the live tracker lost', async () => {
+    const { clock, registry, sink, begin } = setup();
+    await begin();
+    registry.observe('cap', {
+      position: [0.1, 0, -0.2],
+      confidence: 0.9,
+      source: 'detector',
+      t: clock.now(),
+    });
+    registry.lose('cap', clock.advance(500));
+    // The same lesson again: the lesson still reads where the cap was last seen.
+    await begin();
+    expect(registry.get('cap')).toMatchObject({ position: [0.1, 0, -0.2], lostAt: 1500 });
+    const [first, next] = [...sink.episodes.values()];
+    expect(first?.meta.objects.map((o) => o.id)).toEqual(['jug', 'tank']);
+    expect(next?.meta.objects.map((o) => o.id)).toEqual(['jug', 'tank']);
+  });
 });
 
 describe('starting quickly', () => {
@@ -1375,43 +1394,127 @@ describe('starting quickly', () => {
     expect(lesson.activeDemo).toBeNull();
   });
 
-  it("never announces an old lesson's late look in the next lesson", async () => {
-    const tea = parseProcedure({
-      ...plan,
-      id: 'tea',
-      title: 'Make tea',
-      objects: plan.objects.filter((o) => o.id !== 'cap'),
-      steps: [plan.steps[1]],
-    });
+  const tea = parseProcedure({
+    ...plan,
+    id: 'tea',
+    title: 'Make tea',
+    objects: plan.objects.filter((o) => o.id !== 'cap'),
+    steps: [plan.steps[1]],
+  });
+
+  /**
+   * Lesson A (the refill, which looks for the cap) whose first look waits for releaseLook() (with
+   * `all`, every look does) and then finds nothing; plan() makes the next lesson the tea, whose
+   * planner waits for releasePlan() when `held`. The HUD and a scripted coach listen.
+   */
+  function lateLook(o: { all?: boolean } = {}) {
     let next: Procedure = plan;
-    let release: () => void = () => {};
-    const held = new Promise<void>((r) => (release = r));
+    let held = false;
+    let releaseLook: () => void = () => {};
+    const look = new Promise<void>((r) => (releaseLook = r));
+    let releasePlan: () => void = () => {};
+    const planned = new Promise<void>((r) => (releasePlan = r));
     let looks = 0;
     const lab = setup({
-      planner: { plan: async () => ({ planId: next.id, procedure: next, warnings: [] }) },
+      planner: {
+        plan: async () => {
+          const procedure = next;
+          if (held) await planned;
+          return { planId: procedure.id, procedure, warnings: [] };
+        },
+      },
       grounder: {
-        // The first lesson's look waits, then finds nothing.
         ground: async (requests) => {
-          if (looks++ === 0) await held;
+          if (looks++ === 0 || o.all) await look;
           const ids = requests.map((r) => r.id);
           return { ok: true, located: [], missing: ids, sightings: [], source: 't', frameT: 0 };
         },
       },
     });
-    const { bus, lesson, tool, annotations } = lab;
+    const overlay = new OverlayModel(lab.bus, lab.lesson.view());
+    overlay.attach();
+    const told: string[] = [];
+    new Narrator(lab.bus, lab.lesson.view(), (n) => told.push(n.text)).attach();
     const missing: string[][] = [];
-    bus.on('object.missing', (e) => missing.push(e.objectIds));
+    lab.bus.on('object.missing', (e) => missing.push(e.objectIds));
+    return {
+      ...lab,
+      overlay,
+      missing,
+      /** What a coach was told it can't see. */
+      unseen: () => told.filter((text) => text.includes("can't see")),
+      locates: () => lab.annotations.filter((a) => a.label === 'lesson.first_locate'),
+      looks: () => looks,
+      teaNext: (opts: { held?: boolean } = {}) => {
+        next = tea;
+        held = opts.held ?? false;
+      },
+      releaseLook: () => releaseLook(),
+      releasePlan: () => releasePlan(),
+    };
+  }
+
+  it("never announces an old lesson's late look in the next lesson", async () => {
+    const lab = lateLook();
+    const { lesson, tool, missing } = lab;
     await tool('start_lesson', { goal: 'add wiper fluid' });
     await arrive();
     expect(lesson.currentStep()?.id).toBe('open');
-    next = tea;
+    lab.teaNext();
     await tool('start_lesson', { goal: 'make tea' });
     await arrive();
     expect(lesson.procedure?.id).toBe('tea');
-    release();
+    lab.releaseLook();
     await lesson.settled();
-    expect(looks).toBe(1);
+    expect(lab.looks()).toBe(1);
     expect(missing).toEqual([]);
-    expect(annotations.filter((a) => a.label === 'lesson.first_locate')).toHaveLength(1);
+    expect(lab.locates()).toHaveLength(1);
+  });
+
+  it("never announces an old lesson's late look while the next one is being planned", async () => {
+    const lab = lateLook();
+    const { clock, lesson, tool, result, overlay, missing } = lab;
+    await tool('start_lesson', { goal: 'add wiper fluid' });
+    await arrive();
+    expect(lesson.currentStep()?.id).toBe('open');
+    lab.teaNext({ held: true });
+    expect(result(await tool('start_lesson', { goal: 'make tea' }))).toMatchObject({
+      status: 'planning',
+    });
+    await arrive();
+    expect(lesson.phase).toBe('planning');
+    // The refill's look answers "not found" while the tea is still being planned.
+    lab.releaseLook();
+    await arrive();
+    expect(missing).toEqual([]);
+    lab.releasePlan();
+    await lesson.settled();
+    expect(lesson.procedure?.id).toBe('tea');
+    expect(missing).toEqual([]);
+    expect(overlay.snapshot(clock.now()).missing).toEqual([]);
+    expect(lab.unseen()).toEqual([]);
+    // Only the tea's, which had nothing to find.
+    expect(lab.locates().map((a) => a.data)).toEqual([
+      expect.objectContaining({ located: [], missing: [] }),
+    ]);
+  });
+
+  it('says nothing of a look that answers after the lesson is complete', async () => {
+    const lab = lateLook({ all: true });
+    const { clock, lesson, tool, overlay, missing } = lab;
+    await tool('start_lesson', { goal: 'add wiper fluid' });
+    await arrive();
+    for (const step_id of ['open', 'pour', 'close']) {
+      await tool('complete_step', { step_id, reason: 'done', evidence: 'seen' });
+    }
+    await arrive();
+    expect(lesson.phase).toBe('done');
+    lab.releaseLook();
+    await lesson.settled();
+    expect(missing).toEqual([]);
+    // Once "Lesson complete!" is gone, the HUD asks for no object.
+    expect(overlay.snapshot(clock.advance(4000)).missing).toEqual([]);
+    expect(lab.unseen()).toEqual([]);
+    expect(lab.locates()).toEqual([]);
   });
 });
