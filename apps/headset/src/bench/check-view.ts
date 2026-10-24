@@ -6,7 +6,7 @@ import type {
   BenchCheckTestSummary,
 } from '@clio/protocol';
 import { esc, shortModel } from './plan-view';
-import { expectText, verdictLabel } from './watch-view';
+import { criteriaText, expectText, verdictLabel } from './watch-view';
 
 // Pure HTML for the watcher tests in the library: saved looks of the step watcher, each with the
 // answer it should give, run again with any model to see which ones pass.
@@ -86,7 +86,7 @@ export function renderCheckTestDetail(
       ${test.notes ? `<p class="small"><span class="muted">Notes</span> ${esc(test.notes)}</p>` : ''}
       ${seen}
       <div class="row">
-        <label class="inline">Should say <select data-action="test-expect" data-id="${esc(test.id)}">${option('done')}${option('not_done')}${option('wrong')}</select></label>
+        <label class="inline">Should say <select data-action="test-expect" data-id="${esc(test.id)}">${option('done')}${option('not_done')}${option('wrong')}${option('unsure')}</select></label>
         ${running}
         <button type="button" class="danger" data-action="delete-test" data-id="${esc(test.id)}">Delete</button>
       </div>
@@ -95,14 +95,14 @@ export function renderCheckTestDetail(
 }
 
 function renderAnswer(
-  answer: Pick<BenchCheckAnswer, 'verdict' | 'observation' | 'wrong' | 'progress'>,
+  answer: Pick<BenchCheckAnswer, 'verdict' | 'observation' | 'wrong' | 'progress' | 'criteria'>,
 ): string {
   const wrong = answer.wrong
     ? `<span class="verdict wrong">wrong</span> ${esc(answer.wrong)} · `
     : '';
   const along =
     answer.progress === undefined ? '' : ` <span class="muted">${answer.progress}%</span>`;
-  return `${wrong}<span class="verdict ${answer.verdict}">${verdictLabel(answer.verdict)}</span> ${esc(answer.observation)}${along}`;
+  return `${wrong}<span class="verdict ${answer.verdict}">${verdictLabel(answer.verdict)}</span> ${esc(answer.observation)}${along}${criteriaText(answer.criteria)}`;
 }
 
 export function renderCheckRun(run: BenchCheckRun): string {
@@ -112,6 +112,6 @@ export function renderCheckRun(run: BenchCheckRun): string {
   return `
     <li class="${run.passed ? 'pass' : 'fail'}" title="${new Date(run.createdAt).toLocaleString()}">
       <span class="run-mark">${run.passed ? '✓' : '✗'}</span>
-      <span><strong>${esc(shortModel(run.model))}</strong> <span class="muted">${seconds(run.latencyMs)}, expected ${expectText(run.expect)}</span><br>${what}</span>
+      <span><strong>${esc(shortModel(run.model))}</strong> <span class="muted">${run.variant ? `${esc(run.variant)}, ` : ''}${seconds(run.latencyMs)}, expected ${expectText(run.expect)}</span><br>${what}</span>
     </li>`;
 }

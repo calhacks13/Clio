@@ -6,6 +6,7 @@ import {
   type BenchCheckTestListResponse,
   BenchCheckTestRunRequestSchema,
   BenchCheckTestUpdateSchema,
+  BenchCriteriaRequestSchema,
   BenchJudgeRequestSchema,
   type BenchModelsResponse,
   BenchPaths,
@@ -19,6 +20,7 @@ import {
   BenchScenarioUpdateSchema,
   type PlanStage,
   type StepCheckResponse,
+  type StepCriteriaResponse,
 } from '@clio/protocol';
 import { Hono } from 'hono';
 import type { BenchDeps, ServerDeps } from '../deps';
@@ -28,7 +30,7 @@ import { describeError } from '../log';
 import { type BenchModels, benchPlan, judgeRun, scenarioPlanRequest } from '../services/bench';
 import { expectLabel, runCheckTest } from '../services/bench-checks';
 import type { PlanRequestBody } from '../services/plan-service';
-import { askStepCheck } from '../services/step-check-service';
+import { askStepCheck, askStepCriteria } from '../services/step-check-service';
 import { limitBody, parseBody, safeId } from './request';
 
 // The planner bench (docs/planner-bench.md): the laptop page and `pnpm bench` put the planner in
@@ -92,6 +94,18 @@ export function benchRoutes({ bench, now, logger, limits }: ServerDeps): Hono {
     const checker = models.checker(model ?? models.plannerModel);
     const { answer, latencyMs } = await askStepCheck(checker, body, now);
     return c.json({ ...answer, model: checker.model, latencyMs } satisfies StepCheckResponse);
+  });
+
+  app.post(BenchPaths.criteria, limitBody(limits.imageBytes), async (c) => {
+    const models = gemini();
+    const { model, ...body } = await parseBody(
+      c,
+      BenchCriteriaRequestSchema,
+      'bench criteria request',
+    );
+    const checker = models.checker(model ?? models.plannerModel);
+    const { criteria, latencyMs } = await askStepCriteria(checker, body, now);
+    return c.json({ criteria, model: checker.model, latencyMs } satisfies StepCriteriaResponse);
   });
 
   app.get(BenchPaths.scenarios, async (c) =>

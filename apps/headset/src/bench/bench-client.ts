@@ -10,6 +10,7 @@ import {
   BenchCheckTestListResponseSchema,
   BenchCheckTestSchema,
   type BenchCheckTestUpdate,
+  type BenchCriteriaRequest,
   type BenchGrade,
   type BenchModelsResponse,
   BenchModelsResponseSchema,
@@ -28,6 +29,8 @@ import {
   type BenchScenarioUpdate,
   type StepCheckResponse,
   StepCheckResponseSchema,
+  type StepCriteriaResponse,
+  StepCriteriaResponseSchema,
 } from '@clio/protocol';
 import { z } from 'zod';
 import { ApiClient } from '../adapters/net/api-client';
@@ -47,6 +50,10 @@ export class BenchClient extends ApiClient {
 
   benchCheck(request: BenchCheckRequest): Promise<StepCheckResponse> {
     return this.request('POST', BenchPaths.check, request, StepCheckResponseSchema);
+  }
+
+  benchCriteria(request: BenchCriteriaRequest): Promise<StepCriteriaResponse> {
+    return this.request('POST', BenchPaths.criteria, request, StepCriteriaResponseSchema);
   }
 
   scenarios(): Promise<BenchScenarioListResponse> {

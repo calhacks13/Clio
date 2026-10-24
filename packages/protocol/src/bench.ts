@@ -7,6 +7,7 @@ import {
   StepCheckObjectSchema,
   StepCheckRequestSchema,
   StepCheckResponseSchema,
+  StepCriteriaRequestSchema,
 } from './api';
 import { SlugSchema } from './checks';
 import { ProcedureSchema } from './procedure';
@@ -26,6 +27,7 @@ export const BenchPaths = {
   models: '/api/bench/models',
   plan: '/api/bench/plan',
   check: '/api/bench/check',
+  criteria: '/api/bench/criteria',
   scenarios: '/api/bench/scenarios',
   scenario: (id: string) => `/api/bench/scenarios/${seg(id)}`,
   scenarioView: (id: string, n: number) => `/api/bench/scenarios/${seg(id)}/views/${n}`,
@@ -62,6 +64,9 @@ export const BenchPlanRequestSchema = PlanRequestSchema.extend({
   budgetMs: BudgetSchema.optional(),
 });
 export const BenchCheckRequestSchema = StepCheckRequestSchema.extend({
+  model: ModelNameSchema.optional().describe('Defaults to the planner model'),
+});
+export const BenchCriteriaRequestSchema = StepCriteriaRequestSchema.extend({
   model: ModelNameSchema.optional().describe('Defaults to the planner model'),
 });
 
@@ -337,6 +342,7 @@ export const BenchCheckTestRunRequestSchema = z.object({ model: ModelNameSchema.
 export type BenchModelsResponse = z.infer<typeof BenchModelsResponseSchema>;
 export type BenchPlanRequest = z.input<typeof BenchPlanRequestSchema>;
 export type BenchCheckRequest = z.input<typeof BenchCheckRequestSchema>;
+export type BenchCriteriaRequest = z.input<typeof BenchCriteriaRequestSchema>;
 export type BenchGrade = z.infer<typeof BenchGradeSchema>;
 export type BenchVerdict = z.infer<typeof BenchVerdictSchema>;
 export type BenchJudgement = z.infer<typeof BenchJudgementSchema>;

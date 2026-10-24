@@ -108,8 +108,11 @@ interface Watch {
   paused: boolean;
   looking: boolean;
   suggest: boolean;
-  /** The frame from when the focused step gained focus (session.focusTurn), sent as `before`. */
-  before: { turn: number; image: ImagePayload; url: string } | null;
+  /**
+   * The frame from when the focused step gained focus (session.focusTurn), sent as `before`, and
+   * the step's criteria, asked once with it as the headset does.
+   */
+  before: { turn: number; image: ImagePayload; url: string; criteria: string[] } | null;
   /** The look whose save-as-test form is open. */
   saving: WatchLook | null;
   timer: ReturnType<typeof setTimeout> | null;
@@ -1093,14 +1096,39 @@ function scheduleLook(delayMs: number): void {
   watch.timer = setTimeout(() => void look(watch), delayMs);
 }
 
-/** Keeps a frame from the moment the focused step gained focus, to send with its looks. */
+/**
+ * Keeps a frame from the moment the focused step gained focus, to send with its looks, and asks
+ * once for the step's criteria with it. Looks go without criteria when asking fails.
+ */
 async function keepBefore(watch: Watch): Promise<Watch['before']> {
   const turn = watch.session.focusTurn;
   if (watch.before?.turn === turn) return watch.before;
-  if (!webcam || watch.session.focus === null) return null;
+  const stepIndex = watch.session.focus;
+  const step = stepIndex === null ? undefined : watch.session.steps[stepIndex];
+  if (!webcam || stepIndex === null || !step) return null;
   const [image] = await webcam.snapshots(1).catch(() => []);
   if (!image || state.watch !== watch || watch.session.focusTurn !== turn) return null;
-  watch.before = { turn, image, url: dataUrl(image) };
+  const { objects, confusions } = stepCheckHints(
+    { ...watch.procedure, steps: watch.session.steps },
+    stepIndex,
+  );
+  const criteria = await api
+    .benchCriteria({
+      goal: watch.goal,
+      step: {
+        id: step.id,
+        instruction: step.instruction,
+        ...(step.doneWhen ? { doneWhen: step.doneWhen } : {}),
+      },
+      ...(objects.length ? { objects } : {}),
+      ...(confusions.length ? { confusions } : {}),
+      images: [image],
+      model: watch.model,
+    })
+    .then((r) => r.criteria)
+    .catch(() => []);
+  if (state.watch !== watch || watch.session.focusTurn !== turn) return null;
+  watch.before = { turn, image, url: dataUrl(image), criteria };
   return watch.before;
 }
 
@@ -1141,6 +1169,7 @@ async function look(watch: Watch): Promise<void> {
       ...(before ? { before: [before.image] } : {}),
       ...(asked.objects.length ? { objects: asked.objects } : {}),
       ...(asked.confusions.length ? { confusions: asked.confusions } : {}),
+      ...(before?.criteria.length ? { criteria: before.criteria } : {}),
       model: watch.model,
     });
     entry = {
@@ -1154,6 +1183,7 @@ async function look(watch: Watch): Promise<void> {
       ...(answer.wrong?.trim() ? { wrong: answer.wrong.trim() } : {}),
       ...(answer.evidence ? { evidence: answer.evidence } : {}),
       ...(answer.hazard?.trim() ? { hazard: answer.hazard.trim() } : {}),
+      ...(answer.criteria?.length ? { criteria: answer.criteria } : {}),
     };
   } catch (err) {
     entry = { at: Date.now(), step: stepIndex, error: message(err), model: watch.model };

@@ -17,6 +17,7 @@ import {
   ProcedureListResponseSchema,
   type StepCheckRequest,
   StepCheckResponseSchema,
+  StepCriteriaResponseSchema,
 } from '@clio/protocol';
 import { describe, expect, it } from 'vitest';
 import type { BenchDeps } from '../src/deps';
@@ -346,6 +347,24 @@ describe('POST /api/bench/check', () => {
       images: [IMAGE],
     });
     expect(res.status).toBe(502);
+  });
+});
+
+describe('POST /api/bench/criteria', () => {
+  it("writes a step's criteria with the chosen model", async () => {
+    const h = await benchHarness();
+    const res = await h.request('POST', BenchPaths.criteria, {
+      goal: 'Refill the washer fluid',
+      step: { id: 'open-cap', instruction: 'Open the cap.', doneWhen: 'The cap is off.' },
+      images: [IMAGE],
+      model: 'gemini-3.8-flash',
+    });
+    expect(res.status).toBe(200);
+    expect(StepCriteriaResponseSchema.parse(await res.json())).toEqual({
+      criteria: ['The cap is off.'],
+      model: 'gemini-3.8-flash',
+      latencyMs: 1_000,
+    });
   });
 });
 
