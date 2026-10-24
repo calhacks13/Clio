@@ -52,4 +52,10 @@ export class SpeakerOutput implements VoiceOutput {
     this.nextStart = 0;
     if ('speechSynthesis' in window) speechSynthesis.cancel();
   }
+
+  /** A turn's audio arrives faster than it plays: this stays true until the last buffer ends. */
+  playing(): boolean {
+    if (this.sources.size > 0) return true;
+    return 'speechSynthesis' in window && (speechSynthesis.speaking || speechSynthesis.pending);
+  }
 }

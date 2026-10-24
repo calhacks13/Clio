@@ -1,8 +1,10 @@
 import type { Vec3 } from '../../core/math';
 import type { AgentState } from '../coach/agent';
 import type { LessonView } from '../coach/ports';
-import type { AppBus, HighlightStyle, LessonPhase } from '../events';
+import type { AppBus, CoachVoice, HighlightStyle, LessonPhase } from '../events';
 import type { ObjectOutline } from '../world/outline';
+
+export type { CoachVoice };
 
 // The presentation model: what the AR layer should show, reduced from bus events. Presenters read
 // a snapshot each frame and never reach into domain objects themselves.
@@ -43,13 +45,11 @@ export interface OverlaySnapshot {
   demoStepId: string | null;
   caption: { role: 'user' | 'coach'; text: string } | null;
   coach: AgentState | 'off';
-  /** The conversation right now: the learner talking, Clio talking, or neither. */
+  /** The conversation right now: the learner talking, Clio talking, or neither (see CoachVoice). */
   voice: CoachVoice;
   recording: { episodeId: string | null; queued: number } | null;
   missing: string[];
 }
-
-export type CoachVoice = 'quiet' | 'hearing' | 'speaking';
 
 /** How long a coach highlight shows (ms). */
 export const COACH_HIGHLIGHT_MS = 5000;
@@ -68,7 +68,7 @@ export class OverlayModel {
   private demoStepId: string | null = null;
   private caption: (NonNullable<OverlaySnapshot['caption']> & { until: number }) | null = null;
   private coach: AgentState | 'off' = 'off';
-  private voice: CoachVoice = 'quiet';
+  private voice: CoachVoice = 'off';
   private recording: OverlaySnapshot['recording'] = null;
   private missing: string[] = [];
 
@@ -141,6 +141,9 @@ export class OverlayModel {
       }),
       b.on('coach.status', ({ state }) => {
         this.coach = state;
+      }),
+      b.on('coach.voice', ({ voice }) => {
+        this.voice = voice;
       }),
       b.on('recorder.status', ({ recording, episodeId, queued }) => {
         this.recording = recording ? { episodeId, queued } : null;
