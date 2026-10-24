@@ -1,64 +1,93 @@
-# Writing procedures
+# The plan language
 
-A procedure is a task script: the objects involved, and the ordered steps with machine-checkable
-success conditions. Files live in `procedures/<id>.json`, and the schema is
-`packages/protocol/src/procedure.ts`. Add `"$schema": "../packages/protocol/schema/procedure.schema.json"`
-to get autocomplete in your editor. `pnpm test` validates every file, including cross-references
-such as a step targeting an object that doesn't exist.
+A procedure is a lesson: the objects involved, plus ordered steps, each with a machine-checkable
+success condition and an action Clio can demonstrate. **Most procedures are written at runtime by
+the planner LLM** (`POST /api/plans`, saved to `data/plans/`). The files in `procedures/` are
+curated golden lessons used for demos, as planner examples and as test fixtures. Both use the same
+schema, `packages/protocol/src/procedure.ts`, and pass the same validation, including the
+cross-references (a step can't target an object that wasn't declared).
+
+To get editor autocomplete, add `"$schema": "../packages/protocol/schema/procedure.schema.json"`.
+`pnpm test` validates every file in `procedures/`.
 
 The **instruction** is the most important field. It's spoken by the coach, shown in AR, and stored
-as the language label for every frame of that step, so write it as one short imperative sentence
-a robot could also be conditioned on: "Add vinegar to cup A."
+as the language label for every frame of its step. Write it as one short imperative sentence that
+a robot policy could be conditioned on: "Add vinegar to cup A."
 
 ## Objects
 
 ```json
 {
-  "id": "cup_a",
-  "label": "cup A",
-  "kind": "container",
-  "radius": 0.04,
-  "placement": { "method": "layout", "position": [0.15, 0.07, -0.12] },
-  "tracking": {
-    "marker": { "id": 1, "sizeM": 0.04, "offset": [0, 0.03, -0.035] },
-    "query": "white paper cup with a large letter A",
-    "moves": false
-  }
+  "id": "cap",
+  "label": "blue reservoir cap",
+  "kind": "item",
+  "radius": 0.03,
+  "placement": { "method": "detect", "hint": "front left of the engine bay" },
+  "tracking": { "query": "blue cap with a windshield symbol", "moves": true }
 }
 ```
 
-- **`placement`** sets the starting position. `layout` uses a fixed workspace position: tape a spot
-  there. `register` means the user pinches the object during setup.
-- **`tracking`** (optional) tells the camera how to follow the object: a printed fiducial `marker`
-  (fast, unambiguous, gives full pose), a detector `query` (works without stickers), or both.
-  Set `moves: true` for things that travel, such as tools.
-- **`hidden: true`** objects aren't drawn. Use them as zones for mistake rules ("pinched too low").
-- Positions are reference points in the workspace frame: x along the near table edge, y up, z toward
-  you, so table positions have z < 0. Put the point where a hand or tool should go, such as a cup
-  rim or bottle mouth, not the object's base.
+**`placement`** says how Clio first finds the object:
+- `detect`: from the camera, using `tracking.query` (or the label). This is what the planner uses.
+- `register`: the learner pinches it.
+- `layout`: a fixed workspace position, for curated mats with taped spots.
+
+**`tracking`** (optional):
+- `query` is an open-vocabulary visual description. Be specific about color, shape and label text.
+- `marker` is a printed ArUco fiducial, for precision demos.
+- `moves: true` marks objects that travel.
+
+Grasped movable objects (`item`, `tool`, `container`) ride with the hand that holds them.
+
+**`hidden: true`** objects aren't drawn. Use them as zones for mistake rules.
+
+**Positions** are reference points in the workspace frame (x along the near edge, y up, z toward
+the learner, so tabletop positions have z < 0). Put the point where the hand or tool goes, such as
+the rim or the mouth.
+
+## Actions: how Clio shows a step
+
+```json
+"action": { "verb": "twist", "object": "cap", "direction": "ccw", "amount": 1.5 }
+```
+
+The verb picks a choreography for the synthesized ghost hands, placed on the objects' real
+positions. It's also stored as a structured action label. Verbs (`ACTION_VERBS` in
+`packages/protocol/src/actions.ts`):
+
+| Verb                                                   | Object / target                               | Shows                                                  |
+| ------------------------------------------------------ | --------------------------------------------- | ------------------------------------------------------ |
+| `point_at`, `touch`, `pinch`, `grasp`, `press`, `wipe` | object                                        | reach and touch / pinch / grip / push / wipe           |
+| `pick_up`, `lift`                                      | object (`amount` = height)                    | grip and raise                                         |
+| `place`, `insert`, `pour`, `fold`                      | object → target                               | carry, then set down / push in / tilt over / fold over |
+| `twist`                                                | object (`direction` cw/ccw, `amount` = turns) | grip from above and rotate in strokes                  |
+| `pull`                                                 | object (`direction`, `amount` = meters)       | grip and pull                                          |
+| `observe`, `wait`, `other`                             | optional                                      | no hand motion (highlights only)                       |
+
+When an expert's recording of the step exists (`mode=record_demo`, then sliced into clips), it
+replaces the synthesized demo.
 
 ## Checks
 
-Every leaf check is a **state** ("true right now, for at least `dwellMs`"). That makes checks
-composable and tolerant of tracking dropouts.
+Every leaf check is a **state**: "true now, for at least `dwellMs`". That makes checks composable
+and tolerant of one-frame tracking dropouts.
 
-| Check                                                | Satisfied when                                                                          | Defaults                            |
-| ---------------------------------------------------- | --------------------------------------------------------------------------------------- | ----------------------------------- |
-| `pinch_near { object, hand, radius }`                | the hand is pinching, with its pinch point within `radius` of the object                | hand `either`, radius 0.04, dwell 0 |
-| `hand_near { object, hand, point, radius, dwellMs }` | a hand point (`pinch`, `index_tip`, `thumb_tip`, `palm`, `wrist`) stays near the object | radius 0.06, dwell 250              |
-| `lift { hand, point, height }`                       | the point is at least `height` above the table                                          | wrist, 0.15 m, dwell 200            |
-| `object_near { object, target, radius }`             | a tracked object stays near another object                                              | radius 0.06, dwell 500              |
-| `confirm { by, prompt }`                             | the coach or user confirms (the coach's `advance_step` tool)                            | by `either`                         |
-| `elapsed { ms }`                                     | the step has been active for `ms`                                                       |                                     |
-| `all { of }`                                         | every child holds in the same frame                                                     |                                     |
-| `any { of }`                                         | at least one child holds                                                                |                                     |
-| `sequence { of }`                                    | children pass in order; each latches once it passes                                     |                                     |
+| Check                                                | Satisfied when                                                                          | Defaults                       |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------ |
+| `pinch_near { object, hand, radius }`                | the hand is pinching within `radius` of the object                                      | hand `either`, 0.04 m, dwell 0 |
+| `hand_near { object, hand, point, radius, dwellMs }` | a hand point (`pinch`, `index_tip`, `thumb_tip`, `palm`, `wrist`) stays near the object | 0.06 m, 250 ms                 |
+| `lift { hand, point, height }`                       | the point is at least `height` above the surface                                        | wrist, 0.15 m, 200 ms          |
+| `object_near { object, target, radius }`             | a tracked object stays near another                                                     | 0.06 m, 500 ms                 |
+| `confirm { by, prompt }`                             | the coach (`advance_step`) or learner (Done button) confirms                            | `either`                       |
+| `elapsed { ms }`                                     | the step has been active for `ms`                                                       |                                |
+| `all` / `any` / `sequence { of }`                    | every child / some child / children in order (each latches)                             |                                |
 
 Patterns:
-- Use `any` for a tracking fallback: `any [object_near syringe→cup_a, hand_near cup_a]` still works if the marker is hidden.
-- Use `all` to hold one point while pinching another (`pinch-middle` in `shirt-fold.json`).
-- End visual results with `sequence [..., confirm]` and let the coach judge, e.g. "cup A turned pink".
-- Use loose radii (7–8 cm) where the hands cross or occlude each other.
+- Use `any [object_near syringe→cup_a, hand_near cup_a]` as a fallback for when tracking drops.
+- Use `all` to hold one point while pinching another (see `shirt-fold.json`).
+- End visual results with `sequence [..., confirm]`: the coach sees the camera frames, e.g. "cup A
+  turned pink".
+- Loosen radii (7–8 cm) where the hands cross or hide each other.
 
 ## Mistakes
 
@@ -71,19 +100,12 @@ Patterns:
 }
 ```
 
-A rule fires on its rising edge, then waits `cooldownMs` before it can fire again. It emits
-`mistake.detected` (the machine label) and the coach responds, usually with `flag_mistake` and a
-spoken correction. Give rules a dwell so that passing by doesn't count.
+A mistake fires on its rising edge, then waits `cooldownMs` before it can fire again. It's recorded
+as `mistake.detected`, and the coach is told to correct the learner. Give it a dwell so that
+passing by doesn't count.
 
 ## Coach hints
 
-- `coachNotes` (per step) and `coach.persona` / `coach.notes` (per procedure) go into the coach's
-  system prompt.
-- `stuckAfterMs` makes the app tell the coach the learner seems stuck, which is a cue to offer
-  `show_demo`.
-
-## Drafting new procedures ("learn anything")
-
-`POST /api/procedures/draft { "task": "change a bike tire" }` asks an LLM for a draft that is
-validated against the same schema and saved to `data/drafts/`. Review the positions, radii and
-mistakes, then move the file to `procedures/`.
+- `coachNotes` (per step) and `coach.persona` / `coach.notes` (per procedure) shape the coach.
+- `stuckAfterMs` tells the coach the learner seems stuck, which is a cue to offer `show_demo`.
+- Generated plans carry `origin: { kind: "generated", goal, model, createdAt, revisionOf? }`.

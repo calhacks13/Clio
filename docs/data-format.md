@@ -28,10 +28,10 @@ data/
 │   ├── events.ndjson    one EpisodeEvent per line, in time order
 │   ├── objects.ndjson   one ObjectTrackRecord per tracker update, in time order
 │   ├── finish.json      EpisodeFinish: written when the headset finishes the episode
-│   ├── batches.json     server bookkeeping: received batch seqs (for idempotency and gap reports)
+│   ├── batches.json     server bookkeeping: {"received": [seq…], "gaps": [seq…]}
 │   └── media/<name>     optional uploads, e.g. egocentric.webm (see media.started events)
 ├── clips/<procedureId>/<stepId>.json   DemoClip: ghost-hand demos sliced from expert episodes
-└── drafts/<procedureId>.json           LLM-drafted procedures awaiting review
+└── plans/<planId>.json                 procedures written by the planner (and their revisions)
 ```
 
 Episode ids look like `ep-20261024-031502-k3f9` (UTC timestamp plus a random suffix), so they sort

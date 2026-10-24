@@ -2,329 +2,330 @@
 
 > Every lesson trains two students: you, and a robot.
 
-Clio is a WebXR app for Meta Quest 3. A voice coach walks a person through a hands-on task with AR
-targets and "ghost hand" demonstrations, and every session is recorded as an intent-labeled,
+Clio is a WebXR app for Meta Quest 3 that can teach **anything**. You say what you want to learn.
+An LLM plans the lesson from your goal and what the headset camera sees. Clio then works out how
+to _show_ each step: it finds the objects, highlights them, and synthesizes a ghost-hand
+demonstration. A voice coach talks you through it. Every session is recorded as an intent-labeled,
 robot-ready dataset.
 
 This is the map of the system. Read it before you write code, and update it when you change a
-boundary. The exact data formats are in [data-format.md](data-format.md), the task-script language
-is in [procedures.md](procedures.md), and setup is in [dev-setup.md](dev-setup.md).
+boundary. The exact data formats are in [data-format.md](data-format.md), the plan language is in
+[procedures.md](procedures.md), and setup is in [dev-setup.md](dev-setup.md).
 
 ---
 
 ## 1. Goals
 
-| #   | Goal                        | What it means in practice                                                                                                                                 |
-| --- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| G1  | Coach a real task           | A learner finishes the shirt fold or the pH protocol with voice coaching, AR targets, ghost-hand demos and mistake correction.                            |
-| G2  | Every session is data       | Hand joints, head pose, object positions, step intents, coach tool calls, transcripts and mistakes, all on **one clock** and in **one coordinate frame**. |
-| G3  | Robot-ready output          | Episodes export to LeRobot and replay in Rerun.                                                                                                           |
-| G4  | Four people, one headset    | Everyone can build from hour one. The desktop emulator, the scripted coach and synthetic episodes mean no one waits on the Quest.                         |
-| G5  | The demo survives the venue | No Gemini? Use the scripted coach. Bad Wi-Fi? Tether over USB and relay through the laptop. Server hiccup? Batches buffer and retry.                      |
-
-**Not this weekend:** camera-based object detection (designed for in §8, not built), accounts or cloud
-deployment, other headsets or glasses.
+| #   | Goal                        | What it means in practice                                                                                                                                             |
+| --- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1  | Teach anything              | The planner (an LLM) writes the lesson at runtime from a spoken goal plus camera snapshots; Clio grounds the plan in the real scene and demonstrates each step.       |
+| G2  | Show, don't just tell       | Each step's action primitive (`twist`, `pour`, `pick_up`, …) becomes highlights, arrows and a synthesized ghost-hand demo anchored to the real objects.               |
+| G3  | Every session is data       | Hand joints, head pose, object tracks, step intents (language), action labels, coach tool calls, transcripts and mistakes, all on **one clock** and in **one frame**. |
+| G4  | Robot-ready output          | Episodes export to LeRobot v3 and replay in Rerun.                                                                                                                    |
+| G5  | Four people, one headset    | The desktop emulator (IWER), the scripted coach and synthetic episodes mean nobody waits for the Quest.                                                               |
+| G6  | The demo survives the venue | No Gemini? Use the scripted coach. Bad Wi-Fi? USB to the laptop, which relays. No camera? Register objects by pinching.                                               |
 
 ## 2. System at a glance
 
 ```
-┌────────────────────── Quest 3 · Quest Browser · WebXR "immersive-ar" ───────────────────────┐
-│ apps/headset                                                                                 │
-│                                                                                              │
-│  Sensing ─► World ─► SessionController ─► ProcedureRunner ◄─tools─ CoachSession ◄─► Gemini   │
-│  (hands,    (work-    (calibrate → place   (step checks,            (voice, tools,    Live   │
-│   head)      space,     → lesson → done)    mistake rules)           narration)       ▲      │
-│              objects)          │                                         │            │      │
-│        ═══════════════════ typed event bus · one clock ══════════════════════         │      │
-│                 │                                   │                                 │      │
-│           OverlayModel ─► three.js presenters    EpisodeRecorder ─► EpisodeSink       │      │
-└─────────────────────────────────────────────────────────────────────────┼─────────────┼──────┘
-                                       HTTP /api/episodes (batched)        │   WS relay  │
-┌────────────────────────────────── Laptop ───────────────────────────────▼─────────────┴──────┐
-│ apps/server (Node · Hono)  /api/coach/*  /api/procedures  /api/episodes  /api/clips          │
-│                            data/episodes/<id>/ meta.json · frames.ndjson · events.ndjson     │
-│ pipeline/ (Python · uv)    validate · Rerun replay · LeRobot export                          │
-└──────────────────────────────────────────────────────────────────────────────────────────────┘
- packages/protocol (TypeScript · zod): the contracts all of the above share, exported as JSON
- Schema so Python validates against the same definitions.
+ "teach me to add wiper fluid"
+            │ voice
+┌───────────▼──────────────── Quest 3 · Quest Browser · WebXR immersive-ar ─────────────────────┐
+│ apps/headset                                                                                  │
+│                                                                                               │
+│  CoachSession ◄═══════► Gemini Live (voice, tools)            ┌───────── LessonController ───┐│
+│   │ start_lesson ──────────────────────────────────────────►  │ plan ─► locate ─► run ─► record│
+│   │ highlight / show_demo / advance_step / flag_mistake ───►  │   ▲        │        │         ││
+│   │◄── [app] narrations (step briefings, mistakes, …) ◄────── │   │        ▼        ▼         ││
+│                                                               │ Planner  Grounder  ProcedureRunner
+│  Sensing ─► Workspace ─► Pinch/Grasp ─► ObjectRegistry ◄──────┴───────────────────────────────┘│
+│  (hands 90 Hz, head)       (held objects ride the wrist)   ▲ camera detections                 │
+│        ════════════════════ typed event bus · one clock ═══╪═════════════════════              │
+│        │                                │                  │                                   │
+│   OverlayModel ─► three.js presenters  EpisodeRecorder ─► EpisodeUploader                      │
+│   (instruction, highlights,            (frames, events, object tracks)                         │
+│    synthesized ghost hands, glyphs)                                                            │
+└──────────┬─────────────────────────────────────┬──────────────────────┬───────────────────────┘
+           │ /gemini WS relay                    │ /api/plans,          │ /api/episodes
+           ▼                                     ▼ /api/vision/locate   ▼
+┌──────────────────────────────────── Laptop: apps/server (Node · Hono) ────────────────────────┐
+│ relay → Google (injects key) · planner LLM (structured output) · vision locator (2D boxes)    │
+│ data/episodes/<id>/ · data/plans/<id>.json · data/clips/                                       │
+│ pipeline/ (Python · uv): validate · Rerun replay · LeRobot export                              │
+└────────────────────────────────────────────────────────────────────────────────────────────────┘
+ packages/protocol (TypeScript · zod): every contract above, exported as JSON Schema for Python.
 ```
 
 ## 3. Principles
 
-1. **Code owns task state; the LLM owns the conversation.** `ProcedureRunner` is the only source
-   of truth for which step the learner is on. The coach requests changes through tool calls. The
-   runner validates and applies them, and records who decided.
-2. **The LLM never tracks hands.** It sees about one camera frame per second. Hands come from
-   WebXR hand tracking at headset frame rate (72–120 Hz). The coach gets short text narrations of
-   what happened, such as "right hand pinched 2 cm from the shoulder point".
-3. **Hands are the measuring instrument.** The browser gives us no calibrated camera, so we use
-   the hands to calibrate the world. Pinch two corners to define the workspace. Pinch an object to
-   register it, or let the procedure's layout place it. Camera detection plugs in later behind
-   the same port (§8).
-4. **Everything that matters is an event on one clock.** Anything the dataset needs goes through
-   the typed event bus with a timestamp from the same `performance.now()` timeline that XR frames
-   use. The recorder subscribes to the bus, so nothing gets logged on the side.
-5. **One episode, one frame.** All spatial data in an episode is expressed in that episode's
-   workspace frame, and recalibrating starts a new episode. This is why ghost-hand clips replay
-   correctly on a different table, and why robot teams can map our frame to theirs once.
-6. **Ports and adapters.** `domain/` is plain TypeScript with no three.js, WebXR, DOM or SDK
-   imports. Adapters implement its ports. That keeps logic testable in Node, and it lets us swap
-   Gemini for a scripted coach, the headset for an emulator, or the server for an in-memory sink.
-   `test/architecture.test.ts` enforces this rule.
+1. **The LLM plans; code owns the state.** The planner writes the procedure (data). The
+   `ProcedureRunner` is the only source of truth for progress. The coach requests changes through
+   tool calls, and the runner validates them and records who decided and whether the check passed.
+2. **The LLM never tracks hands.** It sees at most one camera frame per second. Hands come from
+   WebXR hand tracking at 72–120 Hz. The coach learns what happened from short `[app]` narrations.
+3. **Hands are the measuring instrument.** Pinch two corners to calibrate the table. Pinch an
+   object the camera couldn't find to register it. Grip an object and it rides with your wrist
+   (§5.6).
+4. **Everything that matters is an event on one clock.** The recorder subscribes to the typed
+   bus, so nothing is logged on the side. Timestamps come from the `performance.now()` timeline
+   that XR frames and camera frames use.
+5. **One episode, one frame.** All spatial data in an episode is in that episode's workspace
+   frame. That's what makes ghost-hand clips portable and the exported dataset coherent.
+6. **Ports and adapters.** `domain/` is plain TypeScript: no three.js, WebXR, DOM or SDK
+   imports. `test/architecture.test.ts` enforces it. Gemini, the camera, the server and the
+   renderer are adapters, so each can be swapped (scripted coach, emulator, memory sink).
 7. **Degrade, don't die.** Every external dependency has a fallback (§10).
 
 ## 4. Repository layout
 
 ```
 Clio/
-├── packages/protocol/        @clio/protocol: zod schemas + types (single source of truth)
-│   ├── src/                  geometry, hand, checks, procedure, episode, clip, coach-tools, api
-│   └── schema/               generated JSON Schema (committed; consumed by pipeline/)
+├── packages/protocol/        @clio/protocol: zod contracts (procedures + checks + actions,
+│   │                         episodes, clips, coach tools, HTTP API) → schema/*.json for Python
 ├── apps/headset/             @clio/headset: the WebXR app (Vite + three.js + TypeScript)
-│   ├── src/core/             clock, typed emitter, math, logging (no dependencies)
-│   ├── src/domain/           pure logic: hands, world, procedure, coach, recording, demo, overlay, session
-│   ├── src/adapters/         xr, render, gemini, scripted, audio, camera, net
-│   ├── src/app/              composition root, config, boot screen, frame loop
-│   ├── scripts/              synth-episode.ts (synthetic episodes from the real domain code)
-│   └── test/                 domain unit tests + architecture fitness test
-├── apps/server/              @clio/server: Node + Hono (Gemini relay/tokens, procedures, episodes, clips)
-├── pipeline/                 Python (uv): load/validate episodes, Rerun replay, LeRobot export
-├── procedures/               task scripts (JSON), e.g. shirt-fold.json, ph-indicator.json
-├── fixtures/episodes/        small synthetic episodes for tests and for building the pipeline early
-└── docs/                     this file, data-format.md, procedures.md, dev-setup.md
+│   ├── src/core/             clock, typed emitter, tuple math, logging
+│   ├── src/domain/           pure logic, unit-tested in Node:
+│   │   ├── hands/            joint features, pinch detection
+│   │   ├── world/            workspace frame, calibration, object registry, camera model,
+│   │   │                     grounding (2D detections → 3D), grasp tracking, pose history
+│   │   ├── procedure/        check evaluators, ProcedureRunner
+│   │   ├── demo/             hand-shape kinematics, keyframes, verb choreographies, clip player,
+│   │   │                     demo library (recorded clip, else synthesized)
+│   │   ├── coach/            RealtimeAgent port, toolbox, narrator, prompt, session
+│   │   ├── recording/        recorder, uploader (ordered, retrying), sinks
+│   │   ├── overlay/          presentation model
+│   │   └── session/          LessonController (plan → locate → run → record → revise)
+│   ├── src/adapters/         xr, render, audio, camera, gemini, scripted, net
+│   ├── src/app/              config, boot page, ClioApp (composition root + frame pipeline)
+│   └── scripts/              synth-episode.ts: synthetic episodes from the real domain
+├── apps/server/              @clio/server: relay, tokens, planner, vision, procedures, episodes, clips
+├── pipeline/                 Python: validate, Rerun, LeRobot export (`clio …`)
+├── procedures/               curated lessons: golden demos, planner examples, test fixtures
+├── fixtures/episodes/        synthetic episodes for tests and pipeline work
+└── docs/
 ```
 
-Workspace packages are consumed **from source** (`"exports": "./src/index.ts"`). There is no build
-step between packages: Vite bundles the headset, `tsx` runs the server, and `tsc` only typechecks.
-
-## 5. Headset app (`apps/headset`)
+## 5. Headset app
 
 ### 5.1 Layers and the dependency rule
 
 ```
-app/        composition root · config · boot UI · frame loop   ← may import anything
-  │
-adapters/   xr · render · gemini · scripted · audio · camera · net   ← implement domain ports
-  │
-domain/     hands · world · procedure · coach · recording · demo · overlay · session
-  │
-core/       clock · emitter · math · log            @clio/protocol (schemas, types)
+app/        composition root · config · boot page        ← may import anything
+adapters/   xr · render · audio · camera · gemini · scripted · net   ← implement domain ports
+domain/     hands · world · procedure · demo · coach · recording · overlay · session
+core/       clock · emitter · math · log          @clio/protocol (schemas, types)
 ```
 
-Imports only point downward. `domain/` and `core/` must not import `three`, `@google/genai`,
-`iwer`, browser globals, or anything from `adapters/` or `app/`. The ports that `domain/` needs are
-defined next to the code that uses them, for example `domain/coach/agent.ts` (`RealtimeAgent`) and
-`domain/recording/sink.ts` (`EpisodeSink`).
+Imports only point downward. Ports are declared next to the code that needs them: `RealtimeAgent`
+(coach), `EpisodeSink` (recording), `LessonPlanner` / `PlanImageSource` (session),
+`CameraFrameSource` / `VisionLocator` / `Grounder` (world), `ClipSource` (demo).
 
-### 5.2 The frame loop (`app/frame-loop.ts`)
+### 5.2 The frame pipeline (`app/clio-app.ts`)
 
-These steps run once per XR frame, in order:
-1. **Sample.** `adapters/xr/frame-sampler` reads the viewer pose and both hands' 25 joints (pose and
-   radius) in the `local-floor` space, giving a `SensorFrame` in world coordinates.
-2. **Localize.** `domain/world/Workspace` converts it into the workspace frame, giving a
-   `WorkspaceFrame`.
-3. **Perceive.** `domain/hands` computes the pinch distance and pinch point per hand, and
-   `PinchDetector` emits `hand.pinch` start/end events (with hysteresis).
-4. **Decide.** `domain/session/SessionController` advances the current phase. During the lesson,
-   `ProcedureRunner` evaluates the step's success check and its mistake rules.
-5. **Record.** `domain/recording/EpisodeRecorder` appends a quantized `FrameRecord`.
-6. **Present.** `domain/overlay/OverlayModel` produces a snapshot, and the presenters in
-   `adapters/render` draw it.
+Once per XR frame:
+1. **Sample.** `FrameSampler` reads the viewer pose and 25 joints per hand (world space) and pushes
+   the head pose into `PoseHistory`, so camera frames can be paired with where the head was.
+2. **Localize.** It establishes the `Workspace` (calibration, a restored anchor, or a default in
+   front of the user), refines it from the anchor, and converts the frame into workspace space.
+3. **Perceive.** `PinchDetector` emits start/end with hysteresis. `GraspTracker` attaches and
+   detaches held objects. The registry's changes go out as `objects.updated`.
+4. **Decide.** `LessonController.update` runs the runner's checks and mistake rules, and
+   `CoachSession.tick` sends camera frames to the model when they're due.
+5. **Record.** `EpisodeRecorder.recordFrame`.
+6. **Present.** Presenters read an `OverlaySnapshot` plus the active demonstration.
 
-Coach I/O (mic audio worklet, Gemini WebSocket) is asynchronous. It reaches the same bus, stamped
-with the same clock.
-
-### 5.3 Session phases (`domain/session`)
+### 5.3 The "teach anything" flow (`domain/session/lesson-controller.ts`)
 
 ```
- setup ──► calibrate ──► place objects ──► lesson ──► done
-            pinch 2       layout: auto      runner + coach + recorder
-            corners       register: pinch   (record_demo mode: expert, no mistake prompts)
-            (or reuse a   each object
-             persisted
-             anchor)
+ coach hears the goal ─► start_lesson(goal)          [non-blocking tool: the coach keeps talking]
+   ├─ plan:    camera snapshots + goal ─► POST /api/plans ─► validated Procedure (+ warnings)
+   ├─ locate:  every unplaced object ─► Grounder (camera → /api/vision/locate → 3D) ─► registry
+   │           still missing? announced once → coach asks the learner to look or pinch it
+   ├─ run:     ProcedureRunner + EpisodeRecorder (the episode embeds the full plan)
+   ├─ per step: briefing narration · targets highlighted · demo auto-played · targets re-located
+   └─ revise_plan(reason) ─► POST /api/plans {revise: {planId, fromStepIndex}} ─► runner.replacePlan
 ```
 
-`mode` is `learn` (a learner with coaching and mistakes) or `record_demo` (an expert performs the
-task, and the episode is later sliced into ghost-hand clips). The phases are the same; only the
-policies differ.
+Curated procedures (`procedures/*.json`, or `?procedure=<id>`) skip planning and go straight to
+locate and run. They are the golden demos and the planner's examples.
 
 ### 5.4 Procedure engine (`domain/procedure`)
 
-A procedure is data (`procedures/*.json`, schema in `@clio/protocol`): objects with optional layout
-positions, plus ordered steps. Each step has an `instruction`, `targets`, a `success` check, optional
-`mistakes` (each a check plus a kind and message), an optional demo clip, and notes for the coach.
+A procedure is objects plus steps. Each step has an instruction (the language label), targets, an
+optional **action** primitive, a **success** check, optional mistake rules and coach notes. Checks
+are composable _state_ checks (`pinch_near`, `hand_near`, `lift`, `object_near`, `confirm`,
+`elapsed`, `all`, `any`, `sequence`) with dwell gates that bridge one-frame tracking dropouts. The
+runner:
+- auto-advances on success;
+- fires mistakes on rising edges with cooldowns;
+- reports stuck steps once;
+- accepts coach and user advances, labeling `forced` when the check hadn't passed;
+- swaps in revised plans without losing progress.
 
-Checks are a small declarative language: `pinch_near`, `hand_near` (with dwell), `lift`, `confirm`,
-`elapsed`, `all`, `any` and `sequence`. Each type has a stateful evaluator registered in
-`domain/procedure/checks/`. The runner:
-- evaluates the current step's `success` every frame. On success it emits `step.completed { by: "check" }` and enters the next step;
-- evaluates `mistakes` every frame with a per-rule cooldown, and emits `mistake.detected` (a machine label) for the coach to react to;
-- accepts `requestAdvance({ by: "coach" | "user", reason })` and `goTo(stepId)`. If the coach advances
-  a step whose check hasn't passed, the step is still completed, but it's labeled `forced: true`
-  so the dataset can filter it.
+### 5.5 Showing a step (`domain/demo`)
 
-### 5.5 Coach (`domain/coach` + `adapters/gemini` + `adapters/scripted`)
+AI-planned steps have no expert recording, so demonstrations are **synthesized** from the step's
+action and the objects' live positions:
+- **Hand shapes:** `open`, `flat`, `relaxed`, `point`, `pinch` and `grasp`, built with finger
+  forward kinematics (left hand mirrored). Each shape has a grip point.
+- **Choreographies:** each verb has one, a short keyframe track placed relative to the real
+  objects. `pick_up` approaches, grips and lifts; `pour` carries the object over the target and
+  tilts it about 100°; `twist` grips from above and rotates in strokes; `place`, `insert`,
+  `press`, `pull`, `wipe` and `fold` have their own.
+- **Glyphs:** arrows, twist arcs, press and sweep cues are drawn alongside the hands.
+- **Playback:** `ClipPlayer` plays synthesized and recorded clips identically.
 
-`CoachSession` connects four things:
+`DemoLibrary` prefers an expert recording when one exists: every good `record_demo` episode can be
+sliced into clips by the server, and that is the flywheel.
 
-| In                                                                 | Out                                                           |
-| ------------------------------------------------------------------ | ------------------------------------------------------------- |
-| mic PCM (16 kHz) from `MicSource`                                  | `agent.pushAudio`                                             |
-| camera JPEG at ≤1 fps from `FrameSource` (optional)                | `agent.pushImage`                                             |
-| bus events → `Narrator` → short `[app]` narrations                 | `agent.pushContext`                                           |
-| agent tool calls → `CoachToolbox` (zod-validated) → runner/overlay | `agent.respondToTools`                                        |
-| agent audio / text / transcripts                                   | `VoiceOutput`, and `transcript` + `coach.*` events on the bus |
+### 5.6 Finding and tracking objects (`domain/world`)
 
-**Tools** are defined once in `@clio/protocol/coach-tools` (name, description, zod args). The Gemini
-adapter turns them into function declarations. There are four, and each one is both a visible action
-and a timestamped label:
-- `highlight(object_id, style?)`: emphasizes an object.
-- `show_demo(step_id?)`: plays the ghost-hand clip.
-- `advance_step(reason)`: asks the runner to move on.
-- `flag_mistake(kind, message)`: shows a correction and labels it.
+Tracking is layered. Each layer covers the others' blind spots:
 
-Tool handlers never throw at the model. Bad arguments come back as `{ ok: false, error }` so the
-model can correct itself.
+| Layer                  | When                                                    | How                                                                                                                                                                                                                                                                                                    | Accuracy                                                 |
+| ---------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
+| **Camera grounding**   | plan start, step start, after a release, on `highlight` | A passthrough camera frame and each object's text query go to `/api/vision/locate` (Gemini spatial understanding → 2D point + box). `liftDetection` casts camera rays using the head pose at capture time: depth comes from where the box's bottom meets the surface, height from the detection point. | ±1–2 cm for static props when calibrated (see dev-setup) |
+| **Held objects**       | while pinched or fist-gripped                           | `GraspTracker` attaches the object to the wrist with the grip offset, so it rides the 90 Hz hand tracking with no camera latency                                                                                                                                                                       | hand-tracking accuracy                                   |
+| **Pinch registration** | the camera can't find something                         | The next free-space pinch registers the next missing object (current step's targets first)                                                                                                                                                                                                             | fingertip accuracy                                       |
+| **Layout**             | curated demos on a taped mat                            | Fixed workspace positions                                                                                                                                                                                                                                                                              | as good as the tape                                      |
 
-**Agents** implement the `RealtimeAgent` port:
-- `GeminiLiveAgent` uses the `@google/genai` Live API in the browser. It has two transports:
-  - **relay (default):** the SDK connects to the laptop server, which proxies the WebSocket to
-    Google and injects the real API key. The headset never holds a key and needs no internet of
-    its own; a USB cable to the laptop is enough.
-  - **direct:** the server mints a short-lived ephemeral token (`POST /api/coach/token`), and the
-    headset connects to Google itself.
+Camera facts that shaped this (October 2026):
+- Quest Browser exposes the passthrough cameras via `getUserMedia` at 1280×960, 30 fps. Ask for
+  `facingMode: environment` and never the avatar "facing front" camera.
+- Permission prompts must happen before entering XR.
+- Lens calibration comes from experimental `getSettings()` fields, with XR Blocks–derived
+  defaults when they're absent.
+- On current builds the headset-camera permission must be granted over `adb` (dev-setup).
 
-  Sessions turn on context-window compression and session resumption, and handle `goAway` by
-  reconnecting transparently.
-- `ScriptedAgent` is a deterministic coach with no network. It speaks step instructions and
-  corrections through `speechSynthesis`, and calls the same tools. It's the demo fallback and the
-  coach that tests use.
+### 5.7 Coach (`domain/coach`, `adapters/gemini`, `adapters/scripted`)
 
-### 5.6 Recording (`domain/recording`)
+`CoachSession` wires a `RealtimeAgent` to:
+- the mic (16 kHz PCM) and the speaker (24 kHz PCM, barge-in flush);
+- the `CoachToolbox`, which validates and records the six tools;
+- the `Narrator`, which turns events into `[app]` facts;
+- the camera, at an ambient 4 s cadence, or 1 s while a step waits on a visual confirmation.
 
-`EpisodeRecorder` has two channels that share one timebase (`t`, in ms since the episode started):
-- **frames:** one quantized `FrameRecord` per XR frame (head pose, plus each hand's 25 × 8 joint
-  values and pinch distance), in the workspace frame;
-- **events:** every recordable bus event (`step.*`, `coach.tool_call/result`, `transcript`,
-  `mistake.detected`, `hand.pinch`, `object.registered`, ...).
+Tools:
 
-Batches carry a monotonic `seq`, so the server can drop duplicates and retries are safe.
-`RetryingSink` buffers and backs off while the server is unreachable. `HttpEpisodeSink` posts to
-`/api/episodes/:id/batches`, and `MemoryEpisodeSink` serves tests and synthetic generation.
+| Tool                           | Behavior     | What it does                                |
+| ------------------------------ | ------------ | ------------------------------------------- |
+| `start_lesson(goal, context?)` | non-blocking | plan + locate + run                         |
+| `revise_plan(reason)`          | non-blocking | re-plan the remaining steps                 |
+| `highlight(object_id, style?)` | blocking     | emphasize an object (locates it if unknown) |
+| `show_demo(step_id?)`          | blocking     | play the step's demonstration               |
+| `advance_step(reason)`         | blocking     | complete a step that needs judgment         |
+| `flag_mistake(kind, message)`  | blocking     | a coach-noticed mistake, shown and labeled  |
 
-### 5.7 Presentation (`domain/overlay` + `adapters/render`)
+**Gemini Live** (`gemini-3.8-live`):
+- **Relay transport (default):** the SDK connects to the laptop, which injects the key, so the
+  headset needs no key and no internet.
+- **Direct transport:** ephemeral tokens.
+- **Session limits:** context-window compression is always on (audio+video sessions die at
+  2 minutes without it). Resumption handles survive `goAway` and connection drops, and
+  `connect()` races a timeout.
 
-`OverlayModel` is a presentation model reduced from bus events: the current instruction, highlights
-(automatic for step targets, plus any the coach requests), the active ghost clip, toasts, coach
-status and recording status. Presenters are dumb: each frame they read a snapshot and update the
-three.js objects.
+**Scripted coach:** the same port with no network. It speaks briefings and corrections through
+text-to-speech, and learners confirm steps with the panel's touchable **Done** button.
 
-| Presenter                   | Draws                                                              |
-| --------------------------- | ------------------------------------------------------------------ |
-| `WorkspacePresenter`        | the workspace outline and axes (calibration feedback)              |
-| `ObjectMarkersPresenter`    | object dots, with target and warning highlight rings               |
-| `GhostHandsPresenter`       | translucent hands driven by `domain/demo/ClipPlayer`               |
-| `InstructionPanelPresenter` | the step text panel (troika SDF text), placed beside the workspace |
-| `HudPresenter`              | coach, recorder and tracking status (debug)                        |
+### 5.8 Recording (`domain/recording`)
+
+Three channels on one rebased clock:
+- **frames:** quantized to 0.1 mm;
+- **events:** recordable bus events, validated, so a bad event is dropped instead of the batch;
+- **objects:** estimate changes.
+
+`EpisodeUploader` creates the episode eagerly, then delivers batches strictly in `seq` order with
+exponential-backoff retries, dropping only batches the server rejects as invalid. The episode's
+`meta.plan` holds the full plan snapshot. Generated plans exist nowhere else.
 
 ## 6. Server (`apps/server`)
 
-The server is a small Node app, built with Hono and typed end to end with `@clio/protocol/api`.
+| Route                                                                 | Purpose                                                                                  |
+| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `GET /api/health`                                                     | liveness; whether a Gemini key is set; live model                                        |
+| `WS /gemini/*`                                                        | Gemini Live relay (allowlisted path, injects `GEMINI_API_KEY`)                           |
+| `POST /api/coach/token`                                               | ephemeral Live token (direct transport)                                                  |
+| `POST /api/plans`, `GET /api/plans/:id`                               | the planner: goal + images (+ revision) → validated `Procedure`, stored in `data/plans/` |
+| `POST /api/vision/locate`                                             | open-vocabulary 2D detection for grounding                                               |
+| `GET /api/procedures[/:id]`                                           | curated (`procedures/`) + generated (`data/plans/`)                                      |
+| `POST /api/episodes` → `…/batches` → `…/finish`, `PUT …/media/:name`  | ingest (idempotent by `seq`)                                                             |
+| `GET /api/episodes[/:id[/frames\|events\|objects]]`                   | browse / replay                                                                          |
+| `POST /api/clips/from-episode`, `GET /api/clips/:procedureId/:stepId` | expert demos → ghost-hand clips                                                          |
 
-| Route                                                                                     | Purpose                                                                                    |
-| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `GET  /api/health`                                                                        | liveness, plus whether a Gemini key is configured                                          |
-| `WS   /gemini/*`                                                                          | transparent Gemini Live relay that injects `GEMINI_API_KEY` server-side                    |
-| `POST /api/coach/token`                                                                   | mints an ephemeral Gemini Live token (direct transport)                                    |
-| `GET  /api/procedures`, `GET /api/procedures/:id`                                         | serves validated `procedures/*.json`                                                       |
-| `POST /api/procedures/draft`                                                              | "learn anything": an LLM drafts a procedure for a named task, validated by the same schema |
-| `POST /api/episodes` → `POST /api/episodes/:id/batches` → `POST /api/episodes/:id/finish` | episode ingest (idempotent by `seq`)                                                       |
-| `PUT  /api/episodes/:id/media/:name`                                                      | optional media (video, audio)                                                              |
-| `GET  /api/episodes`, `GET /api/episodes/:id`, `GET /api/episodes/:id/{frames,events}`    | browse and replay                                                                          |
-| `POST /api/clips/from-episode`, `GET /api/clips/:procedureId/:stepId`                     | slice a good episode into per-step ghost-hand clips (the flywheel)                         |
-
-Storage is plain files under `CLIO_DATA_DIR` (default `./data`, gitignored). The layout is described
-in [data-format.md](data-format.md). Vite proxies `/api` and `/gemini` to the server, so the headset
-only ever talks to one origin.
+Vite proxies `/api` and `/gemini`, so the headset talks to a single origin (and to `localhost` over
+`adb reverse`).
 
 ## 7. Data pipeline (`pipeline/`)
 
-The pipeline is Python, managed with `uv`. It reads the episode directories the server writes:
-- `clio validate <episode>` checks the files against `packages/protocol/schema/*.json`.
-- `clio view <episode>` replays it in Rerun: hand skeletons, head frustum, objects, step timeline,
-  transcript, and the gripper-proxy scalar.
-- `clio export-lerobot <episodes...>` builds a LeRobot dataset. Each frame's `task` is the active
-  step instruction (language-conditioned), the state and action are wrist poses plus aperture per
-  hand, and frames are resampled to a fixed fps. Coordinates are converted from WebXR's y-up frame
-  to the robotics z-up convention at export time.
+`clio validate | info | view | export-lerobot` (uv, Python 3.12):
+- **Validation:** against `packages/protocol/schema`.
+- **Rerun replay:** skeletons, head, objects, aperture, steps, mistakes, tools, transcripts.
+- **LeRobot v3 export:** 16-d wrist pose + aperture state, next-frame action, hand mask, object
+  environment state, the per-frame language `task`, and the `step.action_verb`.
+- **Coordinates:** the export converts y-up to robotics z-up.
 
 ## 8. Extension points
 
-| Want to...                   | Do this                                                                                                                                                                                           |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Find objects with the camera | Implement `ObjectLocator` (`domain/world/object-registry.ts`) in an adapter (on-device model, Gemini 2D boxes, or a laptop detector). Return workspace-frame positions with `method: "detector"`. |
-| Use another realtime model   | Implement `RealtimeAgent` (`domain/coach/agent.ts`).                                                                                                                                              |
-| Add a check type             | Add it to the `Check` union in `@clio/protocol/checks.ts` and register an evaluator in `domain/procedure/checks/`.                                                                                |
-| Add a coach tool             | Add it to `@clio/protocol/coach-tools.ts` and add a handler to `CoachToolbox`.                                                                                                                    |
-| Add a recorded signal        | Add the event to `@clio/protocol/episode.ts`, emit it on the bus, and run `pnpm gen:schema`.                                                                                                      |
+| Want to...             | Do this                                                                                                                                                                                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Better object tracking | Implement `VisionLocator` (on-device ArUco via js-aruco2, YOLO via ONNX Runtime Web/WebGPU, or a laptop detector) or a `Grounder` with depth/hit-test lifting; self-calibrate the camera from a marker (see Google XR Blocks' ArUco add-on) |
+| Another realtime model | Implement `RealtimeAgent`                                                                                                                                                                                                                   |
+| A new action verb      | Add it to `ACTION_VERBS` (protocol) and a choreography in `domain/demo/synthesizer.ts`                                                                                                                                                      |
+| A new check type       | Add it to `@clio/protocol/checks.ts` and an evaluator in `domain/procedure/checks/`                                                                                                                                                         |
+| A new coach tool       | Add it to `@clio/protocol/coach-tools.ts` and a handler in `LessonController.handlers()`                                                                                                                                                    |
+| A new recorded signal  | Add the event to `@clio/protocol/episode.ts`, emit it on the bus, then run `pnpm gen:schema`                                                                                                                                                |
 
-## 9. Coordinate frames, units, time
+## 9. Frames, units, time
 
-- **Units:** meters, milliseconds. Quaternions are `[x, y, z, w]`. Poses are `[px, py, pz, qx, qy, qz, qw]`.
-- **World:** WebXR `local-floor` (right-handed, y up, −z forward at session start).
-- **Workspace (`W`):** set by calibration. The origin is the first pinched corner (on the table
-  surface), +x points along the table edge toward the second corner, +y is up (gravity), and
-  +z points toward the user. The table area is z < 0. Every episode stores `worldFromWorkspace`,
-  and every spatial value in the episode is in `W`.
-- **Time:** `t` is milliseconds since the episode started, on the `performance.now()` timeline (the
-  same one XR frames use). `meta.clock.startEpochMs` anchors it to wall time.
-- **Export:** robotics tools expect z-up, so the pipeline converts at export time and never at
-  capture time.
+- **Units:** meters and milliseconds. Quaternions are `[x, y, z, w]`.
+- **World:** WebXR `local-floor`.
+- **Workspace W:** origin on the surface at the first calibration corner (or a level default
+  ~45 cm in front of and below the head); +x along the edge; +y up; +z toward the user.
+- **Time:** `t` is ms since episode start on the `performance.now()` timeline.
+- **Export:** z-up, converted only in the pipeline.
 
 ## 10. Failure modes and fallbacks
 
-| Failure                                   | Fallback                                                                                                                                  |
-| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Gemini unreachable, slow, or out of quota | `?coach=scripted`: deterministic coach, same tools, local TTS                                                                             |
-| Venue Wi-Fi dies                          | Tether the laptop to a phone hotspot; connect the headset to the laptop over USB (`adb reverse`); coach traffic relays through the laptop |
-| Server down mid-session                   | `RetryingSink` buffers batches in memory and retries with backoff                                                                         |
-| Anchors unsupported or lost               | The workspace pose is kept in `local-floor` space; re-pinch to recalibrate (new episode)                                                  |
-| No camera access                          | The coach runs on narration plus voice; no video gets recorded                                                                            |
-| No headset available                      | Desktop Chrome + IWER emulator (`?emulate=1`); synthetic episodes for pipeline work                                                       |
-| Hand tracking flickers (crossed hands)    | Checks use hysteresis and dwell; demo steps get looser radii                                                                              |
+| Failure                             | Fallback                                                                               |
+| ----------------------------------- | -------------------------------------------------------------------------------------- |
+| Gemini down, slow, or out of quota  | Scripted coach (`?coach=scripted`, automatic if connecting fails) plus the Done button |
+| Planner fails                       | `plan.failed` → the coach apologizes and asks again; curated lessons still work        |
+| Venue Wi-Fi                         | Phone hotspot on the laptop + USB `adb reverse`; the coach relays through the laptop   |
+| Camera permission missing or broken | Grant over adb (dev-setup); otherwise pinch-to-register and layouts                    |
+| Detection misses an object          | Announced once; the learner looks at or pinches it; `highlight` re-locates             |
+| Server down mid-session             | The uploader retries with backoff; nothing is lost while the tab lives                 |
+| Tracking flicker (crossed hands)    | Dwell gates bridge dropouts; looser radii on those steps                               |
+| No headset                          | Desktop Chrome + IWER (`?emulate=1`); `pnpm synth` for data work                       |
 
 ## 11. Who owns what (four-way split)
 
-| Track                        | Owns                                                                                                                                 |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| **Headset** (XR + rendering) | `adapters/xr`, `adapters/render`, `app/`, calibration UX in `domain/world`                                                           |
-| **Coach** (agent)            | `domain/coach`, `adapters/gemini`, `adapters/scripted`, `adapters/audio`, server `/gemini` relay + `/api/coach` + procedure drafting |
-| **Data** (logging + export)  | `domain/recording`, `@clio/protocol/episode`, server `/api/episodes` + `/api/clips`, `pipeline/`                                     |
-| **Integration + pitch**      | `procedures/*.json`, check tuning, `domain/session`, demo script, `docs/`                                                            |
+| Track                        | Owns                                                                                                    |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------- |
+| **Headset** (XR + rendering) | `adapters/xr`, `adapters/render`, `adapters/camera`, `app/`, `domain/world`                             |
+| **Coach + planning**         | `domain/coach`, `adapters/gemini`, `adapters/scripted`, `adapters/audio`, server relay, planner, vision |
+| **Data**                     | `domain/recording`, `@clio/protocol/episode`, server episodes + clips, `pipeline/`                      |
+| **Integration + pitch**      | `domain/session`, `domain/demo`, `procedures/`, demo script, `docs/`                                    |
 
-Contracts live in `@clio/protocol`. Change them in a small PR that everyone sees, then run
+Contracts live in `@clio/protocol`. Change them in a small PR everyone sees, then run
 `pnpm gen:schema`.
 
 ## 12. Key decisions
 
-1. **WebXR in Quest Browser, not Unity.** Deploying is just opening a URL, hot reload works over
-   USB, nobody needs a multi-gigabyte install, and everyone can develop in desktop Chrome with an
-   emulator. The cost is that there are no calibrated camera frames, which principle 3 works
-   around.
-2. **Plain three.js + TypeScript + Vite** rather than React Three Fiber, A-Frame, or a framework
-   layered on top. Data capture needs an explicit, inspectable frame loop and precise timestamps,
-   and three.js has the largest WebXR ecosystem.
-3. **The headset is the realtime edge, with the Gemini relay as the default transport.** Task state,
-   hand data and tool execution stay on the device, where latency matters. The relay keeps the key
-   on the laptop and lets a USB cable stand in for venue Wi-Fi.
-4. **The scripted coach is a first-class adapter**, not a mock. It's the demo insurance and the test
-   double.
-5. **Contracts are written in zod and exported to JSON Schema.** One definition gives TypeScript
-   types, runtime validation, Gemini tool and structured-output schemas, and validation for Python.
-6. **Episodes are append-only NDJSON with batch sequence numbers.** The format is human-readable,
-   streamable and safe to retry. LeRobot and Rerun are export targets, not the capture format.
-7. **Node server, Python only offline.** The online path is one language and shares types. Python
-   is used only where its ecosystem is the point (LeRobot, Rerun).
-8. **pnpm workspaces with source-consumed internal packages, Biome, Vitest.** It's quick to set up
-   and enforces boundaries.
+1. **WebXR in Quest Browser, not Unity.** Deploying means opening a URL, hot reload works over
+   USB, and the IWER emulator lets everyone build without the headset. The browser does expose the
+   passthrough cameras (§5.6). What it lacks is official calibration, which we handle with lens
+   metadata, defaults and hand-based fallbacks.
+2. **LLM-generated plans in a constrained language.** The planner can write anything, but only in
+   a validated vocabulary of checks and action verbs. That's what lets Clio both verify progress
+   and show the step.
+3. **Demonstrations are synthesized from action primitives** rather than recorded, so "learn
+   anything" works on the first try. Recordings upgrade them over time.
+4. **Layered object tracking** (camera, then held, then pinch, then layout), because no single
+   source is reliable enough at a venue.
+5. **The headset is the realtime edge, with the Gemini relay as the default transport.** State,
+   hands and tools stay local. The key stays on the laptop.
+6. **Plain three.js + TypeScript + Vite + zod.** One source of truth for the contracts (types,
+   validation, Gemini schemas, JSON Schema for Python), and an explicit frame loop for precise
+   capture.
+7. **Append-only NDJSON episodes with batch sequence numbers.** Human-readable, streamable, safe to
+   retry. LeRobot and Rerun are export targets, not the capture format.
