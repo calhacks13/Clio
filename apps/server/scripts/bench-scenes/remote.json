@@ -1,0 +1,17 @@
+{
+  "title": "TV remote, one old battery still in, AAA look-alike",
+  "goal": "Replace the batteries in the TV remote",
+  "expect": [
+    "Does not ask to take the battery cover off or to take out the old battery already lying on the desk: only the old battery still in the remote comes out",
+    "Puts in two new blue batteries, never the old black-and-gold one lying on the desk",
+    "Takes the new batteries from the cardboard tray, not the loose blue battery right of it (a thinner AAA), and says how to tell them apart or makes it a mistake",
+    "Puts the battery cover back on at the end",
+    "Every done-when is a state a camera can see, not an action"
+  ],
+  "tags": ["half-done", "look-alike", "synthetic"],
+  "style": "A photorealistic photo taken by the camera of a head-mounted display worn by a person sitting at a desk: first person, looking down at the desk at about 45 degrees, natural indoor light, a slightly wide lens, a little sensor noise. No people, no hands, no text overlays, no watermark. No brand names, logos or printed text anywhere: the batteries and the pack are plain.",
+  "views": [
+    "A light wooden desk top. In the center lies a black TV remote face down, its battery cover removed, so its open battery compartment for two AA batteries faces up: the left slot holds one old AA battery with a plain black casing and a gold end, and the right slot is clearly empty, showing the bare springs. The black plastic battery cover lies on the desk just right of the remote. Just below the remote, one more old AA battery, black with a gold end like the one still inside, lies loose on the desk. To the right, an opened plain cardboard tray with no printing holds two new AA batteries with plain blue casings and silver ends. Next to the tray lies one loose AAA battery, also blue with silver ends, but visibly much thinner and shorter than the AA batteries beside it. A coffee mug stands at the back edge of the desk.",
+    "Edit the attached photo only: show the very same desk a moment later, from a viewpoint shifted slightly to the left and a little closer, as when the wearer moves their head. Do not move, add, remove, resize or recolor any object: one old black-and-gold battery in the remote's left slot and its right slot empty, the battery cover right of the remote, the loose old black-and-gold battery below it, two blue AA batteries in the cardboard tray, and the thinner, shorter loose blue AAA battery beside the tray."
+  ]
+}
