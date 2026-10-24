@@ -47,7 +47,12 @@ export interface GrounderDeps {
   minConfidence?: number;
 }
 
-export class ObjectGrounder {
+/** Port used by the lesson: anything that can locate objects by id. */
+export interface Grounder {
+  ground(ids: readonly string[]): Promise<GroundingResult>;
+}
+
+export class ObjectGrounder implements Grounder {
   constructor(private readonly deps: GrounderDeps) {}
 
   async ground(ids: readonly string[]): Promise<GroundingResult> {

@@ -1,6 +1,6 @@
 // PCM16 helpers for the Live API: 16-bit little-endian mono, base64 on the wire.
 
-export function floatToInt16(input: Float32Array): Int16Array {
+export function floatToInt16(input: Float32Array): Int16Array<ArrayBuffer> {
   const out = new Int16Array(input.length);
   for (let i = 0; i < input.length; i++) {
     const v = Math.max(-1, Math.min(1, input[i] ?? 0));
@@ -9,7 +9,7 @@ export function floatToInt16(input: Float32Array): Int16Array {
   return out;
 }
 
-export function int16ToFloat32(input: Int16Array): Float32Array {
+export function int16ToFloat32(input: Int16Array): Float32Array<ArrayBuffer> {
   const out = new Float32Array(input.length);
   for (let i = 0; i < input.length; i++) {
     const v = input[i] ?? 0;
@@ -30,7 +30,7 @@ export function int16ToBase64(pcm: Int16Array): string {
   return btoa(binary);
 }
 
-export function base64ToInt16(b64: string): Int16Array {
+export function base64ToInt16(b64: string): Int16Array<ArrayBuffer> {
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);

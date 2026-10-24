@@ -66,7 +66,7 @@ function setup(planner?: LessonPlanner) {
     registry,
     workspace: () => new Workspace({ p: [0, 0.8, -0.4], q: [0, 0, 0, 1] }, 'default_in_front'),
     grounder: null,
-    images: { capture: async () => [{ mimeType: 'image/jpeg', data: 'AAAA' }] },
+    images: { snapshots: async () => [{ mimeType: 'image/jpeg', data: 'AAAA' }] },
     demos: new DemoLibrary(null),
     recorder: new EpisodeRecorder({ bus, clock, sink, sleep: async () => {} }),
     context: () => ({
@@ -257,5 +257,42 @@ describe('LessonController missing-object announcements', () => {
     await lesson.handlers().highlight({ object_id: 'cap', style: 'target' });
     await lesson.settled();
     expect(missing).toEqual([['cap']]);
+  });
+});
+
+describe('LessonController re-locating released objects', () => {
+  it('asks the camera again for a released object, without telling the learner it is missing', async () => {
+    const bus = new Emitter<AppEvents>();
+    const asked: string[][] = [];
+    const missing: string[][] = [];
+    bus.on('object.missing', (e) => missing.push(e.objectIds));
+    const clock = new ManualClock(0);
+    const lesson = new LessonController({
+      bus,
+      clock,
+      planner: { plan: async () => ({ planId: 'p', procedure: generated, warnings: [] }) },
+      registry: new ObjectRegistry(bus),
+      workspace: () => new Workspace({ p: [0, 0, 0], q: [0, 0, 0, 1] }),
+      grounder: {
+        ground: async (ids) => {
+          asked.push([...ids]);
+          return { ok: true, located: [], missing: [...ids] };
+        },
+      },
+      images: null,
+      demos: new DemoLibrary(null),
+      recorder: null,
+      context: () => ({
+        operator: { role: 'learner' },
+        coach: { kind: 'none' },
+        device: { userAgent: 't', emulated: true, xrFeatures: [] },
+        app: { version: 't' },
+      }),
+    });
+    await lesson.run(generated);
+    lesson.relocate(['jug']);
+    await lesson.settled();
+    expect(asked.at(-1)).toEqual(['jug']);
+    expect(missing).toEqual([]);
   });
 });

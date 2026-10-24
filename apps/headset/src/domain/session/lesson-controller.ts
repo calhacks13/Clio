@@ -21,7 +21,7 @@ import type { AppBus, HighlightStyle, LessonPhase } from '../events';
 import type { PinchTransition } from '../hands/pinch-detector';
 import { type FrameContext, ProcedureRunner, type RunnerState } from '../procedure/runner';
 import type { EpisodeRecorder } from '../recording/recorder';
-import type { ObjectGrounder } from '../world/grounding';
+import type { Grounder } from '../world/grounding';
 import type { ObjectRegistry } from '../world/object-registry';
 import type { Workspace } from '../world/workspace';
 
@@ -36,7 +36,7 @@ export interface LessonPlanner {
 
 /** Port: camera snapshots to show the planner what the learner is looking at. */
 export interface PlanImageSource {
-  capture(max: number): Promise<ImagePayload[]>;
+  snapshots(max: number): Promise<ImagePayload[]>;
 }
 
 export type EpisodeContext = Pick<EpisodeCreate, 'operator' | 'coach' | 'device' | 'app'>;
@@ -57,7 +57,7 @@ export interface LessonDeps {
   planner: LessonPlanner;
   registry: ObjectRegistry;
   workspace: () => Workspace;
-  grounder: ObjectGrounder | null;
+  grounder: Grounder | null;
   images: PlanImageSource | null;
   demos: DemoLibrary;
   recorder: EpisodeRecorder | null;
@@ -263,6 +263,13 @@ export class LessonController {
     });
   }
 
+  /** Refine positions with the camera (e.g. after the learner puts an object down). Quiet. */
+  relocate(ids: readonly string[]): void {
+    const grounder = this.deps.grounder;
+    if (!grounder || ids.length === 0) return;
+    this.track(grounder.ground(ids));
+  }
+
   /** Learner-side confirmation (e.g. a "done" gesture or button). */
   confirmByUser(reason = 'user confirmed'): ToolOutcome {
     return this.advance('user', reason);
@@ -438,7 +445,7 @@ export class LessonController {
   private async captureImages(): Promise<ImagePayload[]> {
     const source = this.deps.images;
     if (!source) return [];
-    return source.capture(this.deps.options?.planImages ?? 2).catch(() => []);
+    return source.snapshots(this.deps.options?.planImages ?? 2).catch(() => []);
   }
 
   private finish(outcome: 'completed' | 'aborted', t: number): void {
