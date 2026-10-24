@@ -462,8 +462,11 @@ describe('LessonController and the camera', () => {
     const { lesson, asked, outlined, sink } = withCamera();
     await start(lesson, 'add wiper fluid');
     await lesson.settled();
-    expect(asked.at(-1)).toEqual([
-      { id: 'jug', description: 'Blue jug on the fender', phrase: 'fluid jug' },
+    // The first step looks for the jug in its words. The lesson's own look, once it has started,
+    // joins that look for the jug and asks only about the tank.
+    expect(asked).toEqual([
+      [{ id: 'jug', description: 'Blue jug on the fender', phrase: 'fluid jug' }],
+      [{ id: 'tank' }],
     ]);
     expect(outlined).toEqual(['jug#0']);
     await call(lesson, 'complete_step', {
@@ -479,6 +482,7 @@ describe('LessonController and the camera', () => {
       .filter((e) => e.type === 'object.detected');
     expect(detected?.map((e) => e.type === 'object.detected' && [e.objectId, e.stepId])).toEqual([
       ['jug', 'grab'],
+      ['tank', 'grab'],
     ]);
   });
 

@@ -36,6 +36,7 @@ import type { EpisodeRecorder } from '../recording/recorder';
 import type { Grounder } from '../world/grounding';
 import type { ObjectRegistry } from '../world/object-registry';
 import type { Workspace } from '../world/workspace';
+import { type FramesFrom, RecentFrames } from './recent-frames';
 import { Spotlight } from './spotlight';
 import { type StepChecker, StepWatcher, stepLooks, type WatchTarget } from './step-watcher';
 import { adaptTemplate, isCalibrated, type TemplateSource } from './templates';
@@ -71,6 +72,11 @@ export interface LessonOptions {
   autoDemo?: boolean;
   /** Camera snapshots sent with each planning request. */
   planImages?: number;
+  /**
+   * Keep a planning frame this often (ms) while a lesson may be about to start (no lesson running,
+   * the learner spoke lately), so start_lesson needn't wait for fresh ones; 0 turns it off.
+   */
+  planFrameMs?: number;
   /** How often to look again at what the current step shows (ms); 0 only looks on step entry. */
   showRefreshMs?: number;
   /** The least time from the step watcher's last answer to its next look (ms); 0 turns it off. */
@@ -116,6 +122,17 @@ interface Planning {
   landed?: boolean;
 }
 
+/** How start_lesson reached the lesson's first step, recorded as lesson.first_step. */
+interface FirstStepTiming {
+  /** When start_lesson was called. */
+  startedT: number;
+  source: 'planner' | 'template';
+  frames: FramesFrom;
+  captureMs: number;
+  /** The planner's answer, or loading the curated lesson. */
+  planMs: number;
+}
+
 /** A lesson the coach writes itself, before its first step exists. */
 interface CoachDraft {
   goal: string;
@@ -138,6 +155,8 @@ const WATCH_MS = 1000;
 const TRUSTED_SOURCES: ReadonlySet<PlacementMethod> = new Set(['marker', 'pinch', 'manual']);
 /** Coach-written lessons have no measured layout; the same default the planner uses. */
 const COACH_WORKSPACE: [number, number] = [0.8, 0.6];
+/** Planning frames are kept this long after the learner last spoke (when planFrameMs is on). */
+const PLAN_FRAMES_WARM_MS = 8000;
 
 /** A lowercase id from free text, e.g. "Unscrew the blue cap." gives "unscrew-the-blue-cap". */
 function slugFrom(text: string, fallback: string): string {
@@ -207,6 +226,9 @@ export class LessonController {
   /** Every camera lookup goes through here, so each one is recorded and outlined consistently. */
   private readonly spotlight: Spotlight;
   private readonly watcher: StepWatcher | null;
+  /** Planning frames kept while a lesson may be about to start; null when planFrameMs is 0. */
+  private readonly recentFrames: RecentFrames | null;
+  private learnerSpokeT = Number.NEGATIVE_INFINITY;
 
   constructor(private readonly deps: LessonDeps) {
     const { bus, clock, registry, grounder, options } = deps;
@@ -232,6 +254,16 @@ export class LessonController {
             options: { gapMs: watchMs },
           })
         : null;
+    const planFrameMs = options?.planFrameMs ?? 0;
+    this.recentFrames =
+      deps.images && planFrameMs > 0
+        ? new RecentFrames(deps.images, clock, { everyMs: planFrameMs })
+        : null;
+    if (this.recentFrames) {
+      bus.on('coach.caption', ({ t, role }) => {
+        if (role === 'user') this.learnerSpokeT = t;
+      });
+    }
     bus.on('object.registered', ({ objectId, method }) => {
       this.announced.delete(objectId);
       this.basis.set(objectId, method);
@@ -355,6 +387,8 @@ export class LessonController {
       outline?: boolean;
       /** The start_lesson this run belongs to; a newer one cancels it. */
       attempt?: number;
+      /** How start_lesson got here, recorded once the first step is on (lesson.first_step). */
+      timing?: FirstStepTiming;
     } = {},
   ): Promise<{ missing: string[] }> {
     const { bus, clock, registry, recorder } = this.deps;
@@ -371,9 +405,9 @@ export class LessonController {
     this.usedIds.clear();
     for (const step of procedure.steps) this.usedIds.add(step.id);
     this.announced.clear();
+    const background = opts.locate === 'background';
     let missing: string[] = [];
-    if (opts.locate === 'background') this.track(this.locate(registry.unplaced()));
-    else missing = await this.locate(registry.unplaced());
+    if (!background) missing = await this.locate(registry.unplaced());
     if (opts.attempt !== undefined && opts.attempt !== this.attempt) return { missing };
     recorder?.start(this.episodeMeta(procedure), clock.now());
     this.lessonSeq++;
@@ -399,6 +433,10 @@ export class LessonController {
     this.changed('start', opts.by ?? (procedure.origin.kind === 'curated' ? 'app' : 'planner'), {
       callId: opts.callId,
     });
+    if (opts.timing) this.recordFirstStep(opts.timing, background ? 'background' : 'await');
+    // Found while the coach briefs the first step. After the start, so the objects that step
+    // looks for join its look rather than being asked about twice.
+    if (background) this.track(this.locateStarted(opts.timing));
     return { missing };
   }
 
@@ -429,7 +467,7 @@ export class LessonController {
     this.tick(frame.t);
   }
 
-  /** Time-based upkeep: demos, planning deadlines, outlines, and the step watcher. */
+  /** Time-based upkeep: demos, planning deadlines, outlines, the step watcher, planning frames. */
   tick(t: number): void {
     if (this.demo && this.player.finished(t)) this.endDemo(t);
     this.checkPlanning(t);
@@ -437,6 +475,11 @@ export class LessonController {
     if (look) this.track(look);
     const watch = this.watcher?.tick(t);
     if (watch) this.track(watch);
+    // Frames cost a JPEG encode each, so they are kept only when a lesson may be about to start.
+    const warm =
+      !this.planning && !this.activeRunner() && t - this.learnerSpokeT <= PLAN_FRAMES_WARM_MS;
+    const frame = this.recentFrames?.tick(t, warm);
+    if (frame) this.track(frame);
   }
 
   /** A pinch in free space while objects are missing registers the next missing one there. */
@@ -460,7 +503,8 @@ export class LessonController {
   /** Refine positions with the camera (e.g. after the learner puts an object down). Quiet. */
   relocate(ids: readonly string[]): void {
     if (!this.deps.grounder || ids.length === 0) return;
-    this.track(this.spotlight.find(ids.map((id) => ({ id }))));
+    const requests = ids.map((id) => ({ id }));
+    this.track(this.spotlight.find(requests, { join: true }));
   }
 
   /** Learner-side confirmation (e.g. a "done" gesture or button). */
@@ -500,6 +544,13 @@ export class LessonController {
     attempt: number,
   ): Promise<void> {
     const { bus, clock, planner } = this.deps;
+    const timing: FirstStepTiming = {
+      startedT: this.planning?.startedT ?? clock.now(),
+      source: templateId ? 'template' : 'planner',
+      frames: 'none',
+      captureMs: 0,
+      planMs: 0,
+    };
     if (this.runner?.state.status === 'running') {
       this.runner.abort('a new lesson was requested', clock.now());
     }
@@ -513,14 +564,27 @@ export class LessonController {
         (async () => {
           if (templateId) {
             if (!this.deps.templates) throw new Error('No curated lessons are available');
+            const asked = clock.now();
             const template = await this.deps.templates.get(templateId);
+            timing.planMs = clock.now() - asked;
             const calibrated = isCalibrated(this.deps.workspace().method);
             const procedure = adaptTemplate(template, calibrated);
             return { planId: template.id, procedure, warnings: [] };
           }
           // The first step in full and the rest as an outline, so the lesson starts quickly.
-          const images = await this.captureImages();
-          return planner.plan({ goal, ...(context ? { context } : {}), images, stage: 'first' });
+          const captured = clock.now();
+          const { images, from } = await this.planFrames();
+          const asked = clock.now();
+          timing.frames = from;
+          timing.captureMs = asked - captured;
+          const response = await planner.plan({
+            goal,
+            ...(context ? { context } : {}),
+            images,
+            stage: 'first',
+          });
+          timing.planMs = clock.now() - asked;
+          return response;
         })(),
       );
     } catch (err) {
@@ -534,11 +598,14 @@ export class LessonController {
     if (this.planning) this.planning.landed = true;
     const from = draft.outlineFrom ?? draft.procedure.steps.length;
     const outline = from < draft.procedure.steps.length;
+    // The lesson starts on the plan: the coach is briefed on step 1 while its objects are found.
     const started = this.run(draft.procedure, draft.planId, {
       goal,
       announce: draft.warnings,
       outline,
       attempt,
+      locate: 'background',
+      timing,
     });
     // The outline is written in full at once, while the lesson starts and the learner works.
     if (outline) this.track(this.refine(draft, { goal, context, from, attempt }, started));
@@ -622,6 +689,9 @@ export class LessonController {
     const outlined = JSON.stringify(draft.procedure.steps);
     let response: PlanResponse;
     try {
+      // After the lesson has started (at once), so this capture's encode doesn't delay the step-1
+      // briefing.
+      await started;
       const images = await this.cancellable(this.captureImages());
       response = await this.cancellable(
         this.deps.planner.plan({
@@ -637,7 +707,6 @@ export class LessonController {
           },
         }),
       );
-      await started;
     } catch (err) {
       if (attempt === this.attempt) this.refineDropped(errorText(err));
       return;
@@ -1232,13 +1301,41 @@ export class LessonController {
     // Demonstrations belong to their step.
     if (this.demo && this.demo.stepId !== step.id) this.endDemo(t);
     // Outline what the step shows, and find the targets that are still missing.
-    this.track(this.spotlight.enterStep(step).then((missing) => this.announce(missing)));
+    const lesson = this.lessonSeq;
+    const look = this.spotlight.enterStep(step);
+    this.track(look.then((missing) => this.announce(missing, lesson)));
     if (this.deps.options?.autoDemo && step.action) {
-      this.track(
-        this.demoFor(procedure, step).then((demo) => {
-          if (demo && this.currentStep()?.id === step.id) this.playDemo(demo, procedure, step, t);
-        }),
-      );
+      this.track(this.autoDemo(procedure, step, look, t));
+    }
+  }
+
+  /**
+   * Plays the step's demonstration as it starts. A synthesized one needs its objects placed: when
+   * they weren't yet (the lesson's first look still out), it plays once the step's look has
+   * answered, if the step is still on and no other demonstration is playing.
+   */
+  private async autoDemo(
+    procedure: Procedure,
+    step: Step,
+    look: Promise<unknown>,
+    t: number,
+  ): Promise<void> {
+    const { registry } = this.deps;
+    const lesson = this.lessonSeq;
+    const ids = [step.action?.object, step.action?.target];
+    const unplaced = ids.some((id) => id !== undefined && !registry.get(id));
+    const demo = await this.demoFor(procedure, step);
+    const current = () => lesson === this.lessonSeq && this.currentStep()?.id === step.id;
+    if (demo) {
+      if (current()) this.playDemo(demo, procedure, step, t);
+      return;
+    }
+    if (!unplaced) return;
+    await look;
+    if (!current() || this.demo) return;
+    const placed = await this.demoFor(procedure, step);
+    if (placed && current() && !this.demo) {
+      this.playDemo(placed, procedure, step, this.deps.clock.now());
     }
   }
 
@@ -1279,20 +1376,65 @@ export class LessonController {
     });
   }
 
-  /** Locate objects with the camera; returns the ids still missing, announcing new ones once. */
+  /**
+   * Locate objects with the camera; returns the ids still missing, announcing new ones once. An
+   * object some look is already finding waits for that look's answer instead of a second one.
+   */
   private async locate(ids: string[]): Promise<string[]> {
     if (ids.length === 0) return [];
+    const lesson = this.lessonSeq;
     const previous = this.currentPhase;
     const showPhase = this.deps.grounder !== null && previous !== 'lesson';
     if (showPhase) this.setPhase('locating');
-    const missing = await this.spotlight.find(ids.map((id) => ({ id })));
+    const requests = ids.map((id) => ({ id }));
+    const missing = await this.spotlight.find(requests, { join: true });
     if (showPhase && this.currentPhase === 'locating') this.setPhase(previous);
-    this.announce(missing);
+    this.announce(missing, lesson);
     return missing;
   }
 
-  /** Tell the learner (through the HUD, and a coach that is told) about missing objects, once. */
-  private announce(missing: readonly string[]): void {
+  /**
+   * The lesson's objects, found once it has started. A planned lesson records when the look
+   * answered (lesson.first_locate), unless another lesson has started since.
+   */
+  private async locateStarted(timing: FirstStepTiming | undefined): Promise<void> {
+    const { bus, clock, registry } = this.deps;
+    const lesson = this.lessonSeq;
+    const ids = registry.unplaced();
+    const askedT = clock.now();
+    const missing = await this.locate(ids);
+    if (!timing || lesson !== this.lessonSeq) return;
+    const t = clock.now();
+    bus.emit('annotation', {
+      t,
+      label: 'lesson.first_locate',
+      data: {
+        locateMs: t - askedT,
+        sinceStartMs: t - timing.startedT,
+        located: ids.filter((id) => !missing.includes(id)),
+        missing,
+      },
+    });
+  }
+
+  /** How long start_lesson took to reach the first step (lesson.first_step), once it is on. */
+  private recordFirstStep(timing: FirstStepTiming, locate: 'await' | 'background'): void {
+    const { bus, clock } = this.deps;
+    const t = clock.now();
+    const { startedT, ...spent } = timing;
+    bus.emit('annotation', {
+      t,
+      label: 'lesson.first_step',
+      data: { stepId: this.currentStep()?.id ?? null, ...spent, totalMs: t - startedT, locate },
+    });
+  }
+
+  /**
+   * Tell the learner (through the HUD, and a coach that is told) about missing objects, once. An
+   * answer about an earlier lesson is no news in this one.
+   */
+  private announce(missing: readonly string[], lesson: number): void {
+    if (lesson !== this.lessonSeq) return;
     const fresh = missing.filter((id) => !this.announced.has(id));
     for (const id of fresh) this.announced.add(id);
     if (fresh.length > 0) {
@@ -1311,9 +1453,21 @@ export class LessonController {
   }
 
   private async captureImages(): Promise<ImagePayload[]> {
+    return (await this.planFrames()).images;
+  }
+
+  /** Frames for the planner, from the recent ones when kept, and where they came from. */
+  private async planFrames(): Promise<{ images: ImagePayload[]; from: FramesFrom }> {
     const source = this.deps.images;
-    if (!source) return [];
-    return source.snapshots(this.deps.options?.planImages ?? 2).catch(() => []);
+    const max = this.deps.options?.planImages ?? 2;
+    if (!source) return { images: [], from: 'none' };
+    try {
+      if (this.recentFrames) return await this.recentFrames.take(max);
+      const images = await source.snapshots(max);
+      return { images, from: images.length > 0 ? 'fresh' : 'none' };
+    } catch {
+      return { images: [], from: 'none' };
+    }
   }
 
   private finish(outcome: 'completed' | 'aborted', t: number): void {
