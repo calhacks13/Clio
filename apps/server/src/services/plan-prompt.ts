@@ -158,10 +158,12 @@ function firstStageText(r: PlannerRequest): string {
   return [
     ...goalLines(r),
     viewsLine(r.images.length, false),
-    'The lesson starts as soon as you answer. Its later steps are written in full afterwards, ' +
-      'while the learner works on the first one. So:',
-    '- `outline`: every step of the lesson in order, 3 to 10, one line each (id, instruction, ' +
-      'doneWhen, targets). outline[0] is the first step.',
+    'The lesson starts as soon as you answer, so answer briefly. Its later steps are written ' +
+      'in full afterwards, while the learner works on the first one. So:',
+    '- `outline`: every step of the lesson in order, 3 to 10, as an id and an instruction. ' +
+      'outline[0] is the first step.',
+    '- `objects`: only the objects the first step uses (its targets, what it shows and the ' +
+      'look-alike it guards against). The later steps declare theirs when they are written.',
     '- `firstStep`: that first step written in full, with the same id as outline[0].',
     'Get the first step right: it starts from the scene as it is now, it names the right ' +
       'object so that a look-alike cannot pass for it, and its doneWhen is a state the camera ' +

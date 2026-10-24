@@ -98,23 +98,89 @@ export function buildPlanCandidate(output: unknown, ctx: PlanContext): Candidate
   };
 }
 
-/** An outline line as a valid step: confirmed by its done-when, with nothing to outline yet. */
+/**
+ * An outline line as a valid step: confirmed by what it says to do, with nothing to outline yet.
+ * A done-when or targets, when the line has them, are kept.
+ */
 function outlineStep(line: unknown): unknown {
   if (!isRecord(line)) return line;
   const { id, instruction, doneWhen, targets } = line;
-  const prompt = typeof doneWhen === 'string' ? { prompt: doneWhen } : {};
-  return { id, instruction, doneWhen, targets, success: { type: 'confirm', ...prompt } };
+  const prompt = typeof doneWhen === 'string' ? doneWhen : instruction;
+  return {
+    id,
+    instruction,
+    ...(typeof doneWhen === 'string' ? { doneWhen } : {}),
+    ...(Array.isArray(targets) ? { targets } : {}),
+    success: { type: 'confirm', ...(typeof prompt === 'string' ? { prompt } : {}) },
+  };
+}
+
+/** A first-stage object card as an object spec: its look is what the camera looks for. */
+function cardObject(card: unknown): unknown {
+  if (!isRecord(card)) return card;
+  const { id, label, look, moves } = card;
+  return {
+    id,
+    label,
+    kind: 'item',
+    placement: { method: 'detect' },
+    tracking: { query: look, moves: moves === true },
+  };
 }
 
 /**
- * Stage first: `firstStep` written in full, then the rest of the `outline` (whose first line is
- * that same step) as plain steps, until a stage "rest" request writes them in full. So steps[n]
- * is outline[n] for every n after the first, which keeps validation paths readable.
+ * The first step's card in full: its outlines are its objects' looks, each mistake made with a
+ * declared object is caught by a hand lingering near it, and the step is confirmed by its
+ * done-when (the coach and the step watcher judge it from the camera).
+ */
+function cardStep(card: unknown, objects: readonly unknown[]): unknown {
+  if (!isRecord(card)) return card;
+  const { show, mistakes, ...step } = card;
+  const looks = new Map<string, { label: string; look: string }>();
+  for (const o of objects) {
+    if (isRecord(o) && typeof o.id === 'string' && typeof o.look === 'string') {
+      looks.set(o.id, { label: typeof o.label === 'string' ? o.label : o.id, look: o.look });
+    }
+  }
+  const shown = (Array.isArray(show) ? show : []).flatMap((id) => {
+    const seen = typeof id === 'string' ? looks.get(id) : undefined;
+    return seen
+      ? [{ object: id, phrase: seen.label.slice(0, 60), description: seen.look.slice(0, 300) }]
+      : [];
+  });
+  const rules = (Array.isArray(mistakes) ? mistakes : []).flatMap((m) =>
+    isRecord(m) && typeof m.object === 'string' && looks.has(m.object)
+      ? [
+          {
+            kind: m.kind,
+            message: m.message,
+            when: { type: 'hand_near', object: m.object, dwellMs: 700 },
+          },
+        ]
+      : [],
+  );
+  const doneWhen = typeof step.doneWhen === 'string' ? step.doneWhen : undefined;
+  return {
+    ...step,
+    show: shown,
+    mistakes: rules,
+    success: { type: 'confirm', ...(doneWhen ? { prompt: doneWhen } : {}) },
+  };
+}
+
+/**
+ * Stage first: the first step's card in full, then the rest of the `outline` (whose first line
+ * is that same step) as plain steps, until a stage "rest" request writes them in full. So
+ * steps[n] is outline[n] for every n after the first, which keeps validation paths readable.
  */
 export function buildFirstStageCandidate(output: unknown, ctx: PlanContext): Candidate {
-  const { outline, firstStep, ...o } = isRecord(output) ? output : {};
+  const { outline, firstStep, objects, ...o } = isRecord(output) ? output : {};
+  const cards = Array.isArray(objects) ? objects : [];
   const later = Array.isArray(outline) ? outline.slice(1).map(outlineStep) : [];
-  const built = buildPlanCandidate({ ...o, steps: [firstStep, ...later] }, ctx);
+  const built = buildPlanCandidate(
+    { ...o, objects: cards.map(cardObject), steps: [cardStep(firstStep, cards), ...later] },
+    ctx,
+  );
   return later.length ? { ...built, outlineFrom: 1 } : built;
 }
 

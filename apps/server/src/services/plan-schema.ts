@@ -219,15 +219,60 @@ const sightings = arr(
   { description: 'Each declared object you can see, once per view it is in; [] without views' },
 );
 
-/** A step of the first stage's outline: what it does and how it ends, without the AR fields. */
-const outlineStep = obj(
+/**
+ * A line of the first stage's outline: just what the step does. The stage "rest" writes the
+ * step in full a few seconds later; until then the line is what the coach says comes next.
+ */
+const outlineLine = obj(
   {
     id: str('Lowercase slug, unique in the plan, e.g. "open-cap"'),
     instruction: str('One imperative sentence, at most 15 words'),
-    doneWhen: str('The finished state as a camera would see it, naming how the right object looks'),
-    targets: arr(str(), { description: 'Ids of the objects this step touches or looks at' }),
   },
-  ['id', 'instruction', 'doneWhen', 'targets'],
+  ['id', 'instruction'],
+);
+
+// The first stage writes the first step as a card, not in full: every token is time the learner
+// waits. plan-build.ts expands the card into an ordinary step and objects: an object's `look` is
+// its detector query and the description its outline finds it by, a mistake's object becomes a
+// hand_near rule, and the step is confirmed by its done-when.
+
+const cardObject = obj(
+  {
+    id: str('Lowercase slug, e.g. "yogurt_drink"'),
+    label: str('Short spoken name, 1 to 3 words'),
+    look: str(
+      'One sentence of 10 to 25 words that finds it in a camera frame on its own: what it is, ' +
+        'color, shape, markings, and where it is',
+    ),
+    moves: bool('true if it gets picked up and carried during the task'),
+  },
+  ['id', 'label', 'look', 'moves'],
+);
+
+const cardStep = obj(
+  {
+    id: str('Lowercase slug, unique in the plan, e.g. "open-cap"'),
+    instruction: str('One imperative sentence, at most 15 words'),
+    doneWhen: str(
+      'The finished state as a camera or the learner would see it, one sentence of 3 to 200 ' +
+        'characters that names how the right object looks, e.g. "the blue cap is off"',
+    ),
+    targets: arr(str(), { description: 'Ids of the objects this step touches or looks at' }),
+    action: ref('action'),
+    show: arr(objectId, { max: 3, description: 'Objects to outline in AR, most important first' }),
+    mistakes: arr(
+      obj(
+        {
+          kind: str('Lowercase slug label, e.g. "wrong_bottle"'),
+          message: str('A short spoken correction that says how to tell the right one apart'),
+          object: str('The declared object the mistake is made with, e.g. the look-alike'),
+        },
+        ['kind', 'message', 'object'],
+      ),
+      { max: 2, description: 'Likely errors, a look-alike in view first' },
+    ),
+  },
+  ['id', 'instruction', 'doneWhen', 'targets', 'action', 'show', 'mistakes'],
 );
 
 /** What every new plan starts with: what it is about, the scene, and the hazards in it. */
@@ -264,18 +309,26 @@ export function buildPlanJsonSchema(kind: PlanSchemaKind): JsonSchema {
     };
   }
   if (kind === 'first') {
-    // The whole lesson in outline before the first step in detail, so the first step fits it.
+    // The lesson starts on this answer, and every token of it is time the learner waits, so it
+    // holds only what the first step needs: the lesson in one line a step (so the first step
+    // fits it), the first step's objects and where they are, the hazards, and the first step in
+    // full. The workspace takes its default; the later steps' objects come with stage rest.
     return {
       ...obj(
         {
-          ...PLAN_HEAD,
-          outline: arr(outlineStep, {
-            description: 'Every step in order, 3 to 10, one line each; the first is firstStep',
+          title: PLAN_HEAD.title as JsonSchema,
+          summary: PLAN_HEAD.summary as JsonSchema,
+          outline: arr(outlineLine, {
+            description: 'Every step in order, 3 to 10: id and instruction; the first is firstStep',
           }),
-          firstStep: ref('step'),
-          coach,
+          objects: arr(cardObject, {
+            description: 'Only the objects the first step uses and the look-alikes it guards against',
+          }),
+          sightings,
+          warnings,
+          firstStep: cardStep,
         },
-        [...PLAN_HEAD_REQUIRED, 'outline', 'firstStep'],
+        ['title', 'summary', 'outline', 'objects', 'sightings', 'warnings', 'firstStep'],
       ),
       $defs: DEFS,
     };
