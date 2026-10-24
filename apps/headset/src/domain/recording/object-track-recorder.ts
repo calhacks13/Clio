@@ -66,7 +66,9 @@ export class ObjectTrackRecorder {
   record(sample: TrackedObjectSample): void {
     const t = this.deps.clock.now();
     if (sample.image || sample.status === 'lost' || sample.status === 'absent') {
-      this.deps.bus.emit('objects.observed', { t, observation: observationOf(sample, t) });
+      // The observation says when its answer arrived; a 3D state is written now.
+      const observation = observationOf(sample, sample.arrivedT ?? t);
+      this.deps.bus.emit('objects.observed', { t, observation });
     }
     if (this.deps.states !== 'record') return;
     const state = this.stateOf(sample, t);

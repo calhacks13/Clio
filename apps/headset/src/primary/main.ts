@@ -32,7 +32,7 @@ import {
 import { poseFromMatrix } from '../adapters/xr/frame-sampler';
 import { XrPlaneSurfaces } from '../adapters/xr/planes';
 import { createLogger } from '../core/log';
-import { composePose, type Pose } from '../core/math';
+import { composePose, type Pose, type Vec3 } from '../core/math';
 import type { CameraModel } from '../domain/world/camera-model';
 import { DepthMemory } from '../domain/world/depth-memory';
 import type { CameraFrameSource } from '../domain/world/grounding';
@@ -461,9 +461,36 @@ function draw(
     outline.show(placement, name);
   }
   photo?.place(placement.center, model, head);
+  record(placement.center, depth, seen, fresh);
+}
+
+/** Record an outline placed with its center at `center` as `seen`, if given (see draw()). */
+function record(
+  center: Readonly<Vec3>,
+  depth: ObjectDepth | null,
+  seen: Sighting | null,
+  fresh = true,
+): void {
   if (!seen || !depth || depth.kind === 'fixed') return;
   const measured = fresh && !seen.predicted && (depth.kind === 'contact' || depth.kind === 'point');
-  recording.placed(seen.name, placement.center, seen.t, seen.score, measured);
+  recording.placed(seen.name, center, seen.t, seen.score, measured);
+}
+
+/**
+ * A distance measured after a newer outline was drawn: not drawn, but recorded for its own frame
+ * as `seen`, unless the target was lost or changed since it was asked for (`epoch`).
+ */
+function recordLate(
+  mask: ObjectMask,
+  model: CameraModel,
+  head: Pose,
+  depth: ObjectDepth | null,
+  seen: Sighting | null,
+  epoch: number,
+): void {
+  if (!seen || !depth || epoch !== depths.epoch) return;
+  const placement = placeOutline(mask, head, model, depth);
+  if (placement) record(placement.center, depth, seen);
 }
 
 /**
@@ -496,7 +523,10 @@ function outlineAt(
       if (rays && target !== null && depth) {
         depths.remember(target, mask, rays.point, depth, performance.now(), epoch);
       }
-      if (seq <= shownSeq) return;
+      if (seq <= shownSeq) {
+        recordLate(mask, tuned, head, depth, seen, epoch);
+        return;
+      }
       shownSeq = seq;
       draw(mask, name, tuned, head, depth, seen, maskT ?? seen?.t ?? performance.now());
       if (maskT !== null) drawnMaskT = maskT;
@@ -509,8 +539,8 @@ function outlineAt(
 /**
  * Outline a tracker mask on this frame, at its target's last measured distance along the mask's
  * own ray, and measure that distance again in the background when it is due; once measured, the
- * outline is redrawn at it if no newer mask was drawn meanwhile. False when the target has no
- * measured distance yet (the caller measures it first).
+ * outline is redrawn at it if no newer mask was drawn meanwhile, and recorded either way. False
+ * when the target has no measured distance yet (the caller measures it first).
  */
 function outlineAtOnce(
   mask: TrackerMask,
@@ -536,8 +566,8 @@ function outlineAtOnce(
       const depth = await measure(mask, tuned, head);
       if (!depth) return;
       depths.remember(target, mask, rays.point, depth, performance.now(), epoch);
-      if (seq !== shownSeq) return;
-      draw(mask, name, tuned, head, depth, seen, mask.t);
+      if (seq === shownSeq) draw(mask, name, tuned, head, depth, seen, mask.t);
+      else recordLate(mask, tuned, head, depth, seen, epoch);
     } catch (err) {
       log.warn(`placement failed: ${String(err)}`);
     }

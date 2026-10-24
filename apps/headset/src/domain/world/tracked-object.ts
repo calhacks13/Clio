@@ -40,6 +40,11 @@ export interface TrackedObjectSample {
   objectId: string;
   /** When the camera frame was captured (performance.now ms). */
   observedT: number;
+  /**
+   * When the answer arrived (performance.now ms), for a sample recorded later (once its distance
+   * was measured). Absent: when it is recorded.
+   */
+  arrivedT?: number;
   status: ObservationStatus;
   role: ObservationRole;
   /** The model as reported, e.g. "yoloe-26l-seg". */

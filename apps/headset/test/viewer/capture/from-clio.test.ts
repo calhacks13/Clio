@@ -886,6 +886,87 @@ describe('ClioCaptureBuilder recorded grasps and flags', () => {
     });
     expect(old.events.samples).toEqual([]);
   });
+
+  it('takes the later of two lines about one frame, as the pipeline does, even read twice', () => {
+    // Placed at a reused distance, then the same frame's own measurement upgrades it.
+    const reused = flagged(1205, {
+      source: 'detector',
+      confidence: 0.8,
+      locationFlags: 2,
+      observedT: 1100,
+      position: [0.1, 0.05, -0.1],
+    });
+    const measured = flagged(1219, {
+      source: 'detector',
+      confidence: 0.8,
+      locationFlags: 10,
+      observedT: 1100,
+      position: [0.12, 0.05, -0.1],
+    });
+    const builder = new ClioCaptureBuilder(recording([{ id: 'syringe', kind: 'tool' }]));
+    builder.addObjects([reused, measured]);
+    expect(builder.duplicates).toBe(0);
+    builder.addObjects([reused, measured]);
+    expect(builder.duplicates).toBe(2);
+    const at1100 = () =>
+      (builder.capture.poses.get('syringe')?.samples ?? []).filter((s) => s.t_us === 1_100_000);
+    expect(at1100()).toEqual([
+      expect.objectContaining({
+        estimate_type: 'vision_estimate',
+        location: expect.objectContaining({
+          translation: rosFromW([0.12, 0.05, -0.1]),
+          location_flags: POSITION_VALID | POSITION_TRACKED,
+        }),
+      }),
+    ]);
+    // An older line about that frame, read after it, changes nothing.
+    builder.addObjects([{ ...reused, t: 1210 }]);
+    expect(at1100()).toEqual([expect.objectContaining({ estimate_type: 'vision_estimate' })]);
+  });
+
+  it('works the events out again when a later line about one moment changes its validity', () => {
+    const builder = new ClioCaptureBuilder(recording([{ id: 'syringe', kind: 'tool' }]));
+    builder.addObjects([
+      flagged(1000, { source: 'detector', locationFlags: 10, observedT: 1000 }),
+      flagged(1100, { source: 'detector', confidence: 0, locationFlags: 0 }),
+      flagged(1200, { source: 'detector', locationFlags: 10, observedT: 1200 }),
+    ]);
+    const events = () => builder.capture.events.samples.map((e) => [e.t_us / 1000, e.event]);
+    expect(events()).toEqual([
+      [1100, 'tracking_lost'],
+      [1200, 'tracking_recovered'],
+    ]);
+    // A slow measurement of the frame at 1100: it was seen there after all.
+    builder.addObjects([flagged(1250, { source: 'detector', locationFlags: 10, observedT: 1100 })]);
+    expect(events()).toEqual([]);
+    // And lost again at that moment.
+    builder.addObjects([flagged(1300, { source: 'detector', confidence: 0, locationFlags: 0 })]);
+    builder.addObjects([flagged(1300, { source: 'detector', locationFlags: 10, observedT: 1300 })]);
+    builder.addObjects([flagged(1350, { source: 'detector', confidence: 0, locationFlags: 0 })]);
+    expect(events()).toEqual([[1350, 'tracking_lost']]);
+  });
+
+  it('keeps no held or pinch bookkeeping for an estimate a later line replaced', () => {
+    const builder = new ClioCaptureBuilder(planned([{ id: 'syringe', kind: 'tool' }]));
+    builder.addObjects([
+      // Carried at frame rate, then a finder answer about the last frame's moment.
+      ...track('syringe', 'pinch', frameTimes(1000, 1100)),
+      ...track('syringe', 'detector', [1100], 0.7),
+      // Said to be held, then a later line about that moment says it is not.
+      { t: 2000, objects: [{ ...state('syringe', 'pinch'), heldBy: 'right' as const }] },
+      { t: 2000, objects: [{ ...state('syringe', 'pinch'), heldBy: null }] },
+    ]);
+    expect(
+      builder.capture
+        .heldSpans('syringe')
+        .map((s) => [s.startUs / 1000, s.endUs && s.endUs / 1000]),
+    ).toEqual([[1000, 1099]]);
+    const types = typesOf(builder.capture, 'syringe') ?? [];
+    expect(types.filter(([t]) => t === 1100 || t === 2000)).toEqual([
+      [1100, 'vision_estimate', 'clio-detector'],
+      [2000, 'manual', 'clio-pinch'],
+    ]);
+  });
 });
 
 const observation = (t: number, fields: Partial<ObjectObservation> = {}): ObjectObservation => ({

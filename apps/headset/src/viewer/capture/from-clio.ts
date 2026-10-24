@@ -67,9 +67,11 @@ import {
 // replaces the object's placement from meta.objects, which is older. A change of an object's
 // position validity adds a tracking_lost or tracking_recovered event.
 //
-// The same lines can arrive twice (read again after a server restart). Frames not after the newest
-// frame, object states at a (t, id) already seen, and events and observations equal to one at the
-// same t are dropped and counted in `duplicates`.
+// Two object states can be placed at the same (t, id): a frame placed at a reused distance, then
+// measured. The later line wins, as in the pipeline. The same lines can also arrive twice (read
+// again after a server restart). Frames not after the newest frame, object states equal to a line
+// already read at their (t, id), and events and observations equal to one at the same t are
+// dropped and counted in `duplicates`.
 
 export const HEADSET = 'headset';
 export const WORKSPACE = 'workspace';
@@ -152,6 +154,9 @@ function estimateOf(source: PlacementMethod, flags: number): EstimateType {
   const untracked = (flags & POSITION_VALID) !== 0 && (flags & POSITION_TRACKED) === 0;
   return measured(source) && untracked ? 'predicted' : ESTIMATE[source];
 }
+
+/** What an objects line sets on an estimate. */
+type PoseFields = Pick<PoseSample, 'source_id' | 'estimate_type' | 'location' | 'confidence'>;
 
 type StateIn = Pick<ObjectState, 'id' | 'position' | 'orientation' | 'source'> &
   Partial<Pick<ObjectState, 'locationFlags' | 'heldBy' | 'observedT'>> & {
@@ -240,6 +245,10 @@ export class ClioCaptureBuilder {
   readonly #carries = new Map<string, readonly HeldSpan[]>();
   /** Objects whose carries and estimate types need working out again. */
   readonly #unsettled = new Set<string>();
+  /** Each estimate's line time, and every line about its (t, id) read so far, as JSON. */
+  readonly #lines = new WeakMap<PoseSample, { t: number; json: string[] }>();
+  /** The tracking event each estimate that was the newest on arrival added, or null for none. */
+  readonly #changes = new WeakMap<PoseSample, CaptureEvent | null>();
 
   constructor(meta: unknown) {
     this.#meta = EpisodeMetaSchema.parse(meta);
@@ -463,14 +472,19 @@ export class ClioCaptureBuilder {
     return known.radius;
   }
 
-  /** Adds the estimate, or restates a placement; returns null for a duplicate. */
+  /**
+   * Adds the estimate, or replaces the one at its (t, id): a placement restated at t = 0, or an
+   * estimate a later line says more about (a measured distance for a frame already placed at a
+   * reused one). The latest line wins, as in the pipeline. Returns null for a line already read,
+   * or one older than the estimate shown.
+   */
   #addObjectPose(tMs: number, state: StateIn): PoseSample | null {
     this.#object(state.id);
     const location = objectLocation(state);
     const valid = (location.location_flags & POSITION_VALID) !== 0;
     const t = toUs(valid && state.observedT !== undefined ? state.observedT : tMs);
     const held = state.heldBy !== undefined && state.heldBy !== null;
-    const fields = held
+    const fields: PoseFields = held
       ? {
           source_id: GRIP_SOURCE,
           estimate_type: 'runtime_estimate' as const,
@@ -486,14 +500,20 @@ export class ClioCaptureBuilder {
     const series = this.capture.poses.get(state.id);
     if (valid && series) this.#unseed(series, state.id, t);
     const existing = series?.samples[series.indexAt(t)];
+    const json = JSON.stringify([tMs, state]);
     let sample: PoseSample;
     if (existing?.t_us === t) {
-      // A line at t = 0 restates meta.objects; anything else at a known (t, id) is a repeat.
-      if (!this.#placements.delete(existing)) {
+      const line = this.#lines.get(existing) ?? { t: tMs, json: [] };
+      const restated = this.#placements.delete(existing);
+      if (!restated && line.json.includes(json)) {
         this.duplicates++;
         return null;
       }
-      sample = Object.assign(existing, fields);
+      line.json.push(json);
+      if (!restated && tMs < line.t) return null;
+      line.t = tMs;
+      sample = existing;
+      this.#replace(sample, fields);
     } else {
       sample = {
         kind: 'pose',
@@ -502,21 +522,48 @@ export class ClioCaptureBuilder {
         entity_id: state.id,
         ...fields,
       };
+      this.#lines.set(sample, { t: tMs, json: [json] });
       this.capture.addPose(sample);
       this.#tracking(sample);
     }
     if (held) this.#heldEstimates.add(sample);
+    else this.#heldEstimates.delete(sample);
     // A held estimate in an episode that records grasps is typed already and feeds no carry, so a
     // live carry (one line per XR frame) does not make #settle walk the object's estimates again.
+    const pinches = this.#pinches.get(state.id) ?? [];
+    const pinched = sample === existing ? pinches.indexOf(sample) : -1;
     if (state.source === 'pinch' && !(held && this.#recordsGrasps)) {
-      const pinches = this.#pinches.get(state.id) ?? [];
       if (pinches.length === 0) this.#pinches.set(state.id, pinches);
-      let at = pinches.length;
-      while (at > 0 && (pinches[at - 1] as PoseSample).t_us > t) at--;
-      pinches.splice(at, 0, sample);
+      if (pinched < 0) {
+        let at = pinches.length;
+        while (at > 0 && (pinches[at - 1] as PoseSample).t_us > t) at--;
+        pinches.splice(at, 0, sample);
+      }
+      this.#unsettled.add(state.id);
+    } else if (pinched >= 0) {
+      pinches.splice(pinched, 1);
       this.#unsettled.add(state.id);
     }
     return sample;
+  }
+
+  /**
+   * A later line about an estimate: its fields, and when its position validity changed, its own
+   * tracking event and the next estimate's, worked out again.
+   */
+  #replace(sample: PoseSample, fields: PoseFields): void {
+    const wasValid = positionValid(sample);
+    Object.assign(sample, fields);
+    if (positionValid(sample) === wasValid) {
+      const event = this.#changes.get(sample);
+      if (event) event.details = { location_flags: sample.location.location_flags };
+      return;
+    }
+    const samples = this.capture.poses.get(sample.entity_id)?.samples ?? [];
+    const at = samples.indexOf(sample);
+    this.#retrack(sample, samples[at - 1]);
+    const next = samples[at + 1];
+    if (next) this.#retrack(next, sample);
   }
 
   /**
@@ -600,11 +647,27 @@ export class ClioCaptureBuilder {
    */
   #tracking(sample: PoseSample): void {
     const samples = this.capture.poses.get(sample.entity_id)?.samples ?? [];
-    const previous = samples.at(-2);
-    if (samples.at(-1) !== sample || !previous) return;
+    if (samples.at(-1) !== sample) return;
+    this.#changes.set(sample, null);
+    this.#retrack(sample, samples.at(-2));
+  }
+
+  /**
+   * The tracking event of an estimate that was the newest on arrival, against the one before it
+   * (again when a later line changed the validity of either). Others change no event.
+   */
+  #retrack(sample: PoseSample, previous: PoseSample | undefined): void {
+    const had = this.#changes.get(sample);
+    if (had === undefined) return;
+    const events = this.capture.events.samples;
+    const at = had ? events.indexOf(had) : -1;
+    if (at >= 0) events.splice(at, 1);
     const valid = positionValid(sample);
-    if (valid === positionValid(previous)) return;
-    this.capture.addEvent({
+    if (!previous || valid === positionValid(previous)) {
+      this.#changes.set(sample, null);
+      return;
+    }
+    const event: CaptureEvent = {
       kind: 'event',
       t_us: sample.t_us,
       sequence: this.#next('events'),
@@ -613,7 +676,9 @@ export class ClioCaptureBuilder {
       entity_ids: [sample.entity_id],
       origin: 'runtime',
       details: { location_flags: sample.location.location_flags },
-    });
+    };
+    this.capture.addEvent(event);
+    this.#changes.set(sample, event);
   }
 
   #hand(t: number, side: Handedness, frame: FrameRecord): HandSample {

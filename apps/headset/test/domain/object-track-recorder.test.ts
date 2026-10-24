@@ -92,6 +92,13 @@ describe('ObjectTrackRecorder', () => {
     ]);
   });
 
+  it('records an answer recorded after it arrived as arriving then; its 3D state is written now', () => {
+    const { recorder, observed, updated } = setup();
+    recorder.record(sample({ arrivedT: 1210 }));
+    expect(observed.map((o) => [o.t, o.observedT])).toEqual([[1210, 1190]]);
+    expect(updated.map((u) => [u.t, u.state.observedT])).toEqual([[1250, 1190]]);
+  });
+
   it('records a lost or absent answer without image data, and nothing for an empty one', () => {
     const { recorder, observed } = setup();
     recorder.record(sample({ status: 'lost', image: null, position: null, score: null }));
