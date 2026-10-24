@@ -71,8 +71,10 @@ describe('renderWatchControls', () => {
       model: 'gemini-robotics-er-2-preview',
       models: ['gemini-robotics-er-2-preview'],
     });
-    expect(html).toContain('<option value="0" selected>as fast as it answers</option>');
-    expect(html).toContain('every 6 s (headset)');
+    expect(html).toContain(
+      '<option value="0" selected>as fast as it answers (like the headset)</option>',
+    );
+    expect(html).toContain('<option value="6000" >every 6 s</option>');
     expect(html).toContain('<option value="2" selected>2 “done” in a row</option>');
   });
 });

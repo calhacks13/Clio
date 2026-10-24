@@ -28,8 +28,6 @@ export interface WatchControlsOptions {
 /** 0 is "as fast as it answers": the next look starts a moment after the last answer. */
 export const INTERVALS_MS = [0, 2000, 3000, 6000, 10_000] as const;
 export const AS_FAST_AS_IT_ANSWERS = 0;
-/** The headset's step watcher looks every 6 s. */
-export const HEADSET_INTERVAL_MS = 6000;
 
 export const clockText = (ms: number) => {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -46,8 +44,9 @@ export function expectText(expect: BenchCheckExpect): string {
 }
 
 function intervalLabel(ms: number): string {
-  if (ms === AS_FAST_AS_IT_ANSWERS) return 'as fast as it answers';
-  return `every ${ms / 1000} s${ms === HEADSET_INTERVAL_MS ? ' (headset)' : ''}`;
+  // The headset's step watcher looks again 1 s after each answer.
+  if (ms === AS_FAST_AS_IT_ANSWERS) return 'as fast as it answers (like the headset)';
+  return `every ${ms / 1000} s`;
 }
 
 /** One-line state for the panel and the camera badge. */

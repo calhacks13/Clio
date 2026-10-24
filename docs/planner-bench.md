@@ -70,8 +70,8 @@ The panel:
   a row (2 by default); turn it off to see the headset's behavior, where the watcher only suggests
   and the coach or **Mark done** decides;
 - **Look** sets the cadence: **as fast as it answers** (the default: the next look starts 0.5 s
-  after the last answer, about one look every 2 s on Robotics-ER 2) or every 2, 3, 6 (the
-  headset's) or 10 s. After a failed look it waits at least 3 s;
+  after the last answer, about one look every 2 s on Robotics-ER 2; the headset waits 1 s) or every
+  2, 3, 6 or 10 s. After a failed look it waits at least 3 s;
 - **Mark done**, **Skip**, **Back a step** and the numbers on the progress bar move the focus by
   hand; **Look now** asks at once; the cadence and the judging model can change while it runs;
 - **Every look** lists each answer with its frame and latency, and the end shows how long each
