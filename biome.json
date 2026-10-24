@@ -15,7 +15,8 @@
       "!pipeline",
       "!tracker",
       "!pnpm-lock.yaml",
-      "!visualizer"
+      "!visualizer",
+      "!**/.impeccable"
     ]
   },
   "formatter": {
