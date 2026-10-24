@@ -72,12 +72,19 @@ export function parseTrackerMessage(data: unknown): TrackerMessage | null {
   return parsed.success ? parsed.data : null;
 }
 
-/** A frame message: 4-byte big-endian header length, the JSON header, then the JPEG. */
-export function frameMessage(header: FrameHeader, jpeg: Blob): Blob {
-  const json = new TextEncoder().encode(JSON.stringify({ type: 'frame', ...header }));
-  const length = new Uint8Array(4);
-  new DataView(length.buffer).setUint32(0, json.byteLength, false);
-  return new Blob([length, json, jpeg]);
+const encoder = new TextEncoder();
+
+/**
+ * A frame message: 4-byte big-endian header length, the JSON header, then the JPEG. One buffer,
+ * not a Blob: a WebSocket sends a buffer at once, but reads a Blob back asynchronously first.
+ */
+export function frameMessage(header: FrameHeader, jpeg: Uint8Array): Uint8Array<ArrayBuffer> {
+  const json = encoder.encode(JSON.stringify({ type: 'frame', ...header }));
+  const message = new Uint8Array(4 + json.byteLength + jpeg.byteLength);
+  new DataView(message.buffer).setUint32(0, json.byteLength, false);
+  message.set(json, 4);
+  message.set(jpeg, 4 + json.byteLength);
+  return message;
 }
 
 /** ws(s)://<host>/track on the page's own origin. */
@@ -91,7 +98,7 @@ export interface TrackerSocket {
   binaryType: BinaryType;
   onclose: ((event: CloseEvent) => void) | null;
   onmessage: ((event: MessageEvent) => void) | null;
-  send(data: string | Blob): void;
+  send(data: string | ArrayBufferView<ArrayBuffer>): void;
   close(): void;
 }
 
@@ -115,7 +122,7 @@ export class TrackerClient {
   private retry: unknown = null;
   private readyModel: string | null = null;
 
-  constructor(private readonly deps: TrackerClientDeps) {}
+  constructor(private deps: TrackerClientDeps) {}
 
   /** Open, once the tracker said it is ready. */
   get connected(): boolean {
@@ -125,6 +132,15 @@ export class TrackerClient {
   /** The segmentation model the tracker reported, once connected. */
   get model(): string | null {
     return this.readyModel;
+  }
+
+  /** Switch to another tracker: drops the current connection and connects to `url` if open. */
+  setUrl(url: string): void {
+    if (url === this.deps.url) return;
+    const reopen = this.wanted;
+    this.close();
+    this.deps.url = url;
+    if (reopen) this.open();
   }
 
   /** Connect, and keep reconnecting until close(). */
@@ -149,7 +165,7 @@ export class TrackerClient {
   }
 
   /** Send a frame; false when not connected (nothing was sent). */
-  sendFrame(header: FrameHeader, jpeg: Blob): boolean {
+  sendFrame(header: FrameHeader, jpeg: Uint8Array): boolean {
     if (!this.connected || !this.ws) return false;
     this.ws.send(frameMessage(header, jpeg));
     return true;

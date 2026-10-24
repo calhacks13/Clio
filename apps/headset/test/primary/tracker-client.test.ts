@@ -13,12 +13,12 @@ class FakeSocket implements TrackerSocket {
   binaryType: BinaryType = 'blob';
   onclose: ((event: CloseEvent) => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
-  readonly sent: (string | Blob)[] = [];
+  readonly sent: (string | ArrayBufferView)[] = [];
   closed = false;
 
   constructor(readonly url: string) {}
 
-  send(data: string | Blob): void {
+  send(data: string | ArrayBufferView<ArrayBuffer>): void {
     this.sent.push(data);
   }
 
@@ -113,10 +113,10 @@ describe('parseTrackerMessage', () => {
 });
 
 describe('frameMessage', () => {
-  it('is a big-endian header length, the JSON header, then the JPEG', async () => {
-    const jpeg = new Blob([new Uint8Array([0xff, 0xd8, 0xff])]);
+  it('is a big-endian header length, the JSON header, then the JPEG, in one buffer', () => {
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff]);
     const header = { seq: 41, t: 123456.7, width: 640, height: 480 };
-    const bytes = new Uint8Array(await frameMessage(header, jpeg).arrayBuffer());
+    const bytes = frameMessage(header, jpeg);
     const length = new DataView(bytes.buffer).getUint32(0, false);
     const json = JSON.parse(new TextDecoder().decode(bytes.subarray(4, 4 + length)));
     expect(json).toEqual({ type: 'frame', ...header });
@@ -152,14 +152,14 @@ describe('TrackerClient', () => {
   it('sends frames and targets only while connected', () => {
     const { client, sockets } = setup();
     const header = { seq: 1, t: 0, width: 640, height: 480 };
-    expect(client.sendFrame(header, new Blob())).toBe(false);
+    expect(client.sendFrame(header, new Uint8Array([0xff, 0xd8]))).toBe(false);
     client.open();
     expect(client.send({ type: 'clear' })).toBe(false);
     sockets[0]?.accept();
-    expect(client.sendFrame(header, new Blob())).toBe(true);
+    expect(client.sendFrame(header, new Uint8Array([0xff, 0xd8]))).toBe(true);
     const target = { type: 'target', seq: 1, box: [0.1, 0.2, 0.3, 0.4], name: 'cup' } as const;
     expect(client.send(target)).toBe(true);
-    expect(sockets[0]?.sent[0]).toBeInstanceOf(Blob);
+    expect(sockets[0]?.sent[0]).toBeInstanceOf(Uint8Array);
     expect(JSON.parse(String(sockets[0]?.sent[1]))).toEqual(target);
   });
 

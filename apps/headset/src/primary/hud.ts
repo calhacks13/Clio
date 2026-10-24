@@ -10,14 +10,16 @@ import {
 import type { Text } from 'troika-three-text';
 import { makeText, setText } from '../adapters/render/text';
 
-// ?debug=1: the last object named, how many frames a second the tracker answers, and how long the
-// last look (Gemini and jev) took, on a small panel that trails the head a meter ahead and a little
-// below the line of sight (like the tracking page's panel).
+// ?debug=1: the last object named, how many frames a second the tracker answers, how long a frame
+// takes from capture to the tracker's answer and to its outline being drawn (medians), and how
+// long the last look (Gemini and jev) took, on a small panel that trails the head a meter ahead
+// and a little below the line of sight (like the tracking page's panel).
 
-const WIDTH = 0.44;
+const WIDTH = 0.64;
 const HEIGHT = 0.095;
 const CORNER = 0.016;
-const NAME_SHARE = 0.56;
+const NAME_SHARE = 0.36;
+const STATS = 4;
 const DISTANCE = 1;
 const DROP = 0.28;
 const FOLLOW_MS = 350;
@@ -49,6 +51,8 @@ export class PrimaryHud {
   readonly object = new Group();
   private readonly name: Text;
   private readonly rate: Text;
+  private readonly answer: Text;
+  private readonly drawn: Text;
   private readonly cycle: Text;
   private readonly forward = new Vector3(0, 0, -1);
   private placed = false;
@@ -60,11 +64,13 @@ export class PrimaryHud {
     );
     this.object.add(panel);
     const nameWidth = WIDTH * NAME_SHARE;
-    const statWidth = (WIDTH - nameWidth) / 2;
-    const statsLeft = -WIDTH / 2 + nameWidth;
+    const statWidth = (WIDTH - nameWidth) / STATS;
+    const stat = (i: number) => -WIDTH / 2 + nameWidth + statWidth * (i + 0.5);
     this.name = this.cell('Object', -WIDTH / 2 + nameWidth / 2, nameWidth);
-    this.rate = this.cell('Track', statsLeft + statWidth / 2, statWidth);
-    this.cycle = this.cell('Look', statsLeft + statWidth * 1.5, statWidth);
+    this.rate = this.cell('Track', stat(0), statWidth);
+    this.answer = this.cell('Answer', stat(1), statWidth);
+    this.drawn = this.cell('Drawn', stat(2), statWidth);
+    this.cycle = this.cell('Look', stat(3), statWidth);
     this.object.visible = false;
   }
 
@@ -74,9 +80,11 @@ export class PrimaryHud {
     setText(this.cycle, `${(cycleMs / 1000).toFixed(1)} s`);
   }
 
-  /** Tracker results per second. */
-  showRate(fps: number): void {
+  /** Tracker results per second, and capture to answer and to drawn outline (ms, medians). */
+  showStats(fps: number, answerMs: number | null, drawnMs: number | null): void {
     setText(this.rate, `${Math.round(fps)}/s`);
+    setText(this.answer, answerMs === null ? EMPTY : `${Math.round(answerMs)} ms`);
+    setText(this.drawn, drawnMs === null ? EMPTY : `${Math.round(drawnMs)} ms`);
   }
 
   update(head: Vector3, orientation: Quaternion, dt: number): void {
@@ -116,6 +124,8 @@ export class PrimaryHud {
     this.placed = false;
     setText(this.name, EMPTY);
     setText(this.rate, EMPTY);
+    setText(this.answer, EMPTY);
+    setText(this.drawn, EMPTY);
     setText(this.cycle, EMPTY);
   }
 }
