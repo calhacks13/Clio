@@ -33,6 +33,7 @@ import {
   type RunnerState,
 } from '../procedure/runner';
 import type { EpisodeRecorder } from '../recording/recorder';
+import { findWords } from '../world/find-words';
 import type { Grounder } from '../world/grounding';
 import type { ObjectRegistry } from '../world/object-registry';
 import type { Workspace } from '../world/workspace';
@@ -1089,7 +1090,7 @@ export class LessonController {
         return {
           object: objectId,
           phrase: label.slice(0, 60),
-          description: (spec?.tracking?.query ?? label).slice(0, 300),
+          description: (spec ? findWords(spec) : label).slice(0, 300),
         };
       }),
       success: { type: 'confirm', by: 'either', prompt: doneWhen.trim() },

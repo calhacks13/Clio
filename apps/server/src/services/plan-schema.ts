@@ -142,7 +142,10 @@ const DEFS: Record<string, JsonSchema> = {
       ),
       tracking: obj(
         {
-          query: str('What it looks like in the camera images: color, shape, markings'),
+          query: str(
+            'One sentence of 15 to 35 words that finds this one object on its own: color, ' +
+              'shape, markings, which one it is among similar things, and where it is',
+          ),
           moves: bool('true if it gets picked up and carried during the task'),
         },
         ['query', 'moves'],
@@ -168,9 +171,9 @@ const DEFS: Record<string, JsonSchema> = {
             object: objectId,
             phrase: str('2 to 5 words naming it, e.g. "blue washer fluid cap"'),
             description: str(
-              'One sentence of 12 to 30 words that finds it in a camera frame on its own: what ' +
-                'it is, color, material, shape, size, markings, and where it is at this point ' +
-                'in the task',
+              'One sentence of 15 to 35 words that finds this one thing in a camera frame on ' +
+                'its own: what it is, color, material, shape, size, markings, which one it is ' +
+                'among similar things, and where it is at this point in the task',
             ),
           },
           ['object', 'phrase', 'description'],
@@ -245,8 +248,9 @@ const cardObject = obj(
         '"washer fluid cap". No colors, positions or verbs',
     ),
     look: str(
-      'One sentence of 10 to 25 words that finds it in a camera frame on its own: what it is, ' +
-        'color, shape, markings, and where it is',
+      'One sentence of 15 to 35 words that finds this one object in a camera frame on its own: ' +
+        'what it is, color, shape, markings, which one it is among similar things (e.g. the ' +
+        'leftmost of three), and where it is next to large things that stay put',
     ),
     moves: bool('true if it gets picked up and carried during the task'),
   },

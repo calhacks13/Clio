@@ -316,7 +316,8 @@ describe('createGeminiPlanner', () => {
         '- `objects`: only the objects the first step uses (its targets, what it shows and the ' +
           'look-alike it guards against). The later steps declare theirs when they are ' +
           "written. An object's `look` is its tracking.query and the description its outline " +
-          'is found by; its `phrase` names it for the object finder.',
+          'is found by, so it singles out that one thing (ONE THING, NEVER A KIND); its ' +
+          '`phrase` names its kind for the object finder.',
         '- `firstStep`: that first step as a card, with the same id as outline[0]. `show` ' +
           'lists object ids. Each mistake names the object it is made with, never one the ' +
           'step itself uses: Clio speaks its message when a hand lingers at that object. Clio ' +
@@ -368,7 +369,8 @@ describe('createGeminiPlanner', () => {
           'the top mark on the reservoir. Uses: fluid_jug, washer_cap.',
         '3. close-cap: Close the washer fluid cap. Done when: The blue cap is shut flat on the ' +
           'reservoir. Uses: washer_cap.',
-        'Objects already declared, written quickly with a default kind and size (keep these ids):',
+        'Objects already declared, written quickly with a default kind and size (keep these ids, ' +
+          'and keep saying in each tracking.query which one it is and where):',
         '- washer_cap (washer cap): blue cap with a windshield symbol',
         '- coolant_cap (coolant cap): yellow cap with a warning symbol',
         '- fluid_jug (fluid jug): blue plastic jug of washer fluid',
@@ -412,10 +414,20 @@ describe('PLANNER_SYSTEM_INSTRUCTION', () => {
     'outlines in AR',
     'object finder',
     '`phrase`: 2 to 5 words',
-    '`description`: one sentence of 12 to 30 words',
+    '`description`: one sentence of 15 to 35 words',
     'Too vague: "The washer fluid cap."',
     'on its own',
-    'what tells it apart',
+    'which one it is among similar things',
+    // One particular thing, never a kind: an ordinal among look-alikes, anchored, places too.
+    'ONE THING, NEVER A KIND',
+    '"the second shelf from the top"',
+    '"the leftmost of the three beakers"',
+    'Left and right are as seen in the camera views',
+    'Places count too',
+    'once it is open',
+    '"the shelf inside the refrigerator", "black refrigerator door"',
+    'The finder gets only this sentence',
+    'it never replaces saying where in',
     'as it looks at that point in the task',
     '`doneWhen`: one sentence',
     'an end state a camera can confirm',

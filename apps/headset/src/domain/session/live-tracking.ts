@@ -1,6 +1,7 @@
 import type { Procedure, Step } from '@clio/protocol';
 import type { AppBus, HighlightStyle } from '../events';
 import { COACH_HIGHLIGHT_MS } from '../overlay/overlay-model';
+import { findWords } from '../world/find-words';
 import type { ObjectRegistry } from '../world/object-registry';
 
 // Which objects the tracker follows live (tracker/TRACK.md, objects mode), and in which words. The
@@ -134,7 +135,7 @@ export class LiveTracking {
       add({
         id,
         phrase: this.phraseFor(id, this.firstShowPhrase(id) ?? spec.label),
-        query: spec.tracking?.query ?? spec.label,
+        query: findWords(spec),
         rank: null,
         style,
       });
