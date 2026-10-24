@@ -54,7 +54,7 @@ export class EpisodeRecorder {
     return this.uploader?.episodeId ?? null;
   }
 
-  start(meta: EpisodeCreate, t: number): void {
+  start(meta: Omit<EpisodeCreate, 'clock'>, t: number): void {
     if (this.uploader) throw new Error('Already recording an episode');
     const { bus, clock, sink } = this.deps;
     this.startT = t;

@@ -35,6 +35,8 @@ export class EpisodeUploader {
     this.onDrop = options.onDrop ?? ((why) => console.warn(`[uploader] dropped ${why}`));
     this.baseDelay = options.baseDelayMs ?? 500;
     this.maxDelay = options.maxDelayMs ?? 8000;
+    // Create the episode right away, so the server knows a session started before the first batch.
+    void this.kick();
   }
 
   get episodeId(): string | null {
@@ -67,7 +69,7 @@ export class EpisodeUploader {
   }
 
   private async drain(): Promise<void> {
-    while (this.queue.length > 0 && !this.failed) {
+    while (!this.failed && (!this.id || this.queue.length > 0)) {
       if (!this.id) {
         try {
           this.id = await this.retrying(() => this.sink.create(this.meta));

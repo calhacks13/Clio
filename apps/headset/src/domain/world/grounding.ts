@@ -1,5 +1,4 @@
 import type { Detection } from '@clio/protocol';
-import type { AppBus } from '../events';
 import { type CameraModel, liftDetection } from './camera-model';
 import type { ObjectRegistry } from './object-registry';
 import type { PoseHistory } from './pose-history';
@@ -43,8 +42,8 @@ export interface GrounderDeps {
   registry: ObjectRegistry;
   /** Head poses in world space. */
   poses: PoseHistory;
-  workspace: Workspace;
-  bus: AppBus;
+  /** Read at use time, because the workspace can be recalibrated. */
+  workspace: () => Workspace;
   minConfidence?: number;
 }
 
@@ -52,7 +51,8 @@ export class ObjectGrounder {
   constructor(private readonly deps: GrounderDeps) {}
 
   async ground(ids: readonly string[]): Promise<GroundingResult> {
-    const { camera, locator, registry, poses, workspace, bus } = this.deps;
+    const { camera, locator, registry, poses } = this.deps;
+    const workspace = this.deps.workspace();
     const minConfidence = this.deps.minConfidence ?? 0.3;
 
     const frame = await camera.capture();
@@ -93,7 +93,6 @@ export class ObjectGrounder {
         missing.push(id);
       }
     }
-    if (missing.length > 0) bus.emit('object.missing', { t: frame.t, objectIds: missing });
     return { ok: true, located, missing };
   }
 }

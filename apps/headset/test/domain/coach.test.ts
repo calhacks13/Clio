@@ -290,3 +290,26 @@ describe('system prompt', () => {
     expect(prompt).toContain('[app]');
   });
 });
+
+describe('Narrator registration feedback', () => {
+  it('lets the coach acknowledge an object registered by pinch', () => {
+    const { b } = bus();
+    const out: Narration[] = [];
+    new Narrator(b, view, (n) => out.push(n)).attach();
+    b.emit('object.registered', {
+      t: 0,
+      objectId: 'vinegar',
+      position: [0, 0, 0],
+      method: 'pinch',
+    });
+    b.emit('object.registered', {
+      t: 1,
+      objectId: 'cup_a',
+      position: [0, 0, 0],
+      method: 'detector',
+    });
+    expect(out.map((n) => n.text)).toEqual([
+      '[app] Registered the vinegar bottle where they pinched.',
+    ]);
+  });
+});

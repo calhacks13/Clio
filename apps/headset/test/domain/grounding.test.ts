@@ -59,8 +59,7 @@ function setup(detections: Detection[], camera: Partial<CameraFrameSource> = {})
     locator,
     registry,
     poses: history,
-    workspace: new Workspace({ p: [0, 0, 0], q: [0, 0, 0, 1] }),
-    bus,
+    workspace: () => new Workspace({ p: [0, 0, 0], q: [0, 0, 0, 1] }),
   });
   return { grounder, registry, queries, missing };
 }
@@ -90,14 +89,14 @@ describe('ObjectGrounder', () => {
     expect(cup?.position[2]).toBeCloseTo(-1);
   });
 
-  it('reports what the camera could not find', async () => {
+  it('reports what the camera could not find, leaving the announcing to the lesson', async () => {
     const { grounder, missing } = setup([
       cupSeen,
       { id: 'jug', found: false, point: null, box: null, confidence: 0 },
     ]);
     const result = await grounder.ground(['cup', 'jug']);
     expect(result).toEqual({ ok: true, located: ['cup'], missing: ['jug'] });
-    expect(missing).toEqual([['jug']]);
+    expect(missing).toEqual([]);
   });
 
   it('says so when there is no camera, instead of guessing', async () => {

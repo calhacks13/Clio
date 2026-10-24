@@ -92,6 +92,15 @@ export class Narrator {
           true,
         );
       }),
+      b.on('object.registered', ({ t, objectId, method }) => {
+        if (method !== 'pinch') return;
+        this.say(
+          t,
+          'registered',
+          `Registered the ${this.view.label(objectId)} where they pinched.`,
+          true,
+        );
+      }),
       b.on('hand.pinch', ({ t, hand, phase, nearest }) => {
         const window = this.options.pinchThrottleMs ?? 2000;
         if (phase !== 'start' || !nearest || t - this.lastPinchT < window) return;
