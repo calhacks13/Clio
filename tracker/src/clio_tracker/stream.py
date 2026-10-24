@@ -1,10 +1,11 @@
 """One /track connection: read messages as they come, track only the newest frame.
 
-From the jev finder, unchanged but for the tracker it drives (track.py).
+From the jev finder, unchanged but for what it drives: track.py's Modes, which follow one target
+or, in objects mode, the objects the page names.
 
 The page sends a frame only after the answer to the previous one (or after 500 ms), so normally
 one frame waits at a time. When tracking falls behind, a newer frame replaces the waiting
-one, which gets no answer. Targets apply in order before the next frame is segmented.
+one, which gets no answer. Targets and objects apply in order before the next frame is tracked.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from fastapi import WebSocket
 from fastapi.concurrency import run_in_threadpool
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
-from .track import BadMessage, FrameHeader, StreamTracker, TargetBox, parse_command, parse_frame
+from .track import BadMessage, Command, FrameHeader, Modes, parse_command, parse_frame
 
 log = logging.getLogger("clio_tracker")
 
@@ -28,7 +29,7 @@ class Inbox:
     """What the reader has received and the segmenting loop hasn't taken yet."""
 
     frame: tuple[FrameHeader, bytes] | None = None
-    commands: list[TargetBox | None] = field(default_factory=list)
+    commands: list[Command] = field(default_factory=list)
     dropped: int = 0
     closed: bool = False
     ready: asyncio.Event = field(default_factory=asyncio.Event)
@@ -39,7 +40,7 @@ class Inbox:
         self.frame = frame
         self.ready.set()
 
-    def put_command(self, command: TargetBox | None) -> None:
+    def put_command(self, command: Command) -> None:
         self.commands.append(command)
         self.ready.set()
 
@@ -47,7 +48,7 @@ class Inbox:
         self.closed = True
         self.ready.set()
 
-    async def take(self) -> tuple[list[TargetBox | None], tuple[FrameHeader, bytes] | None]:
+    async def take(self) -> tuple[list[Command], tuple[FrameHeader, bytes] | None]:
         """Waits for anything new, then takes all commands and the newest frame."""
         await self.ready.wait()
         self.ready.clear()
@@ -56,7 +57,7 @@ class Inbox:
         return commands, frame
 
 
-async def run_stream(websocket: WebSocket, tracker: StreamTracker) -> None:
+async def run_stream(websocket: WebSocket, tracker: Modes) -> None:
     await websocket.send_text(json.dumps({"type": "ready", "model": tracker.label}))
     inbox = Inbox()
     reader = asyncio.create_task(read(websocket, inbox))

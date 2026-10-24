@@ -8,6 +8,11 @@ ago; that frame is kept, so the box becomes the object's visual prompt on the ve
 looked at and is matched to the track that was there, as in the HTTP tracker. A target that is
 one part of an object (`"part": true`, or a box lying inside what it would be matched to and
 covering less than half of it) is followed by part.py instead, never as the whole object.
+
+In objects mode (an `objects` message, for a lesson), the page names several objects in words
+instead and gets one `detections` answer per frame. jev places them about once a second, in one
+call for all that are due, and each is followed as `POST /locate` with a session follows it
+(session.py), in a TrackerSession of the connection's own.
 """
 
 from __future__ import annotations
@@ -15,8 +20,10 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 import struct
 from collections import OrderedDict
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from time import perf_counter
 
@@ -24,8 +31,10 @@ import cv2
 import numpy as np
 
 from .geometry import iou, normalize_box
+from .identify import FrameImage, Query
 from .motion import CameraMotion, warp_box
 from .part import PartTracker, is_part
+from .session import TrackerSession
 from .tracking import ObjectTracker, Sighting, TrackerParams
 from .vision import YoloeVision
 
@@ -36,6 +45,8 @@ MAX_HEADER_BYTES = 4096
 # Frames kept for targets, which refer to a frame streamed a second or so before: 20 s at the
 # page's 15 frames a second, about 50 KB each.
 FRAMES_KEPT = 300
+MAX_OBJECTS = 8  # followed at once in objects mode; the rest of a longer set is ignored
+WORD = re.compile(r"\w")
 
 
 class BadMessage(ValueError):
@@ -56,6 +67,16 @@ class TargetBox:
     box: list[float]
     name: str | None
     part: bool = False  # the box is one part of the object (a label, a button), not all of it
+
+
+@dataclass(frozen=True)
+class ObjectSet:
+    """Objects mode: the objects to find and follow from now on, in the page's order."""
+
+    objects: list[Query]
+
+
+Command = TargetBox | ObjectSet | None  # None is `clear`
 
 
 def parse_frame(data: bytes) -> tuple[FrameHeader, bytes]:
@@ -79,8 +100,8 @@ def parse_frame(data: bytes) -> tuple[FrameHeader, bytes]:
     return FrameHeader(seq, t, width, height), data[end:]
 
 
-def parse_command(text: str) -> TargetBox | None:
-    """A text message: a target box, or None for `clear`."""
+def parse_command(text: str) -> Command:
+    """A text message: a target box, a set of objects, or None for `clear`."""
     try:
         message = json.loads(text)
     except json.JSONDecodeError as e:
@@ -88,8 +109,10 @@ def parse_command(text: str) -> TargetBox | None:
     kind = message.get("type") if isinstance(message, dict) else None
     if kind == "clear":
         return None
+    if kind == "objects":
+        return _object_set(message.get("objects"))
     if kind != "target":
-        raise BadMessage(f"Unknown message type {kind!r}: send target or clear.")
+        raise BadMessage(f"Unknown message type {kind!r}: send target, objects or clear.")
     seq, box, name = message.get("seq"), message.get("box"), message.get("name")
     if not _is_int(seq):
         raise BadMessage("The target needs the integer seq of the frame jev measured.")
@@ -106,6 +129,34 @@ def parse_command(text: str) -> TargetBox | None:
     return TargetBox(seq, [x0, y0, x1, y1], name, bool(part))
 
 
+def _object_set(objects) -> ObjectSet:
+    """The objects of an `objects` message, checked as `POST /locate` checks its objects. An id
+    sent twice keeps its first words; past the eighth object the rest is ignored."""
+    if not isinstance(objects, list):
+        raise BadMessage("objects must be a list of {id, phrase, query}.")
+    out: list[Query] = []
+    for o in objects:
+        if not isinstance(o, dict):
+            raise BadMessage("Each object must be {id, phrase, query}.")
+        oid, query, phrase = o.get("id"), o.get("query"), o.get("phrase")
+        if not isinstance(oid, str) or not 0 < len(oid) <= 200:
+            raise BadMessage("Each object needs an id of 1 to 200 characters.")
+        query = query.strip() if isinstance(query, str) else ""
+        if not WORD.search(query) or len(query) > 1000:
+            raise BadMessage(f"{oid}: the query must be words, at most 1000 characters.")
+        phrase = phrase.strip() if isinstance(phrase, str) else phrase
+        if phrase is not None and (not isinstance(phrase, str) or len(phrase) > 200):
+            raise BadMessage(f"{oid}: the phrase must be a string of at most 200 characters.")
+        if all(q.id != oid for q in out):
+            out.append(Query(oid, query, phrase if phrase and WORD.search(phrase) else None))
+    if len(out) > MAX_OBJECTS:
+        ignored = ", ".join(q.id for q in out[MAX_OBJECTS:])
+        log.warning(
+            "Track: %d objects sent, %d followed; ignored %s", len(out), MAX_OBJECTS, ignored
+        )
+    return ObjectSet(out[:MAX_OBJECTS])
+
+
 class StreamTracker:
     """One stream's tracking state. `command` and `step` are called one at a time."""
 
@@ -120,11 +171,7 @@ class StreamTracker:
         self.waiting: TargetBox | None = None  # a target whose frame hasn't arrived
         self.t = 0.0  # the newest frame's capture time (s, page clock)
         self.camera = CameraMotion()  # how the picture moved since the frame before
-        # Every few seconds: frames answered, by state, and the mean tracker time, so a slow or
-        # lossy stream shows in the log rather than only on the headset.
-        self._states: dict[str, int] = {}
-        self._window_ms = 0.0
-        self._window_start = perf_counter()
+        self._summary = _Summary("Stream")
 
     def command(self, target: TargetBox | None) -> None:
         """Applies a target (or `clear` as None) before the next frame."""
@@ -147,6 +194,12 @@ class StreamTracker:
         except BadMessage:
             return
         self._identify(target, self.vision.encode(rgb), target.seq)
+
+    def reset(self) -> None:
+        """As on connecting: no target, no frames kept, no camera motion (objects mode ran)."""
+        self.command(None)
+        self.frames.clear()
+        self.camera = CameraMotion()
 
     def step(self, header: FrameHeader, jpeg: bytes) -> dict:
         """Follows the target on one frame and answers with its mask message."""
@@ -212,24 +265,6 @@ class StreamTracker:
         assert self.object is not None
         return self.object.container(seq, box, carry, enc, self.vision, appearance) is not None
 
-    def _summarize(self, state: str, total_ms: float) -> None:
-        self._states[state] = self._states.get(state, 0) + 1
-        self._window_ms += total_ms
-        elapsed = perf_counter() - self._window_start
-        if elapsed < 3:
-            return
-        frames = sum(self._states.values())
-        counts = ", ".join(f"{k} {v}" for k, v in sorted(self._states.items()))
-        log.info(
-            "Stream: %.1f frames/s, %.1f ms each (%s)",
-            frames / elapsed,
-            self._window_ms / frames,
-            counts,
-        )
-        self._states.clear()
-        self._window_ms = 0.0
-        self._window_start = perf_counter()
-
     def _keep(self, seq: int, jpeg: bytes) -> None:
         self.frames[seq] = jpeg
         while len(self.frames) > FRAMES_KEPT:
@@ -245,7 +280,7 @@ class StreamTracker:
     ) -> dict:
         ms["total"] = _ms(started)
         state = sighting.state if sighting else "idle"
-        self._summarize(state, ms["total"])
+        self._summary.add([state], ms["total"])
         if sighting is None or not sighting.found or sighting.box is None or size is None:
             sighting = None
         shape = sighting.shape if sighting else None
@@ -262,9 +297,158 @@ class StreamTracker:
             "score": round(sighting.confidence, 3) if sighting else None,
             # tracking, coasting (drawn at its predicted place), lost, unknown, or idle (no target)
             "state": state,
+            "track": sighting.track_id if sighting else None,  # ByteTrack's id
             "ms": {stage: round(value, 1) for stage, value in ms.items()},
             "model": self.label,
         }
+
+
+class ObjectsTracker:
+    """Objects mode: the objects of the page's last `objects` message, followed on every frame
+    by the connection's own TrackerSession, which asks jev about them as `POST /locate` with a
+    session does. `set` and `step` are called one at a time."""
+
+    def __init__(self, session: TrackerSession):
+        self.session = session
+        self.label = session.vision.model
+        self.objects: list[Query] = []
+        self._summary = _Summary("Objects")
+
+    def set(self, objects: list[Query]) -> None:
+        """Replaces the set. Objects left out are dropped now, along with any jev answer about
+        them still on the way; a new phrase for an id starts it over (on the next frame), while
+        new query words only change what jev is told about it. An empty set stops tracking and
+        jev: frames are still answered, with no detections."""
+        ids = [q.id for q in objects]
+        self.session.drop(q.id for q in self.objects if q.id not in ids)
+        if ids != [q.id for q in self.objects]:
+            log.info("Track: objects %s", ", ".join(ids) or "none")
+        self.objects = list(objects)
+
+    def step(self, header: FrameHeader, jpeg: bytes) -> dict:
+        """Follows every object on one frame and answers with the detections message."""
+        started = perf_counter()
+        ms: dict[str, float] = {}
+        if not self.objects:
+            return self._answer(header, [], ms, started)
+        try:
+            rgb = decode_jpeg(jpeg)
+        except BadMessage as e:
+            log.warning("Frame %d: %s", header.seq, e)
+            unseen = Sighting(False, state="lost")
+            return self._answer(header, [_tracked(q.id, unseen) for q in self.objects], ms, started)
+        ms["decode"] = _ms(started)
+        tracking = perf_counter()
+        image = FrameImage(jpeg, "image/jpeg", rgb)
+        sightings, size, _ = self.session.follow(image, self.objects)
+        ms["track"] = _ms(tracking)
+        detections = [_tracked(q.id, s, size) for q, s in zip(self.objects, sightings, strict=True)]
+        return self._answer(header, detections, ms, started)
+
+    def _answer(
+        self, header: FrameHeader, detections: list[dict], ms: dict, started: float
+    ) -> dict:
+        ms["total"] = _ms(started)
+        self._summary.add([f"{d['id']} {d['state']}" for d in detections] or ["idle"], ms["total"])
+        return {
+            "type": "detections",
+            "seq": header.seq,
+            "t": header.t,
+            "model": self.label,
+            "ms": {stage: round(value, 1) for stage, value in ms.items()},
+            "detections": detections,
+        }
+
+
+def _tracked(object_id: str, s: Sighting, size: tuple[int, int] | None = None) -> dict:
+    """One object's entry in a detections message: the mask message's fields, for each object."""
+    found = s.found and s.box is not None and size is not None
+    shape = s.shape if found else None
+    return {
+        "id": object_id,
+        "found": found,
+        # tracking, coasting (drawn at its predicted place), lost (also when jev says it is not
+        # in view), or unknown (jev hasn't placed it yet)
+        "state": "lost" if s.state == "absent" else s.state,
+        "box": normalize_box(s.box, *size) if found and size else None,
+        "outline": shape.outline if shape else None,
+        "point": shape.point if shape else None,
+        "contact": shape.contact if shape else None,
+        "score": round(s.confidence, 3) if found else None,
+        "track": s.track_id if found else None,
+    }
+
+
+class Modes:
+    """A /track connection's mode (TRACK.md): one target until the page sends `objects`, then
+    objects until it sends a `target`. Switching either way drops what the other mode followed.
+    The objects' TrackerSession is made on the first `objects` and kept for the connection, so
+    a jev call still on the way counts against the one in flight if objects come back."""
+
+    def __init__(self, target: StreamTracker, session: Callable[[], TrackerSession]):
+        self.target = target
+        self.label = target.label
+        self.objects: ObjectsTracker | None = None
+        self.in_objects_mode = False
+        self._session = session
+
+    def command(self, command: Command) -> None:
+        """Applies a message before the next frame."""
+        if isinstance(command, ObjectSet):
+            if not self.in_objects_mode:
+                self.target.reset()
+                self.in_objects_mode = True
+            if self.objects is None:
+                self.objects = ObjectsTracker(self._session())
+            self.objects.set(command.objects)
+        elif self.in_objects_mode:
+            assert self.objects is not None
+            self.objects.set([])  # `clear`, which stays in objects mode, or a target
+            if command is not None:
+                self.in_objects_mode = False
+                self.target.command(command)
+        else:
+            self.target.command(command)
+
+    def step(self, header: FrameHeader, jpeg: bytes) -> dict:
+        if self.in_objects_mode:
+            assert self.objects is not None
+            return self.objects.step(header, jpeg)
+        return self.target.step(header, jpeg)
+
+
+class _Summary:
+    """Every few seconds, a log line: frames answered, how often each state was answered and the
+    mean time in the tracker, so a slow or lossy stream shows in the log, not only on the
+    headset."""
+
+    def __init__(self, what: str):
+        self.what = what
+        self._states: dict[str, int] = {}
+        self._frames = 0
+        self._ms = 0.0
+        self._start = perf_counter()
+
+    def add(self, states: Iterable[str], total_ms: float) -> None:
+        for state in states:
+            self._states[state] = self._states.get(state, 0) + 1
+        self._frames += 1
+        self._ms += total_ms
+        elapsed = perf_counter() - self._start
+        if elapsed < 3:
+            return
+        counts = ", ".join(f"{k} {v}" for k, v in sorted(self._states.items()))
+        log.info(
+            "%s: %.1f frames/s, %.1f ms each (%s)",
+            self.what,
+            self._frames / elapsed,
+            self._ms / self._frames,
+            counts,
+        )
+        self._states.clear()
+        self._frames = 0
+        self._ms = 0.0
+        self._start = perf_counter()
 
 
 def decode_jpeg(jpeg: bytes) -> np.ndarray:

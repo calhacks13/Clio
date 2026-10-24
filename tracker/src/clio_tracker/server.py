@@ -5,7 +5,9 @@ tracking stream (TRACK.md).
   with `refreshMs` so the headset sends the next frame soon; jev looks in the background.
 - `POST /locate` without one (the primary-object route) asks jev now and outlines its boxes
   with YOLOE: one request at a time, another gets 503 rather than a second billed call.
-- `WS /track` follows the target the page names on every frame it streams.
+- `WS /track` follows the target the page names on every frame it streams, or, in objects mode,
+  the objects it names in words, with a TrackerSession of the connection's own (not one of the
+  shared Sessions).
 
 The service listens on 127.0.0.1 only. Requests must name a local host, which stops a web page
 from reaching it through DNS rebinding, and must be sent as JSON, which a page can't do across
@@ -34,7 +36,7 @@ from .identify import FrameImage, IdentifierError, Query
 from .images import BadImage
 from .session import Sessions
 from .stream import run_stream
-from .track import StreamTracker
+from .track import Modes, StreamTracker
 
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]", "testserver"}
 WORD = re.compile(r"\w")
@@ -129,7 +131,7 @@ def create_app(
             await websocket.close(code=1008)
             return
         await websocket.accept()
-        await run_stream(websocket, stream())
+        await run_stream(websocket, Modes(stream(), sessions.new))
 
     return app
 

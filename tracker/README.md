@@ -13,6 +13,9 @@ Clio server ───────────┤   (primary-object route, ~1/s)
                            (lesson Spotlight, every ~50 ms)
 headset primary.html ──── ws /track ─────────────────▶ YOLOE-26 + ByteTrack on every frame
   (via Vite's proxy)       frames + jev's box as `target`
+headset lesson ────────── ws /track, objects mode ───▶ every object on every frame;
+  (via Vite's proxy)       frames + the step's objects   jev ~1/s in the background
+                           in words
 ```
 
 | Endpoint                  | Who calls it                                                    | What it does                                                                                                                                                  |
@@ -20,6 +23,7 @@ headset primary.html ──── ws /track ────────────
 | `POST /locate`            | Clio's primary-object route (`CLIO_PRIMARY_FINDER_URL`)         | One jev call for the frame, then YOLOE outlines each box jev found (`model`: `jev-1.14.0+yoloe-26l-seg`). One request at a time; another gets 503. |
 | `POST /locate` + `session` | Clio's locate route (`CLIO_VISION_URL`), for lesson outlines   | Answers at once from tracking state, with `refreshMs: 50` so the headset sends the next frame soon; jev looks again about once a second.                    |
 | `WS /track`               | `apps/headset/primary.html`                                     | Frames in, one mask per frame out; the page forwards each primary answer's box as the target. Protocol: [TRACK.md](TRACK.md).                              |
+| `WS /track`, objects mode | the headset's lesson                                            | Frames and the step's objects in words in, every object's outline per frame out; jev about once a second, as with a session. [TRACK.md](TRACK.md#objects-mode). |
 | `GET /health`             |                                                                 | `{ok, model, backend, sessions}`                                                                                                                               |
 
 The contract for `/locate` is [docs/object-finder.md](../docs/object-finder.md). The service
@@ -66,6 +70,18 @@ For lesson outlines that follow objects live, also set `CLIO_VISION_URL=http://1
 in `.env` and restart `pnpm dev`. The lesson needs no flag: the tracker's `refreshMs` sets the
 pace (`?showRefresh=0` still turns refreshing off).
 
+## How a lesson uses `/track`
+
+Objects mode ([TRACK.md](TRACK.md#objects-mode)) does what `/locate` with a session does, over
+the stream instead of one HTTP request per frame through Clio's server. The headset opens
+`/track` (through Vite's proxy, as `primary.html` does) and sends the objects to follow in words
+whenever they change: the focused step's objects, each with its id, a phrase that stays the same
+from step to step, and the step's description as the query; `"objects": []` when nothing is to
+be shown, which stops jev. It streams frames as `primary.html` does and gets every object's box,
+outline, point and contact on each one. The tracker asks jev itself, about once a second, in
+one call for all the objects that are due. What comes back feeds the learner's AR view and the
+recording only, never a Gemini coach ([docs/coach-plan.md](../docs/coach-plan.md#the-perception-boundary)).
+
 ## Settings
 
 From the environment, then `tracker/.env`, then the repo's `.env`.
@@ -77,7 +93,7 @@ From the environment, then `tracker/.env`, then the repo's `.env`.
 | `--fake-jev [L,T,R,B]`                | `0.3,0.3,0.7,0.7`       | Every object present at this box; no key, no cost.                                      |
 | `CLIO_TRACKER_MODEL`, `--model`       | `l`                     | The size: `s`, `m` or `l` (also `n`, `x`, or a name such as `yoloe-26s-seg`). See below. |
 | `CLIO_TRACKER_BACKEND`, `--backend`   | `auto`                  | `coreml` (Apple Neural Engine) or `torch` (MPS, CUDA or CPU).                           |
-| `CLIO_TRACKER_IDENTIFY_INTERVAL_MS`   | `1000`                  | With a session: how often jev looks again at each object.                               |
+| `CLIO_TRACKER_IDENTIFY_INTERVAL_MS`   | `1000`                  | With a session or in objects mode: how often jev looks again at each object.            |
 | `CLIO_TRACKER_IDENTIFY_MAX_IN_FLIGHT` | `1`                     | jev calls in flight. jev's client never overlaps billed calls.                          |
 | `CLIO_TRACKER_JEV_TIMEOUT_S`          | `12`                    | The whole jev call. Clio gives up on the finder at 15 s.                                |
 | `JEV_MODEL`, `JEV_ENDPOINT`           | `jev-1.14.0`, TypeSafe  | Box needs jev 1.14 or later.                                                            |
@@ -223,8 +239,11 @@ people: round trip 36 ms p50, 40 ms p95; the first outline 1.2 s in (the first i
 answer); the described person found on 72 of 72 frames after that, IoU 0.95 to 0.96, never on
 another person.
 
-`tests/test_end_to_end.py` runs the same pans on real weights with jev answering once (both on
-`/track` and with a session): the person is kept on every frame. Nothing here has run on a
+`tests/test_end_to_end.py` runs the same pans on real weights with jev answering once (on
+`/track`, with a session, and in objects mode): the person is kept on every frame. In objects
+mode it follows two people at once, the man and the person at the left edge, both on every
+frame after jev's one answer and never on anyone else; a frame of the two took 12 to 14 ms with
+s and 21 to 23 ms with l on the Neural Engine, decoding included. Nothing here has run on a
 Quest yet. jev itself has not been called from this machine; its client is the jev finder's,
 which was measured against real jev (five calls, 7 of 7 present objects found, 3 of 3 absent
 ones rejected, boxes at IoU 0.82 to 0.98), and is tested here against a fake transport.
@@ -285,4 +304,4 @@ uv run ruff check src tests
 ```
 
 Licenses: Ultralytics and the YOLOE-26 weights are AGPL-3.0. `jev.py`, `images.py`, `stream.py`,
-`bench.py` and the `/track` protocol come from the jev finder (this repository).
+`bench.py` and the `/track` protocol's target mode come from the jev finder (this repository).

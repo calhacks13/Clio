@@ -126,6 +126,58 @@ def test_track_stream_follows_a_target_given_once(bus_rgb, vision):
     assert found == n - 1 and wrong == 0 and hits >= 0.9 * (n - 1)
 
 
+class PlacesOnce:
+    """jev placing every object on the first frame it is sent, then down."""
+
+    name = "jev-once"
+
+    def __init__(self, boxes: dict[str, np.ndarray]):
+        self.boxes = boxes
+        self.calls = 0
+
+    def identify(self, image: FrameImage, queries: list[Query]) -> list[Identification]:
+        self.calls += 1
+        if self.calls > 1:
+            raise RuntimeError("jev is down")
+        size = [image.width, image.height] * 2
+        return [Identification(q.id, 0.95, tuple(self.boxes[q.id] / size)) for q in queries]
+
+
+def test_objects_mode_follows_two_people_named_once(bus_rgb, vision):
+    """A lesson's flow: two objects in words over /track, jev placing both on the first frame."""
+    from clio_tracker.track import FrameHeader, Modes, ObjectSet, StreamTracker
+
+    n = 45
+    people = {"man": PERSON, "left": OTHERS[0]}
+    first = camera(bus_rgb, 0, n)[1]
+    jev = PlacesOnce({k: project(box, first)[0] for k, box in people.items()})
+    clock = Clock()
+    session = TrackerSession(
+        vision, jev, ManualExecutor(run_now=True), SessionSettings(identify_interval_s=0.5), clock
+    )
+    modes = Modes(StreamTracker(vision), lambda: session)
+    man = Query("man", "The man in the dark jacket in the middle", "man")
+    modes.command(ObjectSet([man, Query("left", "The person at the left edge", "person")]))
+    hits = {"man": 0, "left": 0}
+    for i in range(n):
+        clock.t += 1 / 15
+        frame, view = camera(bus_rgb, i, n)
+        ok, buf = cv2.imencode(".jpg", frame[..., ::-1])
+        answer = modes.step(FrameHeader(i, 1000.0 + 66 * i, *OUT), buf.tobytes())
+        assert [d["id"] for d in answer["detections"]] == ["man", "left"]
+        if i == 0:
+            continue
+        for d in answer["detections"]:
+            assert d["found"] and d["outline"] and d["contact"]  # both, on every frame
+            box = np.array(d["box"]) * [*OUT, *OUT]
+            others = [b for k, b in people.items() if k != d["id"]] + [OTHERS[1]]
+            assert iou(box, project(np.stack(others), view)).max() < 0.5  # never another person
+            hits[d["id"]] += iou(box, project(people[d["id"]], view)[0])[0, 0] > 0.6
+    assert jev.calls > 1  # it kept asking, and every later call failed
+    assert hits["man"] >= 0.9 * (n - 1)
+    assert hits["left"] >= 0.7 * (n - 1)  # it walks out of the view as the camera pans
+
+
 def test_locate_outlines_jevs_box_with_yoloe(bus_rgb, vision):
     from clio_tracker.finder import Finder
     from clio_tracker.identify import JevIdentifier
