@@ -256,6 +256,24 @@ follow a 100 px a frame turn) and score dips under ByteTrack's floor. With the s
 nothing of the camera (all motion treated as the object's own, the worst case for lag), the box
 still matches the truth at IoU 0.875 against 0.885.
 
+**Parts** (`clio-tracker jitter`, the five part scenes: a caliper's vernier scale, a
+micrometer's thimble and name plate, a rotary switch's shaft, a 9 V battery's terminals; the
+camera frames the part, and the target says `"part": true`). Before, each was followed as an
+object:
+
+| All five part sequences                          | Before | After |
+| ------------------------------------------------ | -----: | ----: |
+| Frames lost while the part is in view            |   9.1% |    0% |
+| Found frames nearer the whole object than the part | 27.3% |  0.7% |
+| IoU with the true part box                       |  0.602 | 0.746 |
+| Box centre wobble, px (mean)                     |   3.35 |  1.67 |
+| Outline centroid wobble, px (mean / p95)         | 5.0 / 24.4 | 3.5 / 13.6 |
+| Outlines that change by more than half (swaps)   |     19 |    16 |
+
+The thimble, which has no YOLOE candidate of its own, was on the micrometer's barrel in 92% of
+frames before (IoU 0.45), 3% after (0.78). The seven whole-object sequences give the same
+numbers as before to the last digit.
+
 ## Tests
 
 ```bash

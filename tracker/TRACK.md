@@ -110,13 +110,16 @@ re-acquired as the whole object's track, whose mask came back. A part target is 
 to a track (`part.py`):
 
 - The object holding the part is followed as an object of its own, the **parent**: on jev's
-  frame, the candidate holding the part box that scores best against its own view (an object's
-  own box scores 0.9 or more, a box over pieces of several things next to nothing). It may be
-  the part itself when YOLOE proposes it (a name plate).
-- The part box rides on the parent's tracked box (translation and scale on each axis; along an
-  axis where the parent's box is cut by the frame edge, its free side carries the part). With
-  no parent in sight, the camera's motion carries it (`state: "coasting"`, for up to 6 s after
-  jev's last answer).
+  frame, the smallest candidate holding the part box that scores at least 0.4 against its own
+  view (an object's own box scores 0.9 or more, a box over pieces of several things next to
+  nothing). That is the part itself when YOLOE proposes it (a name plate, a vernier scale),
+  else what holds it (the micrometer for its thimble).
+- The camera's motion carries the part box, and the parent's own motion on top, as far as the
+  sides of its box agree (YOLOE's box for an object also changes extent, taking in a neighbor
+  or cut by the frame edge): per axis the smaller shift of its two sides when they agree, and a
+  scale when the parent, wholly in view, grows alike in width and height. While the parent
+  coasts or none is in sight, the camera alone carries it (`state: "coasting"`, for up to 6 s
+  after jev's last answer or the parent's last sighting).
 - `outline` is the parent's mask inside the part box, so it follows the object's edges where the
   part meets them; when that mask hardly covers the part box, the part box as a rounded
   rectangle. `point` and `contact` are the part's. `box` is the part box.

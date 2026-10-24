@@ -11,10 +11,12 @@ therefore never matched to a track; it is a box carried by motion:
   box whose box scores best against its own view: an object's own box scores 0.9 or more (a
   caliper, a micrometer, a rotary switch), a box over pieces of several things or background
   next to nothing. It may be the part itself when YOLOE proposes it (a name plate).
-- **The part rides on it.** The part box is kept in the parent box's coordinates (translation and
-  scale on each axis), so it moves and scales with the parent's tracked box. Along an axis where
-  the parent's box is cut by the frame's edge, its free side's motion carries the part; with no
-  parent in sight the camera's motion (motion.py) does.
+- **The part rides on it.** The camera's motion (motion.py) carries the part box, and the
+  parent's own motion on top of it, as far as its box's sides agree (YOLOE's box for an object
+  also changes its extent, taking in a neighbor or cut by the frame's edge): along each axis
+  the smaller shift of its two sides when they agree, and a scale when the parent, wholly in
+  view, grows alike in width and height. While the parent coasts, or none is in sight, the
+  camera alone carries the part. jev's next answer puts it right again.
 - **Its outline** is the parent's mask inside the part box, so the shape follows the object's
   real edges where the part meets them; when the parent's mask hardly covers the part box, the
   part box itself as a rounded rectangle. `point` and `contact` are the part's. It is steadied
@@ -67,10 +69,14 @@ def find_parent(
     scores = vision.scores(enc, vision.prompts(enc, boxes[reps]))[:, idx]  # (R, holding)
     near = iou(boxes[reps], boxes[idx]) >= 0.5
     scores = np.where(near, scores, 0.0)
-    r, i = np.unravel_index(int(np.argmax(scores)), scores.shape)
-    if scores[r, i] < p.parent_min:
+    best = scores.argmax(axis=1)  # each object's best candidate
+    good = scores[np.arange(len(reps)), best] >= p.parent_min
+    if not good.any():
         return None
-    return boxes[idx[i]].copy()
+    # The smallest object holding the part rides closest with it: the part itself when YOLOE
+    # proposes it, else e.g. a sliding jaw before the whole caliper.
+    sizes = np.where(good, area[idx[best]], np.inf)
+    return boxes[idx[best[int(np.argmin(sizes))]]].copy()
 
 
 @dataclass
@@ -86,8 +92,6 @@ class PartTracker:
 
     def __post_init__(self) -> None:
         self._box: np.ndarray | None = None  # the part on the last frame, frame pixels
-        # Per axis (x, y): the part's two sides in units of the parent box's, from its low side.
-        self._rel: list[tuple[float, float] | None] = [None, None]
         self._held_by: np.ndarray | None = None  # the parent's tracked box on the last frame
         self._seen_t = 0.0  # jev's last answer, or the parent's last sighting
         self._applied_seq = -1
@@ -121,9 +125,7 @@ class PartTracker:
             return "part absent"
         self.absent = False
         box = np.asarray(box, dtype=np.float32)
-        held_by, change = self._parent_on(seq, t, box, enc, vision, carry)
-        size = (enc.letterbox.width, enc.letterbox.height)
-        self._rel = [_axis_rel(box, held_by, k, size) for k in (0, 1)]
+        _, change = self._parent_on(seq, t, box, enc, vision, carry)
         self._box = warp_box(box, carry)
         self._held_by = None
         self._seen_t = t
@@ -179,10 +181,19 @@ class PartTracker:
         held = parent is not None and parent.found and parent.measured is not None
         if held:
             assert parent is not None and parent.measured is not None
-            last = warp_box(self._held_by, camera) if self._held_by is not None else None
-            box = self._ride(box, last, parent.measured, size)
-            self._held_by = parent.measured.copy()
             self._seen_t = t
+        # The part rides on the parent's sightings only: while it coasts, its predicted box says
+        # no more than the camera's motion does.
+        if held and parent is not None and parent.state == "tracking":
+            now = parent.measured
+            assert now is not None
+            last = warp_box(self._held_by, camera) if self._held_by is not None else None
+            if last is not None and float(iou(last, now)[0, 0]) < p.part_jump_iou:
+                # YOLOE's box for the parent changed its extent (a jaw, then the whole caliper),
+                # it did not move.
+                last = None
+            box = self._ride(box, last, now, size)
+            self._held_by = now.copy()
         else:
             self._held_by = None
         self._box = box
@@ -217,32 +228,36 @@ class PartTracker:
         now: np.ndarray,
         size: tuple[int, int],
     ) -> np.ndarray:
-        """The part box (already carried by the camera) moved with the parent, now at `now` and
-        on the last frame at `last` (carried by the camera too), axis by axis."""
+        """The part box (already carried by the camera) moved as the parent moved since the last
+        frame (`last`, carried by the camera too, to `now`). YOLOE's box for an object also
+        changes its extent (it takes in a neighbor, or is cut by the frame's edge), so the part
+        moves only as far as the parent's free sides agree: along each axis, the smaller of
+        their two shifts when they shift the same way, none when they don't. It scales only when
+        the parent is wholly in view and grows alike in width and height."""
+        if last is None:
+            return box
+        free = [_free(now, k, size[k]) and _free(last, k, size[k]) for k in (0, 1)]
+        sx = float(now[2] - now[0]) / max(float(last[2] - last[0]), 1e-3)
+        sy = float(now[3] - now[1]) / max(float(last[3] - last[1]), 1e-3)
+        if all(all(f) for f in free) and abs(sx - sy) <= 0.03 * max(sx, sy):
+            s = math.sqrt(sx * sy)
+            c_last, c_now = _centre(last), _centre(now)
+            centre = c_now + s * (_centre(box) - c_last)
+            half = s * (box[2:] - box[:2]) / 2
+            return np.concatenate([centre - half, centre + half]).astype(np.float32)
         out = box.astype(np.float32).copy()
-        for k, limit in ((0, size[0]), (1, size[1])):
-            lo, hi = k, k + 2
-            free = _free(now, k, limit)
-            rel = self._rel[k]
-            if all(free) and rel is not None:
-                span = float(now[hi] - now[lo])
-                out[lo], out[hi] = now[lo] + rel[0] * span, now[lo] + rel[1] * span
+        for k in (0, 1):
+            shifts = [
+                float(now[i] - last[i]) for i, ok in ((k, free[k][0]), (k + 2, free[k][1])) if ok
+            ]
+            if len(shifts) == 2:
+                shift = min(shifts, key=abs) if shifts[0] * shifts[1] > 0 else 0.0
+            elif shifts:
+                shift = shifts[0]
+            else:
                 continue
-            if last is not None:
-                was = _free(last, k, limit)
-                lo_ok, hi_ok = free[0] and was[0], free[1] and was[1]
-                if lo_ok and hi_ok:
-                    s = float(now[hi] - now[lo]) / max(float(last[hi] - last[lo]), 1e-3)
-                    out[lo] = now[lo] + (box[lo] - last[lo]) * s
-                    out[hi] = now[lo] + (box[hi] - last[lo]) * s
-                elif lo_ok or hi_ok:
-                    side = lo if lo_ok else hi
-                    shift = float(now[side] - last[side])
-                    out[lo] += shift
-                    out[hi] += shift
-            if all(free) and rel is None:
-                span = max(float(now[hi] - now[lo]), 1e-3)
-                self._rel[k] = (float(out[lo] - now[lo]) / span, float(out[hi] - now[lo]) / span)
+            out[k] += shift
+            out[k + 2] += shift
         return out
 
 
@@ -268,16 +283,8 @@ def _fill(crop: MaskCrop, box: np.ndarray) -> float:
     return float((_sample(crop, np.asarray(box, dtype=np.float32), (24, 24)) > 0.5).mean())
 
 
-def _axis_rel(
-    box: np.ndarray, held_by: np.ndarray | None, k: int, size: tuple[int, int]
-) -> tuple[float, float] | None:
-    """The part's sides along axis k in units of the parent box's, when that box is whole
-    along it."""
-    if held_by is None or not all(_free(held_by, k, size[k])):
-        return None
-    lo, hi = k, k + 2
-    span = max(float(held_by[hi] - held_by[lo]), 1e-3)
-    return (float(box[lo] - held_by[lo]) / span, float(box[hi] - held_by[lo]) / span)
+def _centre(box: np.ndarray) -> np.ndarray:
+    return np.array([(box[0] + box[2]) / 2, (box[1] + box[3]) / 2], dtype=np.float64)
 
 
 def _free(box: np.ndarray, k: int, limit: float) -> tuple[bool, bool]:

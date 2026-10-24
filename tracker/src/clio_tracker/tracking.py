@@ -93,6 +93,7 @@ class TrackerParams:
     parent_max_area: float = 0.9  # share of the frame: larger is the table or the background
     part_fill: float = 0.3  # the parent's mask must fill this share of the part box to be used
     part_hold_s: float = 6.0  # a part with no parent in sight is carried this long after jev
+    part_jump_iou: float = 0.7  # the parent's box against its last, carried by the camera
     smooth: SmoothParams = field(default_factory=SmoothParams)
 
 
