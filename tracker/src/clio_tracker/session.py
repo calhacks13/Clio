@@ -3,9 +3,11 @@
 Every locate request is one frame. The frame goes through YOLOE once, each requested object's
 tracker steps on it, and the answer goes back right away. jev runs beside that, in a thread:
 an object is sent along with the frame when its interval has passed (or straight away when the
-tracker has nothing to follow, or doubts it is still on the same object). The frame's SAVPE
-maps are kept until jev answers, so its box becomes a prompt on the very frame jev looked at,
-then is matched to the track that was there, several frames ago.
+tracker has nothing to follow, or doubts it is still on the same object). After a failed call
+nothing is sent for the interval, then twice as long after each further failure, up to
+identify_backoff_max_s, until jev answers again. The frame's SAVPE maps are kept until jev
+answers, so its box becomes a prompt on the very frame jev looked at, then is matched to the
+track that was there, several frames ago.
 
 `POST /locate` with a session id shares one of these per id (Sessions); a /track connection in
 objects mode (TRACK.md) has one of its own and steps it on every frame it streams.
@@ -37,6 +39,7 @@ class SessionSettings:
     identify_interval_s: float = 1.0  # how often jev looks again at each object
     # jev's client never overlaps billed calls; another identifier may allow more.
     identify_max_in_flight: int = 1
+    identify_backoff_max_s: float = 16.0  # the longest wait for the next call while jev fails
     present_threshold: float = 0.5  # jev's Noul probability that counts as "in view"
     forget_after_s: float = 10.0  # an object nobody asks about is dropped after this
     tracker: TrackerParams = field(default_factory=TrackerParams)
@@ -81,7 +84,9 @@ class TrackerSession:
         self._in_flight: dict[str, int] = {}
         self._frames: dict[int, Encoding] = {}  # frames jev is looking at
         self._done: queue.SimpleQueue[_Ask] = queue.SimpleQueue()
-        self._identifier_down = False
+        self._failures = 0  # failed calls since jev last answered
+        self._wait_s = 0.0  # and the wait they set before the next call
+        self._retry_at = -np.inf
         self._camera = CameraMotion()
 
     @property
@@ -163,7 +168,7 @@ class TrackerSession:
         trackers: list[ObjectTracker],
     ) -> None:
         s = self.settings
-        if self.in_flight >= s.identify_max_in_flight:
+        if self.in_flight >= s.identify_max_in_flight or now < self._retry_at:
             return
         due = [
             q
@@ -199,15 +204,30 @@ class TrackerSession:
                 self._in_flight[oid] = max(0, self._in_flight.get(oid, 0) - 1)
             took = now - ask.started
             if ask.error is not None or ask.answers is None or enc is None:
-                if not self._identifier_down:
-                    log.warning(f"{self.identifier.name}: {ask.error}. Tracking continues.")
-                self._identifier_down = True
+                self._failed(ask.error, now)
                 continue
-            if self._identifier_down:
-                log.info(f"{self.identifier.name} answers again")
-            self._identifier_down = False
+            if self._failures:
+                log.info(f"{self.identifier.name} answers again, after {self._failures} failed")
+            self._failures, self._retry_at = 0, -np.inf
             for answer in ask.answers:
                 self._apply(answer, ask, enc, now, took)
+
+    def _failed(self, error: BaseException | None, now: float) -> None:
+        """Tracking goes on, and nothing is sent until a wait has passed: a fast failure (an
+        HTTP 429, jev's client busy with another caller, no network) would otherwise send an
+        object that is new or lost again on the very next frame. The wait is the interval, then
+        doubles with each failure in a row."""
+        s = self.settings
+        self._failures += 1
+        longest = max(s.identify_backoff_max_s, s.identify_interval_s)
+        first = self._failures == 1
+        self._wait_s = s.identify_interval_s if first else min(self._wait_s * 2, longest)
+        self._retry_at = now + self._wait_s
+        if first:
+            log.warning(
+                f"{self.identifier.name}: {error}. Tracking continues; asking again in "
+                f"{self._wait_s:g} s, then less often until it answers."
+            )
 
     def _apply(
         self, answer: Identification, ask: _Ask, enc: Encoding, now: float, took: float

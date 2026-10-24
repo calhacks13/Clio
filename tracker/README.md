@@ -79,8 +79,9 @@ whenever they change: the focused step's objects, each with its id, a phrase tha
 from step to step, and the step's description as the query; `"objects": []` when nothing is to
 be shown, which stops jev. It streams frames as `primary.html` does and gets every object's box,
 outline, point and contact on each one. The tracker asks jev itself, about once a second, in
-one call for all the objects that are due. What comes back feeds the learner's AR view and the
-recording only, never a Gemini coach ([docs/coach-plan.md](../docs/coach-plan.md#the-perception-boundary)).
+one call for all the objects that are due, and less often while jev fails (up to 16 s apart,
+as with a session). What comes back feeds the learner's AR view and the recording only, never a
+Gemini coach ([docs/coach-plan.md](../docs/coach-plan.md#the-perception-boundary)).
 
 ## Settings
 
