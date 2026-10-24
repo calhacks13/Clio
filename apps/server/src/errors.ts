@@ -55,6 +55,13 @@ export const invalidName = (what: string) =>
 
 export const notFound = (message: string) => new ApiError(404, 'not_found', message);
 
+export const unauthorized = () =>
+  new ApiError(
+    401,
+    'unauthorized',
+    'This server needs its access key: open the link with ?key=<key>, or send Authorization: Bearer <key>',
+  );
+
 export const payloadTooLarge = (maxBytes: number) =>
   new ApiError(413, 'payload_too_large', `The request body is larger than ${maxBytes} bytes`);
 

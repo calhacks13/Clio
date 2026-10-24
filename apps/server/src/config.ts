@@ -21,6 +21,8 @@ export interface Config {
   proceduresDir: string;
   /** Absolute. The built headset app, served at `/` (docs/deploy.md). null: not served. */
   staticDir: string | null;
+  /** Shared secret for public URLs: /api and the relay require it. null: no gate. */
+  accessKey: string | null;
   /** null when unset or blank: the coach, planner and vision endpoints answer 503. */
   geminiApiKey: string | null;
   liveModel: string;
@@ -53,6 +55,7 @@ const EnvSchema = z.object({
   CLIO_DATA_DIR: optionalText,
   CLIO_PROCEDURES_DIR: optionalText,
   CLIO_STATIC_DIR: optionalText,
+  CLIO_ACCESS_KEY: optionalText,
   GEMINI_API_KEY: optionalText,
   GEMINI_LIVE_MODEL: text(DEFAULT_LIVE_MODEL),
   GEMINI_PLANNER_MODEL: text(DEFAULT_PLANNER_MODEL),
@@ -79,6 +82,7 @@ export function loadConfig(
     dataDir: dir(e.CLIO_DATA_DIR, 'data'),
     proceduresDir: dir(e.CLIO_PROCEDURES_DIR, 'procedures'),
     staticDir: staticDir(e.CLIO_STATIC_DIR, repoRoot),
+    accessKey: e.CLIO_ACCESS_KEY ?? null,
     geminiApiKey: e.GEMINI_API_KEY ?? null,
     liveModel: e.GEMINI_LIVE_MODEL,
     plannerModel: e.GEMINI_PLANNER_MODEL,

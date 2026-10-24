@@ -1,6 +1,7 @@
 import { Hono, type MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
+import { acceptKeyLinks, requireAccess } from './access';
 import { type AppDeps, resolveDeps } from './deps';
 import { ApiError, errorBody } from './errors';
 import type { Logger } from './log';
@@ -24,6 +25,11 @@ export function createApp(deps: AppDeps): Hono {
   app.use('*', logRequests(d.logger));
   // The headset reaches us through the Vite proxy (same origin); CORS is for tools in dev.
   app.use('/api/*', cors());
+  if (d.accessKey) {
+    // After CORS, which answers preflights (they never carry credentials) itself.
+    app.use('/api/*', requireAccess(d.accessKey));
+    app.use('*', acceptKeyLinks(d.accessKey));
+  }
 
   app.route('/', healthRoutes(d));
   app.route('/', coachRoutes(d));

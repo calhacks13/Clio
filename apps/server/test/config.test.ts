@@ -16,6 +16,7 @@ describe('loadConfig', () => {
       proceduresDir: '/repo/procedures',
       // /repo/apps/headset/dist does not exist: nothing is built, so nothing is served.
       staticDir: null,
+      accessKey: null,
       geminiApiKey: null,
       liveModel: 'gemini-3.8-live',
       plannerModel: 'gemini-3.5-flash-lite',
@@ -108,6 +109,11 @@ describe('loadConfig', () => {
   it('rejects an invalid port with a message naming the variable', () => {
     expect(() => loadConfig({ CLIO_SERVER_PORT: 'eighty' }, '/repo')).toThrow(/CLIO_SERVER_PORT/);
     expect(() => loadConfig({ CLIO_SERVER_PORT: '70000' }, '/repo')).toThrow(/CLIO_SERVER_PORT/);
+  });
+
+  it('reads an access key; blank means no gate', () => {
+    expect(loadConfig({ CLIO_ACCESS_KEY: ' s3cret ' }, '/repo').accessKey).toBe('s3cret');
+    expect(loadConfig({ CLIO_ACCESS_KEY: '  ' }, '/repo').accessKey).toBeNull();
   });
 });
 

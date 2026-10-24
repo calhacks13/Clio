@@ -101,6 +101,8 @@ export interface GeminiRelayOptions {
   logger?: Logger;
   /** One log line per relayed message (direction, type, size). Never content or the key. */
   logMessages?: boolean;
+  /** When set, relay upgrades it rejects are refused with 401 (CLIO_ACCESS_KEY, see access.ts). */
+  authorize?: (req: IncomingMessage) => boolean;
 }
 
 export interface GeminiRelay {
@@ -166,6 +168,12 @@ export function createGeminiRelay(options: GeminiRelayOptions): GeminiRelay {
     handleUpgrade(req, socket, head) {
       const parsed = parseRelayRequest(req.url ?? '/');
       if (parsed.kind === 'not_ours') return false;
+      // Before the path check, so a client without access learns nothing about the relay.
+      if (options.authorize && !options.authorize(req)) {
+        logger?.warn('gemini relay: refused an upgrade without the access key');
+        reject(socket, 401);
+        return true;
+      }
       if (parsed.kind === 'not_allowed') {
         reject(socket, 404);
         return true;

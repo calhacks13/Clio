@@ -1,8 +1,9 @@
 import { once } from 'node:events';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { describe, expect, it, onTestFinished } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
+import { ACCESS_COOKIE, upgradeHasAccess } from '../src/access';
 import {
   attachGeminiRelay,
   type GeminiRelayOptions,
@@ -130,8 +131,8 @@ async function relayServer(options: GeminiRelayOptions, extra?: (server: Server)
   return (server.address() as AddressInfo).port;
 }
 
-function connect(port: number, path: string): WebSocket {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`);
+function connect(port: number, path: string, headers: Record<string, string> = {}): WebSocket {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`, { headers });
   onTestFinished(() => ws.terminate());
   return ws;
 }
@@ -231,6 +232,45 @@ describe('Gemini Live relay', () => {
     const client = connect(port, '/gemini/v1beta/models/x:generateContent');
     const [error] = (await once(client, 'error')) as [Error];
     expect(error.message).toMatch(/404/);
+  });
+
+  it('refuses upgrades without access with 401, before saying whether the path exists', async () => {
+    const logger = captureLogger();
+    const port = await relayServer({ apiKey: 'real-key', authorize: () => false, logger });
+    for (const path of [`/gemini${LIVE}?key=x`, '/gemini/v1beta/models/x:generateContent']) {
+      const [error] = (await once(connect(port, path), 'error')) as [Error];
+      expect(error.message).toMatch(/401/);
+    }
+    expect(logger.lines.some((l) => l.startsWith('warn gemini relay: refused'))).toBe(true);
+  });
+
+  it('relays upgrades that carry the access cookie (CLIO_ACCESS_KEY)', async () => {
+    const upstream = await fakeUpstream();
+    const port = await relayServer({
+      apiKey: 'real-key',
+      upstreamOrigin: upstream.origin,
+      authorize: upgradeHasAccess('k3y'),
+    });
+    const client = connect(port, `/gemini${LIVE}?key=placeholder`, {
+      cookie: `${ACCESS_COOKIE}=k3y`,
+    });
+    await once(client, 'open');
+    const echo = messages(client, 1);
+    client.send('{"setup":{}}');
+    expect((await echo)[0]?.bytes).toEqual([...Buffer.from('{"setup":{}}')]);
+    // The SDK's ?key= is the placeholder for the Gemini key, never the access key.
+    expect(upstream.urls).toEqual([`${LIVE}?key=real-key`]);
+
+    const [error] = (await once(connect(port, `/gemini${LIVE}?key=k3y`), 'error')) as [Error];
+    expect(error.message).toMatch(/401/);
+  });
+
+  it('does not check access for upgrades that are not its own', async () => {
+    const authorize = vi.fn(() => false);
+    const port = await relayServer({ apiKey: 'real-key', authorize });
+    const [error] = (await once(connect(port, '/hmr'), 'error')) as [Error];
+    expect(error.message).toMatch(/404/);
+    expect(authorize).not.toHaveBeenCalled();
   });
 
   it('leaves upgrades for other paths to other listeners, and rejects them when there are none', async () => {

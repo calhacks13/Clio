@@ -37,6 +37,8 @@ export interface AppDeps {
   clips: ClipStore;
   /** The built headset app, served at `/`. null (or absent): not served. */
   staticDir?: string | null;
+  /** CLIO_ACCESS_KEY: /api needs it (see access.ts). null (or absent): no gate. */
+  accessKey?: string | null;
   /** Gemini-backed services: null (or absent) when GEMINI_API_KEY is unset, so routes answer 503. */
   tokenMinter?: TokenMinter | null;
   planner?: Planner | null;
@@ -59,6 +61,7 @@ export function resolveDeps(deps: AppDeps): ServerDeps {
   return {
     ...deps,
     staticDir: deps.staticDir ?? null,
+    accessKey: deps.accessKey ?? null,
     tokenMinter: deps.tokenMinter ?? null,
     planner: deps.planner ?? null,
     locator: deps.locator ?? null,

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { GEMINI_RELAY_PATH } from '@clio/protocol';
 import { createAdaptorServer } from '@hono/node-server';
 import pkg from '../package.json' with { type: 'json' };
+import { upgradeHasAccess } from './access';
 import { createApp } from './app';
 import { type Config, loadConfig } from './config';
 import { consoleLogger, describeError, type Logger } from './log';
@@ -50,6 +51,7 @@ function main(): void {
       ? createHttpLocator({ url: config.visionUrl, token: config.visionToken })
       : gemini && createGeminiLocator(gemini, config.visionModel),
     staticDir: config.staticDir,
+    accessKey: config.accessKey,
     logger,
   });
 
@@ -59,6 +61,7 @@ function main(): void {
     apiKey: config.geminiApiKey,
     logger,
     logMessages: config.relayLog,
+    authorize: config.accessKey ? upgradeHasAccess(config.accessKey) : undefined,
   });
   server.on('error', (error: NodeJS.ErrnoException) => {
     logger.error(
@@ -84,6 +87,9 @@ function logStartup(config: Config, logger: Logger, geminiReady: boolean): void 
     config.staticDir
       ? `  App: http://${hosts[0]}:${config.port}/ serves ${config.staticDir}`
       : '  App: not served here (no build yet: pnpm dev serves it on :5173; pnpm build makes one)',
+    config.accessKey
+      ? '  Access key: on. /api and the relay need it; open the app with ?key=<key>'
+      : '  Access key: off',
     geminiReady
       ? `  Gemini: on (live ${config.liveModel}, planner ${config.plannerModel})`
       : '  Gemini: off. Set GEMINI_API_KEY in .env; until then use the scripted coach.',
