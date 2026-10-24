@@ -41,6 +41,10 @@ export class ApiRequestError extends Error {
   }
 }
 
+/** The server has an access key (CLIO_ACCESS_KEY) and this page was opened without ?key=…. */
+export const isAccessDenied = (err: unknown): boolean =>
+  err instanceof ApiRequestError && err.status === 401;
+
 export class ApiClient {
   constructor(
     private readonly base = '',

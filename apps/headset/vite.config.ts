@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { parseEnv } from 'node:util';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 import { defineConfig } from 'vite';
 
@@ -12,6 +13,14 @@ const server = process.env.CLIO_SERVER_URL ?? 'http://127.0.0.1:8787';
 // USB (adb reverse) only needs loopback. Wi-Fi mode (HTTPS) opens the dev server to the LAN, and
 // with it the Gemini relay: only use it on a network you trust.
 const lan = Boolean(process.env.CLIO_HTTPS || process.env.CLIO_LAN);
+// With CLIO_ACCESS_KEY set, the server wants it on /api and /gemini (docs/deploy.md). Read it as
+// the server does (the environment first, then the root .env) and send it, so dev keeps working.
+const rootEnv = new URL('../../.env', import.meta.url);
+const accessKey = (
+  process.env.CLIO_ACCESS_KEY ??
+  (existsSync(rootEnv) ? parseEnv(readFileSync(rootEnv, 'utf8')).CLIO_ACCESS_KEY : undefined)
+)?.trim();
+const headers = accessKey ? { authorization: `Bearer ${accessKey}` } : undefined;
 const { version } = JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
 ) as {
@@ -27,8 +36,8 @@ export default defineConfig({
     host: lan ? true : '127.0.0.1',
     port: 5173,
     proxy: {
-      '/api': { target: server, changeOrigin: true },
-      '/gemini': { target: server, changeOrigin: true, ws: true },
+      '/api': { target: server, changeOrigin: true, headers },
+      '/gemini': { target: server, changeOrigin: true, ws: true, headers },
     },
   },
   build: { target: 'es2022', sourcemap: true },

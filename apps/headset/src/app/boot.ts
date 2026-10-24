@@ -2,7 +2,7 @@ import type { HealthResponse, Procedure, ProcedureSummary } from '@clio/protocol
 import { MicCapture } from '../adapters/audio/mic-capture';
 import { SpeakerOutput } from '../adapters/audio/voice-output';
 import { PassthroughCamera } from '../adapters/camera/passthrough-camera';
-import { ApiClient } from '../adapters/net/api-client';
+import { ApiClient, isAccessDenied } from '../adapters/net/api-client';
 import { isArSupported } from '../adapters/xr/xr-session';
 import { createLogger } from '../core/log';
 import { ClioApp } from './clio-app';
@@ -27,6 +27,8 @@ export async function boot(root: HTMLElement): Promise<void> {
   }
 
   const api = new ApiClient();
+  // Health stays open on a server with an access key; the procedure list says if we lack it.
+  let locked = false;
   const [health, procedures, ar] = await Promise.all([
     api.health().catch((err: unknown) => {
       log.warn(`server unreachable: ${String(err)}`);
@@ -35,11 +37,14 @@ export async function boot(root: HTMLElement): Promise<void> {
     api
       .procedures()
       .then((r) => r.procedures)
-      .catch(() => [] as ProcedureSummary[]),
+      .catch((err: unknown) => {
+        locked = isAccessDenied(err);
+        return [] as ProcedureSummary[];
+      }),
     isArSupported(),
   ]);
 
-  root.innerHTML = render(health, procedures, ar, config.goal ?? '');
+  root.innerHTML = render(health, procedures, ar, config.goal ?? '', locked);
   const $ = <T extends HTMLElement>(sel: string) => root.querySelector(sel) as T;
   $<HTMLSelectElement>('#procedure').value = config.procedureId ?? '';
   $<HTMLInputElement>('#calibrate').checked = config.calibrate;
@@ -91,6 +96,7 @@ function render(
   procedures: ProcedureSummary[],
   ar: boolean,
   goal: string,
+  locked: boolean,
 ): string {
   const check = (ok: boolean, label: string) =>
     `<li class="${ok ? 'ok' : 'bad'}">${ok ? '✓' : '✗'} ${label}</li>`;
@@ -106,6 +112,7 @@ function render(
       <p class="tag">Every lesson trains two students: you, and a robot.</p>
       <ul class="checks">
         ${check(!!health, health ? `server ${esc(health.version)}` : 'server unreachable (run pnpm dev)')}
+        ${locked ? check(false, 'no access key: open the link with ?key=…') : ''}
         ${check(!!health?.coach.configured, health?.coach.configured ? `voice coach ${esc(health.coach.liveModel)}` : 'no Gemini key: offline coach')}
         ${check(ar, ar ? 'passthrough AR available' : 'no immersive-ar (use a Quest, or ?emulate=1)')}
       </ul>
