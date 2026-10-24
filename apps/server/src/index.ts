@@ -18,7 +18,8 @@ import { EpisodeStore } from './storage/episode-store';
 import { ProcedureStore } from './storage/procedure-store';
 
 // Boot: config → stores and services → HTTP app → server, with the Gemini Live relay on the
-// server's `upgrade` event (the Vite dev server proxies /api and /gemini here).
+// server's `upgrade` event. In dev the Vite server proxies /api and /gemini here; once the headset
+// is built, this server also serves the app itself (docs/deploy.md).
 
 function main(): void {
   const logger = consoleLogger;
@@ -48,6 +49,7 @@ function main(): void {
     locator: config.visionUrl
       ? createHttpLocator({ url: config.visionUrl, token: config.visionToken })
       : gemini && createGeminiLocator(gemini, config.visionModel),
+    staticDir: config.staticDir,
     logger,
   });
 
@@ -79,6 +81,9 @@ function logStartup(config: Config, logger: Logger, geminiReady: boolean): void 
     `Clio server ${pkg.version}`,
     ...hosts.map((host) => `  http://${host}:${config.port}/api/health`),
     `  Gemini Live relay: ws://${hosts[0]}:${config.port}${GEMINI_RELAY_PATH}`,
+    config.staticDir
+      ? `  App: http://${hosts[0]}:${config.port}/ serves ${config.staticDir}`
+      : '  App: not served here (no build yet: pnpm dev serves it on :5173; pnpm build makes one)',
     geminiReady
       ? `  Gemini: on (live ${config.liveModel}, planner ${config.plannerModel})`
       : '  Gemini: off. Set GEMINI_API_KEY in .env; until then use the scripted coach.',

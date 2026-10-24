@@ -35,6 +35,8 @@ export interface AppDeps {
   episodes: EpisodeStore;
   procedures: ProcedureStore;
   clips: ClipStore;
+  /** The built headset app, served at `/`. null (or absent): not served. */
+  staticDir?: string | null;
   /** Gemini-backed services: null (or absent) when GEMINI_API_KEY is unset, so routes answer 503. */
   tokenMinter?: TokenMinter | null;
   planner?: Planner | null;
@@ -56,6 +58,7 @@ export interface ServerDeps extends Required<Omit<AppDeps, 'limits' | GeminiServ
 export function resolveDeps(deps: AppDeps): ServerDeps {
   return {
     ...deps,
+    staticDir: deps.staticDir ?? null,
     tokenMinter: deps.tokenMinter ?? null,
     planner: deps.planner ?? null,
     locator: deps.locator ?? null,

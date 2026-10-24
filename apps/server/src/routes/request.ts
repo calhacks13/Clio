@@ -1,3 +1,4 @@
+import { GEMINI_RELAY_PATH } from '@clio/protocol';
 import type { Context, MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import type { z } from 'zod';
@@ -5,6 +6,11 @@ import { invalidId, invalidJson, payloadTooLarge, validationFailed } from '../er
 import { isSafeId } from '../ids';
 
 // Small request helpers shared by the route modules.
+
+/** `/api/…` or the `/gemini` relay: the server's own paths, never pages or files of the app. */
+export function isServerPath(path: string): boolean {
+  return ['/api', GEMINI_RELAY_PATH].some((p) => path === p || path.startsWith(`${p}/`));
+}
 
 /** Rejects bodies over `maxBytes` with a 413 ApiError (checked while the body streams in). */
 export function limitBody(maxBytes: number): MiddlewareHandler {

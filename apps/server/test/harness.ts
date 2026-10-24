@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Hono } from 'hono';
 import { onTestFinished } from 'vitest';
 import { createApp } from '../src/app';
 import type { AppDeps } from '../src/deps';
@@ -53,6 +54,8 @@ export interface HarnessOptions
 }
 
 export interface Harness {
+  /** For tests that need a real HTTP server in front of it. */
+  app: Hono;
   dataDir: string;
   proceduresDir: string;
   logger: CapturedLogger;
@@ -94,6 +97,7 @@ export async function harness(options: HarnessOptions = {}): Promise<Harness> {
     clips,
   });
   return {
+    app,
     dataDir,
     proceduresDir,
     logger,

@@ -10,9 +10,13 @@ import { episodeRoutes } from './routes/episodes';
 import { healthRoutes } from './routes/health';
 import { planRoutes } from './routes/plans';
 import { procedureRoutes } from './routes/procedures';
+import { staticAppRoutes } from './routes/static-app';
 import { visionRoutes } from './routes/vision';
 
-/** The HTTP API. The Gemini Live relay is not here: it hooks the server's `upgrade` event. */
+/**
+ * The HTTP API, plus the built headset app when there is one. The Gemini Live relay is not here:
+ * it hooks the server's `upgrade` event.
+ */
 export function createApp(deps: AppDeps): Hono {
   const d = resolveDeps(deps);
   const app = new Hono();
@@ -28,6 +32,8 @@ export function createApp(deps: AppDeps): Hono {
   app.route('/', visionRoutes(d));
   app.route('/', episodeRoutes(d));
   app.route('/', clipRoutes(d));
+  // Last, so it only sees what no API route answered.
+  if (d.staticDir) app.route('/', staticAppRoutes(d.staticDir));
 
   app.notFound((c) =>
     c.json(errorBody('not_found', `No route for ${c.req.method} ${c.req.path}`), 404),

@@ -1,7 +1,9 @@
 import { existsSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadConfig, REPO_ROOT } from '../src/config';
+import { tempDir } from './harness';
 
 describe('loadConfig', () => {
   it('uses defaults rooted at the repo, not the working directory', () => {
@@ -12,6 +14,8 @@ describe('loadConfig', () => {
       host: '127.0.0.1',
       dataDir: '/repo/data',
       proceduresDir: '/repo/procedures',
+      // /repo/apps/headset/dist does not exist: nothing is built, so nothing is served.
+      staticDir: null,
       geminiApiKey: null,
       liveModel: 'gemini-3.8-live',
       plannerModel: 'gemini-3.5-flash-lite',
@@ -104,6 +108,31 @@ describe('loadConfig', () => {
   it('rejects an invalid port with a message naming the variable', () => {
     expect(() => loadConfig({ CLIO_SERVER_PORT: 'eighty' }, '/repo')).toThrow(/CLIO_SERVER_PORT/);
     expect(() => loadConfig({ CLIO_SERVER_PORT: '70000' }, '/repo')).toThrow(/CLIO_SERVER_PORT/);
+  });
+});
+
+describe('loadConfig: the built headset app', () => {
+  it('serves apps/headset/dist by default once it has been built', async () => {
+    const repo = await tempDir();
+    expect(loadConfig({}, repo).staticDir).toBeNull();
+    await mkdir(join(repo, 'apps', 'headset', 'dist'), { recursive: true });
+    expect(loadConfig({}, repo).staticDir).toBe(join(repo, 'apps', 'headset', 'dist'));
+  });
+
+  it('reads CLIO_STATIC_DIR against the repo root', async () => {
+    const repo = await tempDir();
+    await mkdir(join(repo, 'web'));
+    expect(loadConfig({ CLIO_STATIC_DIR: 'web' }, repo).staticDir).toBe(join(repo, 'web'));
+    expect(loadConfig({ CLIO_STATIC_DIR: join(repo, 'web') }, '/repo').staticDir).toBe(
+      join(repo, 'web'),
+    );
+  });
+
+  it('refuses a CLIO_STATIC_DIR that is not a directory, naming the variable', async () => {
+    const repo = await tempDir();
+    await writeFile(join(repo, 'file.txt'), 'not a directory');
+    expect(() => loadConfig({ CLIO_STATIC_DIR: 'missing' }, repo)).toThrow(/CLIO_STATIC_DIR/);
+    expect(() => loadConfig({ CLIO_STATIC_DIR: 'file.txt' }, repo)).toThrow(/CLIO_STATIC_DIR/);
   });
 });
 
