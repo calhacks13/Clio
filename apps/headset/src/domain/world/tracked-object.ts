@@ -56,6 +56,11 @@ export interface TrackedObjectSample {
   image: TrackedObjectImage | null;
   /** World (local-floor) frame: lifted or measured. Null when there is no 3D estimate. */
   position: Vec3 | null;
+  /**
+   * False when `position` was not measured on this frame (a reused depth, or a guess from a surface
+   * or the workspace plane). Absent means measured.
+   */
+  positionMeasured?: boolean;
   /** World frame, only when measured (a marker, a 6DoF tracker); never guessed. */
   orientation: Quat | null;
 }

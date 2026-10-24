@@ -41,6 +41,11 @@ export interface Observation {
   confidence: number;
   source: PlacementMethod;
   t: number;
+  /**
+   * False when `position` was not measured on this frame (a tracker coasting, a reused depth or a
+   * surface guess). Absent means measured, as every source before the live tracker was.
+   */
+  measured?: boolean;
 }
 
 interface Grip {
@@ -195,6 +200,12 @@ export class ObjectRegistry {
     this.bus.emit('object.grasped', { t, objectId: id, hand, grip, position: est.position });
     return true;
   }
+
+  /**
+   * A live source lost the object: its last estimate stays where it was, but stops counting as
+   * located. Not yet implemented: the recording stream fills it in.
+   */
+  lose(_id: string, _t: number): void {}
 
   detach(id: string, t: number, reason: ReleaseReason = 'opened'): void {
     const grip = this.grips.get(id);
