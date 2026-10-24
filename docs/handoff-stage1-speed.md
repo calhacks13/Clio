@@ -67,7 +67,10 @@ confirm (under a Gemini coach they only ever see trusted positions anyway).
    started (both scenes, 3 runs each, stage rest at medium, judged by gemini-pro-latest):
    `pnpm bench --staged --thinking first=minimal --repeat 3` and the same with `first=low`. Their
    output: `/private/tmp/claude-501/-Users-owengregson-Documents-Clio/b022adb0-b040-4909-a791-5410763b7cda/scratchpad/card-minimal.txt`
-   and `card-low.txt` (also saved as runs under `data/bench/scenarios/*/runs`). The bar to beat:
+   and `card-low.txt` (also saved as runs under `data/bench/scenarios/*/runs` in this worktree,
+   newest first: read them on the bench page or in the JSON). First results, fridge scene: at
+   minimal, step 1 in 2.7 and 3.2 s and the final plans judged 5/5 twice; at low, 6.0 and 4.6 s
+   and 4/5 twice. The pH runs were still going at handoff. The bar to beat:
    before the card, staged plans passed 4 of 4 (18/18 expectations) with lessons starting at
    8.7 s median (and 68/81 over the planning agent's wider runs). Also read the first-stage runs
    themselves: the first step must pick the yogurt drink, not the milk, carry a mistake for the
