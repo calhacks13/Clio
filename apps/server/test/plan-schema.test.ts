@@ -85,6 +85,18 @@ describe.each(['plan', 'first', 'revision'] as const)('buildPlanJsonSchema(%s)',
     for (const name of Object.keys(all)) visit(name);
   });
 
+  it('offers every action verb', () => {
+    expect((props(defs(schema).action as JsonSchema).verb as { enum: string[] }).enum).toEqual(
+      ACTION_VERB_NAMES,
+    );
+  });
+});
+
+// The first stage writes no checks, steps or full objects of its own (it writes cards), so only
+// a whole plan and a revision carry those definitions.
+describe.each(['plan', 'revision'] as const)('buildPlanJsonSchema(%s) in full', (kind) => {
+  const schema = buildPlanJsonSchema(kind);
+
   it('nests composite checks exactly one level deep, over leaf checks', () => {
     const check = defs(schema).check as { anyOf: JsonSchema[] };
     expect(check.anyOf[0]).toEqual({ $ref: '#/$defs/leafCheck' });
@@ -103,10 +115,7 @@ describe.each(['plan', 'first', 'revision'] as const)('buildPlanJsonSchema(%s)',
     expect(refsIn(defs(schema).leafCheck as JsonSchema)).toEqual([]);
   });
 
-  it('offers every action verb and detect-only placement with a visual query', () => {
-    expect((props(defs(schema).action as JsonSchema).verb as { enum: string[] }).enum).toEqual(
-      ACTION_VERB_NAMES,
-    );
+  it('offers detect-only placement with a visual query', () => {
     const object = defs(schema).object as JsonSchema;
     expect(props(props(object).placement as JsonSchema).method).toEqual({
       type: 'string',
@@ -191,23 +200,51 @@ describe('plan, first stage and revision', () => {
     expect(props(sighting).box_2d).toMatchObject({ minItems: 4, maxItems: 4 });
   });
 
-  it('asks a first stage for the whole lesson in outline, then its first step in full', () => {
+  it('asks a first stage for the whole lesson in outline, then its first step as a card', () => {
     const schema = buildPlanJsonSchema('first');
-    expect(Object.keys(props(schema)).slice(-3)).toEqual(['outline', 'firstStep', 'coach']);
-    expect(schema.required).toEqual([
-      'title',
-      'summary',
-      'workspace',
-      'objects',
-      'sightings',
-      'warnings',
-      'outline',
-      'firstStep',
+    const fields = ['title', 'summary', 'outline', 'objects', 'sightings', 'warnings', 'firstStep'];
+    // Gemini writes properties in schema order: the first step comes last, fitted to the rest.
+    expect(Object.keys(props(schema))).toEqual(fields);
+    expect(schema.required).toEqual(fields);
+    // Only the action is shared; the step, object and check definitions would be unused.
+    expect(Object.keys(defs(schema))).toEqual(['action']);
+
+    const outline = props(schema).outline as JsonSchema;
+    expect(outline).toMatchObject({ type: 'array', minItems: 1, maxItems: 10 });
+    const line = outline.items as JsonSchema;
+    expect(Object.keys(props(line))).toEqual(['id', 'instruction']);
+    expect(line.required).toEqual(['id', 'instruction']);
+
+    const objects = props(schema).objects as JsonSchema;
+    expect(objects).toMatchObject({ type: 'array', maxItems: 8 });
+    const card = objects.items as JsonSchema;
+    expect(Object.keys(props(card))).toEqual(['id', 'label', 'phrase', 'look', 'moves']);
+    expect(card.required).toEqual(['id', 'label', 'phrase', 'look', 'moves']);
+    expect((props(card).phrase as JsonSchema).description).toContain('2 to 5 words');
+    expect((props(card).phrase as JsonSchema).description).toContain('No colors, positions');
+    expect(props(card).moves).toMatchObject({ type: 'boolean' });
+
+    const step = props(schema).firstStep as JsonSchema;
+    expect(step.required).toEqual([
+      'id',
+      'instruction',
+      'doneWhen',
+      'targets',
+      'action',
+      'show',
+      'mistakes',
     ]);
-    expect(props(schema).firstStep).toEqual({ $ref: '#/$defs/step' });
-    const line = (props(schema).outline as JsonSchema).items as JsonSchema;
-    expect(line.required).toEqual(['id', 'instruction', 'doneWhen', 'targets']);
-    expect(Object.keys(props(line))).toEqual(['id', 'instruction', 'doneWhen', 'targets']);
+    expect(Object.keys(props(step))).toEqual(step.required);
+    expect(props(step).action).toEqual({ $ref: '#/$defs/action' });
+    expect(props(step).show).toMatchObject({
+      type: 'array',
+      maxItems: 3,
+      items: { type: 'string', description: 'An object id declared in objects' },
+    });
+    const mistakes = props(step).mistakes as JsonSchema;
+    expect(mistakes).toMatchObject({ type: 'array', maxItems: 2 });
+    expect((mistakes.items as JsonSchema).required).toEqual(['kind', 'message', 'object']);
+    expect((props(step).doneWhen as JsonSchema).description).toContain('3 to 200 characters');
   });
 
   it('asks a revision only for new objects, the remaining steps and warnings', () => {

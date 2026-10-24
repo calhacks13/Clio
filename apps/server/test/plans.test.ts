@@ -12,7 +12,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import type { Planner, PlannerRequest } from '../src/services/planner';
 import { type Harness, harness, steppingClock } from './harness';
-import { modelFirstStage, modelPlan, modelRevision } from './plan-fixtures';
+import { modelFirstStage, modelPlan, modelRestStage, modelRevision } from './plan-fixtures';
 import { procedureInput, writeJson } from './procedure-fixtures';
 
 function scriptedPlanner(
@@ -418,7 +418,7 @@ describe('POST /api/plans in two stages', () => {
   const FIRST = JSON.stringify(modelFirstStage());
   const first = { goal: 'Refill the washer fluid', images: [IMAGE, IMAGE], stage: 'first' };
 
-  it('starts with the first step in full, the rest in outline, and where it saw the objects', async () => {
+  it('starts with the first step from its card, the rest in outline, and where it saw the objects', async () => {
     const planner = scriptedPlanner(FIRST);
     const h = await planHarness(planner);
     const { res, body } = await postPlan(h, first);
@@ -427,13 +427,29 @@ describe('POST /api/plans in two stages', () => {
     expect(plan.planId).toBe('refill-the-washer-fluid');
     expect(plan.outlineFrom).toBe(1);
     expect(plan.procedure.steps.map((s) => [s.id, s.success.type, s.show.length])).toEqual([
-      ['open-cap', 'sequence', 1],
+      ['open-cap', 'confirm', 1],
       ['pour-fluid', 'confirm', 0],
       ['close-cap', 'confirm', 0],
     ]);
+    expect(plan.procedure.steps[0]?.mistakes.map((m) => [m.kind, m.when])).toEqual([
+      [
+        'wrong_cap',
+        {
+          type: 'hand_near',
+          object: 'coolant_cap',
+          hand: 'either',
+          point: 'pinch',
+          radius: 0.06,
+          dwellMs: 700,
+        },
+      ],
+    ]);
+    expect(plan.procedure.objects.map((o) => [o.id, o.kind, o.tracking?.query])).toEqual(
+      modelFirstStage().objects.map((card) => [card.id, 'item', card.look]),
+    );
     expect(plan.sightings).toEqual([
       { objectId: 'washer_cap', view: 0, point: [0.25, 0.4], box: [0.23, 0.38, 0.27, 0.42] },
-      { objectId: 'fluid_jug', view: 1, point: [0.8, 0.6], box: [0.7, 0.5, 0.9, 0.7] },
+      { objectId: 'coolant_cap', view: 1, point: [0.8, 0.6], box: [0.7, 0.5, 0.9, 0.7] },
     ]);
     expect(planner.requests).toEqual([
       {
@@ -453,7 +469,7 @@ describe('POST /api/plans in two stages', () => {
   });
 
   it('writes the outline in full as a revision, with a minute to think and retry', async () => {
-    const planner = scriptedPlanner(FIRST, JSON.stringify(modelRevision()));
+    const planner = scriptedPlanner(FIRST, JSON.stringify(modelRestStage()));
     const h = await planHarness(planner);
     const started = PlanResponseSchema.parse((await postPlan(h, first)).body);
     const { res, body } = await postPlan(h, {
@@ -471,6 +487,19 @@ describe('POST /api/plans in two stages', () => {
     const plan = PlanResponseSchema.parse(body);
     expect(plan.planId).toBe('refill-the-washer-fluid-r1');
     expect(plan.procedure.steps[0]).toEqual(started.procedure.steps[0]);
+    expect(plan.procedure.steps.map((s) => s.id)).toEqual([
+      'open-cap',
+      'open-cap-2',
+      'pour-slowly',
+    ]);
+    // The washer cap's card is written in full; the coolant cap's stays a card.
+    expect(plan.procedure.objects.map((o) => [o.id, o.label, o.placement])).toEqual([
+      ['washer_cap', 'washer cap', { method: 'detect', hint: 'front left of the engine bay' }],
+      ['coolant_cap', 'coolant cap', { method: 'detect' }],
+      ['fluid_jug', 'fluid jug', { method: 'detect' }],
+      ['funnel', 'funnel', { method: 'detect' }],
+    ]);
+    expect(plan.procedure.objects[0]?.tracking?.query).toBe('blue cap with a windshield symbol');
     expect(plan).not.toHaveProperty('outlineFrom');
     expect(plan).not.toHaveProperty('sightings');
     expect(planner.requests[1]).toEqual({
