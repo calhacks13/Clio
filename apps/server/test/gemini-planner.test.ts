@@ -263,6 +263,10 @@ describe('createGeminiPlanner', () => {
     ]);
   });
 
+  it('starts a lesson at minimal thinking, as measured on the bench (docs/coach-plan.md)', () => {
+    expect(PLAN_THINKING).toEqual({ full: 'low', first: 'minimal', rest: 'medium' });
+  });
+
   it('thinks as hard as each stage needs, and lets the bench choose', async () => {
     const er = 'gemini-robotics-er-2-preview';
     const ai = fakeAi('{}');
@@ -307,7 +311,8 @@ describe('createGeminiPlanner', () => {
         'The lesson starts as soon as you answer, so answer briefly. Its later steps are ' +
           'written in full afterwards, while the learner works on the first one. So:',
         '- `outline`: every step of the lesson in order, 3 to 10, as an id and an instruction. ' +
-          'outline[0] is the first step.',
+          'It reaches the end of the goal: every part the goal names, not only the part the ' +
+          'first step starts, and it leaves any control untouched. outline[0] is the first step.',
         '- `objects`: only the objects the first step uses (its targets, what it shows and the ' +
           'look-alike it guards against). The later steps declare theirs when they are ' +
           "written. An object's `look` is its tracking.query and the description its outline " +
@@ -419,7 +424,12 @@ describe('PLANNER_SYSTEM_INSTRUCTION', () => {
     'make `prompt` match `doneWhen`',
     // Written for Robotics-ER 2: the scene as it is, look-alikes, hazards, and only what is there.
     'as things stand now',
-    'do not plan that step again',
+    'that part of the goal is done: do not plan it again, in the same place or a new one',
+    // The whole goal, in order, and the control the setup implies (any lesson, not just pH).
+    'Cover the whole goal',
+    'in the order it names them',
+    'Keep the control the setup implies',
+    'the spare one stays untouched',
     'Declare only objects you can see',
     '`sightings`',
     '`point` [y, x]',
