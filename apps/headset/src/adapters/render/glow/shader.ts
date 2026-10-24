@@ -20,7 +20,9 @@ import { depthChunk, INTERIOR_POINTS } from './depth-occlusion';
 // It keeps the room's depth order: hands' occluders (depth only) hide it through the depth test,
 // and with a depth map (GLOW_DEPTH, glow/depth-occlusion.ts) a real surface nearer than the
 // object's own front by more than a margin fades it out: the vertex shader finds that front from
-// the map at points inside the silhouette, then each fragment needs one depth read.
+// the map at points inside the silhouette, then each fragment blends the tests of the nearest
+// texels. Reads nearer than the sensor's reliable range count as unknown, and the test fades out
+// as the glow comes within reach of that range, so a learner leaning in never loses the light.
 
 export const SLICES = 7;
 
@@ -116,9 +118,17 @@ export const glowFragmentShader = /* glsl */ `
     uniform int vizMode;
     uniform float occlusionFilter;
     uniform float occlusionSoftness;
+    uniform float occlusionNearOff;
+    uniform float occlusionNearOn;
     uniform float maxFront;
     flat varying float vFront;
     flat varying vec3 vSurface;
+
+    // How much of the test applies at planar depth z (m): none up close, where the map cannot be
+    // trusted, all of it from occlusionNearOn (nearFade in TS).
+    float nearFade(float z) {
+      return smoothstep(occlusionNearOff, occlusionNearOn, z);
+    }
 
     // The object's own front at this point of the quad (m in front of the plane): the fitted
     // plane where it is further forward than the single depth, within [0, maxFront].
@@ -145,6 +155,8 @@ export const glowFragmentShader = /* glsl */ `
       if (occlusionOn < 0.5) return 0.0;
       vec3 t = depthTexel(world);
       if (t.z <= 0.0) return 0.0;
+      float near = nearFade(t.z);
+      if (near <= 0.0) return 0.0;
       float h = 0.0;
       if (occlusionFilter < 0.5) {
         vec2 f = t.xy - 0.5;
@@ -186,7 +198,7 @@ export const glowFragmentShader = /* glsl */ `
           }
         }
       }
-      return smoothstep(0.55 - occlusionSoftness, 0.55 + occlusionSoftness, h);
+      return smoothstep(0.55 - occlusionSoftness, 0.55 + occlusionSoftness, h) * near;
     }
   #endif
 
@@ -214,9 +226,15 @@ export const glowFragmentShader = /* glsl */ `
     float hidden = 0.0;
     #if GLOW_DEPTH > 0
       if (vizMode == 2) {
-        float gap = depthGap(vWorld);
         // window.__occlusion.setViz('diff'): how the real surface compares with the object's
-        // front here. Green: the object itself (kept); red: in front (hidden); blue: behind.
+        // front here. Green: the object itself (kept); red: in front (hidden); blue: behind;
+        // yellow: too near for the test (it is off); nothing: no read to trust.
+        vec3 at = depthTexel(vWorld);
+        if (at.z > 0.0 && nearFade(at.z) < 0.5) {
+          gl_FragColor = vec4(vec3(1.0, 0.85, 0.1) * 0.5, 0.5);
+          return;
+        }
+        float gap = depthGap(vWorld);
         if (gap <= NO_DEPTH) discard;
         float rel = gap - frontAt(vUv);
         vec3 tint = rel > occlusionMargin ? vec3(1.0, 0.15, 0.1)
