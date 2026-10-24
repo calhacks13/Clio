@@ -9,7 +9,7 @@ import {
 import type { Clock } from '../../core/clock';
 import { type AppBus, isRecordable } from '../events';
 import type { TrackedFrame } from '../hands/types';
-import { qTime, quantizeObject, toFrameRecord } from './quantize';
+import { qTime, quantizeDeep, quantizeObject, toFrameRecord } from './quantize';
 import type { EpisodeSink } from './sink';
 import { EpisodeUploader } from './uploader';
 
@@ -112,7 +112,7 @@ export class EpisodeRecorder {
   }
 
   private recordEvent(type: EpisodeEvent['type'], payload: { t: number }): void {
-    const candidate = { ...payload, type, t: qTime(payload.t - this.startT) };
+    const candidate = { ...quantizeDeep(payload), type, t: qTime(payload.t - this.startT) };
     const parsed = EpisodeEventSchema.safeParse(candidate);
     if (parsed.success) this.events.push(parsed.data);
     else this.deps.onDrop?.(`event ${type}: ${parsed.error.issues[0]?.message ?? 'invalid'}`);

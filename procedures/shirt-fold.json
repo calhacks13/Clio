@@ -17,7 +17,10 @@
       "kind": "point",
       "radius": 0.025,
       "description": "On the near shoulder, halfway between the collar and the sleeve seam.",
-      "placement": { "method": "layout", "position": [0.14, 0.0, -0.18] }
+      "placement": {
+        "method": "layout",
+        "position": [0.14, 0.0, -0.18]
+      }
     },
     {
       "id": "middle",
@@ -25,7 +28,10 @@
       "kind": "point",
       "radius": 0.025,
       "description": "Halfway down the shirt, in line with the shoulder dot.",
-      "placement": { "method": "layout", "position": [0.4, 0.0, -0.18] }
+      "placement": {
+        "method": "layout",
+        "position": [0.4, 0.0, -0.18]
+      }
     },
     {
       "id": "hem",
@@ -33,7 +39,10 @@
       "kind": "point",
       "radius": 0.025,
       "description": "On the bottom hem, in line with the other two dots.",
-      "placement": { "method": "layout", "position": [0.68, 0.0, -0.18] }
+      "placement": {
+        "method": "layout",
+        "position": [0.68, 0.0, -0.18]
+      }
     },
     {
       "id": "middle_low_zone",
@@ -42,7 +51,10 @@
       "radius": 0.06,
       "hidden": true,
       "description": "Mistake zone: a right-hand pinch here means the middle pinch is too close to you.",
-      "placement": { "method": "layout", "position": [0.4, 0.0, -0.08] }
+      "placement": {
+        "method": "layout",
+        "position": [0.4, 0.0, -0.08]
+      }
     }
   ],
   "steps": [
@@ -61,12 +73,27 @@
       "instruction": "With your left hand, pinch the shirt at the shoulder dot.",
       "targets": ["shoulder"],
       "hand": "left",
-      "success": { "type": "pinch_near", "object": "shoulder", "hand": "left", "radius": 0.05 },
+      "action": {
+        "verb": "pinch",
+        "object": "shoulder",
+        "hand": "left"
+      },
+      "success": {
+        "type": "pinch_near",
+        "object": "shoulder",
+        "hand": "left",
+        "radius": 0.05
+      },
       "mistakes": [
         {
           "kind": "wrong_hand",
           "message": "Use your left hand for the shoulder dot.",
-          "when": { "type": "pinch_near", "object": "shoulder", "hand": "right", "radius": 0.05 }
+          "when": {
+            "type": "pinch_near",
+            "object": "shoulder",
+            "hand": "right",
+            "radius": 0.05
+          }
         }
       ],
       "stuckAfterMs": 12000
@@ -76,11 +103,26 @@
       "instruction": "Keep holding. With your right hand, pinch the middle dot.",
       "targets": ["middle"],
       "hand": "right",
+      "action": {
+        "verb": "pinch",
+        "object": "middle",
+        "hand": "right"
+      },
       "success": {
         "type": "all",
         "of": [
-          { "type": "pinch_near", "object": "shoulder", "hand": "left", "radius": 0.07 },
-          { "type": "pinch_near", "object": "middle", "hand": "right", "radius": 0.05 }
+          {
+            "type": "pinch_near",
+            "object": "shoulder",
+            "hand": "left",
+            "radius": 0.07
+          },
+          {
+            "type": "pinch_near",
+            "object": "middle",
+            "hand": "right",
+            "radius": 0.05
+          }
         ]
       },
       "mistakes": [
@@ -105,11 +147,27 @@
       "detail": "Your left hand keeps holding the shoulder fabric and brings it to the hem.",
       "targets": ["hem"],
       "hand": "left",
+      "action": {
+        "verb": "fold",
+        "object": "shoulder",
+        "target": "hem",
+        "hand": "left"
+      },
       "success": {
         "type": "all",
         "of": [
-          { "type": "pinch_near", "object": "hem", "hand": "left", "radius": 0.07 },
-          { "type": "pinch_near", "object": "middle", "hand": "right", "radius": 0.08 }
+          {
+            "type": "pinch_near",
+            "object": "hem",
+            "hand": "left",
+            "radius": 0.07
+          },
+          {
+            "type": "pinch_near",
+            "object": "middle",
+            "hand": "right",
+            "radius": 0.08
+          }
         ]
       },
       "coachNotes": "Hardest step. Tracking can flicker while the hands cross, so the radii are loose on purpose. Offer show_demo early.",
@@ -125,11 +183,23 @@
           {
             "type": "all",
             "of": [
-              { "type": "lift", "hand": "left", "height": 0.2 },
-              { "type": "lift", "hand": "right", "height": 0.2 }
+              {
+                "type": "lift",
+                "hand": "left",
+                "height": 0.2
+              },
+              {
+                "type": "lift",
+                "hand": "right",
+                "height": 0.2
+              }
             ]
           },
-          { "type": "confirm", "by": "either", "prompt": "The shirt is folded and lying flat" }
+          {
+            "type": "confirm",
+            "by": "either",
+            "prompt": "The shirt is folded and lying flat"
+          }
         ]
       },
       "coachNotes": "Celebrate when it is done. If the fold is messy, offer to go again."

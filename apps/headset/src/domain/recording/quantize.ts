@@ -34,6 +34,16 @@ export function toFrameRecord(frame: TrackedFrame, startT: number): FrameRecord 
   };
 }
 
+/** Rounds every number in an event payload to storage precision (1e-4), recursively. */
+export function quantizeDeep<T>(value: T): T {
+  if (typeof value === 'number') return (Number.isInteger(value) ? value : q4(value)) as T;
+  if (Array.isArray(value)) return value.map(quantizeDeep) as T;
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, quantizeDeep(v)])) as T;
+  }
+  return value;
+}
+
 export function quantizeObject(o: ObjectState): ObjectState {
   return {
     id: o.id,

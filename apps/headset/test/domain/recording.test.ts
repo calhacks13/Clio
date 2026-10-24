@@ -81,6 +81,30 @@ describe('EpisodeRecorder', () => {
     ]);
   });
 
+  it('quantizes numbers inside recorded events like frame data', async () => {
+    const { bus, recorder, sink } = setup();
+    recorder.start(meta, 1000);
+    bus.emit('step.completed', {
+      t: 2000.0000000001,
+      stepId: 's',
+      index: 0,
+      by: 'check',
+      forced: false,
+      durationMs: 1000.0000000000005,
+    });
+    bus.emit('hand.pinch', {
+      t: 2100,
+      hand: 'left',
+      phase: 'start',
+      point: [0.142969980697, 0.0151765, -0.185053734],
+      nearest: { objectId: 'dot', distance: 0.0262193 },
+    });
+    await recorder.stop('completed', { stepsCompleted: 1, stepsTotal: 1 }, 2200);
+    const [done, pinch] = sink.only().batches.flatMap((b) => b.events);
+    expect(done).toMatchObject({ t: 1000, durationMs: 1000 });
+    expect(pinch).toMatchObject({ point: [0.143, 0.0152, -0.1851], nearest: { distance: 0.0262 } });
+  });
+
   it('drops a malformed event instead of poisoning the batch', async () => {
     const dropped: string[] = [];
     const { bus, recorder, sink } = setup(new MemoryEpisodeSink(), {

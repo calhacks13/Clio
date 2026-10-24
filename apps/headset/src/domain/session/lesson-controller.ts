@@ -365,6 +365,8 @@ export class LessonController {
     const procedure = this.procedure;
     const step = procedure?.steps[index];
     if (!procedure || !step) return;
+    // Demonstrations belong to their step.
+    if (this.demo && this.demo.stepId !== step.id) this.endDemo(t);
     const { registry } = this.deps;
     const missingTargets = step.targets.filter((id) => !registry.get(id));
     if (missingTargets.length > 0) this.track(this.locate(missingTargets));

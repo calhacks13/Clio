@@ -136,6 +136,17 @@ describe('LessonController', () => {
     expect(playback).toEqual(['start:synth:refill-fluid/grab', 'end:synth:refill-fluid/grab']);
   });
 
+  it("stops a step's demo when the step ends", async () => {
+    const { lesson, bus } = setup();
+    const playback: string[] = [];
+    bus.on('demo.playback', (e) => playback.push(`${e.phase}:${e.stepId}`));
+    await lesson.handlers().start_lesson({ goal: 'add wiper fluid' });
+    await lesson.handlers().show_demo({});
+    await lesson.handlers().advance_step({ reason: 'holding it' });
+    expect(playback).toEqual(['start:grab', 'end:grab']);
+    expect(lesson.activeDemo).toBeNull();
+  });
+
   it('advances through the runner and finishes the recording at the end', async () => {
     const { lesson, sink, clock } = setup();
     await lesson.handlers().start_lesson({ goal: 'add wiper fluid' });
