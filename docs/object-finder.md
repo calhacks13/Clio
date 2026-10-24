@@ -56,6 +56,16 @@ The planner writes `phrase` and the description (sent as `query`) for each step'
 For other lookups (a step's missing targets, or a coach highlight), `query` is the object's
 `tracking.query` or label, and `phrase` is its label.
 
+An attached component is a target in its own right: for example, "vernier scale on the sliding
+jaw" rather than "caliper". The lesson gives it its own object id with `kind: "item"`, and the
+step's `show` describes only that part. `"tool"` and `"container"` are for the whole object: their
+glow spills around it, while an `item` keeps a soft surface light on its contour. So the finder
+should return the part's own contour. The mask of the object holding it lights up too much and is
+not a substitute. The tracker's part mode works this way (a target with `"part": true`, see
+[Following a part](../tracker/TRACK.md#following-a-part)), but lessons don't flag parts yet. A
+finder with no part contour can send the part's box alone, and Clio draws corner brackets around
+it.
+
 ## Response
 
 `200` with JSON:
