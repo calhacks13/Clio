@@ -20,6 +20,8 @@ pnpm dev                 # server :8787 + headset app :5173
 - Desktop, no headset: http://localhost:5173/?emulate=1&debug=1
 - Quest 3: `pnpm quest:reverse`, then open http://localhost:5173 in Quest Browser
   ([setup](docs/dev-setup.md), including the camera-permission workaround)
+- Quest 3 without a cable: `brew install cloudflared`, then `pnpm live` prints a public HTTPS link
+  to open on the headset ([deploy](docs/deploy.md); Render and Docker too)
 
 |                                                |                                                   |
 | ---------------------------------------------- | ------------------------------------------------- |
@@ -28,6 +30,7 @@ pnpm dev                 # server :8787 + headset app :5173
 | [docs/object-finder.md](docs/object-finder.md) | plugging in jev or another object finder          |
 | [docs/data-format.md](docs/data-format.md)     | episodes on disk                                  |
 | [docs/dev-setup.md](docs/dev-setup.md)         | laptop, emulator, Quest, data, demo day           |
+| [docs/deploy.md](docs/deploy.md)               | one HTTPS link for the Quest: pnpm live, Render   |
 
 ```
 packages/protocol   shared contracts (zod → TS types + JSON Schema)

@@ -270,9 +270,13 @@ exponential-backoff retries, dropping only batches the server rejects as invalid
 | `POST /api/episodes` → `…/batches` → `…/finish`, `PUT …/media/:name`  | ingest (idempotent by `seq`)                                                               |
 | `GET /api/episodes[/:id[/frames\|events\|objects]]`                   | browse / replay                                                                            |
 | `POST /api/clips/from-episode`, `GET /api/clips/:procedureId/:stepId` | expert demos → ghost-hand clips                                                            |
+| `GET /*`                                                              | the built headset app (`apps/headset/dist`), once there is one; unknown pages get the app  |
 
-Vite proxies `/api` and `/gemini`, so the headset talks to a single origin (and to `localhost` over
-`adb reverse`).
+In dev, Vite proxies `/api` and `/gemini`, so the headset talks to a single origin (and to
+`localhost` over `adb reverse`). Once the app is built, the server serves it too: still one origin,
+so any HTTPS front (`pnpm live`, Render; see [deploy.md](deploy.md)) gives the headset one link.
+With `CLIO_ACCESS_KEY` set, the relay and every `/api` route except health need the access cookie
+(set by opening any page with `?key=`) or a bearer token.
 
 ## 7. Data pipeline (`pipeline/`)
 
@@ -311,6 +315,7 @@ Vite proxies `/api` and `/gemini`, so the headset talks to a single origin (and 
 | Gemini down, slow, or out of quota  | Scripted coach (`?coach=scripted`, automatic if connecting fails) plus the Done button |
 | Planner fails                       | `plan.failed` → the coach apologizes and asks again; curated lessons still work        |
 | Venue Wi-Fi                         | Phone hotspot on the laptop + USB `adb reverse`; the coach relays through the laptop   |
+| Venue blocks the `pnpm live` tunnel | Laptop on the phone hotspot (the headset can stay on venue Wi-Fi), or the Render link  |
 | Camera permission missing or broken | Grant over adb (dev-setup); otherwise pinch-to-register and layouts                    |
 | Detection misses an object          | Announced once; the learner looks at or pinches it; `highlight` re-locates             |
 | Object finder slow or rate-limited  | Outlines appear later; `?showRefresh=<ms>` looks less often (0: only at step start)    |

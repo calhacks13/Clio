@@ -51,7 +51,10 @@ finder reports. `?showRefresh=1000` makes them follow faster while you test.
    the self-signed certificate once. This exposes the dev server, and with it the Gemini relay
    (your key's quota), to the LAN. Use your own hotspot, not open venue Wi-Fi. By default both the
    dev server and the API server listen on loopback only.
-5. **Mirror for judges:** `scrcpy` (USB, works offline). Use `--crop` to show one eye.
+5. **No cable:** `pnpm live` builds the app and prints a public HTTPS link to open on the headset:
+   a Cloudflare quick tunnel to the laptop, behind an access key. Render works too, for a stable
+   link. See [deploy.md](deploy.md).
+6. **Mirror for judges:** `scrcpy` (USB, works offline). Use `--crop` to show one eye.
 
 ### Camera permission workaround
 
@@ -132,7 +135,9 @@ cd pipeline && uv run pytest -q
 
 - Charge the headset, and pack a USB-C **data** cable (plus a spare), a power bank and a phone
   hotspot.
-- Run `pnpm dev` on the laptop, tethered to the hotspot, and `pnpm quest:reverse` over USB.
+- Run `pnpm dev` on the laptop, tethered to the hotspot, and `pnpm quest:reverse` over USB. No
+  cable: `pnpm live` instead, and open its link on the headset ([deploy.md](deploy.md)). Campus
+  Wi-Fi can block its tunnel, which is one more reason to keep the laptop on the hotspot.
 - Check the camera grant (`dumpsys`, above).
 - **Fallback ladder:** Gemini fails → `?coach=scripted`. Camera fails → `?camera=0` (pinch to
   register). Planning fails → `?procedure=shirt-fold`. The object finder lags or hits a rate limit →
