@@ -16,6 +16,8 @@ describe('loadConfig', () => {
       liveModel: 'gemini-3.8-live',
       plannerModel: 'gemini-3.5-flash-lite',
       visionModel: 'gemini-3.5-flash-lite',
+      visionUrl: null,
+      visionToken: null,
       relayLog: false,
     });
   });
@@ -78,6 +80,25 @@ describe('loadConfig', () => {
     expect(loadConfig({ CLIO_RELAY_LOG: 'true' }, '/repo').relayLog).toBe(true);
     expect(loadConfig({ CLIO_RELAY_LOG: '0' }, '/repo').relayLog).toBe(false);
     expect(loadConfig({ CLIO_RELAY_LOG: 'no' }, '/repo').relayLog).toBe(false);
+  });
+
+  it('reads an external object finder, which must be an http(s) URL', () => {
+    const config = loadConfig(
+      { CLIO_VISION_URL: ' http://127.0.0.1:8001/locate ', CLIO_VISION_TOKEN: 'tok' },
+      '/repo',
+    );
+    expect(config.visionUrl).toBe('http://127.0.0.1:8001/locate');
+    expect(config.visionToken).toBe('tok');
+    expect(loadConfig({ CLIO_VISION_URL: '', CLIO_VISION_TOKEN: '' }, '/repo')).toMatchObject({
+      visionUrl: null,
+      visionToken: null,
+    });
+    expect(() => loadConfig({ CLIO_VISION_URL: 'ftp://host/locate' }, '/repo')).toThrow(
+      /CLIO_VISION_URL/,
+    );
+    expect(() => loadConfig({ CLIO_VISION_URL: 'localhost:8001' }, '/repo')).toThrow(
+      /CLIO_VISION_URL/,
+    );
   });
 
   it('rejects an invalid port with a message naming the variable', () => {

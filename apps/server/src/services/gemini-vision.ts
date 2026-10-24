@@ -4,8 +4,9 @@ import { isRecord, parseModelJson } from './model-json';
 import type { JsonSchema } from './plan-schema';
 import { fromGeminiDetection, type VisionLocator } from './vision';
 
-// Object grounding with Gemini: one image plus a list of { id, query }, answered through
+// Object grounding with Gemini: one image plus a list of { id, query, phrase? }, answered through
 // structured output in Gemini's native spatial convention (0..1000, y first), then converted.
+// Gemini returns points and boxes; outlines come from a segmenting finder (CLIO_VISION_URL).
 
 type LocateObject = LocateRequest['objects'][number];
 
@@ -17,7 +18,7 @@ function uniqueById(objects: readonly LocateObject[]): LocateObject[] {
 export function locatePrompt(objects: readonly LocateObject[]): string {
   return [
     'Find each of these objects in the image:',
-    ...objects.map((o) => `- ${o.id}: ${o.query}`),
+    ...objects.map((o) => `- ${o.id}${o.phrase ? ` (${o.phrase})` : ''}: ${o.query}`),
     '',
     'Return one entry per id. If the object is visible, set found to true, point to the [y, x] ' +
       'of the center of the visible, graspable part of the object, and box_2d to ' +
@@ -56,7 +57,6 @@ export function locateJsonSchema(ids: readonly string[]): JsonSchema {
 
 export function createGeminiLocator(ai: GenerateContentApi, model: string): VisionLocator {
   return {
-    model,
     async locate(request) {
       const objects = uniqueById(request.objects);
       const response = await ai.models.generateContent({
@@ -83,7 +83,8 @@ export function createGeminiLocator(ai: GenerateContentApi, model: string): Visi
         : isRecord(json.value) && Array.isArray(json.value.detections)
           ? json.value.detections
           : [];
-      return entries.map(fromGeminiDetection).filter((d): d is Detection => d !== null);
+      const detections = entries.map(fromGeminiDetection).filter((d): d is Detection => d !== null);
+      return { detections, model };
     },
   };
 }

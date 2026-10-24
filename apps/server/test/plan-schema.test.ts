@@ -106,10 +106,23 @@ describe.each(['plan', 'revision'] as const)('buildPlanJsonSchema(%s)', (kind) =
       'instruction',
       'targets',
       'action',
+      'show',
       'success',
       'mistakes',
     ]);
     expect(props(step).mistakes).toMatchObject({ type: 'array', maxItems: 2 });
+  });
+
+  it('asks each step what to outline: an object, a short phrase and a standalone description', () => {
+    const step = defs(schema).step as JsonSchema;
+    const show = props(step).show as JsonSchema;
+    expect(show).toMatchObject({ type: 'array', maxItems: 3 });
+    const item = show.items as JsonSchema;
+    expect(Object.keys(props(item))).toEqual(['object', 'phrase', 'description']);
+    expect(item.required).toEqual(['object', 'phrase', 'description']);
+    // Gemini writes properties in schema order: it decides what to show right after the action.
+    const order = Object.keys(props(step));
+    expect(order.indexOf('show')).toBe(order.indexOf('action') + 1);
   });
 });
 

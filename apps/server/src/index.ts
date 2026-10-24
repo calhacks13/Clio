@@ -11,6 +11,7 @@ import { attachGeminiRelay, type GeminiRelay } from './relay/gemini-relay';
 import { createGeminiClient, isGeminiConfigured } from './services/gemini';
 import { createGeminiPlanner } from './services/gemini-planner';
 import { createGeminiLocator } from './services/gemini-vision';
+import { createHttpLocator } from './services/http-vision';
 import { createGeminiTokenMinter } from './services/token-minter';
 import { ClipStore } from './storage/clip-store';
 import { EpisodeStore } from './storage/episode-store';
@@ -44,7 +45,9 @@ function main(): void {
     clips: new ClipStore(join(config.dataDir, 'clips')),
     tokenMinter: gemini && createGeminiTokenMinter(gemini),
     planner: gemini && createGeminiPlanner(gemini, config.plannerModel),
-    locator: gemini && createGeminiLocator(gemini, config.visionModel),
+    locator: config.visionUrl
+      ? createHttpLocator({ url: config.visionUrl, token: config.visionToken })
+      : gemini && createGeminiLocator(gemini, config.visionModel),
     logger,
   });
 
@@ -77,8 +80,11 @@ function logStartup(config: Config, logger: Logger, geminiReady: boolean): void 
     ...hosts.map((host) => `  http://${host}:${config.port}/api/health`),
     `  Gemini Live relay: ws://${hosts[0]}:${config.port}${GEMINI_RELAY_PATH}`,
     geminiReady
-      ? `  Gemini: on (live ${config.liveModel}, planner ${config.plannerModel}, vision ${config.visionModel})`
+      ? `  Gemini: on (live ${config.liveModel}, planner ${config.plannerModel})`
       : '  Gemini: off. Set GEMINI_API_KEY in .env; until then use the scripted coach.',
+    `  Object finder: ${
+      config.visionUrl ?? (geminiReady ? `Gemini ${config.visionModel}` : 'off')
+    }`,
     `  Data: ${config.dataDir}`,
     `  Procedures: ${config.proceduresDir}`,
   ];

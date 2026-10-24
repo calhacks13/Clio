@@ -20,6 +20,10 @@ export interface Config {
   liveModel: string;
   plannerModel: string;
   visionModel: string;
+  /** An external object finder (e.g. jev). When set, it answers /api/vision/locate, not Gemini. */
+  visionUrl: string | null;
+  /** Bearer token for visionUrl, if it needs one. */
+  visionToken: string | null;
   /** Log one line per relayed Live message (type and size only, never content or the key). */
   relayLog: boolean;
 }
@@ -28,6 +32,14 @@ export interface Config {
 const blank = (v: unknown) => (typeof v === 'string' && v.trim() === '' ? undefined : v);
 const text = (fallback: string) => z.preprocess(blank, z.string().trim().default(fallback));
 const optionalText = z.preprocess(blank, z.string().trim().optional());
+const optionalHttpUrl = z.preprocess(
+  blank,
+  z
+    .string()
+    .trim()
+    .pipe(z.url({ protocol: /^https?$/, error: 'Expected an http:// or https:// URL' }))
+    .optional(),
+);
 
 const EnvSchema = z.object({
   CLIO_SERVER_PORT: z.preprocess(blank, z.coerce.number().int().min(1).max(65535).default(8787)),
@@ -38,6 +50,8 @@ const EnvSchema = z.object({
   GEMINI_LIVE_MODEL: text(DEFAULT_LIVE_MODEL),
   GEMINI_PLANNER_MODEL: text(DEFAULT_PLANNER_MODEL),
   GEMINI_VISION_MODEL: text(DEFAULT_VISION_MODEL),
+  CLIO_VISION_URL: optionalHttpUrl,
+  CLIO_VISION_TOKEN: optionalText,
   CLIO_RELAY_LOG: optionalText,
 });
 
@@ -61,6 +75,8 @@ export function loadConfig(
     liveModel: e.GEMINI_LIVE_MODEL,
     plannerModel: e.GEMINI_PLANNER_MODEL,
     visionModel: e.GEMINI_VISION_MODEL,
+    visionUrl: e.CLIO_VISION_URL ?? null,
+    visionToken: e.CLIO_VISION_TOKEN ?? null,
     relayLog: e.CLIO_RELAY_LOG === '1' || e.CLIO_RELAY_LOG === 'true',
   };
 }

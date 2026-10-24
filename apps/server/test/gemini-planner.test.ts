@@ -159,6 +159,14 @@ describe('PLANNER_SYSTEM_INSTRUCTION', () => {
     'hot surfaces, live electrical parts or sharp blades',
     '`warnings`',
     'safe preparatory plan',
+    'SHOW',
+    'outlines in AR',
+    'object finder',
+    '`phrase`: 2 to 5 words',
+    '`description`: one sentence',
+    'on its own',
+    'what tells it apart',
+    'as it looks at that point in the task',
   ])('covers %j', (phrase) => {
     expect(PLANNER_SYSTEM_INSTRUCTION).toContain(phrase);
   });

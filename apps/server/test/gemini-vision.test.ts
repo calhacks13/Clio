@@ -30,8 +30,9 @@ describe('createGeminiLocator', () => {
   it('sends the image and the objects, and converts the answer to our convention', async () => {
     const ai = fakeAi(ANSWER);
     const locator = createGeminiLocator(ai, 'vision-x');
-    expect(locator.model).toBe('vision-x');
-    expect(await locator.locate({ image: IMAGE, objects: OBJECTS })).toEqual([
+    const answer = await locator.locate({ image: IMAGE, objects: OBJECTS });
+    expect(answer.model).toBe('vision-x');
+    expect(answer.detections).toEqual([
       {
         id: 'cap',
         found: true,
@@ -64,7 +65,7 @@ describe('createGeminiLocator', () => {
 
   it('accepts the list wrapped in an object', async () => {
     const ai = fakeAi(JSON.stringify({ detections: JSON.parse(ANSWER) }));
-    const detections = await createGeminiLocator(ai, 'v').locate({
+    const { detections } = await createGeminiLocator(ai, 'v').locate({
       image: IMAGE,
       objects: OBJECTS,
     });
@@ -91,6 +92,21 @@ describe('locatePrompt', () => {
     expect(prompt).toContain('[y, x]');
     expect(prompt).toContain('[ymin, xmin, ymax, xmax]');
     expect(prompt).toContain('0 to 1000');
+  });
+
+  it('names each object by its short phrase too, when there is one', () => {
+    const prompt = locatePrompt([
+      {
+        id: 'cap',
+        query: 'Round blue cap, front left of the engine bay',
+        phrase: 'blue washer cap',
+      },
+      { id: 'jug', query: 'blue jug of washer fluid' },
+    ]);
+    expect(prompt).toContain(
+      '- cap (blue washer cap): Round blue cap, front left of the engine bay',
+    );
+    expect(prompt).toContain('- jug: blue jug of washer fluid');
   });
 });
 

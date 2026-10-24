@@ -1,21 +1,21 @@
-import { type Detection, LocateRequestSchema, type LocateResponse } from '@clio/protocol';
+import { LocateRequestSchema, type LocateResponse } from '@clio/protocol';
 import { Hono } from 'hono';
 import type { ServerDeps } from '../deps';
-import { geminiNotConfigured, upstreamFailed } from '../errors';
+import { upstreamFailed, visionNotConfigured } from '../errors';
 import { describeError } from '../log';
-import { alignDetections } from '../services/vision';
+import { alignDetections, type LocateAnswer } from '../services/vision';
 import { limitBody, parseBody } from './request';
 
 export function visionRoutes({ locator, now, limits }: ServerDeps): Hono {
   const app = new Hono();
 
   app.post('/api/vision/locate', limitBody(limits.imageBytes), async (c) => {
-    if (!locator) throw geminiNotConfigured('Object detection');
+    if (!locator) throw visionNotConfigured();
     const body = await parseBody(c, LocateRequestSchema, 'locate request');
     const started = now().getTime();
-    let detections: Detection[];
+    let answer: LocateAnswer;
     try {
-      detections = await locator.locate(body);
+      answer = await locator.locate(body);
     } catch (error) {
       throw upstreamFailed(`Vision request failed: ${describeError(error)}`);
     }
@@ -23,9 +23,9 @@ export function visionRoutes({ locator, now, limits }: ServerDeps): Hono {
     return c.json({
       detections: alignDetections(
         body.objects.map((o) => o.id),
-        detections,
+        answer.detections,
       ),
-      model: locator.model,
+      model: answer.model,
       latencyMs,
     } satisfies LocateResponse);
   });

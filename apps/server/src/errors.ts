@@ -65,5 +65,12 @@ export const geminiNotConfigured = (feature: string) =>
     `${feature} is off: GEMINI_API_KEY is not set on the server`,
   );
 
+export const visionNotConfigured = () =>
+  new ApiError(
+    503,
+    'vision_not_configured',
+    'Object detection is off: set GEMINI_API_KEY or CLIO_VISION_URL on the server',
+  );
+
 export const upstreamFailed = (message: string, details?: unknown) =>
   new ApiError(502, 'upstream_failed', message, details);

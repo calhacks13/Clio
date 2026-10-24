@@ -5,6 +5,8 @@ import {
   fromGeminiBox,
   fromGeminiDetection,
   fromGeminiPoint,
+  notFound,
+  simplifyOutline,
   type VisionLocator,
 } from '../src/services/vision';
 import { harness, steppingClock } from './harness';
@@ -128,6 +130,78 @@ describe('alignDetections', () => {
       { id: 'funnel', found: false, point: null, box: null, outline: null, confidence: 0 },
     ]);
   });
+
+  it('takes the most confident instance when a finder answers an id more than once', () => {
+    // Segmenters answer a phrase with every instance they see.
+    const cap = (x: number, confidence: number): Detection => ({ ...found('cap', x), confidence });
+    expect(
+      alignDetections(
+        ['cap', 'jug'],
+        [cap(0.1, 0.4), notFound('jug'), cap(0.7, 0.8), found('jug', 0.3)],
+      ),
+    ).toEqual([cap(0.7, 0.8), found('jug', 0.3)]);
+  });
+});
+
+describe('simplifyOutline', () => {
+  const square = (n: number): [number, number][] => {
+    // n points per edge, counterclockwise from the top left, on the square 0.25..0.75.
+    const edge = (from: [number, number], to: [number, number]) =>
+      Array.from({ length: n }, (_, i): [number, number] => [
+        from[0] + ((to[0] - from[0]) * i) / n,
+        from[1] + ((to[1] - from[1]) * i) / n,
+      ]);
+    return [
+      ...edge([0.25, 0.25], [0.25, 0.75]),
+      ...edge([0.25, 0.75], [0.75, 0.75]),
+      ...edge([0.75, 0.75], [0.75, 0.25]),
+      ...edge([0.75, 0.25], [0.25, 0.25]),
+    ];
+  };
+
+  it('leaves a light outline as it is, minus repeated points', () => {
+    expect(
+      simplifyOutline([
+        [0.25, 0.25],
+        [0.25, 0.25],
+        [0.75, 0.25],
+        [0.5, 0.75],
+        [0.25, 0.25],
+      ]),
+    ).toEqual([
+      [0.25, 0.25],
+      [0.75, 0.25],
+      [0.5, 0.75],
+    ]);
+  });
+
+  it('keeps the corners of a dense polygon and drops the points between them', () => {
+    expect(simplifyOutline(square(200))).toEqual([
+      [0.25, 0.25],
+      [0.25, 0.75],
+      [0.75, 0.75],
+      [0.75, 0.25],
+    ]);
+  });
+
+  it('caps the point count', () => {
+    const wobbly = Array.from({ length: 900 }, (_, i): [number, number] => {
+      const a = (2 * Math.PI * i) / 900;
+      const r = 0.2 + 0.05 * Math.sin(37 * a);
+      return [0.5 + r * Math.cos(a), 0.5 + r * Math.sin(a)];
+    });
+    expect(simplifyOutline(wobbly, 32)?.length).toBeLessThanOrEqual(32);
+  });
+
+  it('returns null for fewer than three distinct points', () => {
+    expect(
+      simplifyOutline([
+        [0.5, 0.5],
+        [0.5, 0.5],
+        [0.25, 0.5],
+      ]),
+    ).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -139,22 +213,34 @@ const OBJECTS = [
 ];
 
 describe('POST /api/vision/locate', () => {
-  it('answers 503 when no Gemini key is configured', async () => {
+  it('answers 503, naming both ways to turn it on, when no object finder is configured', async () => {
     const h = await harness();
     const res = await h.request('POST', ApiPaths.visionLocate, { image: IMAGE, objects: OBJECTS });
     expect(res.status).toBe(503);
-    expect(ApiErrorSchema.parse(await res.json()).error.code).toBe('gemini_not_configured');
+    const { error } = ApiErrorSchema.parse(await res.json());
+    expect(error.code).toBe('vision_not_configured');
+    expect(error.message).toContain('GEMINI_API_KEY');
+    expect(error.message).toContain('CLIO_VISION_URL');
   });
 
   it('returns one detection per object, the model and the measured latency', async () => {
     const seen: unknown[] = [];
     const locator: VisionLocator = {
-      model: 'vision-test',
       async locate(request) {
         seen.push(request);
-        return [
-          { id: 'cap', found: true, point: [0.25, 0.5], box: null, outline: null, confidence: 0.9 },
-        ];
+        return {
+          model: 'vision-test',
+          detections: [
+            {
+              id: 'cap',
+              found: true,
+              point: [0.25, 0.5],
+              box: null,
+              outline: null,
+              confidence: 0.9,
+            },
+          ],
+        };
       },
     };
     const h = await harness({ locator, now: steppingClock('2026-10-24T03:15:02.000Z', 250) });
@@ -173,7 +259,6 @@ describe('POST /api/vision/locate', () => {
 
   it('answers 502 when the vision call fails', async () => {
     const locator: VisionLocator = {
-      model: 'vision-test',
       locate: async () => {
         throw new Error('deadline exceeded');
       },
@@ -188,7 +273,7 @@ describe('POST /api/vision/locate', () => {
   });
 
   it('validates the request', async () => {
-    const locator: VisionLocator = { model: 'v', locate: async () => [] };
+    const locator: VisionLocator = { locate: async () => ({ model: 'v', detections: [] }) };
     const h = await harness({ locator });
     const post = (body: unknown) => h.request('POST', ApiPaths.visionLocate, body);
     expect((await post({ image: IMAGE, objects: [] })).status).toBe(400);

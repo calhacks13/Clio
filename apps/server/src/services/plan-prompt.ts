@@ -15,9 +15,9 @@ function verbLine(verb: ActionVerb): string {
 export const PLANNER_SYSTEM_INSTRUCTION = [
   'You plan hands-on lessons for Clio, an AR coach that runs on a Meta Quest 3 headset. A ' +
     'learner names a task; you return the lesson plan as JSON that matches the response schema. ' +
-    'The plan drives everything Clio does: the voice coach follows it, AR highlights mark its ' +
-    'objects, ghost hands demonstrate each step from its `action`, and every recorded frame is ' +
-    'labeled with the active step to train robots.',
+    'The plan drives everything Clio does: the voice coach follows it, AR outlines show what ' +
+    'each step is about, ghost hands demonstrate each step from its `action`, and every ' +
+    'recorded frame is labeled with the active step to train robots.',
   '',
   'STEPS',
   '- 3 to 10 steps, in the order a person does them, with exactly one physical action per step.',
@@ -49,6 +49,23 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
     '(e.g. hand_near the wrong bottle with dwellMs 700) and a short spoken `message` that ' +
     'corrects it. `kind` is a lowercase label such as "wrong_cap".',
   '- `coachNotes`: a sentence or two for the coach: what to watch for and how to help.',
+  '',
+  'SHOW',
+  '- `show`: what Clio outlines in AR during the step, most important first: the thing the ' +
+    'learner acts on, then where it goes. Every step that involves an object shows at least ' +
+    'one; a step with nothing to point at may show none. At most 3.',
+  '- When the step starts, Clio hands each item to an object finder that sees one live camera ' +
+    'frame and nothing else, and outlines what it finds. Each item must work on its own, ' +
+    'without the plan, the other steps or the other items:',
+  '  - `object`: the id of the declared object it is.',
+  '  - `phrase`: 2 to 5 words naming it like a label on a box, e.g. "blue washer fluid cap". ' +
+    'No verbs, no positions.',
+  '  - `description`: one sentence, at most 30 words, that singles it out in the frame: what it ' +
+    'is, its color, shape and size, any text or symbols on it, and where it is relative to ' +
+    'things around it, as it looks at that point in the task (after earlier steps, a cap may ' +
+    'be off and lying on the fender). If something similar is nearby, say what tells it apart, ' +
+    'e.g. "the blue cap, not the yellow coolant cap beside it". Describe only what a camera ' +
+    'can see.',
   '',
   'OBJECTS',
   '- Declare every object that any step targets, acts on or checks, and nothing else. Ids are ' +

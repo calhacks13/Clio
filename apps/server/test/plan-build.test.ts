@@ -54,6 +54,10 @@ describe('buildPlanCandidate', () => {
       target: 'washer_cap',
       hand: 'either',
     });
+    expect(p.steps[1]?.show.map((item) => [item.object, item.phrase])).toEqual([
+      ['fluid_jug', 'washer fluid jug'],
+      ['washer_cap', 'washer reservoir opening'],
+    ]);
     expect(warnings).toEqual(['Make sure the engine is off and cool.']);
   });
 

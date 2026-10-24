@@ -155,6 +155,20 @@ const DEFS: Record<string, JsonSchema> = {
       targets: arr(str(), { description: 'Ids of the objects this step touches or looks at' }),
       hand: oneOf(['left', 'right', 'either', 'both']),
       action: ref('action'),
+      show: arr(
+        obj(
+          {
+            object: objectId,
+            phrase: str('2 to 5 words naming it, e.g. "blue washer fluid cap"'),
+            description: str(
+              'One sentence that finds it in a camera frame on its own: what it is, color, ' +
+                'shape, size, markings, and where it is at this point in the task',
+            ),
+          },
+          ['object', 'phrase', 'description'],
+        ),
+        { max: 3, description: 'What Clio outlines in AR during this step, most important first' },
+      ),
       success: ref('check'),
       mistakes: arr(
         obj(
@@ -170,7 +184,7 @@ const DEFS: Record<string, JsonSchema> = {
       coachNotes: str('One or two sentences of advice for the coach'),
       stuckAfterMs: int(5_000, 120_000, 'Offer help after this long'),
     },
-    ['id', 'instruction', 'targets', 'action', 'success', 'mistakes'],
+    ['id', 'instruction', 'targets', 'action', 'show', 'success', 'mistakes'],
   ),
 };
 

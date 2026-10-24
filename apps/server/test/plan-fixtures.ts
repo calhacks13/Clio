@@ -38,6 +38,15 @@ export const modelPlan = () => ({
       targets: ['washer_cap'],
       hand: 'right',
       action: { verb: 'twist', object: 'washer_cap', direction: 'ccw', amount: 0.5 },
+      show: [
+        {
+          object: 'washer_cap',
+          phrase: 'blue washer fluid cap',
+          description:
+            'Round blue plastic cap with a windshield-spray symbol, at the front left of the ' +
+            'engine bay, next to a yellow coolant cap',
+        },
+      ],
       success: {
         type: 'sequence',
         of: [
@@ -59,6 +68,20 @@ export const modelPlan = () => ({
       targets: ['fluid_jug', 'washer_cap'],
       hand: 'both',
       action: { verb: 'pour', object: 'fluid_jug', target: 'washer_cap' },
+      show: [
+        {
+          object: 'fluid_jug',
+          phrase: 'washer fluid jug',
+          description: 'Blue plastic jug of washer fluid with a white label, held by the learner',
+        },
+        {
+          object: 'washer_cap',
+          phrase: 'washer reservoir opening',
+          description:
+            'Open neck of the washer fluid reservoir at the front left of the engine bay, its ' +
+            'blue cap flipped open',
+        },
+      ],
       success: { type: 'confirm', prompt: 'The reservoir is full' },
       mistakes: [],
       coachNotes: 'Watch the level through the reservoir wall.',
@@ -68,6 +91,13 @@ export const modelPlan = () => ({
       instruction: 'Close the washer fluid cap.',
       targets: ['washer_cap'],
       action: { verb: 'press', object: 'washer_cap' },
+      show: [
+        {
+          object: 'washer_cap',
+          phrase: 'blue washer fluid cap',
+          description: 'Open blue cap on the washer fluid reservoir, front left of the engine bay',
+        },
+      ],
       success: { type: 'hand_near', object: 'washer_cap', dwellMs: 500 },
       mistakes: [],
     },
@@ -93,6 +123,13 @@ export const modelRevision = () => ({
       instruction: 'Set the funnel in the reservoir neck.',
       targets: ['funnel', 'washer_cap'],
       action: { verb: 'place', object: 'funnel', target: 'washer_cap' },
+      show: [
+        {
+          object: 'funnel',
+          phrase: 'orange funnel',
+          description: 'Small orange plastic funnel lying on the fender',
+        },
+      ],
       success: { type: 'object_near', object: 'funnel', target: 'washer_cap' },
       mistakes: [],
     },
