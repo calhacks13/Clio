@@ -77,17 +77,18 @@ export class OverlayModel {
       b.on('lesson.phase', ({ phase }) => {
         this.phase = phase;
       }),
+      b.on('plan.requested', ({ revision }) => {
+        if (!revision) this.forgetLesson();
+      }),
+      // Objects may be reported missing before the plan arrives, so plan.ready keeps the list.
       b.on('plan.ready', ({ procedure }) => {
         this.title = procedure.title;
-        this.missing = [];
       }),
-      b.on('step.entered', ({ index, instruction, targets }) => {
-        const steps = this.view.procedure()?.steps ?? [];
-        const detail = steps[index]?.detail;
+      b.on('step.entered', ({ stepId, index, instruction, targets }) => {
+        const detail = this.detailOf(stepId);
         this.instruction = {
           text: instruction,
-          index,
-          total: steps.length,
+          ...this.position(index),
           ...(detail ? { detail } : {}),
         };
         this.progress = 0;
@@ -99,7 +100,9 @@ export class OverlayModel {
           until: null,
         }));
       }),
-      b.on('step.completed', ({ t }) => {
+      b.on('plan.changed', () => this.refreshInstruction()),
+      b.on('step.completed', ({ t, by }) => {
+        if (by === 'skip') return;
         this.toast = { kind: 'success', text: 'Nice!', until: t + SUCCESS_MS };
       }),
       b.on('procedure.completed', ({ t }) => {
@@ -158,7 +161,8 @@ export class OverlayModel {
     if (this.caption && this.caption.until <= t) this.caption = null;
     return {
       phase: this.phase,
-      title: this.title ?? this.view.procedure()?.title ?? null,
+      // Saved and coach-written lessons send no plan.ready. The view keeps an ended lesson.
+      title: this.title ?? (this.instruction && this.view.procedure()?.title) ?? null,
       instruction: this.instruction && { ...this.instruction, progress: this.progress },
       highlights: [...this.highlights],
       outlines: [...this.outlines.values()].sort((a, b) => a.rank - b.rank),
@@ -171,10 +175,41 @@ export class OverlayModel {
     };
   }
 
+  /** Done steps out of those not skipped, from the plan; else the step's place in the list. */
+  private position(stepIndex: number): { index: number; total: number } {
+    const plan = this.view.plan();
+    if (!plan) return { index: stepIndex, total: this.view.procedure()?.steps.length ?? 0 };
+    const counted = plan.steps.filter((s) => s.status !== 'skipped');
+    return { index: counted.filter((s) => s.status === 'done').length, total: counted.length };
+  }
+
+  private detailOf(stepId: string): string | undefined {
+    return this.view.procedure()?.steps.find((s) => s.id === stepId)?.detail;
+  }
+
+  /** After a plan change: the focused step's current text, detail and count. The rest stays. */
+  private refreshInstruction(): void {
+    const plan = this.view.plan();
+    if (!this.instruction || !plan) return;
+    const focus = plan.steps.find((s) => s.id === plan.focusId);
+    const detail = focus ? this.detailOf(focus.id) : this.instruction.detail;
+    this.instruction = {
+      text: focus?.instruction ?? this.instruction.text,
+      ...this.position(this.instruction.index),
+      ...(detail ? { detail } : {}),
+    };
+  }
+
   private endLesson(): void {
     this.instruction = null;
     this.highlights = [];
     this.outlines.clear();
     this.demoStepId = null;
+    this.forgetLesson();
+  }
+
+  private forgetLesson(): void {
+    this.title = null;
+    this.missing = [];
   }
 }

@@ -1,6 +1,5 @@
 import { GEMINI_RELAY_PATH } from '@clio/protocol';
 import {
-  FunctionResponseScheduling,
   GoogleGenAI,
   type LiveConnectConfig,
   type LiveServerMessage,
@@ -16,10 +15,9 @@ import type {
   Narration,
   RealtimeAgent,
   ToolResult,
-  ToolTiming,
 } from '../../domain/coach/agent';
 import { base64ToInt16, int16ToBase64 } from '../audio/pcm';
-import { isNonBlocking, toGeminiTools } from './declarations';
+import { toGeminiTools } from './declarations';
 import { interpretServerMessage, TranscriptAggregator } from './messages';
 
 // RealtimeAgent over the Gemini Live API (@google/genai 2.31, model gemini-3.8-live).
@@ -31,7 +29,11 @@ import { interpretServerMessage, TranscriptAggregator } from './messages';
 // Robustness: audio+video sessions end after ~2 minutes without context-window compression, so it
 // is always on; connections are recycled about every 10 minutes (goAway) and can drop, so we keep
 // the latest resumption handle and reconnect with backoff. connect() can hang if the socket closes
-// before setup completes (js-genai#1257), so it races a timeout and the close event.
+// before setup completes (js-genai#1257), so it races a timeout and the close event. While there
+// is no connection, narrations wait (the newest few) and go out as one turn once it is back,
+// together with whatever is narrated on 'ready'; tool answers and media for a dead connection are
+// dropped. updateInstruction() changes the system
+// instruction the next connection starts with, so a reconnect starts from the current plan.
 
 const log = createLogger('gemini');
 
@@ -46,13 +48,9 @@ export interface GeminiLiveOptions {
   connectTimeoutMs?: number;
 }
 
-const SCHEDULING: Record<ToolTiming, FunctionResponseScheduling> = {
-  interrupt: FunctionResponseScheduling.INTERRUPT,
-  when_idle: FunctionResponseScheduling.WHEN_IDLE,
-  silent: FunctionResponseScheduling.SILENT,
-};
-
 const MAX_RECONNECTS = 6;
+/** Narrations kept while there is no connection. */
+const MAX_QUEUED = 10;
 
 export class GeminiLiveAgent implements RealtimeAgent {
   readonly kind = 'gemini' as const;
@@ -63,6 +61,9 @@ export class GeminiLiveAgent implements RealtimeAgent {
   private readonly transcripts = new TranscriptAggregator();
   private closing = false;
   private reconnecting = false;
+  private queued: Narration[] = [];
+  /** While 'ready' is announced, narrations join the queue so they go out in one turn. */
+  private replaying = false;
 
   constructor(private readonly options: GeminiLiveOptions) {}
 
@@ -87,11 +88,13 @@ export class GeminiLiveAgent implements RealtimeAgent {
   }
 
   narrate(n: Narration): void {
-    // turnComplete defaults to true in the SDK; context-only facts must not trigger a reply.
-    this.session?.sendClientContent({
-      turns: [{ role: 'user', parts: [{ text: n.text }] }],
-      turnComplete: n.reply,
-    });
+    if (this.session && !this.replaying) {
+      this.sendTurn(n.text, n.reply);
+      return;
+    }
+    if (this.closing) return;
+    this.queued.push(n);
+    if (this.queued.length > MAX_QUEUED) this.queued.shift();
   }
 
   respond(results: ToolResult[]): void {
@@ -100,16 +103,39 @@ export class GeminiLiveAgent implements RealtimeAgent {
         id: r.id,
         name: r.name,
         response: r.ok ? { output: r.result } : { error: r.result },
-        ...(isNonBlocking(r.name) ? { scheduling: SCHEDULING[r.timing ?? 'when_idle'] } : {}),
       })),
     });
   }
 
+  updateInstruction(systemInstruction: string): void {
+    if (this.setup) this.setup = { ...this.setup, systemInstruction };
+  }
+
   async close(): Promise<void> {
     this.closing = true;
+    this.queued = [];
     this.session?.close();
     this.session = null;
     this.events.emit('status', { state: 'closed' });
+  }
+
+  private sendTurn(text: string, reply: boolean): void {
+    // turnComplete defaults to true in the SDK; context-only facts must not trigger a reply.
+    this.session?.sendClientContent({
+      turns: [{ role: 'user', parts: [{ text }] }],
+      turnComplete: reply,
+    });
+  }
+
+  /** What was narrated while there was no connection, as one turn. */
+  private sendQueued(): void {
+    const queued = this.queued;
+    this.queued = [];
+    if (queued.length === 0) return;
+    this.sendTurn(
+      queued.map((n) => n.text).join(' '),
+      queued.some((n) => n.reply),
+    );
   }
 
   private async client(): Promise<GoogleGenAI> {
@@ -176,7 +202,12 @@ export class GeminiLiveAgent implements RealtimeAgent {
       },
     });
     this.session = await Promise.race([connecting, closedEarly, timeout]);
+    // What is said on 'ready' (a recap) follows what was missed in the same turn: a second message
+    // would interrupt the reply to the first.
+    this.replaying = true;
     this.events.emit('status', { state: 'ready' });
+    this.replaying = false;
+    this.sendQueued();
   }
 
   private onMessage(msg: LiveServerMessage): void {

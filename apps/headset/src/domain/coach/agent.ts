@@ -10,18 +10,12 @@ export interface ToolCall {
   args: Record<string, unknown>;
 }
 
-/**
- * How the model should take a result that arrives while it is talking (long-running tools such as
- * start_lesson): interrupt itself, wait until idle, or absorb it silently.
- */
-export type ToolTiming = 'interrupt' | 'when_idle' | 'silent';
-
+/** Every tool answers at once; slow work (planning) reports back later as a narration. */
 export interface ToolResult {
   id: string;
   name: string;
   ok: boolean;
   result: unknown;
-  timing?: ToolTiming;
 }
 
 /** An app-side fact for the model, e.g. "[app] Step 2/5 …". `reply` asks the model to speak. */
@@ -66,5 +60,10 @@ export interface RealtimeAgent {
   pushImage(jpegBase64: string): void;
   narrate(narration: Narration): void;
   respond(results: ToolResult[]): void;
+  /**
+   * Replace the system instruction (it carries the current plan). Agents that reconnect use it from
+   * the next connection on, so a resumed session starts from the plan as it is now.
+   */
+  updateInstruction?(systemInstruction: string): void;
   close(): Promise<void>;
 }

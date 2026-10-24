@@ -6,6 +6,7 @@ import { GeminiLiveAgent } from '../adapters/gemini/gemini-live-agent';
 import type { ApiClient } from '../adapters/net/api-client';
 import { HttpEpisodeSink } from '../adapters/net/http-episode-sink';
 import { RemoteClipSource, RemoteLocator, RemotePlanner } from '../adapters/net/remote';
+import { RemoteStepChecker, RemoteTemplates } from '../adapters/net/remote-plan';
 import type { PresentContext, Presenter } from '../adapters/render/presenter';
 import { GhostHandsPresenter } from '../adapters/render/presenters/ghost-hands';
 import { GlyphsPresenter } from '../adapters/render/presenters/glyphs';
@@ -128,6 +129,8 @@ export class ClioApp {
       demos: new DemoLibrary(new RemoteClipSource(o.api)),
       recorder: this.recorder,
       context: () => this.episodeContext(),
+      checker: new RemoteStepChecker(o.api),
+      templates: new RemoteTemplates(o.api),
       options: {
         mode: o.config.mode,
         autoDemo: o.config.autoDemo,
@@ -300,7 +303,8 @@ export class ClioApp {
   private async kickoff(): Promise<void> {
     await this.startCoach();
     const { procedure, goal } = this.o;
-    if (procedure) await this.lesson.run(procedure);
+    // Announced like a planned lesson, so the coach hears the whole plan with its step ids.
+    if (procedure) await this.lesson.run(procedure, null, { announce: [] });
     else if (goal) await this.lesson.startLesson(goal);
     // Otherwise the coach asks what they want to learn and calls start_lesson.
   }
@@ -311,6 +315,7 @@ export class ClioApp {
     const useGemini = config.coach === 'gemini' && health?.coach.configured;
     if (config.coach === 'gemini' && !useGemini)
       log.warn('Gemini not configured on the server; using the scripted coach');
+    const templates = await new RemoteTemplates(api).list().catch(() => []);
     const make = (gemini: boolean): RealtimeAgent =>
       gemini && health
         ? new GeminiLiveAgent({
@@ -331,6 +336,7 @@ export class ClioApp {
         ...(agent.kind === 'gemini' ? { mic: new MicCapture() } : {}),
         ...(camera && agent.kind === 'gemini' ? { camera } : {}),
         ...(this.o.procedure?.coach.persona ? { persona: this.o.procedure.coach.persona } : {}),
+        templates,
       });
     try {
       this.agent = make(!!useGemini);

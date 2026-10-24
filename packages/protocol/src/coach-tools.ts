@@ -1,25 +1,104 @@
 import { prettifyError, z } from 'zod';
 
 // The coach's tools, defined once. Each call is both a visible action and a timestamped label in
-// the dataset. Descriptions are prompts: they tell the model when to use each tool.
+// the dataset. Descriptions are prompts: they tell the model when to use each tool. Arguments stay
+// flat (no unions), and every tool answers at once: slow work reports back as an [app] message.
+
+export const STEP_STATUS_CHANGES = ['current', 'skipped', 'todo'] as const;
 
 export const COACH_TOOLS = {
   start_lesson: {
     description:
-      'Plan a new hands-on lesson for what the user wants to learn. Call it as soon as you know the ' +
-      'goal; ask one short clarifying question first only if the goal is ambiguous. The app looks ' +
-      'at the scene, writes the step plan, and tells you when it is ready.',
+      'Start a hands-on lesson for what the user wants to do. Call it as soon as you know the ' +
+      'goal; ask one short clarifying question first only if the goal is ambiguous. Pass ' +
+      'template_id when one of the curated lessons in your instructions fits. It answers at once; ' +
+      'the step plan arrives as an [app] message.',
     args: z.object({
-      goal: z.string().min(3).describe('What to teach, e.g. "refill windshield washer fluid"'),
-      context: z.string().optional().describe('Anything the user said about their setup'),
+      goal: z
+        .string()
+        .min(3)
+        .max(300)
+        .describe('What to do, in a short phrase, e.g. "refill windshield washer fluid"'),
+      context: z.string().max(2000).optional().describe('Anything the user said about their setup'),
+      template_id: z
+        .string()
+        .optional()
+        .describe('A curated lesson id from your instructions, e.g. "ph-indicator"'),
     }),
   },
   revise_plan: {
     description:
-      'Re-plan the rest of the lesson when reality differs from the plan: a missing tool, a ' +
-      'different object, or the user wants another approach. Completed steps are kept.',
+      'Re-plan every step that is not done yet when reality differs a lot from the plan: missing ' +
+      'tools, different objects, or another approach. For one or two steps, use add_step or ' +
+      'update_step instead. It answers at once; the new plan arrives as an [app] message.',
     args: z.object({
       reason: z.string().min(1).describe('What is different, e.g. "no funnel available"'),
+    }),
+  },
+  add_step: {
+    description:
+      'Add a step to the plan, at the end unless after_step_id says where. Write text as one ' +
+      'short imperative sentence and done_when as the end state you will be able to see.',
+    args: z.object({
+      text: z.string().min(1).max(200).describe('e.g. "Unscrew the blue washer fluid cap."'),
+      done_when: z
+        .string()
+        .min(3)
+        .max(200)
+        .describe('What it looks like once done, e.g. "the blue cap is off"'),
+      after_step_id: z
+        .string()
+        .optional()
+        .describe('Insert after this step; omit to add at the end'),
+      objects: z
+        .array(z.string())
+        .max(4)
+        .optional()
+        .describe('Ids of the materials the step uses, from the plan'),
+    }),
+  },
+  update_step: {
+    description:
+      'Change one step: reword it, keep a note about it, skip it (status "skipped": not needed or ' +
+      'impossible), work on it now (status "current", which reopens a done step), or reopen it ' +
+      '(status "todo"). Text and done_when can change only on steps that are not done, and a ' +
+      'rewording must keep what the step does; to change that, skip it and add a new step.',
+    args: z.object({
+      step_id: z.string().min(1).describe('A step id from the plan'),
+      text: z.string().min(1).max(200).optional().describe('The new instruction'),
+      done_when: z.string().min(3).max(200).optional().describe('The new end state'),
+      note: z
+        .string()
+        .max(200)
+        .optional()
+        .describe('A note to yourself about this step, e.g. "they are left-handed"'),
+      status: z.enum(STEP_STATUS_CHANGES).optional(),
+      reason: z.string().optional().describe('Why, e.g. "they have no funnel"'),
+    }),
+  },
+  complete_step: {
+    description:
+      "Mark a step done: when you see the step's done-when state in the camera (evidence " +
+      '"seen"), or when the user tells you they did it, including work off camera (evidence ' +
+      '"heard"; use it whenever you know from their words rather than your eyes). Any step can ' +
+      'be completed, in any order. Name the step by its id from the plan, and give the reason.',
+    args: z.object({
+      step_id: z.string().min(1).describe('The id of the step that is done, from the plan'),
+      reason: z.string().min(1).describe('Why the step is done, e.g. "cup A turned pink"'),
+      evidence: z.enum(['seen', 'heard']),
+    }),
+  },
+  add_material: {
+    description:
+      'Add something the plan did not list, e.g. a funnel the user has. It returns the id to use ' +
+      'in add_step objects.',
+    args: z.object({
+      label: z.string().min(1).max(40).describe('Short name, e.g. "funnel"'),
+      look_for: z
+        .string()
+        .max(200)
+        .optional()
+        .describe('What it looks like, e.g. "small white plastic funnel on the fender"'),
     }),
   },
   highlight: {
@@ -42,15 +121,6 @@ export const COACH_TOOLS = {
       'Use it when the user hesitates, asks how, or repeats a mistake.',
     args: z.object({
       step_id: z.string().optional().describe('Defaults to the current step'),
-    }),
-  },
-  advance_step: {
-    description:
-      'Move to the next step. The app advances by itself when it detects success; call this only ' +
-      'for steps that need your judgment (for example a color change you can see) or when the user ' +
-      'clearly finished. Always give the reason.',
-    args: z.object({
-      reason: z.string().min(1).describe('Why the step is done, e.g. "cup A turned pink"'),
     }),
   },
   flag_mistake: {

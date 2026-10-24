@@ -1,4 +1,5 @@
 import type { Procedure } from '@clio/protocol';
+import type { PlanView } from '../plan/recital';
 
 /** Port: microphone, delivering PCM16 mono chunks at 16 kHz. */
 export interface MicSource {
@@ -23,4 +24,8 @@ export interface CoachFrameSource {
 export interface LessonView {
   procedure(): Procedure | null;
   label(objectId: string): string;
+  /** The plan with each step's status, or null when no lesson is running. */
+  plan(): PlanView | null;
+  /** Who completes steps from sensor checks right now (see docs/coach-plan.md). */
+  authority?(): 'coach' | 'local';
 }

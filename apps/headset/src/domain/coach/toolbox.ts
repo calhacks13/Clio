@@ -1,14 +1,20 @@
 import { type CoachToolArgs, type CoachToolName, parseToolArgs } from '@clio/protocol';
 import type { Clock } from '../../core/clock';
 import type { AppBus } from '../events';
-import type { ToolCall, ToolResult, ToolTiming } from './agent';
+import type { ToolCall, ToolResult } from './agent';
 
-export type ToolOutcome =
-  | { ok: true; result: unknown; timing?: ToolTiming }
-  | { ok: false; error: string };
+export type ToolOutcome = { ok: true; result: unknown } | { ok: false; error: string };
+
+/** Which call a handler is serving, so what it changes can be linked to the recorded call. */
+export interface ToolCallInfo {
+  callId: string;
+}
 
 export type ToolHandlers = {
-  [N in CoachToolName]: (args: CoachToolArgs<N>) => ToolOutcome | Promise<ToolOutcome>;
+  [N in CoachToolName]: (
+    args: CoachToolArgs<N>,
+    call: ToolCallInfo,
+  ) => ToolOutcome | Promise<ToolOutcome>;
 };
 
 /**
@@ -39,8 +45,9 @@ export class CoachToolbox {
       try {
         const handler = this.handlers[parsed.name] as (
           args: unknown,
+          call: ToolCallInfo,
         ) => ToolOutcome | Promise<ToolOutcome>;
-        outcome = await handler(parsed.args);
+        outcome = await handler(parsed.args, { callId: call.id });
       } catch (err) {
         outcome = { ok: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -54,12 +61,6 @@ export class CoachToolbox {
       ok: outcome.ok,
       result,
     });
-    return {
-      id: call.id,
-      name: call.name,
-      ok: outcome.ok,
-      result,
-      ...(outcome.ok && outcome.timing ? { timing: outcome.timing } : {}),
-    };
+    return { id: call.id, name: call.name, ok: outcome.ok, result };
   }
 }

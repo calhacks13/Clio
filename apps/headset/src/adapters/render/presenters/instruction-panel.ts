@@ -81,10 +81,7 @@ export class InstructionPanelPresenter implements Presenter {
       );
     } else if (s.instruction) {
       const i = s.instruction;
-      setText(
-        this.header,
-        `${(s.title ?? 'LESSON').toUpperCase()}  ·  STEP ${i.index + 1} OF ${i.total}`,
-      );
+      setText(this.header, stepHeader(s.title, i.index, i.total));
       setText(this.instruction, i.text);
       setText(this.detail, i.detail ?? '');
     } else {
@@ -151,6 +148,11 @@ export class InstructionPanelPresenter implements Presenter {
       }
     }
   }
+}
+
+/** "TITLE   STEP n OF m", where `index` counts the steps done so far. */
+export function stepHeader(title: string | null, index: number, total: number): string {
+  return `${(title ?? 'LESSON').toUpperCase()}   STEP ${Math.min(index + 1, total)} OF ${total}`;
 }
 
 const PHASE_TEXT: Partial<Record<string, string>> = {

@@ -10,7 +10,6 @@ import type {
 
 /** Records everything the session pushes; tests drive it by emitting agent events. */
 export class FakeAgent implements RealtimeAgent {
-  readonly kind: CoachKind = 'gemini';
   readonly model = 'fake-live';
   readonly events = new Emitter<AgentEvents>();
   setup: AgentSetup | null = null;
@@ -18,7 +17,13 @@ export class FakeAgent implements RealtimeAgent {
   images: string[] = [];
   narrations: Narration[] = [];
   responses: ToolResult[] = [];
+  /** Every system instruction passed to updateInstruction, oldest first. */
+  instructions: string[] = [];
+  /** Narrations and tool answers in the order they reached the model. */
+  log: string[] = [];
   closed = false;
+
+  constructor(readonly kind: CoachKind = 'gemini') {}
 
   async connect(setup: AgentSetup) {
     this.setup = setup;
@@ -32,9 +37,14 @@ export class FakeAgent implements RealtimeAgent {
   }
   narrate(n: Narration) {
     this.narrations.push(n);
+    this.log.push(`narrate:${n.kind}`);
   }
   respond(results: ToolResult[]) {
     this.responses.push(...results);
+    for (const r of results) this.log.push(`respond:${r.id}`);
+  }
+  updateInstruction(systemInstruction: string) {
+    this.instructions.push(systemInstruction);
   }
   async close() {
     this.closed = true;

@@ -23,6 +23,9 @@ import {
   type ProcedureListResponse,
   ProcedureListResponseSchema,
   ProcedureSchema,
+  type StepCheckRequest,
+  type StepCheckResponse,
+  StepCheckResponseSchema,
 } from '@clio/protocol';
 import type { z } from 'zod';
 
@@ -61,6 +64,10 @@ export class ApiClient {
 
   plan(request: PlanRequest): Promise<PlanResponse> {
     return this.request('POST', ApiPaths.plans, request, PlanResponseSchema);
+  }
+
+  checkStep(request: StepCheckRequest): Promise<StepCheckResponse> {
+    return this.request('POST', ApiPaths.planCheck, request, StepCheckResponseSchema);
   }
 
   locate(request: LocateRequest): Promise<LocateResponse> {

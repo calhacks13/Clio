@@ -80,6 +80,20 @@ export class ObjectRegistry {
     return [...this.specs.values()];
   }
 
+  /** Declare one more object, leaving the others (and what is held) alone. */
+  add(spec: ObjectSpec, t: number): void {
+    if (this.specs.has(spec.id)) return;
+    this.specs.set(spec.id, spec);
+    if (spec.placement.method === 'layout') {
+      this.set(spec.id, {
+        position: [...spec.placement.position],
+        confidence: 1,
+        source: 'layout',
+        t,
+      });
+    }
+  }
+
   get(id: string): ObjectEstimate | undefined {
     return this.estimates.get(id);
   }

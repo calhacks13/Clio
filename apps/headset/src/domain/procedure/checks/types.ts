@@ -10,7 +10,7 @@ export interface CheckContext {
   frame: TrackedFrame;
   pinching: Record<Handedness, boolean>;
   objects: { position(id: string): Vec3 | undefined };
-  /** Latched confirmations for the current step (the coach's advance_step, or the user). */
+  /** Latched confirmations for the current step (the coach's complete_step, or the Done button). */
   confirmations: { coach: boolean; user: boolean };
 }
 

@@ -118,6 +118,7 @@ describe.each(['plan', 'revision'] as const)('buildPlanJsonSchema(%s)', (kind) =
     expect(step.required).toEqual([
       'id',
       'instruction',
+      'doneWhen',
       'targets',
       'action',
       'show',
@@ -125,6 +126,18 @@ describe.each(['plan', 'revision'] as const)('buildPlanJsonSchema(%s)', (kind) =
       'mistakes',
     ]);
     expect(props(step).mistakes).toMatchObject({ type: 'array', maxItems: 2 });
+  });
+
+  it('asks every step for doneWhen: its finished state, as a camera would see it', () => {
+    const step = defs(schema).step as JsonSchema;
+    const doneWhen = props(step).doneWhen as JsonSchema;
+    expect(doneWhen.type).toBe('string');
+    expect(doneWhen.description).toContain('3 to 200 characters');
+    expect(doneWhen.description).toContain('as a camera or the learner would see it');
+    expect(doneWhen.description).toContain('"the blue cap is off"');
+    // Written right after the instruction, before the AR fields.
+    const order = Object.keys(props(step));
+    expect(order.indexOf('doneWhen')).toBe(order.indexOf('instruction') + 1);
   });
 
   it('asks each step what to outline: an object, a short phrase and a standalone description', () => {

@@ -61,16 +61,18 @@
     {
       "id": "lay-flat",
       "instruction": "Lay the shirt flat in the outline, face up, collar on the left.",
+      "doneWhen": "the shirt lies flat in the outline, face up, with the collar on the left",
       "success": {
         "type": "confirm",
         "by": "either",
-        "prompt": "The shirt lies flat inside the outline with the collar on the left"
+        "prompt": "the shirt lies flat in the outline, face up, with the collar on the left"
       },
       "coachNotes": "Ask them to say ready when it is flat. You may also see it in the camera frames."
     },
     {
       "id": "pinch-shoulder",
       "instruction": "With your left hand, pinch the shirt at the shoulder dot.",
+      "doneWhen": "the left hand pinches the near shoulder, halfway between the collar and the sleeve seam",
       "targets": ["shoulder"],
       "hand": "left",
       "action": {
@@ -101,6 +103,7 @@
     {
       "id": "pinch-middle",
       "instruction": "Keep holding. With your right hand, pinch the middle dot.",
+      "doneWhen": "the left hand still holds the shoulder and the right hand pinches halfway down the shirt, in line with it",
       "targets": ["middle"],
       "hand": "right",
       "action": {
@@ -144,6 +147,7 @@
     {
       "id": "cross-to-hem",
       "instruction": "Cross your left hand over your right and pinch the hem dot.",
+      "doneWhen": "the left hand, crossed over the right, pinches the shoulder fabric to the bottom hem",
       "detail": "Your left hand keeps holding the shoulder fabric and brings it to the hem.",
       "targets": ["hem"],
       "hand": "left",
@@ -170,12 +174,13 @@
           }
         ]
       },
-      "coachNotes": "Hardest step. Tracking can flicker while the hands cross, so the radii are loose on purpose. Offer show_demo early.",
+      "coachNotes": "Hardest step. Offer show_demo early.",
       "stuckAfterMs": 15000
     },
     {
       "id": "lift-and-fold",
       "instruction": "Lift both hands, uncross them, and lay the shirt down folded.",
+      "doneWhen": "the shirt lies folded flat in a neat rectangle",
       "hand": "both",
       "success": {
         "type": "sequence",
@@ -198,7 +203,7 @@
           {
             "type": "confirm",
             "by": "either",
-            "prompt": "The shirt is folded and lying flat"
+            "prompt": "the shirt lies folded flat in a neat rectangle"
           }
         ]
       },
@@ -207,6 +212,6 @@
   ],
   "coach": {
     "persona": "Upbeat and brief, like a friend showing off a party trick.",
-    "notes": "Say each instruction in under 12 words. Never guess where the hands are; trust the [app] messages."
+    "notes": "Say each instruction in under 12 words. The whole fold takes about two seconds, faster than your camera frames, so judge it by the result: a neatly folded shirt."
   }
 }

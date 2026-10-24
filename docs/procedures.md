@@ -1,12 +1,14 @@
 # The plan language
 
-A procedure is a lesson: the objects involved, plus ordered steps. Each step has a
-machine-checkable success condition, an action Clio can demonstrate, and the things Clio outlines
-for the learner. **Most procedures are written at runtime by
+A procedure is a lesson: the objects involved, plus ordered steps. Each step has the end state
+that says it's done, a machine-checkable success condition, an action Clio can demonstrate, and
+the things Clio outlines for the learner. **Most procedures are written at runtime by
 the planner LLM** (`POST /api/plans`, saved to `data/plans/`). The files in `procedures/` are
-curated golden lessons used for demos, as planner examples and as test fixtures. Both use the same
-schema, `packages/protocol/src/procedure.ts`, and pass the same validation, including the
-cross-references (a step can't target an object that wasn't declared).
+curated golden lessons used for demos, as planner examples and as test fixtures, and the coach can
+start a lesson from one (`start_lesson` with `template_id`). Both use the same schema,
+`packages/protocol/src/procedure.ts`, and pass the same validation, including the cross-references
+(a step can't target an object that wasn't declared). Whoever wrote the first draft, the coach
+edits the plan as the lesson goes ([coach-plan.md](coach-plan.md)).
 
 To get editor autocomplete, add `"$schema": "../packages/protocol/schema/procedure.schema.json"`.
 `pnpm test` validates every file in `procedures/`.
@@ -101,6 +103,30 @@ The planner writes `show` for every step. A step without it outlines nothing and
 targets it hasn't found yet. Each answer is recorded as an `object.detected` event, so every
 outline is also a training label.
 
+## Done when: how a step ends
+
+```json
+"doneWhen": "the blue cap is off and lying on the fender"
+```
+
+`doneWhen` is the step's finished state, as a camera or the learner would see it. The coach judges
+completion against it, and so does the step watcher, which sends a camera frame and the step's
+`doneWhen` to the planner's model every few seconds and tells the coach when the step looks done
+(see [coach-plan.md](coach-plan.md)). Every plan the coach hears shows it as `Done when: ...`.
+- One sentence, 3 to 200 characters. Start lower case and leave off the period, because it's read
+  after "Done when:".
+- Describe the end state, not the motion. Good: "cup A has turned pink". Vague: "the user has
+  compared the colors", which no camera can see.
+- Name real things by how they look and where they are. The camera doesn't see AR dots or
+  outlines: write "the left hand pinches the near shoulder, halfway between the collar and the
+  sleeve seam", not "at the shoulder dot".
+- Write steps so each one ends in a visible state. When it can't be seen (a click, work out of
+  view), say what the learner will notice, so the coach can ask.
+- A `confirm` check's `prompt` says the same thing as `doneWhen`.
+
+The planner writes `doneWhen` for every step. It's optional in the schema; without it, the coach
+and the watcher judge by the instruction.
+
 ## Checks
 
 Every leaf check is a **state**: "true now, for at least `dwellMs`". That makes checks composable
@@ -112,7 +138,7 @@ and tolerant of one-frame tracking dropouts.
 | `hand_near { object, hand, point, radius, dwellMs }` | a hand point (`pinch`, `index_tip`, `thumb_tip`, `palm`, `wrist`) stays near the object | 0.06 m, 250 ms                 |
 | `lift { hand, point, height }`                       | the point is at least `height` above the surface                                        | wrist, 0.15 m, 200 ms          |
 | `object_near { object, target, radius }`             | a tracked object stays near another                                                     | 0.06 m, 500 ms                 |
-| `confirm { by, prompt }`                             | the coach (`advance_step`) or learner (Done button) confirms                            | `either`                       |
+| `confirm { by, prompt }`                             | the coach (`complete_step`) or learner (Done button) confirms                           | `either`                       |
 | `elapsed { ms }`                                     | the step has been active for `ms`                                                       |                                |
 | `all` / `any` / `sequence { of }`                    | every child / some child / children in order (each latches)                             |                                |
 
@@ -120,8 +146,21 @@ Patterns:
 - Use `any [object_near syringe→cup_a, hand_near cup_a]` as a fallback for when tracking drops.
 - Use `all` to hold one point while pinching another (see `shirt-fold.json`).
 - End visual results with `sequence [..., confirm]`: the coach sees the camera frames, e.g. "cup A
-  turned pink".
+  has turned pink".
 - Loosen radii (7–8 cm) where the hands cross or hide each other.
+
+A passing check completes the focused step on its own, and so does the Done button. The coach can
+complete any step, in any order, with `complete_step` and the step's `step_id`. A step is labeled
+`forced` when its check hadn't passed.
+
+When the coach is Gemini in learn mode, checks and mistake rules see only trusted positions: hand
+tracking, and objects placed by a printed marker, a manual placement, `layout` on a calibrated
+workspace, or a learner's pinch when it was the only object missing. Camera detections don't
+count, so a check on an object only the camera found waits for the coach or the Done button, even
+while the learner holds it. The same check also runs on every position, with its own state, but
+that only labels a completion `forced`; it never completes a step. Everywhere else (the scripted
+coach, `record_demo`, or while the Gemini connection is down) checks see every position. See
+[the perception boundary](coach-plan.md#the-perception-boundary).
 
 ## Mistakes
 
@@ -135,11 +174,14 @@ Patterns:
 ```
 
 A mistake fires on its rising edge, then waits `cooldownMs` before it can fire again. It's recorded
-as `mistake.detected`, and the coach is told to correct the learner. Give it a dwell so that
-passing by doesn't count.
+as `mistake.detected`, and the coach is told to correct the learner. A Gemini coach is told only
+while it is in charge, when the rule saw only trusted positions. Give it a dwell so that passing by
+doesn't count.
 
 ## Coach hints
 
 - `coachNotes` (per step) and `coach.persona` / `coach.notes` (per procedure) shape the coach.
+  Write them about the task, not about tracking or checks: the coach judges from what it sees and
+  hears, and never hears positions.
 - `stuckAfterMs` tells the coach the learner seems stuck, which is a cue to offer `show_demo`.
 - Generated plans carry `origin: { kind: "generated", goal, model, createdAt, revisionOf? }`.

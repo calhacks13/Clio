@@ -65,7 +65,10 @@ export const ConfirmCheckSchema = z
     by: z.enum(['coach', 'user', 'either']).default('either'),
     prompt: z.string().optional().describe('What must be verified, e.g. "cup A turned pink"'),
   })
-  .describe('Satisfied when the coach or user confirms (advance_step), e.g. visual judgments.');
+  .describe(
+    'Satisfied when the coach (complete_step) or the learner (the Done button) confirms, e.g. ' +
+      'visual judgments.',
+  );
 
 export const ElapsedCheckSchema = z
   .object({

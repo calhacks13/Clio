@@ -35,6 +35,7 @@ export const modelPlan = () => ({
     {
       id: 'open-cap',
       instruction: 'Flip open the blue washer fluid cap.',
+      doneWhen: 'The blue cap is flipped open and the reservoir neck is visible.',
       targets: ['washer_cap'],
       hand: 'right',
       action: { verb: 'twist', object: 'washer_cap', direction: 'ccw', amount: 0.5 },
@@ -51,7 +52,7 @@ export const modelPlan = () => ({
         type: 'sequence',
         of: [
           { type: 'pinch_near', object: 'washer_cap' },
-          { type: 'confirm', prompt: 'The cap is open' },
+          { type: 'confirm', prompt: 'The blue cap is flipped open' },
         ],
       },
       mistakes: [
@@ -65,6 +66,7 @@ export const modelPlan = () => ({
     {
       id: 'pour-fluid',
       instruction: 'Pour the fluid into the reservoir.',
+      doneWhen: 'The blue fluid reaches the top mark on the reservoir.',
       targets: ['fluid_jug', 'washer_cap'],
       hand: 'both',
       action: { verb: 'pour', object: 'fluid_jug', target: 'washer_cap' },
@@ -82,13 +84,14 @@ export const modelPlan = () => ({
             'blue cap flipped open',
         },
       ],
-      success: { type: 'confirm', prompt: 'The reservoir is full' },
+      success: { type: 'confirm', prompt: 'The blue fluid reaches the top mark' },
       mistakes: [],
       coachNotes: 'Watch the level through the reservoir wall.',
     },
     {
       id: 'close-cap',
       instruction: 'Close the washer fluid cap.',
+      doneWhen: 'The blue cap is shut flat on the reservoir.',
       targets: ['washer_cap'],
       action: { verb: 'press', object: 'washer_cap' },
       show: [
@@ -121,6 +124,7 @@ export const modelRevision = () => ({
     {
       id: 'open-cap',
       instruction: 'Set the funnel in the reservoir neck.',
+      doneWhen: 'The orange funnel sits upright in the reservoir neck.',
       targets: ['funnel', 'washer_cap'],
       action: { verb: 'place', object: 'funnel', target: 'washer_cap' },
       show: [
@@ -136,9 +140,10 @@ export const modelRevision = () => ({
     {
       id: 'pour-slowly',
       instruction: 'Pour the fluid slowly through the funnel.',
+      doneWhen: 'The blue fluid reaches the top mark on the reservoir.',
       targets: ['fluid_jug', 'funnel'],
       action: { verb: 'pour', object: 'fluid_jug', target: 'funnel' },
-      success: { type: 'confirm', prompt: 'The reservoir is full' },
+      success: { type: 'confirm', prompt: 'The blue fluid reaches the top mark' },
       mistakes: [],
     },
   ],

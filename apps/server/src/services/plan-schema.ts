@@ -153,6 +153,10 @@ const DEFS: Record<string, JsonSchema> = {
     {
       id: str('Lowercase slug, unique in the plan, e.g. "open-cap"'),
       instruction: str('One imperative sentence, at most 15 words'),
+      doneWhen: str(
+        'The finished state as a camera or the learner would see it, one sentence of 3 to 200 ' +
+          'characters, e.g. "the blue cap is off"',
+      ),
       detail: str(),
       targets: arr(str(), { description: 'Ids of the objects this step touches or looks at' }),
       hand: oneOf(['left', 'right', 'either', 'both']),
@@ -187,7 +191,7 @@ const DEFS: Record<string, JsonSchema> = {
       coachNotes: str('One or two sentences of advice for the coach'),
       stuckAfterMs: int(5_000, 120_000, 'Offer help after this long'),
     },
-    ['id', 'instruction', 'targets', 'action', 'show', 'success', 'mistakes'],
+    ['id', 'instruction', 'doneWhen', 'targets', 'action', 'show', 'success', 'mistakes'],
   ),
 };
 

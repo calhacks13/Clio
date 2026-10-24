@@ -3,10 +3,8 @@ import { Behavior, type FunctionDeclaration, type Schema, type Tool, Type } from
 
 // Converts the protocol's tool definitions (zod → JSON Schema) into Gemini function declarations.
 // Gemini's Live docs use the OpenAPI-style `parameters` field, so we convert rather than relying on
-// `parametersJsonSchema`.
-
-/** Tools that take seconds (planning). They run while the conversation continues. */
-const NON_BLOCKING = new Set<CoachToolName>(['start_lesson', 'revise_plan']);
+// `parametersJsonSchema`. Every tool is blocking: each answers in milliseconds, and slow work
+// (planning) reports back later as an [app] message.
 
 interface JsonSchemaNode {
   type?: string;
@@ -44,10 +42,8 @@ export function toGeminiTools(names: readonly CoachToolName[]): Tool[] {
   const functionDeclarations: FunctionDeclaration[] = names.map((name) => ({
     name,
     description: COACH_TOOLS[name].description,
-    behavior: NON_BLOCKING.has(name) ? Behavior.NON_BLOCKING : Behavior.BLOCKING,
+    behavior: Behavior.BLOCKING,
     parameters: toSchema(toolParametersJsonSchema(name) as JsonSchemaNode),
   }));
   return [{ functionDeclarations }];
 }
-
-export const isNonBlocking = (name: string): boolean => NON_BLOCKING.has(name as CoachToolName);

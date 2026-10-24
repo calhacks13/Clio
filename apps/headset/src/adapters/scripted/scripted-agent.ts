@@ -44,6 +44,9 @@ export class ScriptedAgent implements RealtimeAgent {
       case 'plan_failed':
         this.say("Sorry, I couldn't plan that lesson.");
         break;
+      // Plan recitals, the step watcher and the rest are context for a model that reads them.
+      default:
+        break;
     }
   }
 

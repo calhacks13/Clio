@@ -1,38 +1,72 @@
-// The coach's standing instructions. Lesson-specific details arrive later as [app] narrations
-// (plan summaries, per-step briefings), because lessons are planned at runtime.
+import { type PlanView, recitePlan } from '../plan/recital';
+import type { TemplateSummary } from '../session/templates';
+
+// The coach's standing instructions: who it is, how a lesson goes, and how it keeps the plan. The
+// app owns the plan; the instruction ends with a snapshot of it, rebuilt whenever the plan changes,
+// so every new connection (a reconnect, a resumption) starts from the plan as it is now.
 
 export interface PromptOptions {
   /** Extra persona text, e.g. from a curated procedure's coach.persona. */
   persona?: string;
+  /** Advice for the whole lesson, e.g. from a curated procedure's coach.notes. */
+  lessonNotes?: string;
+  /** Curated lessons the coach can start from with start_lesson(template_id). */
+  templates?: readonly TemplateSummary[];
+  /** The plan as it stands, or null when no lesson is running. */
+  plan?: PlanView | null;
 }
 
-export function buildSystemInstruction({ persona }: PromptOptions = {}): string {
-  return [
-    'You are Clio, a hands-on tutor in mixed reality. The user wears a Quest headset and hears you',
-    'in their ear. You cannot touch anything: the app outlines the real objects each step is about,',
-    'shows AR highlights and translucent ghost-hand demonstrations anchored to real objects, and it',
-    'tracks the hands precisely.',
-    '',
-    'How a session goes:',
-    '1. If no lesson is running, ask what they want to learn. Once you know the goal, call',
-    '   start_lesson right away (ask one short clarifying question first only if it is ambiguous).',
-    '   While the plan is prepared, keep them company in one sentence ("Let me look at your setup").',
-    '2. Messages that start with [app] are facts from the app and its sensors, not from the user.',
-    '   Trust them over your own guesses. You see roughly one camera frame per second; the app sees',
-    '   the hands at full frame rate.',
-    '3. For each step: say the instruction in your own words, briefly. Point them at what is',
-    '   outlined ("the blue cap I outlined"); call highlight right before you name anything else.',
-    '   If they hesitate, ask how, or repeat a mistake, call show_demo.',
-    '4. The app advances steps by itself when it detects success. Call advance_step only when a step',
-    '   needs your judgment (for example a color change you can see), or they clearly finished,',
-    '   and always give the reason.',
-    '5. When you notice a mistake the app did not report, call flag_mistake with a short kind and a',
-    '   correction, and say the correction.',
-    '6. If reality differs from the plan (a missing tool, a different object), call revise_plan.',
-    '',
-    'Style: warm, calm, and very brief: under 15 words per turn unless they ask for more. One',
-    'instruction at a time. If they interrupt, answer them first. Stop them immediately if anything',
-    'looks unsafe.',
-    ...(persona ? ['', `Persona for this lesson: ${persona}`] : []),
-  ].join('\n');
+const STANDING = [
+  'You are Clio, a hands-on tutor in mixed reality. The learner wears a Quest headset and hears',
+  'you in their ear. You see roughly one camera frame every 4 seconds from the headset. You cannot',
+  'touch anything.',
+  '',
+  'How a session goes:',
+  '1. If no lesson is running, ask what they want to do. Once you know the goal, call start_lesson',
+  '   right away (ask one short clarifying question first only if it is ambiguous). Pass',
+  '   template_id when a curated lesson listed below fits. The plan arrives as an [app] message;',
+  '   until then, keep them company in one short sentence.',
+  '2. The app keeps the plan, and it is your notes: keep it true. Use add_step, update_step,',
+  '   complete_step and add_material for small changes, and revise_plan when a lot is different',
+  '   (missing tools, other objects, another approach). Every result repeats the plan. Call a tool',
+  '   instead of remembering a change.',
+  '3. Judge progress yourself, from what you see and hear. Steps can be finished in any order.',
+  '   Call complete_step with the step_id from the plan: evidence "seen" when you see its done-when',
+  '   state in the camera, and evidence "heard" whenever you know from their words rather than',
+  '   your own eyes, e.g. "I already did that". Never say a step is done without calling',
+  '   complete_step.',
+  '4. Messages that start with [app] are lesson events from the app, not observations. The step',
+  "   watcher's suggestions are a second opinion: check them against what you see.",
+  "5. The headset outlines objects for the learner on its own, and you don't see the outlines.",
+  '   Refer to objects by what they look like and where they are. Call highlight to point one out.',
+  '6. Offer show_demo when they hesitate or ask how. When you notice a mistake, call flag_mistake',
+  '   with a short kind and the correction, then say the correction.',
+  '',
+  'Style: warm, calm and very brief: under 15 words per turn unless they ask for more. One',
+  'instruction at a time. If they interrupt, answer them first. Stop them at once if anything',
+  'looks unsafe. Never read step ids aloud.',
+];
+
+const title = (text: string) => text.trim().replace(/[.!?]$/, '');
+
+export function buildSystemInstruction({
+  persona,
+  lessonNotes,
+  templates,
+  plan,
+}: PromptOptions = {}): string {
+  const sections = [STANDING.join('\n')];
+  if (persona) sections.push(`Persona for this lesson: ${persona}`);
+  if (lessonNotes) sections.push(`Lesson notes: ${lessonNotes}`);
+  if (templates?.length) {
+    const lines = templates.map((t) => `- ${t.id}: ${title(t.title)}. ${t.summary}`);
+    sections.push(['Curated lessons you can start from:', ...lines].join('\n'));
+  }
+  if (plan) {
+    sections.push(
+      'Lesson plan (snapshot from when this connection started; newer [app] messages and tool ' +
+        `results win):\n${recitePlan(plan)}`,
+    );
+  }
+  return sections.join('\n\n');
 }

@@ -5,13 +5,18 @@ import {
   type EpisodeMode,
   HAND_LAYOUT,
   type ImagePayload,
+  type ObjectSpec,
+  type PlacementMethod,
   type PlanRequest,
   type PlanResponse,
+  PROCEDURE_SCHEMA_ID,
   type Procedure,
   type Step,
+  safeParseProcedure,
 } from '@clio/protocol';
 import type { Clock } from '../../core/clock';
 import { poseToTuple } from '../../core/math';
+import type { AgentState } from '../coach/agent';
 import type { LessonView } from '../coach/ports';
 import type { ToolHandlers, ToolOutcome } from '../coach/toolbox';
 import { ClipPlayer } from '../demo/clip-player';
@@ -19,24 +24,35 @@ import type { DemoLibrary } from '../demo/demo-library';
 import type { Demonstration } from '../demo/types';
 import type { AppBus, HighlightStyle, LessonPhase } from '../events';
 import type { PinchTransition } from '../hands/pinch-detector';
-import { type FrameContext, ProcedureRunner, type RunnerState } from '../procedure/runner';
+import { briefStep, type PlanOp, type PlanView, recitePlan } from '../plan/recital';
+import {
+  type FrameContext,
+  type ObjectPositions,
+  ProcedureRunner,
+  type RunnerState,
+} from '../procedure/runner';
 import type { EpisodeRecorder } from '../recording/recorder';
 import type { Grounder } from '../world/grounding';
 import type { ObjectRegistry } from '../world/object-registry';
 import type { Workspace } from '../world/workspace';
 import { Spotlight } from './spotlight';
+import { type StepChecker, StepWatcher, type WatchTarget } from './step-watcher';
+import { adaptTemplate, isCalibrated, type TemplateSource } from './templates';
 
-// The application service for a lesson: goal → plan (LLM, with camera snapshots) → locate the
-// plan's objects → run the procedure while recording, outlining what each step shows → revise
-// when reality differs. It also implements the coach's tools, so everything the coach does flows
-// through one place.
+// The application service for a lesson. The coach decides what the lesson is; this keeps track of
+// where it stands. A lesson starts from a goal: its first draft comes from a curated lesson, the
+// planner (goal plus camera snapshots), or the coach itself when planning fails. The coach then
+// keeps the plan true through tools (add, reword, skip, refocus, complete), and every change is
+// recorded and repeated back to it, so the plan works as the coach's notes without living in its
+// context. It also finds and outlines what each step shows, and runs the step watcher. See
+// docs/coach-plan.md.
 
 /** Port: the planner (the server's /api/plans). */
 export interface LessonPlanner {
   plan(request: PlanRequest): Promise<PlanResponse>;
 }
 
-/** Port: camera snapshots to show the planner what the learner is looking at. */
+/** Port: camera snapshots to show the planner (and the step watcher) what the learner sees. */
 export interface PlanImageSource {
   snapshots(max: number): Promise<ImagePayload[]>;
 }
@@ -53,6 +69,12 @@ export interface LessonOptions {
   planImages?: number;
   /** How often to look again at what the current step shows (ms); 0 only looks on step entry. */
   showRefreshMs?: number;
+  /** How often the step watcher looks while a step waits (ms); 0 turns it off. */
+  watchMs?: number;
+  /** Tell the coach planning is slow after this long (ms). */
+  planSlowMs?: number;
+  /** Give up on the planner after this long (ms); the coach then writes the steps. */
+  planTimeoutMs?: number;
 }
 
 export interface LessonDeps {
@@ -66,28 +88,118 @@ export interface LessonDeps {
   demos: DemoLibrary;
   recorder: EpisodeRecorder | null;
   context: () => EpisodeContext;
+  /** Judges whether a step looks done from the camera (the step watcher); null turns it off. */
+  checker?: StepChecker | null;
+  /** Curated lessons the coach can start from. */
+  templates?: TemplateSource | null;
+  /** Wall clock, for the provenance of plans the coach writes. */
+  now?: () => Date;
   options?: LessonOptions;
+}
+
+/** Who may complete steps from sensor checks: everything (local), or only trusted data (coach). */
+export type Authority = 'coach' | 'local';
+type Actor = 'coach' | 'user' | 'planner' | 'app';
+
+interface Planning {
+  goal: string;
+  context?: string;
+  revision: boolean;
+  startedT: number;
+  slowSent: boolean;
+  attempt: number;
+  /** The plan arrived and the lesson is starting: no more slow or timeout notices. */
+  landed?: boolean;
+}
+
+/** A lesson the coach writes itself, before its first step exists. */
+interface CoachDraft {
+  goal: string;
+  objects: ObjectSpec[];
 }
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 /** A pinch this close to a placed object is about that object, not a registration. */
 const NEAR_KNOWN_OBJECT_M = 0.08;
+const PLAN_SLOW_MS = 12_000;
+/** The planner and the step check take goals up to this long. */
+const GOAL_MAX = 300;
+const PLAN_TIMEOUT_MS = 45_000;
+const WATCH_MS = 6000;
+/** Placements measured by something other than the camera's guess. */
+const TRUSTED_SOURCES: ReadonlySet<PlacementMethod> = new Set(['marker', 'pinch', 'manual']);
+/** Coach-written lessons have no measured layout; the same default the planner uses. */
+const COACH_WORKSPACE: [number, number] = [0.8, 0.6];
+
+/** A lowercase id from free text, e.g. "Unscrew the blue cap." gives "unscrew-the-blue-cap". */
+function slugFrom(text: string, fallback: string): string {
+  const words = text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 4);
+  return (words.join('-') || fallback).slice(0, 40).replace(/-+$/, '');
+}
+
+function uniqueId(base: string, taken: ReadonlySet<string>): string {
+  let id = base;
+  for (let n = 2; taken.has(id); n++) id = `${base}-${n}`;
+  return id;
+}
+
+const sameText = (a: string, b: string) =>
+  a
+    .trim()
+    .toLowerCase()
+    .replace(/[.!?]+$/, '') ===
+  b
+    .trim()
+    .toLowerCase()
+    .replace(/[.!?]+$/, '');
 
 export class LessonController {
   readonly player = new ClipPlayer();
   private currentPhase: LessonPhase = 'idle';
   private runner: ProcedureRunner | null = null;
-  private plan: { planId: string | null; procedure: Procedure } | null = null;
+  private planId: string | null = null;
+  private goal = '';
+  private rev = 0;
+  /** The coach's own note for each step. */
+  private readonly notes = new Map<string, string>();
+  /** Every step id this lesson has used, so a dropped step's id is never given to another. */
+  private readonly usedIds = new Set<string>();
+  private planning: Planning | null = null;
+  private attempt = 0;
+  private draft: CoachDraft | null = null;
+  /** Inside a call that records its own plan change, so the bus listeners don't record it too. */
+  private opDepth = 0;
+  /** A completion by a check or the learner, recorded once the focus has moved on. */
+  private unrecorded: { op: PlanOp; by: Actor; stepId: string } | null = null;
+  /** The lesson completed inside a tool call; it finishes when the call returns. */
+  private finishAfterOp: number | null = null;
+  private coachState: AgentState | null = null;
+  /**
+   * Where each object's position was last measured. A held object's estimate reads 'pinch' while
+   * it rides the hand, but its trust stays with how it was found.
+   */
+  private readonly basis = new Map<string, PlacementMethod>();
+  /** Objects a free-space pinch registered while several were missing: a guess, not a measurement. */
+  private readonly guessed = new Set<string>();
+  /** Gives up on planning work in flight (see stop()). */
+  private readonly abandons = new Set<() => void>();
+  /** Counts lessons, so an answer about one lesson is never applied to the next. */
+  private lessonSeq = 0;
   private demo: Demonstration | null = null;
   private demoClipId = '';
-  private planning = false;
-  private completedSteps = 0;
   private readonly pending = new Set<Promise<unknown>>();
   /** Missing objects already announced to the learner, so the coach isn't told twice. */
   private readonly announced = new Set<string>();
   /** Every camera lookup goes through here, so each one is recorded and outlined consistently. */
   private readonly spotlight: Spotlight;
+  private readonly watcher: StepWatcher | null;
 
   constructor(private readonly deps: LessonDeps) {
     const { bus, clock, registry, grounder, options } = deps;
@@ -100,15 +212,44 @@ export class LessonController {
         ? {}
         : { options: { refreshMs: options.showRefreshMs } }),
     });
-    bus.on('object.registered', ({ objectId }) => {
+    const watchMs = options?.watchMs ?? WATCH_MS;
+    this.watcher =
+      deps.checker && deps.images && watchMs > 0
+        ? new StepWatcher({
+            bus,
+            clock,
+            checker: deps.checker,
+            frames: deps.images,
+            target: () => this.watchTarget(),
+            enabled: () => this.authority() === 'coach',
+            options: { intervalMs: watchMs },
+          })
+        : null;
+    bus.on('object.registered', ({ objectId, method }) => {
       this.announced.delete(objectId);
+      this.basis.set(objectId, method);
+      if (method !== 'pinch') this.guessed.delete(objectId);
     });
-    bus.on('step.completed', () => {
-      this.completedSteps++;
+    // A check or the Done button finished the focused step: record it once the focus has moved on.
+    bus.on('step.completed', ({ stepId, by }) => {
+      if (this.opDepth > 0) return;
+      const actor: Actor = by === 'check' ? 'app' : by === 'skip' ? 'coach' : by;
+      this.unrecorded = { op: by === 'skip' ? 'skip' : 'complete', by: actor, stepId };
     });
-    bus.on('step.entered', ({ t, index }) => this.onStepEntered(index, t));
-    bus.on('procedure.completed', ({ t }) => this.finish('completed', t));
+    bus.on('step.entered', ({ t, index }) => {
+      this.onStepEntered(index, t);
+      this.recordUnrecorded();
+    });
+    // A tool call that ends the lesson records its plan change before the recording stops.
+    bus.on('procedure.completed', ({ t }) => {
+      this.recordUnrecorded();
+      if (this.opDepth > 0) this.finishAfterOp = t;
+      else this.finish('completed', t);
+    });
     bus.on('procedure.aborted', ({ t }) => this.finish('aborted', t));
+    bus.on('coach.status', ({ state }) => {
+      this.coachState = state;
+    });
   }
 
   get phase(): LessonPhase {
@@ -116,7 +257,7 @@ export class LessonController {
   }
 
   get procedure(): Procedure | null {
-    return this.plan?.procedure ?? null;
+    return this.runner?.state.procedure ?? null;
   }
 
   get runnerState(): RunnerState | null {
@@ -131,153 +272,179 @@ export class LessonController {
     return this.runner?.state.step ?? null;
   }
 
+  /**
+   * Coach authority: a Gemini coach that can see is connected in learn mode, so checks may use only
+   * trusted positions and the coach judges the rest. Otherwise checks use everything, as before.
+   */
+  authority(): Authority {
+    const { coach } = this.deps.context();
+    const learn = (this.deps.options?.mode ?? 'learn') === 'learn';
+    return coach.kind === 'gemini' && learn && this.coachState === 'ready' ? 'coach' : 'local';
+  }
+
   view(): LessonView {
     return {
       procedure: () => this.procedure,
       label: (id) => this.deps.registry.spec(id)?.label ?? id,
+      plan: () => this.planView(),
+      authority: () => this.authority(),
     };
   }
 
   handlers(): ToolHandlers {
     return {
-      start_lesson: ({ goal, context }) => this.startLesson(goal, context),
-      revise_plan: ({ reason }) => this.revisePlan(reason),
+      start_lesson: ({ goal, context, template_id }) =>
+        this.startLesson(goal, context, template_id),
+      revise_plan: ({ reason }, { callId }) => this.revisePlan(reason, callId),
+      add_step: (args, { callId }) =>
+        this.op(() =>
+          this.addStep(args.text, args.done_when, args.after_step_id, args.objects, callId),
+        ),
+      update_step: (args, { callId }) => this.op(() => this.updateStep(args, callId)),
+      complete_step: ({ reason, evidence, step_id }, { callId }) =>
+        this.op(() => this.completeStep(step_id, reason, evidence, callId)),
+      add_material: ({ label, look_for }, { callId }) =>
+        this.op(() => this.addMaterial(label, look_for, callId)),
       highlight: ({ object_id, style }) => this.highlight(object_id, style),
       show_demo: ({ step_id }) => this.showDemo(step_id),
-      advance_step: ({ reason }) => this.advance('coach', reason),
       flag_mistake: ({ kind, message }) => this.flagMistake(kind, message),
     };
   }
 
-  /** Plan a lesson for a goal and run it. */
-  async startLesson(goal: string, context?: string): Promise<ToolOutcome> {
-    const { bus, clock, planner } = this.deps;
-    if (this.planning) return { ok: false, error: 'Already planning a lesson.' };
-    if (this.runner?.state.status === 'running') {
-      this.runner.abort('a new lesson was requested', clock.now());
-      await this.settled();
+  /** Start a lesson for a goal. Answers at once; the plan arrives as plan.ready (or plan.failed). */
+  startLesson(rawGoal: string, context?: string, templateId?: string): ToolOutcome {
+    // A re-plan of the current lesson gives way to a new lesson.
+    if (this.planning && !this.planning.revision) {
+      return { ok: false, error: 'Already planning a lesson; it will arrive as an [app] message.' };
     }
-    this.planning = true;
-    this.setPhase('planning', goal);
-    bus.emit('plan.requested', { t: clock.now(), goal, revision: false });
-    let response: PlanResponse;
-    try {
-      const images = await this.captureImages();
-      response = await planner.plan({ goal, ...(context ? { context } : {}), images });
-    } catch (err) {
-      this.planning = false;
-      bus.emit('plan.failed', { t: clock.now(), goal, error: errorText(err) });
-      this.setPhase('idle');
-      return { ok: false, error: `Planning failed: ${errorText(err)}` };
-    }
-    this.planning = false;
-    const { procedure, planId, warnings } = response;
-    bus.emit('plan.ready', { t: clock.now(), planId, procedure, warnings, revision: false });
-    const located = await this.run(procedure, planId);
-    return {
-      ok: true,
-      timing: 'when_idle',
-      result: {
-        title: procedure.title,
-        steps: procedure.steps.length,
-        notFound: located.missing.map((id) => this.view().label(id)),
-        warnings,
-      },
+    const goal = rawGoal.trim().slice(0, GOAL_MAX);
+    for (const abandon of this.abandons) abandon();
+    const attempt = ++this.attempt;
+    this.planning = {
+      goal,
+      ...(context ? { context } : {}),
+      revision: false,
+      startedT: this.deps.clock.now(),
+      slowSent: false,
+      attempt,
     };
+    this.draft = null;
+    this.track(this.prepare(goal, context, templateId, attempt));
+    return { ok: true, result: { status: templateId ? 'loading' : 'planning', goal } };
   }
 
   /** Run a procedure (curated from the menu, or freshly planned). */
-  async run(procedure: Procedure, planId: string | null = null): Promise<{ missing: string[] }> {
+  async run(
+    procedure: Procedure,
+    planId: string | null = null,
+    opts: {
+      goal?: string;
+      locate?: 'await' | 'background';
+      by?: Actor;
+      callId?: string;
+      /** Announce the plan (plan.ready, with these warnings) once the lesson exists. */
+      announce?: string[];
+      /** The start_lesson this run belongs to; a newer one cancels it. */
+      attempt?: number;
+    } = {},
+  ): Promise<{ missing: string[] }> {
     const { bus, clock, registry, recorder } = this.deps;
+    if (this.runner?.state.status === 'running') {
+      this.runner.abort('a new lesson started', clock.now());
+    }
     registry.load(procedure.objects, clock.now());
-    this.plan = { planId, procedure };
-    this.completedSteps = 0;
+    this.planId = planId;
+    this.goal =
+      opts.goal ??
+      (procedure.origin.kind === 'generated' ? procedure.origin.goal : procedure.title);
+    this.rev = -1;
+    this.notes.clear();
+    this.usedIds.clear();
+    for (const step of procedure.steps) this.usedIds.add(step.id);
     this.announced.clear();
-    const missing = await this.locate(registry.unplaced());
+    let missing: string[] = [];
+    if (opts.locate === 'background') this.track(this.locate(registry.unplaced()));
+    else missing = await this.locate(registry.unplaced());
+    if (opts.attempt !== undefined && opts.attempt !== this.attempt) return { missing };
     recorder?.start(this.episodeMeta(procedure), clock.now());
+    this.lessonSeq++;
     this.runner = new ProcedureRunner(procedure, bus, {
       coachCanForce: this.deps.options?.coachCanForce ?? true,
     });
+    if (opts.announce) {
+      bus.emit('plan.ready', {
+        t: clock.now(),
+        planId: planId ?? procedure.id,
+        procedure,
+        warnings: opts.announce,
+        revision: false,
+      });
+    }
     this.setPhase('lesson');
-    this.runner.start(clock.now());
+    const runner = this.runner;
+    this.op(() => {
+      runner.start(clock.now());
+      return { ok: true, result: null };
+    });
+    this.changed('start', opts.by ?? (procedure.origin.kind === 'curated' ? 'app' : 'planner'), {
+      callId: opts.callId,
+    });
     return { missing };
   }
 
-  async revisePlan(reason: string): Promise<ToolOutcome> {
-    const { bus, clock, planner, registry } = this.deps;
-    const plan = this.plan;
-    const runner = this.runner;
-    if (!plan || !runner || runner.state.status !== 'running') {
-      return { ok: false, error: 'No lesson is running to revise.' };
-    }
+  revisePlan(reason: string, callId?: string): ToolOutcome {
+    const runner = this.activeRunner();
+    if (!runner) return { ok: false, error: 'No lesson is running to revise.' };
     if (this.planning) return { ok: false, error: 'Already planning.' };
-    const fromStepIndex = runner.state.stepIndex;
-    const goal =
-      plan.procedure.origin.kind === 'generated'
-        ? plan.procedure.origin.goal
-        : plan.procedure.title;
-    this.planning = true;
-    bus.emit('plan.requested', { t: clock.now(), goal, revision: true });
-    let response: PlanResponse;
-    try {
-      response = await planner.plan({
-        goal,
-        images: await this.captureImages(),
-        revise: { planId: plan.planId ?? plan.procedure.id, fromStepIndex, reason },
-      });
-    } catch (err) {
-      bus.emit('plan.failed', { t: clock.now(), goal, error: errorText(err) });
-      return { ok: false, error: `Re-planning failed: ${errorText(err)}` };
-    } finally {
-      this.planning = false;
-    }
-    const t = clock.now();
-    bus.emit('plan.ready', { t, ...response, revision: true });
-    bus.emit('annotation', {
-      t,
-      label: 'plan.revised',
-      data: { from: plan.planId, to: response.planId, fromStepIndex, reason },
-    });
-    registry.load(response.procedure.objects, t);
-    this.plan = { planId: response.planId, procedure: response.procedure };
-    runner.replacePlan(response.procedure, t);
-    const missing = await this.locate(registry.unplaced());
-    return {
-      ok: true,
-      timing: 'when_idle',
-      result: {
-        steps: response.procedure.steps.length,
-        resumingAtStep: fromStepIndex + 1,
-        notFound: missing.map((id) => this.view().label(id)),
-      },
+    const { bus, clock } = this.deps;
+    const attempt = ++this.attempt;
+    this.planning = {
+      goal: this.goal,
+      revision: true,
+      startedT: clock.now(),
+      slowSent: false,
+      attempt,
     };
+    bus.emit('plan.requested', { t: clock.now(), goal: this.goal, revision: true });
+    this.track(this.revise(runner, reason, attempt, callId));
+    return { ok: true, result: { status: 'replanning' } };
   }
 
   /** Per tracked frame (workspace space). */
   update(frame: FrameContext): void {
-    this.runner?.update(frame);
+    this.runner?.update(frame, {
+      positions: this.trustedPositions(),
+      inCharge: this.authority() === 'coach',
+    });
     this.tick(frame.t);
   }
 
-  /** Time-based upkeep: demo playback, and looking again at what the step shows. */
+  /** Time-based upkeep: demos, planning deadlines, outlines, and the step watcher. */
   tick(t: number): void {
     if (this.demo && this.player.finished(t)) this.endDemo(t);
+    this.checkPlanning(t);
     const look = this.spotlight.tick(t);
     if (look) this.track(look);
+    const watch = this.watcher?.tick(t);
+    if (watch) this.track(watch);
   }
 
   /** A pinch in free space while objects are missing registers the next missing one there. */
   onPinch(transition: PinchTransition): void {
     const { registry } = this.deps;
     if (transition.phase !== 'start') return;
-    const [next] = this.registrationQueue();
+    const queue = this.registrationQueue();
+    const [next] = queue;
     if (!next || registry.nearest(transition.point, NEAR_KNOWN_OBJECT_M)) return;
-    registry.observe(next, {
+    const placed = registry.observe(next, {
       position: transition.point,
       confidence: 0.9,
       source: 'pinch',
       t: transition.t,
     });
+    // With several objects missing, the learner may have pinched for the task, not for this one.
+    if (placed && queue.length > 1) this.guessed.add(next);
+    else if (placed) this.guessed.delete(next);
   }
 
   /** Refine positions with the camera (e.g. after the learner puts an object down). Quiet. */
@@ -288,20 +455,586 @@ export class LessonController {
 
   /** Learner-side confirmation (e.g. a "done" gesture or button). */
   confirmByUser(reason = 'user confirmed'): ToolOutcome {
-    return this.advance('user', reason);
+    if (!this.runner) return { ok: false, error: 'No lesson is running.' };
+    const r = this.runner.advance('user', reason, this.deps.clock.now());
+    return r.ok
+      ? { ok: true, result: { advanced: true, forced: r.forced } }
+      : { ok: false, error: r.error };
   }
 
   async stop(reason: string): Promise<void> {
+    // Give up on a plan in flight rather than waiting for it and starting a lesson nobody sees.
+    if (this.planning || this.draft) {
+      this.planning = null;
+      this.draft = null;
+      this.attempt++;
+      for (const abandon of this.abandons) abandon();
+    }
     if (this.runner?.state.status === 'running') this.runner.abort(reason, this.deps.clock.now());
+    this.watcher?.stop();
     await this.settled();
   }
 
-  /** Resolves when background work (grounding, recording uploads) has finished. */
+  /** Resolves when background work (planning, grounding, recording uploads) has finished. */
   async settled(): Promise<void> {
     while (this.pending.size > 0) await Promise.allSettled([...this.pending]);
   }
 
-  // ---- tools ---------------------------------------------------------------------------------
+  // ---- drafting the plan ---------------------------------------------------------------------
+
+  private async prepare(
+    goal: string,
+    context: string | undefined,
+    templateId: string | undefined,
+    attempt: number,
+  ): Promise<void> {
+    const { bus, clock, planner } = this.deps;
+    if (this.runner?.state.status === 'running') {
+      this.runner.abort('a new lesson was requested', clock.now());
+    }
+    // The previous lesson is over: its plan must not stand in for the new one.
+    this.runner = null;
+    this.setPhase('planning', goal);
+    bus.emit('plan.requested', { t: clock.now(), goal, revision: false });
+    let draft: PlanResponse;
+    try {
+      draft = await this.cancellable(
+        (async () => {
+          if (templateId) {
+            if (!this.deps.templates) throw new Error('No curated lessons are available');
+            const template = await this.deps.templates.get(templateId);
+            const calibrated = isCalibrated(this.deps.workspace().method);
+            const procedure = adaptTemplate(template, calibrated);
+            return { planId: template.id, procedure, warnings: [] };
+          }
+          const images = await this.captureImages();
+          return planner.plan({ goal, ...(context ? { context } : {}), images });
+        })(),
+      );
+    } catch (err) {
+      if (attempt !== this.attempt) return;
+      this.planning = null;
+      this.failPlanning(goal, errorText(err), false);
+      return;
+    }
+    if (attempt !== this.attempt) return;
+    // Still "planning" until the lesson has started, so nothing else starts or edits it meanwhile.
+    if (this.planning) this.planning.landed = true;
+    try {
+      await this.run(draft.procedure, draft.planId, { goal, announce: draft.warnings, attempt });
+    } finally {
+      if (attempt === this.attempt) this.planning = null;
+    }
+  }
+
+  private async revise(
+    runner: ProcedureRunner,
+    reason: string,
+    attempt: number,
+    callId: string | undefined,
+  ): Promise<void> {
+    const { bus, clock, planner } = this.deps;
+    const { procedure, statuses } = runner.state;
+    const kept = procedure.steps.filter((s) => statuses[s.id] !== 'todo');
+    const todo = procedure.steps.filter((s) => statuses[s.id] === 'todo');
+    const base = { ...procedure, steps: [...kept, ...todo] };
+    let response: PlanResponse;
+    try {
+      const images = await this.cancellable(this.captureImages());
+      response = await this.cancellable(
+        planner.plan({
+          goal: this.goal,
+          images,
+          revise: {
+            planId: this.planId ?? procedure.id,
+            fromStepIndex: kept.length,
+            reason,
+            skippedStepIds: kept.filter((s) => statuses[s.id] === 'skipped').map((s) => s.id),
+            base,
+          },
+        }),
+      );
+    } catch (err) {
+      if (attempt !== this.attempt) return;
+      this.planning = null;
+      this.failPlanning(this.goal, errorText(err), true);
+      return;
+    }
+    if (attempt !== this.attempt) return;
+    this.planning = null;
+    if (this.runner !== runner || runner.state.status !== 'running') return;
+    // A step the planner was asked to replace but that was finished meanwhile stays as it is.
+    const asked = new Set(todo.map((s) => s.id));
+    const now = runner.state.statuses;
+    const fresh = response.procedure.steps
+      .slice(kept.length)
+      .filter((s) => !(asked.has(s.id) && now[s.id] !== 'todo'));
+    const merged = this.mergeRevision(runner, fresh, response);
+    if (!merged.ok) {
+      this.failPlanning(this.goal, merged.error, true);
+      return;
+    }
+    const t = clock.now();
+    for (const spec of merged.procedure.objects) this.deps.registry.add(spec, t);
+    // One op, so a revision that leaves nothing to do records itself before the lesson finishes.
+    this.op(() => {
+      bus.emit('annotation', {
+        t,
+        label: 'plan.revised',
+        data: { from: this.planId, to: response.planId, kept: kept.length, reason },
+      });
+      runner.replacePlan(merged.procedure, t);
+      for (const step of merged.procedure.steps) this.usedIds.add(step.id);
+      for (const id of this.notes.keys()) if (!runner.statusOf(id)) this.notes.delete(id);
+      this.planId = response.planId;
+      this.changed('revise', 'planner', { reason, ...(callId ? { callId } : {}) });
+      bus.emit('plan.ready', {
+        t,
+        planId: response.planId,
+        procedure: merged.procedure,
+        warnings: response.warnings,
+        revision: true,
+      });
+      return { ok: true, result: null };
+    });
+    this.track(this.locate(this.deps.registry.unplaced()));
+  }
+
+  /**
+   * The revision lands on the plan as it is now: every step done or skipped meanwhile stays, then
+   * the planner's new steps. A new step never takes an id the lesson used for something else.
+   */
+  private mergeRevision(
+    runner: ProcedureRunner,
+    fresh: readonly Step[],
+    response: PlanResponse,
+  ): { ok: true; procedure: Procedure } | { ok: false; error: string } {
+    const { procedure, statuses } = runner.state;
+    const kept = procedure.steps.filter((s) => statuses[s.id] !== 'todo');
+    const todo = new Set(procedure.steps.filter((s) => statuses[s.id] === 'todo').map((s) => s.id));
+    const taken = new Set([...this.usedIds].filter((id) => !todo.has(id)));
+    const steps = fresh.map((s) => {
+      const id = uniqueId(s.id, taken);
+      taken.add(id);
+      return id === s.id ? s : { ...s, id };
+    });
+    const known = new Set(procedure.objects.map((o) => o.id));
+    const objects = [
+      ...procedure.objects,
+      ...response.procedure.objects.filter((o) => !known.has(o.id)),
+    ];
+    const r = safeParseProcedure({ ...procedure, objects, steps: [...kept, ...steps] });
+    return r.ok ? { ok: true, procedure: r.procedure } : { ok: false, error: r.error };
+  }
+
+  private failPlanning(goal: string, error: string, revision: boolean): void {
+    const { bus, clock } = this.deps;
+    bus.emit('plan.failed', { t: clock.now(), goal, error, revision });
+    if (revision) return;
+    // The coach writes the steps itself; the lesson starts with its first add_step. A coach that
+    // can't (the scripted one) asks the learner again instead.
+    this.draft = { goal, objects: [] };
+    if (this.deps.context().coach.kind === 'gemini') this.setPhase('planning', goal);
+    else this.setPhase('idle');
+  }
+
+  /** A promise that stop() can make fail at once, so it never waits on a slow planner. */
+  private cancellable<T>(work: Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const abandon = () => reject(new Error('stopped'));
+      this.abandons.add(abandon);
+      work.then(resolve, reject).finally(() => this.abandons.delete(abandon));
+    });
+  }
+
+  /** Tell the coach when planning is slow, and give up on it at the deadline. */
+  private checkPlanning(t: number): void {
+    const p = this.planning;
+    if (!p || p.landed) return;
+    const elapsed = t - p.startedT;
+    const options = this.deps.options;
+    if (elapsed >= (options?.planTimeoutMs ?? PLAN_TIMEOUT_MS)) {
+      this.planning = null;
+      this.attempt++;
+      this.failPlanning(p.goal, `no plan after ${Math.round(elapsed / 1000)} s`, p.revision);
+    } else if (!p.slowSent && elapsed >= (options?.planSlowMs ?? PLAN_SLOW_MS)) {
+      p.slowSent = true;
+      this.deps.bus.emit('plan.slow', { t, goal: p.goal, elapsedMs: elapsed });
+    }
+  }
+
+  // ---- plan tools ------------------------------------------------------------------------------
+
+  private addStep(
+    text: string,
+    doneWhen: string,
+    afterStepId: string | undefined,
+    objects: readonly string[] | undefined,
+    callId: string,
+  ): ToolOutcome {
+    if (this.planning) return this.planningError();
+    const runner = this.activeRunner();
+    const known = runner ? this.deps.registry.allSpecs() : (this.draft?.objects ?? []);
+    const unknown = (objects ?? []).filter((id) => !known.some((o) => o.id === id));
+    if (unknown.length > 0) {
+      const ids = known.map((o) => o.id).join(', ') || 'none yet; call add_material';
+      return { ok: false, error: `Unknown material "${unknown[0]}". Materials: ${ids}.` };
+    }
+    if (!runner) return this.startCoachLesson(text, doneWhen, objects ?? [], known, callId);
+
+    const { procedure, statuses } = runner.state;
+    const focusBefore = this.focusId();
+    // The same call again (a replay after a reconnect) gives the same step. A skipped step with
+    // the same words is not a duplicate: skipping and adding anew is how a step changes.
+    const same = procedure.steps.find(
+      (s) => statuses[s.id] === 'todo' && sameText(s.instruction, text),
+    );
+    if (same) return this.planResult({ step_id: same.id, already: true }, focusBefore);
+    const step = this.coachStep(text, doneWhen, objects ?? [], known);
+    const r = runner.insert(step, afterStepId ?? null);
+    if (!r.ok) return r;
+    this.usedIds.add(step.id);
+    this.changed('add', 'coach', { stepId: step.id, callId });
+    return this.planResult({ step_id: step.id }, focusBefore);
+  }
+
+  /** The planner failed: the coach's first step starts a lesson it writes itself. */
+  private startCoachLesson(
+    text: string,
+    doneWhen: string,
+    objects: readonly string[],
+    known: readonly ObjectSpec[],
+    callId: string,
+  ): ToolOutcome {
+    const draft = this.draft;
+    if (!draft) return { ok: false, error: 'No lesson is running. Call start_lesson first.' };
+    const { coach } = this.deps.context();
+    const step = this.coachStep(text, doneWhen, objects, known);
+    const parsed = safeParseProcedure({
+      schema: PROCEDURE_SCHEMA_ID,
+      id: slugFrom(draft.goal, 'lesson'),
+      version: 1,
+      origin: {
+        kind: 'generated',
+        goal: draft.goal,
+        model: coach.model ?? coach.kind,
+        createdAt: (this.deps.now?.() ?? new Date()).toISOString(),
+      },
+      title: draft.goal,
+      summary: draft.goal,
+      workspace: { size: COACH_WORKSPACE },
+      objects: draft.objects,
+      steps: [step],
+    });
+    if (!parsed.ok) return { ok: false, error: parsed.error };
+    this.draft = null;
+    // With background locating, run() starts the lesson before it first awaits.
+    this.track(
+      this.run(parsed.procedure, null, {
+        goal: draft.goal,
+        locate: 'background',
+        by: 'coach',
+        callId,
+      }),
+    );
+    return this.planResult({ step_id: step.id, started: true }, null);
+  }
+
+  private updateStep(
+    args: {
+      step_id: string;
+      text?: string;
+      done_when?: string;
+      note?: string;
+      status?: 'current' | 'skipped' | 'todo';
+      reason?: string;
+    },
+    callId: string,
+  ): ToolOutcome {
+    if (this.planning && !this.planning.revision) return this.planningError();
+    const runner = this.activeRunner();
+    if (!runner) return { ok: false, error: 'No lesson is running.' };
+    const { step_id: id, text, done_when: doneWhen, note, status, reason } = args;
+    if (text === undefined && doneWhen === undefined && note === undefined && !status) {
+      return { ok: false, error: 'Nothing to change: give text, done_when, note or status.' };
+    }
+    const current = runner.statusOf(id);
+    if (!current) {
+      const ids = runner.state.procedure.steps.map((s) => s.id).join(', ');
+      return { ok: false, error: `Unknown step "${id}". Steps: ${ids}.` };
+    }
+    // A re-plan replaces the steps still to do, so only notes on finished steps survive it.
+    const replaced = text !== undefined || doneWhen !== undefined || status || current === 'todo';
+    if (this.planning?.revision && replaced) return this.planningError();
+    const focusBefore = this.focusId();
+    const t = this.deps.clock.now();
+    if (status) {
+      const r =
+        status === 'skipped'
+          ? runner.skip(id, t)
+          : status === 'current'
+            ? runner.focus(id, t)
+            : runner.reopen(id);
+      if (!r.ok) return r;
+    }
+    // Skipping the last step ends the lesson; there is nothing left to reword.
+    const ended = runner.state.status !== 'running';
+    if (!ended && (text !== undefined || doneWhen !== undefined)) {
+      const r = runner.edit(id, {
+        ...(text !== undefined ? { instruction: text } : {}),
+        ...(doneWhen !== undefined ? { doneWhen } : {}),
+      });
+      if (!r.ok) return r;
+    }
+    if (note !== undefined) {
+      if (note.trim()) this.notes.set(id, note.trim());
+      else this.notes.delete(id);
+    }
+    const op: PlanOp =
+      status === 'skipped'
+        ? 'skip'
+        : status === 'current'
+          ? 'focus'
+          : status === 'todo'
+            ? 'reopen'
+            : 'edit';
+    this.changed(op, 'coach', { stepId: id, callId, ...(reason ? { reason } : {}) });
+    return this.planResult(ended ? { finished: true } : {}, focusBefore);
+  }
+
+  private completeStep(
+    stepId: string,
+    reason: string,
+    evidence: 'seen' | 'heard',
+    callId: string,
+  ): ToolOutcome {
+    if (this.planning && !this.planning.revision) return this.planningError();
+    const runner = this.activeRunner();
+    if (!runner) return { ok: false, error: 'No lesson is running.' };
+    const focusBefore = this.focusId();
+    const r = runner.complete(stepId, 'coach', this.deps.clock.now());
+    if (!r.ok) return r;
+    if (!r.already) this.changed('complete', 'coach', { stepId, reason, evidence, callId });
+    const finished = runner.state.status === 'completed';
+    return this.planResult(
+      { done: true, ...(r.already ? { already: true } : {}), ...(finished ? { finished } : {}) },
+      focusBefore,
+    );
+  }
+
+  private addMaterial(label: string, lookFor: string | undefined, callId: string): ToolOutcome {
+    if (this.planning && !this.planning.revision) return this.planningError();
+    const { registry, clock } = this.deps;
+    const runner = this.activeRunner();
+    const draft = runner ? null : this.draft;
+    if (!runner && !draft) {
+      return { ok: false, error: 'No lesson is running. Call start_lesson first.' };
+    }
+    const existing = runner ? registry.allSpecs() : (draft?.objects ?? []);
+    const same = existing.find((o) => sameText(o.label, label));
+    if (same) return this.planResult({ material_id: same.id, already: true }, this.focusId());
+    const spec: ObjectSpec = {
+      id: uniqueId(slugFrom(label, 'material'), new Set(existing.map((o) => o.id))),
+      label,
+      kind: 'item',
+      radius: 0.03,
+      hidden: false,
+      placement: { method: 'detect' },
+      tracking: { query: lookFor?.trim() || label, moves: true },
+    };
+    if (!runner) {
+      draft?.objects.push(spec);
+      return { ok: true, result: { material_id: spec.id } };
+    }
+    const r = runner.addObject(spec);
+    if (!r.ok) return r;
+    registry.add(spec, clock.now());
+    this.track(this.locate([spec.id]));
+    this.changed('material', 'coach', { callId, materialId: spec.id });
+    return this.planResult({ material_id: spec.id }, this.focusId());
+  }
+
+  /** A step the coach wrote: confirmed by the coach or learner, outlining the materials it uses. */
+  private coachStep(
+    text: string,
+    doneWhen: string,
+    objects: readonly string[],
+    known: readonly ObjectSpec[],
+  ): Step {
+    const taken = new Set([
+      ...this.usedIds,
+      ...(this.runner?.state.procedure.steps ?? []).map((s) => s.id),
+    ]);
+    const id = uniqueId(slugFrom(text, 'step'), taken);
+    return {
+      id,
+      instruction: text.trim(),
+      doneWhen: doneWhen.trim(),
+      targets: [...objects],
+      hand: 'either',
+      show: objects.slice(0, 4).map((objectId) => {
+        const spec = known.find((o) => o.id === objectId);
+        const label = spec?.label ?? objectId;
+        return {
+          object: objectId,
+          phrase: label.slice(0, 60),
+          description: (spec?.tracking?.query ?? label).slice(0, 300),
+        };
+      }),
+      success: { type: 'confirm', by: 'either', prompt: doneWhen.trim() },
+      mistakes: [],
+    };
+  }
+
+  private planningError(): ToolOutcome {
+    return {
+      ok: false,
+      error: this.planning?.revision
+        ? 'A re-plan is running and will replace the steps not done yet. Wait for the new plan.'
+        : 'The plan is being written. Wait for it, then change it.',
+    };
+  }
+
+  /** A plan tool's answer: the recital, plus the briefing when the call moved the focus. */
+  private planResult(extra: Record<string, unknown>, focusBefore: string | null): ToolOutcome {
+    const plan = this.planView();
+    const focus = plan?.focusId ?? null;
+    return {
+      ok: true,
+      result: {
+        ...extra,
+        ...(plan && focus && focus !== focusBefore ? { now: briefStep(plan, focus) } : {}),
+        ...(plan ? { plan: recitePlan(plan) } : {}),
+      },
+    };
+  }
+
+  /** Runs a tool that records its own plan change, so the bus listeners don't record it twice. */
+  private op(fn: () => ToolOutcome): ToolOutcome {
+    this.opDepth++;
+    try {
+      return fn();
+    } finally {
+      this.opDepth--;
+      const t = this.finishAfterOp;
+      if (this.opDepth === 0 && t !== null) {
+        this.finishAfterOp = null;
+        this.finish('completed', t);
+      }
+    }
+  }
+
+  private recordUnrecorded(): void {
+    const change = this.unrecorded;
+    if (!change) return;
+    this.unrecorded = null;
+    this.changed(change.op, change.by, { stepId: change.stepId });
+  }
+
+  /** Record a plan change and tell the app (coach instruction, HUD) to read the plan again. */
+  private changed(op: PlanOp, by: Actor, details: Record<string, string | undefined> = {}): void {
+    const { bus, clock } = this.deps;
+    const t = clock.now();
+    this.rev++;
+    const data = Object.fromEntries(Object.entries(details).filter(([, v]) => v !== undefined));
+    bus.emit('annotation', {
+      t,
+      label: 'plan.updated',
+      data: { rev: this.rev, op, by, ...data, plan: this.snapshot() },
+    });
+    bus.emit('plan.changed', { t, rev: this.rev, op, stepId: details.stepId ?? null });
+  }
+
+  /** The plan as recorded with every change: what each step says and where it stands. */
+  private snapshot() {
+    const state = this.runner?.state;
+    if (!state) return null;
+    return {
+      goal: this.goal,
+      focusId: this.focusId(),
+      steps: state.procedure.steps.map((s) => ({
+        id: s.id,
+        instruction: s.instruction,
+        ...(s.doneWhen ? { doneWhen: s.doneWhen } : {}),
+        status: state.statuses[s.id] ?? 'todo',
+        targets: s.targets,
+        ...(s.action ? { action: s.action.verb } : {}),
+        ...(this.notes.has(s.id) ? { note: this.notes.get(s.id) } : {}),
+      })),
+      materials: state.procedure.objects.filter((o) => !o.hidden).map((o) => o.id),
+    };
+  }
+
+  private planView(): PlanView | null {
+    const state = this.runner?.state;
+    if (!state || state.status === 'aborted') return null;
+    const label = (id: string) => this.deps.registry.spec(id)?.label ?? id;
+    return {
+      goal: this.goal,
+      title: state.procedure.title,
+      rev: Math.max(0, this.rev),
+      steps: state.procedure.steps.map((s) => {
+        const note = this.notes.get(s.id);
+        return {
+          id: s.id,
+          instruction: s.instruction,
+          ...(s.doneWhen ? { doneWhen: s.doneWhen } : {}),
+          status: state.statuses[s.id] ?? 'todo',
+          ...(note ? { note } : {}),
+          uses: s.targets.map(label),
+          demo: !!s.action,
+          ...(s.coachNotes ? { coachNotes: s.coachNotes } : {}),
+        };
+      }),
+      focusId: this.focusId(),
+      materials: state.procedure.objects
+        .filter((o) => !o.hidden)
+        .map((o) => ({ id: o.id, label: o.label })),
+    };
+  }
+
+  private focusId(): string | null {
+    const state = this.runner?.state;
+    if (state?.status === 'running') return state.step?.id ?? null;
+    // Announced but not started yet: the first step is next.
+    if (state?.status === 'idle') return state.procedure.steps[0]?.id ?? null;
+    return null;
+  }
+
+  private activeRunner(): ProcedureRunner | null {
+    return this.runner?.state.status === 'running' ? this.runner : null;
+  }
+
+  private watchTarget(): WatchTarget | null {
+    const step = this.activeRunner()?.state.step;
+    if (!step || this.planning) return null;
+    return {
+      lesson: this.lessonSeq,
+      goal: this.goal,
+      step: {
+        id: step.id,
+        instruction: step.instruction,
+        ...(step.doneWhen ? { doneWhen: step.doneWhen } : {}),
+      },
+    };
+  }
+
+  /** Positions measured by something other than a camera guess: what coach-era checks may use. */
+  private trustedPositions(): ObjectPositions {
+    const { registry, workspace } = this.deps;
+    const calibrated = isCalibrated(workspace().method);
+    return {
+      position: (id) => {
+        const estimate = registry.get(id);
+        if (!estimate || this.guessed.has(id)) return undefined;
+        const basis = this.basis.get(id) ?? estimate.source;
+        const trusted = TRUSTED_SOURCES.has(basis) || (basis === 'layout' && calibrated);
+        return trusted ? estimate.position : undefined;
+      },
+    };
+  }
+
+  // ---- other tools -----------------------------------------------------------------------------
 
   private highlight(objectId: string, style: HighlightStyle): ToolOutcome {
     const { bus, clock, registry } = this.deps;
@@ -322,7 +1055,7 @@ export class LessonController {
       this.track(this.locate([objectId]));
       return {
         ok: true,
-        result: { shown: false, note: `${spec.label} is not located yet; looking for it.` },
+        result: { shown: false, note: 'The headset cannot show it yet; describe where it is.' },
       };
     }
     return { ok: true, result: { shown: true } };
@@ -339,7 +1072,7 @@ export class LessonController {
       return {
         ok: false,
         error: step.action
-          ? 'Cannot show this yet: its objects have not been located.'
+          ? 'The headset cannot show this step yet; explain it in words.'
           : 'This step has no hand motion to demonstrate.',
       };
     }
@@ -352,14 +1085,6 @@ export class LessonController {
         seconds: Math.round(demo.clip.durationMs / 100) / 10,
       },
     };
-  }
-
-  private advance(by: 'coach' | 'user', reason: string): ToolOutcome {
-    if (!this.runner) return { ok: false, error: 'No lesson is running.' };
-    const r = this.runner.advance(by, reason, this.deps.clock.now());
-    return r.ok
-      ? { ok: true, result: { advanced: true, forced: r.forced } }
-      : { ok: false, error: r.error };
   }
 
   private flagMistake(kind: string, message: string): ToolOutcome {
@@ -438,12 +1163,12 @@ export class LessonController {
     const showPhase = this.deps.grounder !== null && previous !== 'lesson';
     if (showPhase) this.setPhase('locating');
     const missing = await this.spotlight.find(ids.map((id) => ({ id })));
-    if (showPhase) this.setPhase(previous);
+    if (showPhase && this.currentPhase === 'locating') this.setPhase(previous);
     this.announce(missing);
     return missing;
   }
 
-  /** Tell the learner (through the coach) about missing objects, once each. */
+  /** Tell the learner (through the HUD, and a coach that is told) about missing objects, once. */
   private announce(missing: readonly string[]): void {
     const fresh = missing.filter((id) => !this.announced.has(id));
     for (const id of fresh) this.announced.add(id);
@@ -469,12 +1194,21 @@ export class LessonController {
   }
 
   private finish(outcome: 'completed' | 'aborted', t: number): void {
+    // A re-plan for a lesson that is over has nothing to land on.
+    if (this.planning?.revision) {
+      this.planning = null;
+      this.attempt++;
+    }
     this.spotlight.stop();
     this.endDemo(t);
     this.setPhase('done');
+    const statuses = Object.values(this.runner?.state.statuses ?? {});
     const stop = this.deps.recorder?.stop(
       outcome,
-      { stepsCompleted: this.completedSteps, stepsTotal: this.procedure?.steps.length ?? 0 },
+      {
+        stepsCompleted: statuses.filter((s) => s === 'done').length,
+        stepsTotal: statuses.filter((s) => s !== 'skipped').length,
+      },
       t,
     );
     if (stop) this.track(stop);

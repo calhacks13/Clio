@@ -1,10 +1,25 @@
-import type { MistakeRule, Procedure, Step } from '@clio/protocol';
+import {
+  type MistakeRule,
+  type ObjectSpec,
+  type Procedure,
+  type Step,
+  safeParseProcedure,
+} from '@clio/protocol';
 import type { AppBus } from '../events';
+import type { StepStatus } from '../plan/recital';
 import { type CheckContext, type CheckEvaluator, createCheck } from './checks';
 
-// The single source of truth for lesson progress. Checks advance steps on their own; the coach and
-// the user can confirm or advance through `advance()`, and every completion records who decided and
-// whether the step's check had actually passed (`forced`), so the dataset can filter.
+// The single source of truth for lesson progress. The plan is a list of steps, each todo, done or
+// skipped; the focused step is the one being worked on (the HUD shows it and the dataset labels
+// frames with it). Steps can be completed in any order. Checks complete the focused step on their
+// own; the coach and the user complete steps through `complete()`, and every completion records who
+// decided and whether the step's check had actually passed (`forced`), so the dataset can filter.
+// The coach also edits the plan as the lesson goes: steps are added, reworded, skipped, reopened.
+//
+// Progress may be limited to trusted object positions (see `update`). Checks and mistake rules then
+// run twice, as separate trees: one on trusted positions and one on every position. The tree that
+// is in charge completes the step and fires mistakes; the full tree always decides `forced`, so the
+// label means the same whoever is in charge. Neither tree's state leaks into the other's.
 
 export type RunnerStatus = 'idle' | 'running' | 'completed' | 'aborted';
 export type Decider = 'coach' | 'user';
@@ -17,17 +32,31 @@ export interface RunnerOptions {
 export interface RunnerState {
   status: RunnerStatus;
   procedure: Procedure;
+  /** Index of the focused step in the procedure. */
   stepIndex: number;
+  /** The focused step, while running. */
   step: Step | null;
   stepStartT: number;
-  /** 0..1 progress of the current step's success check. */
+  /** 0..1 progress of the focused step's success check. */
   progress: number;
+  statuses: Readonly<Record<string, StepStatus>>;
 }
 
 export type AdvanceResult = { ok: true; forced: boolean } | { ok: false; error: string };
+export type CompleteResult =
+  | { ok: true; forced: boolean; already: boolean }
+  | { ok: false; error: string };
+export type ChangeResult = { ok: true } | { ok: false; error: string };
 
 /** A check context minus what the runner owns. */
 export type FrameContext = Omit<CheckContext, 'stepStartT' | 'confirmations'>;
+export type ObjectPositions = FrameContext['objects'];
+
+/** Positions progress may rely on, and whether only those count right now. */
+export interface Trust {
+  positions: ObjectPositions;
+  inCharge: boolean;
+}
 
 /** Before the first tracked frame: no hands, no object positions. */
 const emptyFrame = (t: number): FrameContext => ({
@@ -39,39 +68,56 @@ const emptyFrame = (t: number): FrameContext => ({
 
 interface MistakeWatch {
   rule: MistakeRule;
-  evaluator: CheckEvaluator;
+  /** On trusted positions, and on every position. */
+  trusted: CheckEvaluator;
+  full: CheckEvaluator;
   wasSatisfied: boolean;
   lastFired: number;
 }
 
+const notRunning = { ok: false, error: 'No lesson is running.' } as const;
+
 export class ProcedureRunner {
   private status: RunnerStatus = 'idle';
-  private index = 0;
+  private focusId: string | null = null;
+  private readonly statuses = new Map<string, StepStatus>();
   private startT = 0;
   private stepStartT = 0;
   private progress = 0;
+  /** The step's check on trusted positions only. */
   private success: CheckEvaluator | null = null;
+  /** The same check on every object position; decides `forced`. */
+  private full: CheckEvaluator | null = null;
   private mistakes: MistakeWatch[] = [];
   private confirmations = { coach: false, user: false };
   private decidedBy: Decider | null = null;
   private stuckReported = false;
   private lastFrame: FrameContext | null = null;
+  private lastTrust: Trust | null = null;
 
   constructor(
     private procedure: Procedure,
     private readonly bus: AppBus,
     private readonly options: RunnerOptions = {},
-  ) {}
+  ) {
+    for (const step of procedure.steps) this.statuses.set(step.id, 'todo');
+  }
 
   get state(): RunnerState {
+    const index = this.focusIndex();
     return {
       status: this.status,
       procedure: this.procedure,
-      stepIndex: this.index,
-      step: this.status === 'running' ? (this.procedure.steps[this.index] ?? null) : null,
+      stepIndex: index < 0 ? this.procedure.steps.length - 1 : index,
+      step: this.status === 'running' ? (this.procedure.steps[index] ?? null) : null,
       stepStartT: this.stepStartT,
       progress: this.progress,
+      statuses: Object.fromEntries(this.statuses),
     };
+  }
+
+  statusOf(stepId: string): StepStatus | undefined {
+    return this.statuses.get(stepId);
   }
 
   start(t: number): void {
@@ -83,17 +129,27 @@ export class ProcedureRunner {
       version: this.procedure.version,
       stepCount: this.procedure.steps.length,
     });
-    this.enter(0, t);
+    this.focusNext(t);
   }
 
-  update(frame: FrameContext): void {
-    if (this.status !== 'running' || !this.success) return;
+  /**
+   * Evaluate the focused step on a tracked frame. With `trust`, the trusted tree sees only its
+   * positions, and it alone completes steps and fires mistakes while `trust.inCharge`.
+   */
+  update(frame: FrameContext, trust?: Trust): void {
+    if (!this.success || !this.full || this.status !== 'running') return;
     this.lastFrame = frame;
-    const ctx = this.context(frame);
-    const step = this.currentStep();
+    this.lastTrust = trust ?? null;
+    const full = this.context(frame);
+    const ctx = trust ? this.context({ ...frame, objects: trust.positions }) : full;
+    const useTrusted = trust?.inCharge ?? false;
+    const step = this.focused();
+    if (!step) return;
 
     for (const watch of this.mistakes) {
-      const s = watch.evaluator.update(ctx);
+      const trusted = watch.trusted.update(ctx);
+      const all = watch.full.update(full);
+      const s = useTrusted ? trusted : all;
       const rising = s.satisfied && !watch.wasSatisfied;
       watch.wasSatisfied = s.satisfied;
       if (rising && ctx.t - watch.lastFired >= watch.rule.cooldownMs) {
@@ -108,10 +164,12 @@ export class ProcedureRunner {
       }
     }
 
-    const status = this.success.update(ctx);
+    const trusted = this.success.update(ctx);
+    const all = this.full.update(full);
+    const status = useTrusted ? trusted : all;
     this.progress = status.progress;
     if (status.satisfied) {
-      this.complete(this.decidedBy ?? 'check', false, ctx.t);
+      this.finish(step, this.decidedBy ?? 'check', !all.satisfied, ctx.t);
       return;
     }
 
@@ -125,38 +183,129 @@ export class ProcedureRunner {
     }
   }
 
-  /** Latch a confirmation for the current step; it takes effect on the next update. */
+  /** Latch a confirmation for the focused step; it takes effect on the next update. */
   confirm(by: Decider): void {
     this.confirmations[by] = true;
     this.decidedBy = by;
   }
 
-  /** The coach's advance_step, or a user's "next". */
+  /** Complete the focused step (the user's Done button). */
   advance(by: Decider, _reason: string, t: number): AdvanceResult {
-    if (this.status !== 'running' || !this.success) {
-      return { ok: false, error: 'No step is active.' };
+    const r = this.complete(null, by, t);
+    return r.ok ? { ok: true, forced: r.forced } : r;
+  }
+
+  /**
+   * Complete a step, the focused one by default. Any todo or skipped step can be completed; a step
+   * that isn't focused never had its check evaluated, so its completion is labeled forced.
+   */
+  complete(stepId: string | null, by: Decider, t: number): CompleteResult {
+    if (this.status !== 'running') return notRunning;
+    const step = stepId === null ? this.focused() : this.find(stepId);
+    if (!step) return { ok: false, error: this.unknownStep(stepId ?? '') };
+    if (this.statuses.get(step.id) === 'done') return { ok: true, forced: false, already: true };
+    const policy = by === 'coach' && this.options.coachCanForce === false;
+    if (step.id !== this.focusId) {
+      // Only the focused step is checked, so this completion is unverified.
+      if (policy) return { ok: false, error: `Step "${step.id}" isn't being worked on yet.` };
+      this.finish(step, by, true, t);
+      return { ok: true, forced: true, already: false };
     }
     this.confirm(by);
-    const frame = this.lastFrame ?? emptyFrame(t);
-    if (this.success.update(this.context({ ...frame, t })).satisfied) {
-      this.complete(by, false, t);
-      return { ok: true, forced: false };
-    }
-    if (by === 'coach' && this.options.coachCanForce === false) {
+    const frame = { ...(this.lastFrame ?? emptyFrame(t)), t };
+    const trust = this.lastTrust;
+    this.success?.update(this.context(trust ? { ...frame, objects: trust.positions } : frame));
+    const forced = !(this.full?.update(this.context(frame)).satisfied ?? false);
+    if (forced && policy) {
       return {
         ok: false,
-        error: `Step "${this.currentStep().id}" is not done yet; the app has not detected it.`,
+        error: `Step "${step.id}" is not done yet; the app has not detected it.`,
       };
     }
-    this.complete(by, true, t);
-    return { ok: true, forced: true };
+    this.finish(step, by, forced, t);
+    return { ok: true, forced, already: false };
+  }
+
+  /** The step isn't needed or can't be done. */
+  skip(stepId: string, t: number): ChangeResult {
+    if (this.status !== 'running') return notRunning;
+    const step = this.find(stepId);
+    if (!step) return { ok: false, error: this.unknownStep(stepId) };
+    const status = this.statuses.get(step.id);
+    if (status === 'done') return { ok: false, error: `Step "${step.id}" is already done.` };
+    if (status === 'skipped') return { ok: true };
+    this.statuses.set(step.id, 'skipped');
+    this.bus.emit('step.completed', {
+      t,
+      stepId: step.id,
+      index: this.indexOf(step.id),
+      by: 'skip',
+      forced: true,
+      durationMs: step.id === this.focusId ? t - this.stepStartT : 0,
+    });
+    if (step.id === this.focusId) this.focusNext(t);
+    return { ok: true };
+  }
+
+  /** Work on a step now, reopening it if it was done or skipped. */
+  focus(stepId: string, t: number): ChangeResult {
+    if (this.status !== 'running') return notRunning;
+    const step = this.find(stepId);
+    if (!step) return { ok: false, error: this.unknownStep(stepId) };
+    this.statuses.set(step.id, 'todo');
+    if (step.id !== this.focusId) this.enter(step.id, t);
+    return { ok: true };
+  }
+
+  /** Make a done or skipped step todo again without moving the focus. */
+  reopen(stepId: string): ChangeResult {
+    if (this.status !== 'running') return notRunning;
+    const step = this.find(stepId);
+    if (!step) return { ok: false, error: this.unknownStep(stepId) };
+    this.statuses.set(step.id, 'todo');
+    return { ok: true };
+  }
+
+  /** Add a step after `afterId`, or at the end. The focus stays where it is. */
+  insert(step: Step, afterId: string | null): ChangeResult {
+    if (this.status !== 'running') return notRunning;
+    if (this.statuses.has(step.id))
+      return { ok: false, error: `Step "${step.id}" already exists.` };
+    let at = this.procedure.steps.length;
+    if (afterId !== null) {
+      const i = this.indexOf(afterId);
+      if (i < 0) return { ok: false, error: this.unknownStep(afterId) };
+      at = i + 1;
+    }
+    const steps = [...this.procedure.steps];
+    steps.splice(at, 0, step);
+    const r = this.revalidate({ ...this.procedure, steps });
+    if (r.ok) this.statuses.set(step.id, 'todo');
+    return r;
+  }
+
+  /** Reword a step that isn't done. The focused step keeps its check state. */
+  edit(stepId: string, patch: Partial<Pick<Step, 'instruction' | 'doneWhen'>>): ChangeResult {
+    if (this.status !== 'running') return notRunning;
+    const step = this.find(stepId);
+    if (!step) return { ok: false, error: this.unknownStep(stepId) };
+    if (this.statuses.get(step.id) === 'done') {
+      return { ok: false, error: `Step "${step.id}" is already done; reopen it to change it.` };
+    }
+    const steps = this.procedure.steps.map((s) => (s.id === step.id ? { ...s, ...patch } : s));
+    return this.revalidate({ ...this.procedure, steps });
+  }
+
+  /** Declare another object (a material the plan didn't list). */
+  addObject(spec: ObjectSpec): ChangeResult {
+    if (this.procedure.objects.some((o) => o.id === spec.id)) {
+      return { ok: false, error: `Object "${spec.id}" already exists.` };
+    }
+    return this.revalidate({ ...this.procedure, objects: [...this.procedure.objects, spec] });
   }
 
   goTo(stepId: string, t: number): boolean {
-    const i = this.procedure.steps.findIndex((s) => s.id === stepId);
-    if (i < 0 || this.status !== 'running') return false;
-    this.enter(i, t);
-    return true;
+    return this.focus(stepId, t).ok;
   }
 
   abort(reason: string, t: number): void {
@@ -166,42 +315,66 @@ export class ProcedureRunner {
   }
 
   /**
-   * Swap in a revised plan. Steps before the current one are unchanged by construction; the
-   * current step is re-entered if the revision replaced it.
+   * Swap in a revised plan. Steps are matched by id: kept steps keep their status, new ones are
+   * todo, and steps the revision left out are gone. The focused step keeps the focus if the
+   * revision left it as it was; otherwise the focus goes to the first step still to do.
    */
   replacePlan(procedure: Procedure, t: number): void {
-    const before = this.procedure.steps[this.index];
+    const before = this.focused();
+    const previous = new Map(this.statuses);
     this.procedure = procedure;
+    this.statuses.clear();
+    for (const step of procedure.steps) this.statuses.set(step.id, previous.get(step.id) ?? 'todo');
     if (this.status !== 'running') return;
-    const now = procedure.steps[this.index];
-    if (!now) {
-      this.status = 'completed';
-      this.bus.emit('procedure.completed', { t, durationMs: t - this.startT });
-    } else if (JSON.stringify(now) !== JSON.stringify(before)) {
-      this.enter(this.index, t);
-    }
+    const now = before ? this.find(before.id) : undefined;
+    const unchanged = now && JSON.stringify(now) === JSON.stringify(before);
+    if (!unchanged || this.statuses.get(now.id) !== 'todo') this.focusNext(t);
   }
 
-  private currentStep(): Step {
-    const step = this.procedure.steps[this.index];
-    if (!step) throw new Error(`No step at index ${this.index}`);
-    return step;
+  private find(stepId: string): Step | undefined {
+    return this.procedure.steps.find((s) => s.id === stepId);
+  }
+
+  private indexOf(stepId: string): number {
+    return this.procedure.steps.findIndex((s) => s.id === stepId);
+  }
+
+  private focusIndex(): number {
+    return this.focusId === null ? -1 : this.indexOf(this.focusId);
+  }
+
+  private focused(): Step | null {
+    return this.focusId === null ? null : (this.find(this.focusId) ?? null);
+  }
+
+  private unknownStep(stepId: string): string {
+    return `Unknown step "${stepId}". Steps: ${this.procedure.steps.map((s) => s.id).join(', ')}.`;
+  }
+
+  private revalidate(candidate: Procedure): ChangeResult {
+    const r = safeParseProcedure(candidate);
+    if (!r.ok) return { ok: false, error: r.error };
+    this.procedure = r.procedure;
+    return { ok: true };
   }
 
   private context(frame: FrameContext): CheckContext {
     return { ...frame, stepStartT: this.stepStartT, confirmations: { ...this.confirmations } };
   }
 
-  private enter(index: number, t: number): void {
+  private enter(stepId: string, t: number): void {
+    const index = this.indexOf(stepId);
     const step = this.procedure.steps[index];
     if (!step) return;
-    this.index = index;
+    this.focusId = step.id;
     this.stepStartT = t;
     this.progress = 0;
     this.success = createCheck(step.success);
+    this.full = createCheck(step.success);
     this.mistakes = step.mistakes.map((rule) => ({
       rule,
-      evaluator: createCheck(rule.when),
+      trusted: createCheck(rule.when),
+      full: createCheck(rule.when),
       wasSatisfied: false,
       lastFired: Number.NEGATIVE_INFINITY,
     }));
@@ -217,22 +390,31 @@ export class ProcedureRunner {
     });
   }
 
-  private complete(by: Decider | 'check', forced: boolean, t: number): void {
-    const step = this.currentStep();
+  /** Focus the first step still to do, in list order, or finish the lesson. */
+  private focusNext(t: number): void {
+    const next = this.procedure.steps.find((s) => this.statuses.get(s.id) === 'todo');
+    if (next) {
+      this.enter(next.id, t);
+      return;
+    }
+    this.focusId = null;
+    this.status = 'completed';
+    this.success = null;
+    this.full = null;
+    this.bus.emit('procedure.completed', { t, durationMs: t - this.startT });
+  }
+
+  private finish(step: Step, by: Decider | 'check', forced: boolean, t: number): void {
+    const focused = step.id === this.focusId;
+    this.statuses.set(step.id, 'done');
     this.bus.emit('step.completed', {
       t,
       stepId: step.id,
-      index: this.index,
+      index: this.indexOf(step.id),
       by,
       forced,
-      durationMs: t - this.stepStartT,
+      durationMs: focused ? t - this.stepStartT : 0,
     });
-    if (this.index + 1 < this.procedure.steps.length) {
-      this.enter(this.index + 1, t);
-    } else {
-      this.status = 'completed';
-      this.success = null;
-      this.bus.emit('procedure.completed', { t, durationMs: t - this.startT });
-    }
+    if (focused) this.focusNext(t);
   }
 }

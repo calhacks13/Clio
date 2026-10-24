@@ -24,6 +24,10 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
   '- `instruction`: one short imperative sentence, at most 15 words, naming the action and the ' +
     'object, e.g. "Unscrew the blue washer fluid cap." It is spoken, shown in AR, and used as ' +
     "the robot's language label.",
+  '- `doneWhen`: one sentence, an end state a camera can confirm, described as it will look ' +
+    'when the step is finished, e.g. "the blue cap is off and lying on the fender". The coach ' +
+    'and a camera check judge the step against it, so write each step so it ends in a visible ' +
+    'state.',
   "- `targets`: ids of the objects the step's hands touch or look at. `hand`: left, right, " +
     'either or both.',
   '- `action`: what the hands do, as one verb with its arguments (object = the thing acted on, ' +
@@ -36,7 +40,7 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
   '- `success`: how the app knows the step is done. Checks are states that must hold for `dwellMs`:',
   '  - confirm: the coach or learner confirms. Prefer it for visual state changes (a color, a ' +
     'fill level, "the cap is off") and anything hands alone cannot show; `prompt` says what ' +
-    'must be true.',
+    'must be true: make `prompt` match `doneWhen`.',
   '  - pinch_near / hand_near: the hand pinches at / stays near an object. Use them for touch ' +
     'and grasp.',
   '  - object_near: a tracked object is near another object. Use it only when `object` has ' +
@@ -111,19 +115,33 @@ function planText(r: PlannerRequest): string {
 }
 
 function revisionText(r: PlannerRequest & { revision: NonNullable<PlannerRequest['revision']> }) {
-  const { base, fromStepIndex, reason } = r.revision;
-  const stepLine = (s: { id: string; instruction: string }, i: number) =>
-    `${i + 1}. ${s.id}: ${s.instruction}`;
-  const kept = base.steps.slice(0, fromStepIndex);
-  const replaced = base.steps.slice(fromStepIndex);
+  const { base, fromStepIndex, reason, skippedStepIds } = r.revision;
+  const steps = base.steps.map((s, i) => ({
+    id: s.id,
+    line: `${i + 1}. ${s.id}: ${s.instruction}`,
+  }));
+  const kept = steps.slice(0, fromStepIndex);
+  const skipped = new Set(skippedStepIds);
+  const done = kept.filter((s) => !skipped.has(s.id)).map((s) => s.line);
+  const notDone = kept.filter((s) => skipped.has(s.id)).map((s) => s.line);
+  const replaced = steps.slice(fromStepIndex).map((s) => s.line);
   const lines = ['Revise a lesson that is in progress.', `Goal: ${r.goal}`];
   if (r.context) lines.push(`What the learner said about their setup: ${r.context}`);
   lines.push(
     `Why the plan must change: ${reason}`,
     'Steps already done (they stay as they are; do not repeat them):',
-    ...(kept.length ? kept.map(stepLine) : ['(none)']),
+    ...(done.length ? done : ['(none)']),
+  );
+  if (notDone.length) {
+    lines.push(
+      'Steps that were skipped and NOT done (they stay in the list; plan for their outcome if ' +
+        'the goal still needs it):',
+      ...notDone,
+    );
+  }
+  lines.push(
     'The rest of the old plan, which you are replacing:',
-    ...(replaced.length ? replaced.map((s, i) => stepLine(s, i + fromStepIndex)) : ['(none)']),
+    ...(replaced.length ? replaced : ['(none)']),
     'Objects already declared (reuse these ids; declare a new object only if a new step needs it):',
     ...base.objects.map(
       (o) => `- ${o.id} (${o.label}): ${o.tracking?.query ?? o.description ?? o.label}`,

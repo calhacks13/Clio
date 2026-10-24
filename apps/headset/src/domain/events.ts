@@ -8,6 +8,7 @@ import {
 } from '@clio/protocol';
 import type { Emitter } from '../core/emitter';
 import type { Pose, Vec3 } from '../core/math';
+import type { PlanOp } from './plan/recital';
 import type { ObjectOutline } from './world/outline';
 
 // The headset's event bus. Recordable events are exactly the protocol's episode events (payload
@@ -38,7 +39,13 @@ export interface InternalEvents {
     warnings: string[];
     revision: boolean;
   }>;
-  'plan.failed': Timed<{ goal: string; error: string }>;
+  'plan.failed': Timed<{ goal: string; error: string; revision: boolean }>;
+  /** Planning is taking longer than expected; the plan may still arrive. */
+  'plan.slow': Timed<{ goal: string; elapsedMs: number }>;
+  /** The plan or a step's status changed. Read the new plan from LessonView.plan(). */
+  'plan.changed': Timed<{ rev: number; op: PlanOp; stepId: string | null }>;
+  /** The step watcher thinks a step looks done (base64 JPEG it judged by). The coach decides. */
+  'step.looks_done': Timed<{ stepId: string; observation: string; image: string | null }>;
   'step.stuck': Timed<{ stepId: string; elapsedMs: number }>;
   'object.missing': Timed<{ objectIds: string[] }>;
   'objects.updated': Timed<{ objects: ObjectState[] }>;

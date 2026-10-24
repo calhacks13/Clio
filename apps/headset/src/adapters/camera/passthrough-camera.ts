@@ -17,6 +17,9 @@ import { cameraModelFromSettings, defaultQuestCameraModel } from './calibration'
 
 const log = createLogger('camera');
 const isQuest = () => /OculusBrowser|Quest/.test(navigator.userAgent);
+/** Time between the frames of one snapshots() call, so they don't all show the same instant. */
+const SNAPSHOT_GAP_MS = 400;
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export class PassthroughCamera implements CameraFrameSource, CoachFrameSource, PlanImageSource {
   private readonly canvas = document.createElement('canvas');
@@ -92,9 +95,19 @@ export class PassthroughCamera implements CameraFrameSource, CoachFrameSource, P
     return this.encode(640, 0.7);
   }
 
+  /**
+   * Up to `max` sharp frames for the planner and the step watcher, the first at once and each next
+   * about 400 ms later. Stops early when the video isn't ready, so it may return fewer.
+   */
   async snapshots(max: number): Promise<ImagePayload[]> {
-    const jpeg = max > 0 ? this.encode(1024, 0.8) : null;
-    return jpeg ? [{ mimeType: 'image/jpeg', data: jpeg }] : [];
+    const shots: ImagePayload[] = [];
+    for (let i = 0; i < max; i++) {
+      if (i > 0) await sleep(SNAPSHOT_GAP_MS);
+      const jpeg = this.encode(1024, 0.8);
+      if (!jpeg) break;
+      shots.push({ mimeType: 'image/jpeg', data: jpeg });
+    }
+    return shots;
   }
 
   close(): void {

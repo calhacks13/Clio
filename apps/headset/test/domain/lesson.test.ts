@@ -1,7 +1,15 @@
-import { HAND_LAYOUT, type PlanRequest, type PlanResponse, parseProcedure } from '@clio/protocol';
+import {
+  type CoachToolArgs,
+  type CoachToolName,
+  HAND_LAYOUT,
+  type PlanRequest,
+  type PlanResponse,
+  parseProcedure,
+} from '@clio/protocol';
 import { describe, expect, it } from 'vitest';
 import { ManualClock } from '../../src/core/clock';
 import { Emitter } from '../../src/core/emitter';
+import type { ToolOutcome } from '../../src/domain/coach/toolbox';
 import { DemoLibrary } from '../../src/domain/demo/demo-library';
 import type { AppEvents } from '../../src/domain/events';
 import { EpisodeRecorder } from '../../src/domain/recording/recorder';
@@ -46,6 +54,26 @@ const generated = parseProcedure({
   ],
 });
 
+/** Calls one of the lesson's coach tools, as the toolbox would. */
+function call<N extends CoachToolName>(
+  lesson: LessonController,
+  name: N,
+  args: CoachToolArgs<N>,
+): Promise<ToolOutcome> {
+  const handler = lesson.handlers()[name] as (
+    a: CoachToolArgs<N>,
+    c: { callId: string },
+  ) => ToolOutcome | Promise<ToolOutcome>;
+  return Promise.resolve(handler(args, { callId: `call-${name}` }));
+}
+
+/** start_lesson answers at once; this waits for the plan to arrive and the lesson to start. */
+async function start(lesson: LessonController, goal = 'add wiper fluid') {
+  const outcome = await call(lesson, 'start_lesson', { goal });
+  await lesson.settled();
+  return outcome;
+}
+
 function setup(planner?: LessonPlanner) {
   const bus = new Emitter<AppEvents>();
   const clock = new ManualClock(1000);
@@ -83,16 +111,12 @@ function setup(planner?: LessonPlanner) {
 describe('LessonController', () => {
   it('plans from the goal and what the camera sees, then runs and records the lesson', async () => {
     const { lesson, requests, types, sink } = setup();
-    const outcome = await lesson.handlers().start_lesson({ goal: 'add wiper fluid' });
+    const outcome = await start(lesson);
     expect(requests[0]).toMatchObject({
       goal: 'add wiper fluid',
       images: [{ mimeType: 'image/jpeg' }],
     });
-    expect(outcome).toMatchObject({
-      ok: true,
-      result: { title: 'Refill washer fluid', steps: 2 },
-      timing: 'when_idle',
-    });
+    expect(outcome).toEqual({ ok: true, result: { status: 'planning', goal: 'add wiper fluid' } });
     expect(lesson.phase).toBe('lesson');
     expect(types).toEqual(
       expect.arrayContaining(['plan.requested', 'plan.ready', 'procedure.started', 'step.entered']),
@@ -108,19 +132,19 @@ describe('LessonController', () => {
     const { lesson, types } = setup({
       plan: async () => Promise.reject(new Error('quota exceeded')),
     });
-    const outcome = await lesson.handlers().start_lesson({ goal: 'juggle' });
-    expect(outcome).toEqual({ ok: false, error: 'Planning failed: quota exceeded' });
+    const outcome = await start(lesson, 'juggle');
+    expect(outcome).toMatchObject({ ok: true });
     expect(types).toContain('plan.failed');
     expect(lesson.phase).toBe('idle');
   });
 
   it('only highlights objects the plan declares', async () => {
     const { lesson, types } = setup();
-    await lesson.handlers().start_lesson({ goal: 'add wiper fluid' });
-    const bad = await lesson.handlers().highlight({ object_id: 'hammer', style: 'target' });
+    await start(lesson, 'add wiper fluid');
+    const bad = await call(lesson, 'highlight', { object_id: 'hammer', style: 'target' });
     expect(bad).toMatchObject({ ok: false, error: expect.stringContaining('jug, tank') });
     expect(
-      await lesson.handlers().highlight({ object_id: 'tank', style: 'attention' }),
+      await call(lesson, 'highlight', { object_id: 'tank', style: 'attention' }),
     ).toMatchObject({ ok: true });
     expect(types).toContain('overlay.highlight');
   });
@@ -129,9 +153,9 @@ describe('LessonController', () => {
     const { lesson, bus, clock } = setup();
     const playback: string[] = [];
     bus.on('demo.playback', (e) => playback.push(`${e.phase}:${e.clipId}`));
-    await lesson.handlers().start_lesson({ goal: 'add wiper fluid' });
+    await start(lesson, 'add wiper fluid');
     playback.length = 0;
-    const r = await lesson.handlers().show_demo({});
+    const r = await call(lesson, 'show_demo', {});
     expect(r).toMatchObject({ ok: true, result: { source: 'synthesized' } });
     lesson.tick(clock.advance(60_000));
     expect(playback).toEqual(['start:synth:refill-fluid/grab', 'end:synth:refill-fluid/grab']);
@@ -141,22 +165,36 @@ describe('LessonController', () => {
     const { lesson, bus } = setup();
     const playback: string[] = [];
     bus.on('demo.playback', (e) => playback.push(`${e.phase}:${e.stepId}`));
-    await lesson.handlers().start_lesson({ goal: 'add wiper fluid' });
-    await lesson.handlers().show_demo({});
-    await lesson.handlers().advance_step({ reason: 'holding it' });
+    await start(lesson, 'add wiper fluid');
+    await call(lesson, 'show_demo', {});
+    await call(lesson, 'complete_step', {
+      step_id: 'grab',
+      reason: 'holding it',
+      evidence: 'seen',
+    });
     expect(playback).toEqual(['start:grab', 'end:grab']);
     expect(lesson.activeDemo).toBeNull();
   });
 
   it('advances through the runner and finishes the recording at the end', async () => {
     const { lesson, sink, clock } = setup();
-    await lesson.handlers().start_lesson({ goal: 'add wiper fluid' });
+    await start(lesson, 'add wiper fluid');
     clock.advance(500);
-    expect(await lesson.handlers().advance_step({ reason: 'holding the jug' })).toMatchObject({
+    expect(
+      await call(lesson, 'complete_step', {
+        step_id: 'grab',
+        reason: 'holding the jug',
+        evidence: 'seen',
+      }),
+    ).toMatchObject({
       ok: true,
     });
     clock.advance(500);
-    await lesson.handlers().advance_step({ reason: 'it is full' });
+    await call(lesson, 'complete_step', {
+      step_id: 'pour',
+      reason: 'it is full',
+      evidence: 'seen',
+    });
     await lesson.settled();
     const [episode] = sink.episodes.values();
     expect(episode?.finish).toMatchObject({
@@ -169,8 +207,12 @@ describe('LessonController', () => {
 
   it('records the event that ends the procedure as the last event of the episode', async () => {
     const { lesson, sink } = setup();
-    await lesson.handlers().start_lesson({ goal: 'add wiper fluid' });
-    await lesson.handlers().advance_step({ reason: 'holding it' });
+    await start(lesson, 'add wiper fluid');
+    await call(lesson, 'complete_step', {
+      step_id: 'grab',
+      reason: 'holding it',
+      evidence: 'seen',
+    });
     await lesson.stop('learner took the headset off');
     const [episode] = sink.episodes.values();
     const types = episode?.batches.flatMap((b) => b.events).map((e) => e.type) ?? [];
@@ -181,8 +223,8 @@ describe('LessonController', () => {
     const { lesson, bus } = setup();
     const mistakes: string[] = [];
     bus.on('mistake.detected', (e) => mistakes.push(`${e.stepId}:${e.kind}:${e.source}`));
-    await lesson.handlers().start_lesson({ goal: 'add wiper fluid' });
-    await lesson.handlers().flag_mistake({ kind: 'spill', message: 'Slow down.' });
+    await start(lesson, 'add wiper fluid');
+    await call(lesson, 'flag_mistake', { kind: 'spill', message: 'Slow down.' });
     expect(mistakes).toEqual(['grab:spill:coach']);
   });
 
@@ -209,16 +251,23 @@ describe('LessonController', () => {
           : { planId: 'refill-fluid', procedure: generated, warnings: [] };
       },
     });
-    await lesson.handlers().start_lesson({ goal: 'add wiper fluid' });
-    await lesson.handlers().advance_step({ reason: 'holding it' });
-    const r = await lesson.handlers().revise_plan({ reason: 'no funnel' });
-    expect(r).toMatchObject({ ok: true });
-    expect(calls[1]?.revise).toEqual({
+    await start(lesson, 'add wiper fluid');
+    await call(lesson, 'complete_step', {
+      step_id: 'grab',
+      reason: 'holding it',
+      evidence: 'seen',
+    });
+    const r = await call(lesson, 'revise_plan', { reason: 'no funnel' });
+    expect(r).toEqual({ ok: true, result: { status: 'replanning' } });
+    await lesson.settled();
+    expect(calls[1]?.revise).toMatchObject({
       planId: 'refill-fluid',
       fromStepIndex: 1,
       reason: 'no funnel',
+      base: { id: 'refill-fluid' },
     });
     expect(lesson.currentStep()?.id).toBe('funnel');
+    expect(lesson.runnerState?.statuses).toEqual({ grab: 'done', funnel: 'todo' });
   });
 });
 
@@ -244,7 +293,7 @@ describe('LessonController without a camera', () => {
     });
     const missing: string[][] = [];
     bus.on('object.missing', (e) => missing.push(e.objectIds));
-    await lesson.handlers().start_lesson({ goal: 'open the cap' });
+    await start(lesson, 'open the cap');
     expect(missing).toEqual([['cap']]);
 
     // A pinch next to a known object is not a registration...
@@ -274,9 +323,9 @@ describe('LessonController missing-object announcements', () => {
     });
     const missing: string[][] = [];
     bus.on('object.missing', (e) => missing.push(e.objectIds));
-    await lesson.handlers().start_lesson({ goal: 'open the cap' });
-    await lesson.handlers().advance_step({ reason: 'next' });
-    await lesson.handlers().highlight({ object_id: 'cap', style: 'target' });
+    await start(lesson, 'open the cap');
+    await call(lesson, 'complete_step', { step_id: 'one', reason: 'next', evidence: 'seen' });
+    await call(lesson, 'highlight', { object_id: 'cap', style: 'target' });
     await lesson.settled();
     expect(missing).toEqual([['cap']]);
   });
@@ -411,14 +460,18 @@ describe('LessonController and the camera', () => {
 
   it('outlines what each step shows, in its words, and records what the camera saw', async () => {
     const { lesson, asked, outlined, sink } = withCamera();
-    await lesson.handlers().start_lesson({ goal: 'add wiper fluid' });
+    await start(lesson, 'add wiper fluid');
     await lesson.settled();
     expect(asked.at(-1)).toEqual([
       { id: 'jug', description: 'Blue jug on the fender', phrase: 'fluid jug' },
     ]);
     expect(outlined).toEqual(['jug#0']);
-    await lesson.handlers().advance_step({ reason: 'holding it' });
-    await lesson.handlers().advance_step({ reason: 'poured' });
+    await call(lesson, 'complete_step', {
+      step_id: 'grab',
+      reason: 'holding it',
+      evidence: 'seen',
+    });
+    await call(lesson, 'complete_step', { step_id: 'pour', reason: 'poured', evidence: 'seen' });
     await lesson.settled();
     const [episode] = sink.episodes.values();
     const detected = episode?.batches
@@ -431,7 +484,7 @@ describe('LessonController and the camera', () => {
 
   it('keeps looking at what the step shows while it runs', async () => {
     const { lesson, clock, asked } = withCamera({ showRefreshMs: 2000 });
-    await lesson.handlers().start_lesson({ goal: 'add wiper fluid' });
+    await start(lesson, 'add wiper fluid');
     await lesson.settled();
     const before = asked.length;
     lesson.tick(clock.advance(1999));

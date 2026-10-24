@@ -97,6 +97,7 @@
     {
       "id": "draw-indicator",
       "instruction": "Fill the syringe with purple indicator from the indicator bottle.",
+      "doneWhen": "the syringe holds purple indicator",
       "targets": ["indicator", "syringe"],
       "show": [
         {
@@ -123,11 +124,12 @@
           { "type": "hand_near", "object": "indicator", "radius": 0.08, "dwellMs": 1800 }
         ]
       },
-      "coachNotes": "Dip the syringe tip into the bottle and pull the plunger back. The hand_near fallback covers lost tracking."
+      "coachNotes": "Dip the syringe tip into the bottle and pull the plunger back."
     },
     {
       "id": "dispense-indicator",
       "instruction": "Squirt a little indicator into cups A, B, and C.",
+      "doneWhen": "a little purple indicator is in each of cups A, B and C",
       "targets": ["cup_a", "cup_b", "cup_c"],
       "show": [
         {
@@ -177,6 +179,7 @@
     {
       "id": "acid-to-a",
       "instruction": "Now add vinegar to cup A.",
+      "doneWhen": "cup A has turned pink",
       "targets": ["vinegar", "cup_a"],
       "show": [
         {
@@ -207,7 +210,7 @@
               { "type": "hand_near", "object": "cup_a", "dwellMs": 900 }
             ]
           },
-          { "type": "confirm", "by": "either", "prompt": "Cup A turned pink" }
+          { "type": "confirm", "by": "either", "prompt": "cup A has turned pink" }
         ]
       },
       "mistakes": [
@@ -223,11 +226,12 @@
           }
         }
       ],
-      "coachNotes": "The planted demo mistake: the vinegar heads for cup B. Confirm once you see pink in cup A or the user says it changed."
+      "coachNotes": "The planted demo mistake: the vinegar heads for cup B. Complete the step once you see pink in cup A or the user says it changed."
     },
     {
       "id": "base-to-b",
       "instruction": "Add baking-soda water to cup B.",
+      "doneWhen": "cup B has turned blue-green",
       "targets": ["base", "cup_b"],
       "show": [
         {
@@ -258,7 +262,7 @@
               { "type": "hand_near", "object": "cup_b", "dwellMs": 900 }
             ]
           },
-          { "type": "confirm", "by": "either", "prompt": "Cup B turned blue-green" }
+          { "type": "confirm", "by": "either", "prompt": "cup B has turned blue-green" }
         ]
       },
       "mistakes": [
@@ -289,6 +293,7 @@
     {
       "id": "compare",
       "instruction": "Leave cup C purple and compare all three colors.",
+      "doneWhen": "all three cups are side by side, with A pink, B blue-green and C still purple",
       "targets": ["cup_a", "cup_b", "cup_c"],
       "show": [
         {
@@ -310,13 +315,13 @@
       "success": {
         "type": "confirm",
         "by": "either",
-        "prompt": "The user has compared the colors"
+        "prompt": "all three cups are side by side, with A pink, B blue-green and C still purple"
       },
       "coachNotes": "Explain in one breath: acid turns the indicator pink, base turns it blue-green, and C stays purple as the control."
     }
   ],
   "coach": {
     "persona": "A calm lab instructor who keeps things safe and quick.",
-    "notes": "Mention the cup letter every time. Never guess where the syringe is; trust the [app] messages."
+    "notes": "Mention the cup letter every time. Judge each step by the colors you see in the cups. When a cup or the syringe is out of view, ask them to look at it rather than guessing."
   }
 }

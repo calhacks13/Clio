@@ -99,6 +99,15 @@ export const StepSchema = z.object({
     .min(1)
     .max(200)
     .describe('Imperative sentence, spoken and shown. This is the language label for the step.'),
+  doneWhen: z
+    .string()
+    .min(3)
+    .max(200)
+    .optional()
+    .describe(
+      'The finished state as a camera or the learner would see it, e.g. "cup A has turned pink". ' +
+        'The coach and the step watcher judge completion against it.',
+    ),
   detail: z.string().optional(),
   targets: z.array(SlugSchema).default([]),
   hand: z.enum(['left', 'right', 'either', 'both']).default('either'),

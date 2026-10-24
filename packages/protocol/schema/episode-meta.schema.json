@@ -434,6 +434,12 @@
                 "maxLength": 200,
                 "description": "Imperative sentence, spoken and shown. This is the language label for the step."
               },
+              "doneWhen": {
+                "description": "The finished state as a camera or the learner would see it, e.g. \"cup A has turned pink\". The coach and the step watcher judge completion against it.",
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 200
+              },
               "detail": {
                 "type": "string"
               },
@@ -1149,7 +1155,7 @@
             "by"
           ],
           "additionalProperties": false,
-          "description": "Satisfied when the coach or user confirms (advance_step), e.g. visual judgments."
+          "description": "Satisfied when the coach (complete_step) or the learner (the Done button) confirms, e.g. visual judgments."
         },
         {
           "type": "object",

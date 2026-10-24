@@ -16,4 +16,10 @@ describe('procedures/*.json', () => {
     if (!r.ok) throw new Error(r.error);
     expect(`${r.procedure.id}.json`).toBe(file);
   });
+
+  it.each(files)('%s says how every step ends', async (file) => {
+    const r = safeParseProcedure(JSON.parse(await readFile(join(dir, file), 'utf8')));
+    if (!r.ok) throw new Error(r.error);
+    for (const step of r.procedure.steps) expect(step.doneWhen, step.id).toBeTruthy();
+  });
 });

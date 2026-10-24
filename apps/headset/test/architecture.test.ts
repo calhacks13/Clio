@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 
 // Fitness test for the dependency rule in docs/ARCHITECTURE.md §5.1: core/ and domain/ are plain
 // TypeScript. They must not import rendering, XR, SDK or emulator packages, nor adapters/ or app/.
+// And the coach never sees perception (docs/coach-plan.md): domain/coach/ imports nothing from the
+// world model, the hand tracker or the success checks.
 
 const SRC = join(import.meta.dirname, '..', 'src');
 const FORBIDDEN_PACKAGES = [
@@ -14,6 +16,11 @@ const FORBIDDEN_PACKAGES = [
   /^@iwer\//,
 ];
 const FORBIDDEN_LAYERS = ['adapters', 'app'];
+const COACH = 'domain/coach/';
+const PERCEPTION = [/^domain\/world\//, /^domain\/hands\//, /^domain\/procedure\/checks(\.ts)?$/];
+
+/** A path relative to src/, with forward slashes. */
+const fromSrc = (path: string) => relative(SRC, path).split(/[\\/]/).join('/');
 
 /** Import specifiers in a module's source (static, dynamic and type-only). */
 function importsOf(source: string): string[] {
@@ -31,8 +38,11 @@ function violations(file: string, source: string): string[] {
   return importsOf(source).flatMap((spec) => {
     if (FORBIDDEN_PACKAGES.some((re) => re.test(spec))) return [`${file} imports ${spec}`];
     if (spec.startsWith('.')) {
-      const layer = relative(SRC, resolve(dirname(file), spec)).split(/[\\/]/)[0] ?? '';
+      const target = fromSrc(resolve(dirname(file), spec));
+      const layer = target.split('/')[0] ?? '';
       if (FORBIDDEN_LAYERS.includes(layer)) return [`${file} imports ${spec} (${layer}/)`];
+      if (fromSrc(file).startsWith(COACH) && PERCEPTION.some((re) => re.test(target)))
+        return [`${file} imports ${spec} (perception, into the coach)`];
     }
     return [];
   });
@@ -56,7 +66,24 @@ describe('dependency rule', () => {
     expect(violations(fake, "import { add } from '../core/math';")).toHaveLength(0);
   });
 
-  it('keeps core/ and domain/ framework-free', async () => {
+  it('detects perception imported into the coach (the checker itself works)', () => {
+    const coach = join(SRC, 'domain', 'coach', 'x.ts');
+    for (const source of [
+      "import { needsConfirmation } from '../procedure/checks';",
+      "import type { ObjectOutline } from '../world/outline';",
+      "import type { PinchTransition } from '../hands/pinch-detector';",
+    ]) {
+      expect(violations(coach, source)).toHaveLength(1);
+    }
+    expect(violations(coach, "import { recitePlan } from '../plan/recital';")).toHaveLength(0);
+    expect(violations(coach, "import type { AppBus } from '../events';")).toHaveLength(0);
+    const session = join(SRC, 'domain', 'session', 'x.ts');
+    expect(violations(session, "import type { Grounder } from '../world/grounding';")).toHaveLength(
+      0,
+    );
+  });
+
+  it('keeps core/ and domain/ framework-free, and perception out of the coach', async () => {
     const files = [
       ...(await sourceFiles(join(SRC, 'core'))),
       ...(await sourceFiles(join(SRC, 'domain'))),

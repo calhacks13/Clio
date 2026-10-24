@@ -6,6 +6,8 @@ import {
   PlanResponseSchema,
   ProcedureListResponseSchema,
   ProcedureSchema,
+  type StepCheckRequest,
+  StepCheckResponseSchema,
 } from '@clio/protocol';
 import { describe, expect, it } from 'vitest';
 import type { Planner, PlannerRequest } from '../src/services/planner';
@@ -25,6 +27,19 @@ function scriptedPlanner(
       const answer = answers[Math.min(requests.length - 1, answers.length - 1)];
       if (answer instanceof Error) throw answer;
       return answer ?? '';
+    },
+  };
+}
+
+function checkingPlanner(answer: string | Error): Planner & { checks: StepCheckRequest[] } {
+  const checks: StepCheckRequest[] = [];
+  return {
+    ...scriptedPlanner(PLAN),
+    checks,
+    async checkStep(request) {
+      checks.push(request);
+      if (answer instanceof Error) throw answer;
+      return answer;
     },
   };
 }
@@ -69,9 +84,17 @@ describe('POST /api/plans', () => {
     expect(plan.procedure.id).toBe('refill-the-washer-fluid');
     expect(plan.procedure.origin).toEqual(ORIGIN);
     expect(plan.procedure.steps.map((s) => s.id)).toEqual(['open-cap', 'pour-fluid', 'close-cap']);
+    expect(plan.procedure.steps[0]?.doneWhen).toBe(
+      'The blue cap is flipped open and the reservoir neck is visible.',
+    );
     expect(plan.warnings).toEqual(['Make sure the engine is off and cool.']);
     expect(planner.requests).toEqual([
-      { goal: 'Refill the washer fluid', context: 'It is a 2015 Civic.', images: [IMAGE] },
+      {
+        goal: 'Refill the washer fluid',
+        context: 'It is a 2015 Civic.',
+        images: [IMAGE],
+        timeoutMs: 40_000,
+      },
     ]);
 
     const stored = ProcedureSchema.parse(
@@ -153,6 +176,45 @@ describe('POST /api/plans', () => {
     });
   });
 
+  it('logs each plan with its step count, goal and latency', async () => {
+    const h = await harness({
+      planner: scriptedPlanner(PLAN),
+      now: steppingClock('2026-10-24T03:15:02.000Z', 1_000),
+    });
+    await postPlan(h, { goal: 'Refill the washer fluid' });
+    expect(h.logger.lines).toContain(
+      'info plan refill-the-washer-fluid: 3 steps from "Refill the washer fluid" in 3000 ms',
+    );
+  });
+
+  // Each clock reading is `stepMs` later: the request starts, then each planner call starts.
+  const slowHarness = (planner: Planner, stepMs: number) =>
+    harness({ planner, now: steppingClock('2026-10-24T03:15:02.000Z', stepMs) });
+
+  it('gives the draft and its retry one 40 s budget between them', async () => {
+    const planner = scriptedPlanner('Sure! Here is a plan.', PLAN);
+    const h = await slowHarness(planner, 10_000);
+    expect((await postPlan(h, { goal: 'Refill the washer fluid' })).res.status).toBe(200);
+    expect(planner.requests.map((r) => r.timeoutMs)).toEqual([30_000, 20_000]);
+  });
+
+  it('answers 504 instead of retrying when less than 10 s of the budget is left', async () => {
+    const planner = scriptedPlanner('Sure! Here is a plan.', PLAN);
+    const h = await slowHarness(planner, 20_000);
+    const { res, body } = await postPlan(h, { goal: 'Refill the washer fluid' });
+    expect(res.status).toBe(504);
+    const error = ApiErrorSchema.parse(body).error;
+    expect(error.code).toBe('plan_timeout');
+    expect(error.message).toBe(
+      'The planner ran out of time: its plan was invalid and too little time was left to retry',
+    );
+    expect((error.details as { errors: string }).errors).toMatch(
+      /^The response was not valid JSON/,
+    );
+    expect(planner.requests).toHaveLength(1);
+    await expect(readdir(join(h.dataDir, 'plans'))).rejects.toThrow(/ENOENT/);
+  });
+
   it('validates the request', async () => {
     const h = await planHarness(scriptedPlanner(PLAN));
     expect((await postPlan(h, { goal: 'no' })).res.status).toBe(400);
@@ -200,7 +262,8 @@ describe('POST /api/plans with revise', () => {
     expect(planner.requests[1]).toEqual({
       goal: 'Refill the washer fluid',
       images: [],
-      revision: { reason: 'They found a funnel', base, fromStepIndex: 1 },
+      timeoutMs: 40_000,
+      revision: { reason: 'They found a funnel', base, fromStepIndex: 1, skippedStepIds: [] },
     });
     expect(JSON.parse(await h.readData('plans', 'refill-the-washer-fluid-r1.json')).id).toBe(
       'refill-the-washer-fluid-r1',
@@ -217,23 +280,52 @@ describe('POST /api/plans with revise', () => {
     expect(plan.procedure.origin).toMatchObject({ revisionOf: 'refill-the-washer-fluid-r1' });
   });
 
-  it('revises curated procedures too', async () => {
-    const planner = scriptedPlanner(
-      JSON.stringify({
-        objects: [],
-        steps: [
-          {
-            id: 'wave',
-            instruction: 'Wave at cup A.',
-            targets: ['cup_a'],
-            action: { verb: 'point_at', object: 'cup_a' },
-            success: { type: 'confirm', prompt: 'Waved' },
-            mistakes: [],
-          },
-        ],
-        warnings: [],
-      }),
+  it('records the plan it revised as the parent, though the base keeps the first id', async () => {
+    const answer = JSON.stringify(modelRevision());
+    const { h } = await withBasePlan(answer, answer);
+    const first = PlanResponseSchema.parse(
+      (await postPlan(h, revise('refill-the-washer-fluid'))).body,
     );
+    // The headset sends the running plan, which keeps the id the lesson started with.
+    const base = { ...first.procedure, id: 'refill-the-washer-fluid' };
+    const request = revise(first.planId);
+    const { body } = await postPlan(h, { ...request, revise: { ...request.revise, base } });
+    const plan = PlanResponseSchema.parse(body);
+    expect(plan.planId).toBe('refill-the-washer-fluid-r2');
+    expect(plan.procedure.origin).toMatchObject({ revisionOf: 'refill-the-washer-fluid-r1' });
+  });
+
+  it('tells the planner which kept steps were skipped rather than done', async () => {
+    const { h, planner } = await withBasePlan(JSON.stringify(modelRevision()));
+    const request = revise('refill-the-washer-fluid');
+    const { res } = await postPlan(h, {
+      ...request,
+      revise: { ...request.revise, skippedStepIds: ['open-cap'] },
+    });
+    expect(res.status).toBe(200);
+    expect(planner.requests[1]?.revision?.skippedStepIds).toEqual(['open-cap']);
+  });
+
+  /** A revision for procedureInput(), whose only object is cup_a. */
+  const WAVE = JSON.stringify({
+    objects: [],
+    steps: [
+      {
+        id: 'wave',
+        instruction: 'Wave at cup A.',
+        doneWhen: 'A hand waves above cup A.',
+        targets: ['cup_a'],
+        action: { verb: 'point_at', object: 'cup_a' },
+        show: [],
+        success: { type: 'confirm', prompt: 'A hand waves above cup A' },
+        mistakes: [],
+      },
+    ],
+    warnings: [],
+  });
+
+  it('revises curated procedures too', async () => {
+    const planner = scriptedPlanner(WAVE);
     const h = await planHarness(planner);
     await writeJson(h.proceduresDir, 'demo.json', procedureInput('demo'));
     const { res, body } = await postPlan(h, revise('demo', 1));
@@ -252,6 +344,69 @@ describe('POST /api/plans with revise', () => {
     expect(plan.warnings[0]).toBe('fromStepIndex 9 is past the end of the plan; kept all 3 steps');
   });
 
+  it('revises the plan as it stands now when the request carries it as base', async () => {
+    const { h, planner } = await withBasePlan(JSON.stringify(modelRevision()));
+    const stored = ProcedureSchema.parse(
+      await (await h.request('GET', ApiPaths.plan('refill-the-washer-fluid'))).json(),
+    );
+    // The coach reworded the first step and dropped the last one during the lesson.
+    const [first, second] = stored.steps;
+    const edited = { ...stored, steps: [{ ...first, instruction: 'Pop the blue cap.' }, second] };
+    const { res, body } = await postPlan(h, {
+      ...revise('refill-the-washer-fluid'),
+      revise: { ...revise('refill-the-washer-fluid').revise, base: edited },
+    });
+    expect(res.status).toBe(200);
+    const base = ProcedureSchema.parse(edited);
+    expect(planner.requests[1]?.revision).toEqual({
+      reason: 'They found a funnel',
+      base,
+      fromStepIndex: 1,
+      skippedStepIds: [],
+    });
+    const plan = PlanResponseSchema.parse(body);
+    expect(plan.planId).toBe('refill-the-washer-fluid-r1');
+    expect(plan.procedure.steps[0]).toEqual(base.steps[0]);
+    expect(plan.procedure.steps.map((s) => s.id)).toEqual([
+      'open-cap',
+      'open-cap-2',
+      'pour-slowly',
+    ]);
+  });
+
+  it('keeps the same fromStepIndex clamp with a base, and needs no stored plan', async () => {
+    const planner = scriptedPlanner(WAVE);
+    const h = await planHarness(planner);
+    const base = procedureInput('coach-lesson');
+    const { res, body } = await postPlan(h, {
+      goal: 'Refill the washer fluid',
+      revise: { planId: 'coach-lesson', fromStepIndex: 7, reason: 'They found a funnel', base },
+    });
+    expect(res.status).toBe(200);
+    expect(planner.requests[0]?.revision?.fromStepIndex).toBe(2);
+    const plan = PlanResponseSchema.parse(body);
+    expect(plan.planId).toBe('coach-lesson-r1');
+    expect(plan.procedure.origin).toMatchObject({ revisionOf: 'coach-lesson' });
+    expect(plan.procedure.steps.map((s) => s.id)).toEqual(['touch-cup', 'done', 'wave']);
+    expect(plan.warnings[0]).toBe('fromStepIndex 7 is past the end of the plan; kept all 2 steps');
+  });
+
+  it('names the revision after the plan it revises, not the id inside the base', async () => {
+    const h = await planHarness(scriptedPlanner(WAVE));
+    const { body } = await postPlan(h, {
+      goal: 'Refill the washer fluid',
+      revise: {
+        planId: 'demo-lesson',
+        fromStepIndex: 1,
+        reason: 'They found a funnel',
+        base: procedureInput('demo'),
+      },
+    });
+    const plan = PlanResponseSchema.parse(body);
+    expect(plan.planId).toBe('demo-lesson-r1');
+    expect(plan.procedure.origin).toMatchObject({ revisionOf: 'demo-lesson' });
+  });
+
   it('answers 404 for an unknown plan and 400 for an unsafe id', async () => {
     const h = await planHarness(scriptedPlanner(PLAN));
     expect((await postPlan(h, revise('nope'))).res.status).toBe(404);
@@ -265,5 +420,86 @@ describe('GET /api/plans/:id', () => {
     await writeJson(h.proceduresDir, 'demo.json', procedureInput('demo'));
     expect((await h.request('GET', ApiPaths.plan('demo'))).status).toBe(404);
     expect((await h.request('GET', '/api/plans/..%2Fx')).status).toBe(400);
+  });
+});
+
+describe('POST /api/plans/check', () => {
+  const check = (overrides: Partial<StepCheckRequest> = {}) => ({
+    goal: 'Refill the washer fluid',
+    step: {
+      id: 'open-cap',
+      instruction: 'Flip open the blue washer fluid cap.',
+      doneWhen: 'The blue cap is flipped open.',
+    },
+    images: [IMAGE],
+    ...overrides,
+  });
+
+  async function postCheck(h: Harness, body: unknown) {
+    const res = await h.request('POST', ApiPaths.planCheck, body);
+    return { res, body: (await res.json()) as unknown };
+  }
+
+  it('answers 503 without a planner, or with one that cannot check steps', async () => {
+    for (const planner of [undefined, scriptedPlanner(PLAN)]) {
+      const h = await harness({ planner });
+      const { res, body } = await postCheck(h, check());
+      expect(res.status).toBe(503);
+      expect(ApiErrorSchema.parse(body).error).toEqual({
+        code: 'gemini_not_configured',
+        message: 'Step checks is off: GEMINI_API_KEY is not set on the server',
+      });
+    }
+  });
+
+  it("returns the model's verdict and observation, the model and the measured latency", async () => {
+    const planner = checkingPlanner('{"verdict":"done","observation":"The blue cap is open."}');
+    const h = await harness({ planner, now: steppingClock('2026-10-24T03:15:02.000Z', 250) });
+    const { res, body } = await postCheck(h, check());
+    expect(res.status).toBe(200);
+    expect(StepCheckResponseSchema.parse(body)).toEqual({
+      verdict: 'done',
+      observation: 'The blue cap is open.',
+      model: 'planner-test',
+      latencyMs: 250,
+    });
+    expect(body).toEqual(StepCheckResponseSchema.parse(body));
+    expect(planner.checks).toEqual([check()]);
+  });
+
+  it('answers 502 when the model call fails', async () => {
+    const h = await harness({ planner: checkingPlanner(new Error('deadline exceeded')) });
+    const { res, body } = await postCheck(h, check());
+    expect(res.status).toBe(502);
+    expect(ApiErrorSchema.parse(body).error).toEqual({
+      code: 'upstream_failed',
+      message: 'Step check failed: deadline exceeded',
+    });
+  });
+
+  it('answers 502 when the model answers something unusable', async () => {
+    const h = await harness({ planner: checkingPlanner('{"verdict":"probably"}') });
+    const { res, body } = await postCheck(h, check());
+    expect(res.status).toBe(502);
+    expect(ApiErrorSchema.parse(body).error).toEqual({
+      code: 'upstream_failed',
+      message:
+        'Step check gave an unusable answer: The step check verdict "probably" is not one of ' +
+        'done, not_done, unsure',
+    });
+  });
+
+  it('validates the request', async () => {
+    const planner = checkingPlanner('{"verdict":"done","observation":"Open."}');
+    const h = await harness({ planner });
+    expect((await postCheck(h, check({ images: [] }))).res.status).toBe(400);
+    expect((await postCheck(h, check({ images: [IMAGE, IMAGE, IMAGE, IMAGE] }))).res.status).toBe(
+      400,
+    );
+    const noInstruction = check({ step: { id: 'open-cap', instruction: '' } });
+    expect((await postCheck(h, noInstruction)).res.status).toBe(400);
+    const res = await h.request('POST', ApiPaths.planCheck, 'not json');
+    expect(ApiErrorSchema.parse(await res.json()).error.code).toBe('invalid_json');
+    expect(planner.checks).toEqual([]);
   });
 });

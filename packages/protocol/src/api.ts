@@ -20,6 +20,7 @@ export const ApiPaths = {
   procedure: (id: string) => `/api/procedures/${seg(id)}`,
   plans: '/api/plans',
   plan: (id: string) => `/api/plans/${seg(id)}`,
+  planCheck: '/api/plans/check',
   visionLocate: '/api/vision/locate',
   episodes: '/api/episodes',
   episode: (id: string) => `/api/episodes/${seg(id)}`,
@@ -80,6 +81,14 @@ export const PlanRequestSchema = z.object({
       planId: z.string(),
       fromStepIndex: z.number().int().nonnegative().describe('Steps before this are kept as-is'),
       reason: z.string().min(1),
+      skippedStepIds: z
+        .array(z.string())
+        .optional()
+        .describe('Kept steps (before fromStepIndex) that were skipped, not done'),
+      base: ProcedureSchema.optional().describe(
+        'The plan as it stands now, with its done and skipped steps first. Used instead of the ' +
+          'stored plan, which lacks the edits the coach made during the lesson',
+      ),
     })
     .optional(),
 });
@@ -87,6 +96,23 @@ export const PlanResponseSchema = z.object({
   planId: z.string(),
   procedure: ProcedureSchema,
   warnings: z.array(z.string()).describe('Non-fatal issues the planner fixed or skipped'),
+});
+
+export const StepCheckRequestSchema = z.object({
+  goal: z.string().min(1).max(300),
+  step: z.object({
+    id: z.string(),
+    instruction: z.string().min(1).max(200),
+    doneWhen: z.string().max(200).optional(),
+  }),
+  images: z.array(ImagePayloadSchema).min(1).max(3).describe('Current camera views, newest last'),
+});
+export const StepCheckVerdictSchema = z.enum(['done', 'not_done', 'unsure']);
+export const StepCheckResponseSchema = z.object({
+  verdict: StepCheckVerdictSchema,
+  observation: z.string().describe('What the model saw, in a few words'),
+  model: z.string(),
+  latencyMs: z.number().nonnegative(),
 });
 
 export const LocateRequestSchema = z.object({
@@ -183,6 +209,9 @@ export type ProcedureListResponse = z.infer<typeof ProcedureListResponseSchema>;
 export type ImagePayload = z.infer<typeof ImagePayloadSchema>;
 export type PlanRequest = z.input<typeof PlanRequestSchema>;
 export type PlanResponse = z.infer<typeof PlanResponseSchema>;
+export type StepCheckRequest = z.infer<typeof StepCheckRequestSchema>;
+export type StepCheckVerdict = z.infer<typeof StepCheckVerdictSchema>;
+export type StepCheckResponse = z.infer<typeof StepCheckResponseSchema>;
 export type LocateRequest = z.infer<typeof LocateRequestSchema>;
 export type Detection = z.output<typeof DetectionSchema>;
 export type DetectionInput = z.input<typeof DetectionSchema>;

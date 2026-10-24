@@ -1,13 +1,31 @@
 import { ACTION_VERBS, safeParseProcedure } from '@clio/protocol';
 import type { GenerateContentParameters } from '@google/genai';
-import { describe, expect, it } from 'vitest';
-import { createGeminiPlanner } from '../src/services/gemini-planner';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import {
+  createGeminiPlanner,
+  PLAN_TIMEOUT_MS,
+  STEP_CHECK_TIMEOUT_MS,
+} from '../src/services/gemini-planner';
 import { buildPlanCandidate } from '../src/services/plan-build';
 import { PLANNER_SYSTEM_INSTRUCTION, plannerContents } from '../src/services/plan-prompt';
 import { buildPlanJsonSchema } from '../src/services/plan-schema';
+import {
+  STEP_CHECK_INSTRUCTION,
+  stepCheckContents,
+  stepCheckJsonSchema,
+} from '../src/services/step-check';
 import { modelPlan } from './plan-fixtures';
 
 const IMAGE = { mimeType: 'image/jpeg' as const, data: '/9j/4AAQSkZJRgABAQ' };
+const CHECK = {
+  goal: 'Refill the washer fluid',
+  step: {
+    id: 'open-cap',
+    instruction: 'Flip open the blue washer fluid cap.',
+    doneWhen: 'The blue cap is flipped open.',
+  },
+  images: [IMAGE],
+};
 
 function fakeAi(text: string | undefined) {
   const calls: GenerateContentParameters[] = [];
@@ -16,10 +34,24 @@ function fakeAi(text: string | undefined) {
     models: {
       generateContent: async (params: GenerateContentParameters) => {
         calls.push(params);
+        const signal = params.config?.abortSignal;
+        if (signal?.aborted) throw signal.reason;
         return { text };
       },
     },
   };
+}
+
+/** Records the timeouts the planner asks for; `expired` hands out signals that already fired. */
+function spyOnTimeouts({ expired = false } = {}) {
+  const spy = vi.spyOn(AbortSignal, 'timeout');
+  if (expired) {
+    spy.mockImplementation(() =>
+      AbortSignal.abort(new DOMException('The operation timed out.', 'TimeoutError')),
+    );
+  }
+  onTestFinished(() => spy.mockRestore());
+  return spy;
 }
 
 const base = (() => {
@@ -68,6 +100,57 @@ describe('createGeminiPlanner', () => {
           systemInstruction: PLANNER_SYSTEM_INSTRUCTION,
           responseMimeType: 'application/json',
           responseJsonSchema: buildPlanJsonSchema('plan'),
+          abortSignal: expect.any(AbortSignal),
+        },
+      },
+    ]);
+  });
+
+  it('gives a draft 45 s and a step check 8 s', async () => {
+    const timeouts = spyOnTimeouts();
+    const planner = createGeminiPlanner(fakeAi('{}'), 'm');
+    await planner.draft({ goal: 'Refill it', images: [] });
+    await planner.checkStep?.(CHECK);
+    expect([PLAN_TIMEOUT_MS, STEP_CHECK_TIMEOUT_MS]).toEqual([45_000, 8_000]);
+    expect(timeouts.mock.calls).toEqual([[45_000], [8_000]]);
+  });
+
+  it('gives a draft the time its request has left when the request says', async () => {
+    const timeouts = spyOnTimeouts();
+    await createGeminiPlanner(fakeAi('{}'), 'm').draft({
+      goal: 'Refill it',
+      images: [],
+      timeoutMs: 21_437,
+    });
+    expect(timeouts.mock.calls).toEqual([[21_437]]);
+  });
+
+  it('says how long it waited when Gemini does not answer in time', async () => {
+    spyOnTimeouts({ expired: true });
+    const planner = createGeminiPlanner(fakeAi('{}'), 'm');
+    await expect(planner.draft({ goal: 'Refill it', images: [] })).rejects.toThrow(
+      'Gemini did not answer within 45 s',
+    );
+    await expect(planner.checkStep?.(CHECK)).rejects.toThrow('Gemini did not answer within 8 s');
+    await expect(
+      planner.draft({ goal: 'Refill it', images: [], timeoutMs: 21_437 }),
+    ).rejects.toThrow('Gemini did not answer within 21 s');
+  });
+
+  it('checks a step with the same model, the views and the step-check schema', async () => {
+    const answer = '{"verdict":"done","observation":"The blue cap is open."}';
+    const ai = fakeAi(answer);
+    const planner = createGeminiPlanner(ai, 'planner-x');
+    expect(await planner.checkStep?.(CHECK)).toBe(answer);
+    expect(ai.calls).toEqual([
+      {
+        model: 'planner-x',
+        contents: stepCheckContents(CHECK),
+        config: {
+          systemInstruction: STEP_CHECK_INSTRUCTION,
+          responseMimeType: 'application/json',
+          responseJsonSchema: stepCheckJsonSchema(),
+          abortSignal: expect.any(AbortSignal),
         },
       },
     ]);
@@ -78,7 +161,7 @@ describe('createGeminiPlanner', () => {
     await createGeminiPlanner(ai, 'planner-x').draft({
       goal: 'Refill the washer fluid',
       images: [],
-      revision: { reason: 'They found a funnel', base, fromStepIndex: 1 },
+      revision: { reason: 'They found a funnel', base, fromStepIndex: 1, skippedStepIds: [] },
     });
     const call = ai.calls[0];
     expect(call?.config?.responseJsonSchema).toEqual(buildPlanJsonSchema('revision'));
@@ -109,11 +192,43 @@ describe('createGeminiPlanner', () => {
     ]);
   });
 
+  it('lists the kept steps that were skipped apart from the done ones', () => {
+    const revisionPrompt = (fromStepIndex: number) =>
+      plannerContents({
+        goal: 'Refill the washer fluid',
+        images: [],
+        revision: { reason: 'r', base, fromStepIndex, skippedStepIds: ['open-cap'] },
+      })[0]?.parts?.[0]?.text;
+    const skippedHeading =
+      'Steps that were skipped and NOT done (they stay in the list; plan for their outcome if ' +
+      'the goal still needs it):';
+    expect(revisionPrompt(2)).toContain(
+      [
+        'Steps already done (they stay as they are; do not repeat them):',
+        '2. pour-fluid: Pour the fluid into the reservoir.',
+        skippedHeading,
+        '1. open-cap: Flip open the blue washer fluid cap.',
+        'The rest of the old plan, which you are replacing:',
+        '3. close-cap: Close the washer fluid cap.',
+      ].join('\n'),
+    );
+    expect(revisionPrompt(1)).toContain(
+      [
+        'Steps already done (they stay as they are; do not repeat them):',
+        '(none)',
+        skippedHeading,
+        '1. open-cap: Flip open the blue washer fluid cap.',
+        'The rest of the old plan, which you are replacing:',
+      ].join('\n'),
+    );
+    expect(revisionPrompt(1)).toContain('New step ids must not be: open-cap.');
+  });
+
   it('replays its previous answer and the errors when retrying', () => {
     const contents = plannerContents({
       goal: 'Refill the washer fluid',
       images: [],
-      revision: { reason: 'r', base, fromStepIndex: 1 },
+      revision: { reason: 'r', base, fromStepIndex: 1, skippedStepIds: [] },
       retry: { previousText: '{"steps":[]}', errors: '✖ Unknown object "ghost"' },
     });
     expect(contents.slice(1)).toEqual([
@@ -133,9 +248,9 @@ describe('createGeminiPlanner', () => {
   });
 
   it('fails when Gemini returns no text', async () => {
-    await expect(
-      createGeminiPlanner(fakeAi(undefined), 'm').draft({ goal: 'Refill it', images: [] }),
-    ).rejects.toThrow(/empty/);
+    const planner = createGeminiPlanner(fakeAi(undefined), 'm');
+    await expect(planner.draft({ goal: 'Refill it', images: [] })).rejects.toThrow(/empty/);
+    await expect(planner.checkStep?.(CHECK)).rejects.toThrow(/empty/);
   });
 });
 
@@ -168,6 +283,11 @@ describe('PLANNER_SYSTEM_INSTRUCTION', () => {
     'on its own',
     'what tells it apart',
     'as it looks at that point in the task',
+    '`doneWhen`: one sentence',
+    'an end state a camera can confirm',
+    '"the blue cap is off and lying on the fender"',
+    'ends in a visible state',
+    'make `prompt` match `doneWhen`',
   ])('covers %j', (phrase) => {
     expect(PLANNER_SYSTEM_INSTRUCTION).toContain(phrase);
   });
