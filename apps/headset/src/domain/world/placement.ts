@@ -1,21 +1,15 @@
-import { composePose, dot, madd, type Pose, sub, type Vec3 } from '../core/math';
+import { composePose, dot, madd, type Pose, sub, type Vec3 } from '../../core/math';
 import {
   type CameraModel,
   intersectPlaneY,
   pixelRay,
   type Ray,
   type SurfaceCast,
-} from '../domain/world/camera-model';
-import type { SurfaceRaycaster } from '../domain/world/grounding';
-import {
-  billboard,
-  boxPolygon,
-  liftOutline,
-  type ObjectOutline,
-  outlinePoint,
-} from '../domain/world/outline';
-import { workspaceInFrontOf } from '../domain/world/workspace';
-import type { DepthHit, DepthSource } from './depth';
+} from './camera-model';
+import type { DepthHit, DepthSource } from './depth-source';
+import type { SurfaceRaycaster } from './grounding';
+import { billboard, boxPolygon, liftOutline, type ObjectOutline, outlinePoint } from './outline';
+import { workspaceInFrontOf } from './workspace';
 
 // Where the main object is in the room. The camera saw it along rays from where it was at capture
 // time (head pose at the frame, then the camera's offset); the outline must also be at the

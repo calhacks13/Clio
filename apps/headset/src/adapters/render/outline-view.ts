@@ -1,13 +1,9 @@
 import { Group, type Vector3 } from 'three';
 import type { Text } from 'troika-three-text';
-import {
-  installOcclusionDebug,
-  type WindowFar,
-  XrDepthOcclusion,
-} from '../adapters/render/glow/depth-occlusion';
-import { type ObjectGlowMode, ObjectHighlight } from '../adapters/render/object-highlight';
-import { makeText, setText } from '../adapters/render/text';
-import type { Placement } from './placement';
+import type { Placement } from '../../domain/world/placement';
+import { installOcclusionDebug, type WindowFar, XrDepthOcclusion } from './glow/depth-occlusion';
+import { type ObjectGlowMode, ObjectHighlight } from './object-highlight';
+import { makeText, setText } from './text';
 
 // The main object's light, drawn like the lesson's (adapters/render/presenters/outlines.ts): the
 // object glows from within its silhouette, or corner brackets frame a box-only answer, on a plane
@@ -16,7 +12,7 @@ import type { Placement } from './placement';
 // or one back after being lost) fades in quickly with a brief flare; "nothing found" fades it out.
 // Nothing is allocated per frame: the group turns with lookAt, whose basis (+z at the eye, x
 // level) is the outline's billboard. The light and its name keep the room's depth order: hands
-// hide them through their occluders (tracking/hand-occluders.ts), and real surfaces nearer than
+// hide them through their occluders (hand-occluders.ts), and real surfaces nearer than
 // the object hide the light through the depth map (adapters/render/glow/depth-occlusion.ts).
 
 const LABEL_SIZE = 0.024;

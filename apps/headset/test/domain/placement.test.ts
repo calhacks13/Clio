@@ -10,7 +10,7 @@ import {
 } from '../../src/core/math';
 import { type CameraModel, intersectPlaneY } from '../../src/domain/world/camera-model';
 import { billboard, outlinePoint } from '../../src/domain/world/outline';
-import { placeDetection, surfaceOrTable } from '../../src/primary/placement';
+import { placeDetection, surfaceOrTable } from '../../src/domain/world/placement';
 
 // A level camera at the head, 1.2 m above the floor: 1280 x 960, f = 800 px. The default table
 // plane is 45 cm below the head (y = 0.75). A ray through image row y meets it where

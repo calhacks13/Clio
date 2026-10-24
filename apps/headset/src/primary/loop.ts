@@ -1,6 +1,6 @@
 import type { PrimaryResponse } from '@clio/protocol';
+import type { ClearMessage, TargetMessage } from '../adapters/net/tracker-client';
 import type { PrimaryAnswer } from './answer';
-import type { ClearMessage, TargetMessage } from './tracker-client';
 
 // The demo's naming loop: look at the scene and ask the server for the main object (a Gemini pick
 // and a paid jev box) about once a second, each look starting PERIOD_MS after the last one

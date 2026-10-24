@@ -6,7 +6,7 @@ import {
   type TrackerMask,
   type TrackerSocket,
   trackerUrl,
-} from '../../src/primary/tracker-client';
+} from '../../src/adapters/net/tracker-client';
 
 class FakeSocket implements TrackerSocket {
   readyState = 0;

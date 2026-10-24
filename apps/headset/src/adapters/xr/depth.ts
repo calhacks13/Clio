@@ -1,6 +1,7 @@
-import { createLogger } from '../core/log';
-import { dot, madd, rotateVec, sub, type Vec3 } from '../core/math';
-import type { Ray } from '../domain/world/camera-model';
+import { createLogger } from '../../core/log';
+import { dot, madd, rotateVec, sub, type Vec3 } from '../../core/math';
+import type { Ray } from '../../domain/world/camera-model';
+import type { DepthHit, DepthSource } from '../../domain/world/depth-source';
 
 // How far along a camera ray the real world is, from WebXR hit-test against the room's geometry
 // (Quest's room setup: planes and the scene mesh; IWER's synthetic room on desktop). The outline
@@ -14,20 +15,7 @@ import type { Ray } from '../domain/world/camera-model';
 
 const log = createLogger('depth');
 
-export interface DepthHit {
-  /** World space (the probe's reference space), on the ray. */
-  point: Vec3;
-  /** Unit normal of the surface that was hit. */
-  normal: Vec3;
-  /** Meters along the ray from its origin. */
-  distance: number;
-}
-
-/** Port: hits along world-space rays. */
-export interface DepthSource {
-  /** One answer per ray, in order: the nearest hit, or null where the ray meets nothing known. */
-  measure(rays: readonly Ray[]): Promise<(DepthHit | null)[]>;
-}
+export type { DepthHit, DepthSource };
 
 export interface DepthProbeOptions {
   /** Reuse a hit for a new ray that passes this close to it (m). */

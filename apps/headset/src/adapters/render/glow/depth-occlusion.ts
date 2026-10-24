@@ -23,7 +23,7 @@ import {
 // (about the 10th percentile, so one stray read does not count), as an offset in front of the
 // plane, capped by the object's size. A fragment then fades only where the real surface is nearer
 // than that front by more than the margin. A surface behind (a hand-held object's table) never
-// cuts it. Hands are hidden by their own depth-only occluders as well (tracking/hand-occluders.ts).
+// cuts it. Hands are hidden by their own depth-only occluders as well (hand-occluders.ts).
 //
 // three.js's own occlusion (the depth map drawn into the depth buffer) stays off in the primary
 // demo (disableXrDepthOcclusion): it hid the outline behind the object itself.

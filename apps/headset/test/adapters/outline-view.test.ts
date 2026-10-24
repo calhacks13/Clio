@@ -11,8 +11,8 @@ vi.mock('../../src/adapters/render/text', () => ({
 }));
 
 import { ObjectHighlight } from '../../src/adapters/render/object-highlight';
-import { PrimaryOutlineView } from '../../src/primary/outline-view';
-import type { Placement } from '../../src/primary/placement';
+import { PrimaryOutlineView } from '../../src/adapters/render/outline-view';
+import type { Placement } from '../../src/domain/world/placement';
 
 const placement = (center: [number, number, number]): Placement =>
   ({

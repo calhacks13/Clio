@@ -1,5 +1,12 @@
 import type { PrimaryResponse } from '@clio/protocol';
 import * as THREE from 'three';
+import {
+  type FrameImage,
+  FrameStream,
+  frameSize,
+  RecentSamples,
+  videoFrames,
+} from '../adapters/camera/frame-stream';
 import { PassthroughCamera } from '../adapters/camera/passthrough-camera';
 import {
   applyStoredCalibration,
@@ -11,41 +18,26 @@ import {
 } from '../adapters/camera/stored-calibration';
 import { ApiClient } from '../adapters/net/api-client';
 import { HttpEpisodeSink } from '../adapters/net/http-episode-sink';
+import { TrackerClient, type TrackerMask, trackerUrl } from '../adapters/net/tracker-client';
 import { depthOverlay } from '../adapters/render/glow/depth-occlusion';
-import { poseFromMatrix } from '../adapters/xr/frame-sampler';
-import { XrPlaneSurfaces } from '../adapters/xr/planes';
-import { createLogger } from '../core/log';
-import { composePose, type Pose } from '../core/math';
-import type { CameraModel } from '../domain/world/camera-model';
-import type { CameraFrameSource } from '../domain/world/grounding';
-import { PoseHistory } from '../domain/world/pose-history';
-import { HandOccluders } from '../tracking/hand-occluders';
-import { HandsView } from '../tracking/hands';
-import { readAnswer } from './answer';
-import { PrimaryClient } from './client';
-import { boxMask, DebugBoxes, debugFlags } from './debug-boxes';
-import { createDepthProbe, type DepthSource, type XrDepthProbe } from './depth';
-import { DepthMemory } from './depth-memory';
+import { HandOccluders } from '../adapters/render/hand-occluders';
+import { PrimaryOutlineView } from '../adapters/render/outline-view';
+import { createDepthProbe, type DepthSource, type XrDepthProbe } from '../adapters/xr/depth';
 import {
   createDepthSampler,
   type DepthSampler,
   depthSensingInit,
   disableXrDepthOcclusion,
   preferDepthSensing,
-} from './depth-sensing';
-import {
-  type FrameImage,
-  FrameStream,
-  frameSize,
-  RecentSamples,
-  videoFrames,
-} from './frame-stream';
-import { PrimaryHud } from './hud';
-import { LatestOnly } from './latest-only';
-import { PrimaryLoop, trackerUpdate } from './loop';
-import { motionOptionsFromParams, OutlineMotion } from './motion-smoothing';
-import { PrimaryOutlineView } from './outline-view';
-import { PhotoView } from './photo-view';
+} from '../adapters/xr/depth-sensing';
+import { poseFromMatrix } from '../adapters/xr/frame-sampler';
+import { XrPlaneSurfaces } from '../adapters/xr/planes';
+import { createLogger } from '../core/log';
+import { composePose, type Pose } from '../core/math';
+import type { CameraModel } from '../domain/world/camera-model';
+import { DepthMemory } from '../domain/world/depth-memory';
+import type { CameraFrameSource } from '../domain/world/grounding';
+import { motionOptionsFromParams, OutlineMotion } from '../domain/world/motion-smoothing';
 import {
   maskRays,
   measureDepth,
@@ -53,10 +45,18 @@ import {
   type ObjectMask,
   placeOutline,
   surfaceOrTable,
-} from './placement';
+} from '../domain/world/placement';
+import { PoseHistory } from '../domain/world/pose-history';
+import { HandsView } from '../tracking/hands';
+import { readAnswer } from './answer';
+import { PrimaryClient } from './client';
+import { boxMask, DebugBoxes, debugFlags } from './debug-boxes';
+import { PrimaryHud } from './hud';
+import { LatestOnly } from './latest-only';
+import { PrimaryLoop, trackerUpdate } from './loop';
+import { PhotoView } from './photo-view';
 import { PrimaryRecording } from './recording';
 import { StillImageCamera } from './still-image';
-import { TrackerClient, type TrackerMask, trackerUrl } from './tracker-client';
 
 // The primary-object demo (/primary.html): about once a second the server names the main object
 // in the passthrough camera's view (Gemini picks it, jev boxes it), and in between the tracker on

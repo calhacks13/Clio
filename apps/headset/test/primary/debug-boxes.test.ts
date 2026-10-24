@@ -1,5 +1,6 @@
 import { Quaternion, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
+import type { TrackerMask } from '../../src/adapters/net/tracker-client';
 import type { Vec3 } from '../../src/core/math';
 import {
   boxMask,
@@ -9,7 +10,6 @@ import {
   drawPanel,
   frameRibbon,
 } from '../../src/primary/debug-boxes';
-import type { TrackerMask } from '../../src/primary/tracker-client';
 
 /** A 2D context that records what was called (no canvas in Node). */
 function recordingContext() {

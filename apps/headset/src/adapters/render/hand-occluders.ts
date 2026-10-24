@@ -9,7 +9,7 @@ import {
   SphereGeometry,
   Vector3,
 } from 'three';
-import { occlusionSettings } from '../adapters/render/glow/depth-occlusion';
+import { occlusionSettings } from './glow/depth-occlusion';
 
 // Invisible stand-ins for the real hands, so virtual light behind a hand stays behind it. Quest's
 // depth map does not contain hands (a fingertip reads the surface behind it), so the hands are

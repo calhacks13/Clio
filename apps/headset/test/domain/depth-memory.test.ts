@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Ray } from '../../src/domain/world/camera-model';
-import { DepthMemory } from '../../src/primary/depth-memory';
-import type { ObjectDepth, ObjectMask } from '../../src/primary/placement';
+import { DepthMemory } from '../../src/domain/world/depth-memory';
+import type { ObjectDepth, ObjectMask } from '../../src/domain/world/placement';
 
 const ray = (origin: [number, number, number], direction: [number, number, number]): Ray => ({
   origin,

@@ -1,5 +1,5 @@
-import { dot, length, madd, scale, sub, type Vec3 } from '../core/math';
-import { billboard, type ObjectOutline, outlinePoint, type Point2 } from '../domain/world/outline';
+import { dot, length, madd, scale, sub, type Vec3 } from '../../core/math';
+import { billboard, type ObjectOutline, outlinePoint, type Point2 } from './outline';
 import type { DepthKind, Placement } from './placement';
 
 // The tracked object's outline, steadied and brought up to date before it is drawn. The tracker

@@ -11,10 +11,10 @@ import {
   SRGBColorSpace,
   Vector3,
 } from 'three';
+import { base64ToBytes, type StreamedFrame } from '../adapters/camera/frame-stream';
+import type { TargetMessage, TrackerMask } from '../adapters/net/tracker-client';
 import { length, madd, sub, type Vec3 } from '../core/math';
-import { base64ToBytes, type StreamedFrame } from './frame-stream';
-import type { ObjectMask, Placement } from './placement';
-import type { TargetMessage, TrackerMask } from './tracker-client';
+import type { ObjectMask, Placement } from '../domain/world/placement';
 
 // ?debug=boxes: where jev's box and the tracker's mask really are. A picture-in-picture panel,
 // lazily head-locked in the lower left of the view, shows the newest streamed camera frame the

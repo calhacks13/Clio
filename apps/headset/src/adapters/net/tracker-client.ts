@@ -4,7 +4,7 @@ import {
   NormalizedPolygonSchema,
 } from '@clio/protocol';
 import { z } from 'zod';
-import { createLogger } from '../core/log';
+import { createLogger } from '../../core/log';
 
 // The live tracking stream (tracker/TRACK.md): camera frames go to the tracker on the
 // Mac, which segments the current target on every one and answers each with a mask; Gemini and
