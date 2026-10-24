@@ -5,6 +5,7 @@ import {
   intersectPlaneY,
   liftDetection,
   pixelRay,
+  planeAt,
 } from '../../src/domain/world/camera-model';
 import { PoseHistory } from '../../src/domain/world/pose-history';
 
@@ -53,13 +54,13 @@ describe('camera model', () => {
       { point: [0.5, 560 / 720], box: [0.45, 0.7, 0.55, 600 / 720] },
       model,
       head,
-      0,
+      planeAt(0),
     );
     expect(near(lifted, [0, 0.05, -1])).toBe(true);
   });
 
   it('falls back to the table under the point when there is no box', () => {
-    const lifted = liftDetection({ point: [0.5, 600 / 720], box: null }, model, head, 0);
+    const lifted = liftDetection({ point: [0.5, 600 / 720], box: null }, model, head, planeAt(0));
     expect(near(lifted, [0, 0, -1])).toBe(true);
   });
 });

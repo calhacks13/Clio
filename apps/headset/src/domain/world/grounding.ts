@@ -1,5 +1,6 @@
 import type { Detection } from '@clio/protocol';
-import { type CameraModel, liftDetection } from './camera-model';
+import type { Vec3 } from '../../core/math';
+import { type CameraModel, intersectPlaneY, liftDetection, type Ray } from './camera-model';
 import type { ObjectRegistry } from './object-registry';
 import type { PoseHistory } from './pose-history';
 import type { Workspace } from './workspace';
@@ -23,6 +24,11 @@ export interface CameraFrameSource {
   model(): CameraModel | null;
 }
 
+/** Port: real surfaces (e.g. WebXR plane detection), in world space. */
+export interface SurfaceRaycaster {
+  cast(ray: Ray): Vec3 | null;
+}
+
 /** Port: open-vocabulary 2D detection. */
 export interface VisionLocator {
   locate(frame: CameraFrame, objects: { id: string; query: string }[]): Promise<Detection[]>;
@@ -44,6 +50,8 @@ export interface GrounderDeps {
   poses: PoseHistory;
   /** Read at use time, because the workspace can be recalibrated. */
   workspace: () => Workspace;
+  /** Detected surfaces; detections fall back to the workspace plane when it misses. */
+  surface?: SurfaceRaycaster;
   minConfidence?: number;
 }
 
@@ -84,7 +92,7 @@ export class ObjectGrounder implements Grounder {
       const det = detections.find((d) => d.id === id);
       const world =
         det?.found && det.confidence >= minConfidence
-          ? liftDetection(det, model, head, workspace.surfaceY)
+          ? liftDetection(det, model, head, (ray) => this.cast(ray, workspace))
           : null;
       if (world && det) {
         registry.observe(id, {
@@ -99,5 +107,9 @@ export class ObjectGrounder implements Grounder {
       }
     }
     return { ok: true, located, missing };
+  }
+
+  private cast(ray: Ray, workspace: Workspace): Vec3 | null {
+    return this.deps.surface?.cast(ray) ?? intersectPlaneY(ray, workspace.surfaceY);
   }
 }

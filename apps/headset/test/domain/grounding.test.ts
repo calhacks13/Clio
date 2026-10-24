@@ -7,6 +7,7 @@ import {
   type CameraFrame,
   type CameraFrameSource,
   ObjectGrounder,
+  type SurfaceRaycaster,
   type VisionLocator,
 } from '../../src/domain/world/grounding';
 import { ObjectRegistry } from '../../src/domain/world/object-registry';
@@ -32,7 +33,11 @@ const model: CameraModel = {
   headFromCamera: { p: [0, 0, 0], q: [0, 0, 0, 1] },
 };
 
-function setup(detections: Detection[], camera: Partial<CameraFrameSource> = {}) {
+function setup(
+  detections: Detection[],
+  camera: Partial<CameraFrameSource> = {},
+  surface?: SurfaceRaycaster,
+) {
   const bus = new Emitter<AppEvents>();
   const registry = new ObjectRegistry(bus);
   registry.load(procedure.objects, 0);
@@ -60,6 +65,7 @@ function setup(detections: Detection[], camera: Partial<CameraFrameSource> = {})
     registry,
     poses: history,
     workspace: () => new Workspace({ p: [0, 0, 0], q: [0, 0, 0, 1] }),
+    ...(surface ? { surface } : {}),
   });
   return { grounder, registry, queries, missing };
 }
@@ -102,5 +108,24 @@ describe('ObjectGrounder', () => {
   it('says so when there is no camera, instead of guessing', async () => {
     const { grounder } = setup([cupSeen], { capture: async () => null });
     expect(await grounder.ground(['cup'])).toEqual({ ok: false, reason: 'no-camera-frame' });
+  });
+
+  it('lifts onto a detected real surface when one is available', async () => {
+    // A detected table top 10 cm below the camera ray's workspace-plane hit: the cup's base lands on it.
+    const surface: SurfaceRaycaster = {
+      cast: (ray) => {
+        const s = (-0.1 - ray.origin[1]) / ray.direction[1];
+        return s > 0
+          ? [ray.origin[0] + ray.direction[0] * s, -0.1, ray.origin[2] + ray.direction[2] * s]
+          : null;
+      },
+    };
+    const { grounder, registry } = setup([cupSeen], {}, surface);
+    await grounder.ground(['cup']);
+    // Base ray (0, -0.3, -1) meets y = -0.1 at z = -4/3; the center ray (0, -0.25, -1) passes above
+    // that base at y = 0.3 - 0.25 * 4/3.
+    const cup = registry.get('cup');
+    expect(cup?.position[2]).toBeCloseTo(-4 / 3);
+    expect(cup?.position[1]).toBeCloseTo(0.3 - 0.25 * (4 / 3));
   });
 });

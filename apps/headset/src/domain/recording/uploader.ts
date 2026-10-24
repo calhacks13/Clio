@@ -10,6 +10,8 @@ export interface UploaderOptions {
   onDrop?: (why: string) => void;
   baseDelayMs?: number;
   maxDelayMs?: number;
+  /** Batches held while the server is unreachable; the oldest are dropped beyond this. */
+  maxQueued?: number;
 }
 
 type Op = { kind: 'batch'; batch: EpisodeBatchInput } | { kind: 'finish'; finish: EpisodeFinish };
@@ -21,6 +23,8 @@ export class EpisodeUploader {
   private id: string | null = null;
   private running: Promise<void> | null = null;
   private failed = false;
+  private inFlight: Op | null = null;
+  private readonly maxQueued: number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly onDrop: (why: string) => void;
   private readonly baseDelay: number;
@@ -35,6 +39,7 @@ export class EpisodeUploader {
     this.onDrop = options.onDrop ?? ((why) => console.warn(`[uploader] dropped ${why}`));
     this.baseDelay = options.baseDelayMs ?? 500;
     this.maxDelay = options.maxDelayMs ?? 8000;
+    this.maxQueued = options.maxQueued ?? 300;
     // Create the episode right away, so the server knows a session started before the first batch.
     void this.kick();
   }
@@ -50,6 +55,7 @@ export class EpisodeUploader {
 
   push(batch: EpisodeBatchInput): void {
     this.queue.push({ kind: 'batch', batch });
+    this.trim();
     this.kick();
   }
 
@@ -82,6 +88,7 @@ export class EpisodeUploader {
       }
       const op = this.queue[0];
       if (!op) break;
+      this.inFlight = op;
       const id = this.id;
       try {
         if (op.kind === 'batch') await this.retrying(() => this.sink.append(id, op.batch));
@@ -91,7 +98,20 @@ export class EpisodeUploader {
           `${op.kind === 'batch' ? `batch ${op.batch.seq}` : 'finish'}: ${errorMessage(err)}`,
         );
       }
+      this.inFlight = null;
       this.queue.shift();
+    }
+  }
+
+  /** Keep memory bounded during long outages: drop the oldest queued batches, never in-flight. */
+  private trim(): void {
+    let batches = this.queue.filter((op) => op.kind === 'batch').length;
+    while (batches > this.maxQueued) {
+      const i = this.queue.findIndex((op) => op.kind === 'batch' && op !== this.inFlight);
+      const [op] = i >= 0 ? this.queue.splice(i, 1) : [];
+      if (op?.kind !== 'batch') break;
+      this.onDrop(`batch ${op.batch.seq}: upload queue full`);
+      batches--;
     }
   }
 

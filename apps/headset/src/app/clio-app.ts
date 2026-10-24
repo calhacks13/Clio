@@ -20,6 +20,7 @@ import { SceneRuntime } from '../adapters/render/scene-runtime';
 import { ScriptedAgent } from '../adapters/scripted/scripted-agent';
 import { WorkspaceAnchor } from '../adapters/xr/anchors';
 import { FrameSampler } from '../adapters/xr/frame-sampler';
+import { XrPlaneSurfaces } from '../adapters/xr/planes';
 import { startArSession, type XrRuntime } from '../adapters/xr/xr-session';
 import { performanceClock } from '../core/clock';
 import { Emitter } from '../core/emitter';
@@ -80,6 +81,7 @@ export class ClioApp {
   private readonly lesson: LessonController;
   private readonly overlay: OverlayModel;
   private readonly sampler = new FrameSampler();
+  private readonly surfaces = new XrPlaneSurfaces();
   private readonly anchor = new WorkspaceAnchor();
   private readonly workspacePresenters: Presenter[];
   private readonly worldPresenters: Presenter[];
@@ -111,6 +113,7 @@ export class ClioApp {
           registry: this.registry,
           poses: this.poses,
           workspace: () => this.currentWorkspace(),
+          surface: this.surfaces,
         })
       : null;
     this.lesson = new LessonController({
@@ -177,8 +180,9 @@ export class ClioApp {
     if (!world) return;
     this.poses.push(t, world.head);
 
-    // 2. Localize: establish and refine the workspace frame.
+    // 2. Localize: establish and refine the workspace frame; track real surfaces.
     const workspace = this.localize(world, frame, runtime);
+    this.surfaces.update(frame, runtime.space);
     this.scene.setWorkspacePose(workspace.worldFromWorkspace);
     const local = workspace.toWorkspaceFrame(world);
 

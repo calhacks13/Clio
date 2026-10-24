@@ -76,24 +76,33 @@ export interface Detection2D {
   box: readonly [number, number, number, number] | null;
 }
 
+/** Where a ray meets a surface in world space, or null. */
+export type SurfaceCast = (ray: Ray) => Vec3 | null;
+
+/** The horizontal plane y = h as a SurfaceCast. */
+export const planeAt =
+  (h: number): SurfaceCast =>
+  (ray) =>
+    intersectPlaneY(ray, h);
+
 /**
- * Lift a detection on a surface at height `surfaceY` (world) to a 3D point. Depth comes from where
- * the box's bottom center meets the surface (objects rest on it); height comes from the detection
- * point straight above that base. Without a box, the point's ray meets the surface directly.
+ * Lift a detection to a 3D point (world space). Objects rest on surfaces, so depth comes from where
+ * the box's bottom center meets `surface`; height comes from the detection point straight above
+ * that base. Without a box, the point's own ray meets the surface.
  */
 export function liftDetection(
   det: Detection2D,
   model: CameraModel,
   worldFromHead: Pose,
-  surfaceY: number,
+  surface: SurfaceCast,
 ): Vec3 | null {
   if (det.box) {
     const [x0, , x1, y1] = det.box;
-    const base = intersectPlaneY(pixelRay(model, [(x0 + x1) / 2, y1], worldFromHead), surfaceY);
+    const base = surface(pixelRay(model, [(x0 + x1) / 2, y1], worldFromHead));
     if (base) {
       if (!det.point) return base;
       return pointAboveBase(pixelRay(model, det.point, worldFromHead), base) ?? base;
     }
   }
-  return det.point ? intersectPlaneY(pixelRay(model, det.point, worldFromHead), surfaceY) : null;
+  return det.point ? surface(pixelRay(model, det.point, worldFromHead)) : null;
 }

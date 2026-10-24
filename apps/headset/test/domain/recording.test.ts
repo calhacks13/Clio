@@ -250,4 +250,34 @@ describe('EpisodeUploader', () => {
     expect(sink.only().batches.map((b) => b.seq)).toEqual([1]);
     expect(dropped).toEqual(['batch 0: 400: invalid batch']);
   });
+
+  it('drops the oldest batches beyond the queue limit, and says so', async () => {
+    const sink = new MemoryEpisodeSink();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const create = sink.create.bind(sink);
+    sink.create = async (m) => {
+      await gate; // server unreachable until released
+      return create(m);
+    };
+    const dropped: string[] = [];
+    const up = new EpisodeUploader(sink, meta, {
+      sleep: noSleep,
+      maxQueued: 2,
+      onDrop: (why) => dropped.push(why),
+    });
+    for (const seq of [0, 1, 2, 3]) up.push({ seq, frames: [], events: [], objects: [] });
+    release();
+    await up.finish({
+      durationMs: 1,
+      outcome: 'completed',
+      stepsCompleted: 0,
+      stepsTotal: 0,
+      batches: 4,
+    });
+    expect(sink.only().batches.map((b) => b.seq)).toEqual([2, 3]);
+    expect(dropped).toEqual(['batch 0: upload queue full', 'batch 1: upload queue full']);
+  });
 });

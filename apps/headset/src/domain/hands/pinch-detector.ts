@@ -14,14 +14,21 @@ export interface PinchThresholds {
   startDistance: number;
   /** An active pinch ends only once the tips are this far apart (m). Must exceed startDistance. */
   endDistance: number;
+  /** A tracking dropout shorter than this (since the hand was last seen) doesn't end a pinch. */
+  dropoutGraceMs?: number;
 }
 
-export const DEFAULT_PINCH: PinchThresholds = { startDistance: 0.02, endDistance: 0.035 };
+export const DEFAULT_PINCH: PinchThresholds = {
+  startDistance: 0.02,
+  endDistance: 0.035,
+  dropoutGraceMs: 150,
+};
 
 /** Pinch state per hand with hysteresis, so tracking jitter near the threshold can't flicker. */
 export class PinchDetector {
   private readonly pinching: Record<Handedness, boolean> = { left: false, right: false };
   private readonly last: Record<Handedness, Vec3> = { left: [0, 0, 0], right: [0, 0, 0] };
+  private readonly lastSeen: Record<Handedness, number> = { left: 0, right: 0 };
 
   constructor(private readonly thresholds: PinchThresholds = DEFAULT_PINCH) {}
 
@@ -31,12 +38,14 @@ export class PinchDetector {
 
   update(hand: Handedness, sample: HandSample | null, t: number): PinchTransition | null {
     if (!sample) {
-      if (!this.pinching[hand]) return null;
+      const grace = this.thresholds.dropoutGraceMs ?? 150;
+      if (!this.pinching[hand] || t - this.lastSeen[hand] < grace) return null;
       this.pinching[hand] = false;
       return { hand, phase: 'end', point: this.last[hand], t };
     }
     const point = pinchPoint(sample);
     this.last[hand] = point;
+    this.lastSeen[hand] = t;
     if (!this.pinching[hand] && sample.pinch <= this.thresholds.startDistance) {
       this.pinching[hand] = true;
       return { hand, phase: 'start', point, t };

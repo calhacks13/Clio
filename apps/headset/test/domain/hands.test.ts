@@ -41,10 +41,21 @@ describe('PinchDetector', () => {
     expect(d.isPinching('right')).toBe(false);
   });
 
-  it('ends an active pinch when the hand stops being tracked', () => {
+  it('keeps a pinch alive through a brief tracking dropout', () => {
     const d = new PinchDetector({ startDistance: 0.02, endDistance: 0.035 });
     d.update('left', tips(0.01), 0);
-    expect(d.update('left', null, 10)?.phase).toBe('end');
+    expect(d.update('left', null, 100)).toBeNull();
+    expect(d.update('left', tips(0.01), 120)).toBeNull();
+    expect(d.isPinching('left')).toBe(true);
+  });
+
+  it('ends a pinch once the hand has been lost for longer than the grace period', () => {
+    const d = new PinchDetector({ startDistance: 0.02, endDistance: 0.035 });
+    d.update('left', tips(0.01), 0);
+    d.update('left', null, 100);
+    const end = d.update('left', null, 200);
+    expect(end?.phase).toBe('end');
+    expect(end?.t).toBe(200);
   });
 
   it('reports where the pinch happened', () => {
