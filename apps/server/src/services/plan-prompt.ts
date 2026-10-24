@@ -314,8 +314,8 @@ function reviewText(r: Revising): string {
     'First read the scene and the goal:',
     '- `done`: each part of the goal the views show already done before the lesson, and what ' +
       'shows it (e.g. "the acid test: cup A is already pink"). A step under way is not done.',
-    '- `todo`: each part of the goal still to do, in the order the goal names them; the step ' +
-      'under way starts one.',
+    '- `todo`: each part of the goal still to do, in the order the goal names them, and none ' +
+      'of those in `done`; the step under way starts one.',
     '- `control`: in an experiment that compares samples, the one the setup keeps untouched ' +
       'for comparison (when more like samples are set out than the parts left to do use); "" ' +
       'in any other task.',
@@ -323,7 +323,8 @@ function reviewText(r: Revising): string {
     '- Keep a line, with its id, where it is right; reword, drop, split or add lines where it ' +
       'is not.',
     '- Every part in `todo` gets its steps, in order; a part in `done` gets none, here or in a ' +
-      'new place; the control stays untouched.',
+      'new place; the control stays untouched. Add nothing a thing already has (indicator to a ' +
+      'cup that is already purple).',
     '- Every step changes something a camera can see. No step only looks, observes, compares ' +
       'or checks: what to notice belongs to the step that causes the change.',
     '- Close what the task opened, unless the goal needs it open.',

@@ -334,7 +334,7 @@ function describeParts(parts: readonly RestPartReport[]): string {
     .filter((p) => p.kind === 'step')
     .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
   return [
-    ...parts.filter((p) => p.kind === 'review' && !p.detail).map((p) => `review ${say(p)}`),
+    ...parts.filter((p) => p.kind === 'review').map((p) => `review ${say(p)}`),
     ...(steps.length ? [`steps ${steps.map(say).join(', ')}`] : []),
     ...parts.filter((p) => p.kind === 'objects').map((p) => `objects ${say(p)}`),
   ].join('; ');

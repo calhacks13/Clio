@@ -14,11 +14,12 @@ import {
 } from './plan-build';
 import type { Planner, PlannerRequest, RestPart } from './planner';
 
-// Stage rest in parallel (docs/coach-plan.md, "Who writes the first draft"). One call writes
-// the first stage's outline in full today, which takes 11 to 23 s, and it keeps whatever the quick
+// Stage rest in parallel (docs/coach-plan.md, "Who writes the first draft"). One call used to
+// write the first stage's quick outline in full (11 to 44 s on the bench) and kept whatever the
 // outline got wrong. Here the work is split by what it needs:
-// - one call checks the outline against the scene and the goal (what is done, what is left, the
-//   control), thinking hard but writing little, and names the new objects the lines use;
+// - one call reviews the outline against the scene and the goal (what is done, what is left,
+//   the control), where the lesson's shape is decided, writing little; it names the new objects
+//   the lines use;
 // - meanwhile another writes the first stage's object cards in full, with the hazards in view;
 // - then every checked line is written in full at once, each by its own call, from the whole
 //   checked outline and one table of objects, so the steps fit together and share ids.
@@ -65,22 +66,19 @@ export async function draftRestInParallel(
 ): Promise<Candidate | null> {
   const { base, fromStepIndex: from } = request.revision;
   const objects = writeObjects(deps, request);
-  const checked = await part(deps, request, { kind: 'review' }, REVIEW_TIMEOUT_MS, (json) => {
-    const read = readCheckedOutline(json, base, from);
-    return read.ok ? { ok: true, value: read.outline } : read;
-  });
+  const checked = await part(
+    deps,
+    request,
+    { kind: 'review' },
+    REVIEW_TIMEOUT_MS,
+    (json) => {
+      const read = readCheckedOutline(json, base, from);
+      return read.ok ? { ok: true, value: read.outline } : read;
+    },
+    describeReview,
+  );
   if (!checked) return null;
   const outline = checked.value;
-  const { done, todo, control } = outline.reading;
-  deps.onPart?.({
-    kind: 'review',
-    ms: 0,
-    ok: true,
-    attempts: 0,
-    detail:
-      `done: ${done.join('; ') || '-'} | todo: ${todo.join('; ') || '-'} | control: ` +
-      `${control || '-'} | ${outline.lines.map((l) => l.instruction).join(' / ')}`,
-  });
   const declare = restDeclarations(outline);
   const table = restObjects(base, outline);
   const written = await Promise.all(
@@ -101,6 +99,15 @@ export async function draftRestInParallel(
   );
   const { upgrades, warnings } = await objects;
   return mergeParallelRest(base, from, { outline, written, upgrades, warnings }, ctx);
+}
+
+/** "done: … | todo: … | control: … | line / line", for the bench and the logs. */
+function describeReview({ reading, lines }: CheckedOutline): string {
+  const { done, todo, control } = reading;
+  return (
+    `done: ${done.join('; ') || '-'} | todo: ${todo.join('; ') || '-'} | control: ` +
+    `${control || '-'} | ${lines.map((l) => l.instruction).join(' / ')}`
+  );
 }
 
 /** The first stage's objects in full, and the warnings; none when the call fails. */
@@ -133,8 +140,9 @@ function readWrittenStep(
   ctx: PlanContext,
   id: string,
 ): { ok: true; value: WrittenStep } | { ok: false; error: string } {
-  if (!isRecord(json) || !isRecord(json.step))
+  if (!isRecord(json) || !isRecord(json.step)) {
     return { ok: false, error: 'The answer has no `step`' };
+  }
   const declared = (Array.isArray(json.objects) ? json.objects : []).filter(isRecord);
   const checked = checkStep({ ...json.step, id }, writerObjects(objects, outline, declared), ctx);
   return checked.ok
@@ -152,6 +160,7 @@ async function part<T>(
   which: RestPart,
   timeoutMs: number,
   read: (json: unknown) => { ok: true; value: T } | { ok: false; error: string },
+  describe?: (value: T) => string,
 ): Promise<{ value: T } | null> {
   const started = deps.now().getTime();
   let attempts = 0;
@@ -159,7 +168,7 @@ async function part<T>(
   let result: { value: T } | null = null;
   while (attempts < 2 && result === null) {
     const left = Math.min(timeoutMs - (deps.now().getTime() - started), deps.timeLeft());
-    if (attempts > 0 && left < RETRY_MIN_MS) break;
+    if (left <= 0 || (attempts > 0 && left < RETRY_MIN_MS)) break;
     attempts++;
     let text: string;
     try {
@@ -185,6 +194,7 @@ async function part<T>(
     ms: deps.now().getTime() - started,
     ok: result !== null,
     attempts,
+    ...(result && describe ? { detail: describe(result.value) } : {}),
   });
   return result;
 }
