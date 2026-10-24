@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Object glow preview</title>
+<style>
+  body { margin: 0; background: #0b1016; color: #fff; font: 14px system-ui, sans-serif; overflow: hidden; }
+  canvas { display: block; }
+  #controls { position: absolute; left: 16px; right: 16px; top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+  button { background: #263b4b; color: #fff; border: 0; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
+  button[aria-pressed='true'] { background: #4fe3ff; color: #0b1016; }
+  button:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+  #cost { position: absolute; left: 16px; bottom: 12px; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<div id="controls"></div>
+<div id="cost"></div>
+<script type="module">
+// Render harness for the object glow (src/adapters/render/object-highlight.ts) on the demo photo:
+// saved masks, a live mask from the local tracker (ws /track, no paid calls), mask jitter at the
+// tracker's rate, an orbiting eye for parallax, and the CPU cost of one update.
+import * as THREE from 'three';
+import { PrimaryOutlineView } from '/src/primary/outline-view.ts';
+
+const W = 0.5;
+const H = (0.5 * 849) / 1280;
+const cases = [{"name": "Vernier scale", "mode": "surface", "points": [[0.08710937499999999, -0.004492187499999995], [0.08515624999999999, 0.006054687500000006], [0.08632812499999998, 0.012695312499999997], [0.08437499999999998, 0.015039062499999997], [0.08281250000000001, 0.02207031249999999], [0.08359375000000002, 0.0255859375], [0.08515624999999999, 0.026757812500000006], [0.08359375000000002, 0.030664062499999995], [0.08476562500000001, 0.03222656250000001], [0.08242187499999998, 0.034570312500000006], [0.08242187499999998, 0.0361328125], [0.07851562499999998, 0.037695312499999994], [0.07890625000000001, 0.0388671875], [0.08281250000000001, 0.0392578125], [0.08085937500000001, 0.0490234375], [0.05546875000000001, 0.0490234375], [0.03671875000000002, 0.04746093750000001], [0.009765625, 0.047851562500000014], [0.005078124999999989, 0.0466796875], [-0.03242187499999999, 0.045507812499999994], [-0.038671874999999994, 0.0462890625], [-0.03984375000000001, 0.0451171875], [-0.04609374999999999, 0.0462890625], [-0.04999999999999999, 0.044726562500000004], [-0.06171874999999999, 0.044726562500000004], [-0.0640625, 0.0462890625], [-0.06875, 0.04589843749999999], [-0.07148437499999999, 0.047851562500000014], [-0.07343749999999999, 0.0470703125], [-0.07539062499999999, 0.04824218749999999], [-0.07734374999999999, 0.0466796875], [-0.078125, 0.03964843750000001], [-0.0765625, 0.029492187500000006], [-0.078515625, 0.026367187500000007], [-0.078515625, 0.017773437499999996], [-0.0796875, 0.016601562500000007], [-0.0796875, 0.013867187500000006], [-0.07695312500000001, 0.011523437500000008], [-0.07734374999999999, 0.009960937499999998], [-0.07578125, 0.008398437500000005], [-0.073828125, -0.004882812499999998], [-0.066796875, -0.005664062500000003], [-0.07109375000000001, -0.009570312499999994], [-0.06757812499999999, -0.012304687500000014], [-0.0625, -0.011914062500000011], [-0.05976562499999999, -0.013085937499999983], [-0.05781249999999999, -0.011523437500000008], [-0.05546875000000001, -0.012304687500000014], [-0.05390624999999999, -0.010742187500000003], [-0.052343749999999994, -0.012695312500000017], [-0.04999999999999999, -0.011523437500000008], [-0.04414062499999999, -0.012695312500000017], [0.008203124999999978, -0.009570312499999994], [0.08124999999999999, -0.007226562500000014], [0.08554687500000002, -0.006445312500000008]]}, {"name": "Locking screw", "mode": "surface", "points": [[-0.021484375, 0.0732421875], [-0.021484375, 0.0724609375], [-0.021875000000000006, 0.0720703125], [-0.021875000000000006, 0.0646484375], [-0.021484375, 0.0642578125], [-0.021484375, 0.06347656250000001], [-0.021875000000000006, 0.06308593750000001], [-0.021875000000000006, 0.0623046875], [-0.02226562500000001, 0.0619140625], [-0.02226562500000001, 0.06074218750000001], [-0.021875000000000006, 0.0603515625], [-0.02226562500000001, 0.0599609375], [-0.02226562500000001, 0.05839843749999999], [-0.021875000000000006, 0.05800781250000001], [-0.021875000000000006, 0.0576171875], [-0.021484375, 0.0572265625], [-0.021093749999999994, 0.0572265625], [-0.02070312499999999, 0.0568359375], [-0.01679687499999999, 0.0568359375], [-0.01640625000000001, 0.0572265625], [-0.009765625, 0.0572265625], [-0.009374999999999994, 0.0576171875], [-0.0074218749999999944, 0.0576171875], [-0.007031249999999989, 0.05800781250000001], [-0.00390625, 0.05800781250000001], [-0.0035156249999999944, 0.05839843749999999], [-0.0007812500000000111, 0.05839843749999999], [-0.00039062500000000555, 0.05878906249999999], [0.0007812500000000111, 0.05878906249999999], [0.001171874999999989, 0.0591796875], [0.001171874999999989, 0.0599609375], [0.0015625000000000222, 0.0603515625], [0.0015625000000000222, 0.06308593750000001], [0.0007812500000000111, 0.06386718749999999], [0.0007812500000000111, 0.0642578125], [0.0003906249999999778, 0.0646484375], [0.0003906249999999778, 0.0650390625], [-0.0015624999999999944, 0.0669921875], [-0.0015624999999999944, 0.06816406250000001], [-0.001953125, 0.06855468750000002], [-0.001953125, 0.0697265625], [-0.0023437500000000056, 0.0701171875], [-0.0023437500000000056, 0.0748046875], [-0.00390625, 0.07636718750000002], [-0.004687500000000011, 0.07636718750000002], [-0.005078124999999989, 0.0767578125], [-0.0078125, 0.0767578125], [-0.008203125000000006, 0.0771484375], [-0.013281249999999994, 0.0771484375], [-0.013671875, 0.0767578125], [-0.016015625000000006, 0.0767578125], [-0.01640625000000001, 0.07636718750000002], [-0.017187499999999994, 0.07636718750000002], [-0.017578125, 0.07597656250000001], [-0.017968750000000006, 0.07597656250000001], [-0.01835937500000001, 0.0755859375], [-0.01874999999999999, 0.0755859375], [-0.019140624999999994, 0.0751953125], [-0.01953125, 0.0751953125]]}, {"name": "Inside jaws", "mode": "surface", "points": [[-0.1015625, 0.0939453125], [-0.10390625, 0.0939453125], [-0.112890625, 0.0822265625], [-0.11406250000000001, 0.07871093750000001], [-0.1171875, 0.07402343749999998], [-0.11796875000000001, 0.0705078125], [-0.12031249999999999, 0.0697265625], [-0.11953125, 0.0689453125], [-0.12031249999999999, 0.0626953125], [-0.12265625, 0.0673828125], [-0.12265625, 0.07089843750000001], [-0.124609375, 0.0724609375], [-0.12734375, 0.0798828125], [-0.134375, 0.0876953125], [-0.13203125, 0.0900390625], [-0.134765625, 0.0904296875], [-0.1359375, 0.0892578125], [-0.1390625, 0.09199218749999999], [-0.141796875, 0.09160156249999998], [-0.142578125, 0.0888671875], [-0.14140625, 0.0826171875], [-0.14140625, 0.0673828125], [-0.139453125, 0.05878906249999999], [-0.140234375, 0.0494140625], [-0.14296875, 0.0466796875], [-0.159375, 0.045507812499999994], [-0.159765625, 0.043554687499999994], [-0.15859375, 0.042382812500000006], [-0.16015625, 0.0416015625], [-0.1609375, 0.03964843750000001], [-0.158984375, 0.0373046875], [-0.16015625, 0.0361328125], [-0.159375, 0.03417968750000001], [-0.157421875, 0.03417968750000001], [-0.15625, 0.03222656250000001], [-0.1453125, 0.03183593750000001], [-0.1234375, 0.0333984375], [-0.112890625, 0.035351562499999996], [-0.105859375, 0.034570312500000006], [-0.1, 0.035742187499999994], [-0.098046875, 0.037695312499999994], [-0.0953125, 0.036914062500000004], [-0.09765625, 0.035742187499999994], [-0.09492187499999999, 0.035742187499999994], [-0.09375, 0.0408203125], [-0.09453125000000001, 0.045507812499999994], [-0.0953125, 0.0462890625], [-0.1, 0.0462890625], [-0.1015625, 0.04746093750000001], [-0.10234375000000001, 0.0603515625], [-0.10078124999999999, 0.0666015625]]}, {"name": "Whole caliper", "mode": "object", "points": [[-0.1625, 0.044726562500000004], [-0.159765625, -0.023632812499999982], [-0.12890625, -0.11699218749999998], [-0.11484375, -0.1240234375], [-0.112890625, -0.09707031249999999], [-0.08710937499999999, -0.09746093749999998], [-0.09140625, -0.0939453125], [-0.08710937499999999, -0.0951171875], [-0.0875, -0.0826171875], [-0.07929687499999999, -0.0826171875], [-0.078125, -0.0923828125], [-0.07265625, -0.09472656250000001], [-0.072265625, -0.12207031249999997], [-0.057031250000000006, -0.1126953125], [-0.03437499999999999, -0.017773437500000017], [-0.033593750000000006, -0.023242187500000018], [-0.002734375000000011, -0.024023437499999988], [-0.001171874999999989, -0.020507812499999997], [0.0007812500000000111, -0.026757812500000006], [0.05937500000000001, -0.026757812500000006], [0.068359375, -0.03300781250000001], [0.05898437499999998, -0.03378906249999998], [0.05742187500000001, -0.029882812499999988], [0.04570312500000001, -0.035351562499999996], [0.06718750000000001, -0.036914062500000004], [0.072265625, -0.034179687499999986], [0.07070312499999998, -0.029882812499999988], [0.07929687499999999, -0.0314453125], [0.08124999999999999, -0.02207031250000001], [0.09023437499999998, -0.01933593749999999], [0.0859375, -0.011914062500000011], [0.09453125000000001, -0.008398437499999986], [0.09453125000000001, 0.0021484374999999967], [0.08828124999999998, -0.006835937500000011], [0.08671875000000001, 0.0037109375000000076], [0.24960937500000002, 0.013476562500000002], [0.24960937500000002, 0.0544921875], [0.08281250000000001, 0.04746093750000001], [0.07929687499999999, 0.0615234375], [0.0003906249999999778, 0.0576171875], [0.007031249999999989, 0.06074218750000001], [-0.002734375000000011, 0.0642578125], [-0.004687500000000011, 0.07597656250000001], [-0.012109375000000006, 0.0767578125], [-0.028906249999999994, 0.0658203125], [-0.01679687499999999, 0.0576171875], [-0.014453125000000011, 0.0666015625], [-0.008593750000000011, 0.0591796875], [-0.07734374999999999, 0.05332031249999999], [-0.07890625000000001, 0.04746093750000001], [-0.10078124999999999, 0.0451171875], [-0.101953125, 0.09433593750000001], [-0.12226562499999999, 0.06074218750000001], [-0.133203125, 0.0900390625], [-0.140234375, 0.09160156249999998], [-0.140234375, 0.04824218749999999]]}];
+const params = new URLSearchParams(location.search);
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(devicePixelRatio);
+document.body.append(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#0b1016');
+const camera = new THREE.PerspectiveCamera(34, 1, 0.01, 10);
+const tex = await new THREE.TextureLoader().loadAsync('/demo/caliper.jpg');
+tex.colorSpace = THREE.SRGBColorSpace;
+// The photo stands in for passthrough: drawn first, never occluding the light.
+const photo = new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshBasicMaterial({ map: tex, depthWrite: false }));
+photo.renderOrder = -1;
+photo.position.z = -0.005;
+scene.add(photo);
+const view = new PrimaryOutlineView();
+scene.add(view.object);
+
+let selected = Number(params.get('case') ?? 3);
+let detail = params.get('detail') === '1';
+let jitter = params.get('jitter') === '1';
+let orbit = params.get('orbit') === '1';
+let glowOn = true;
+let live = null;
+const pts = () => (selected === cases.length ? live : cases[selected].points);
+const noisy = [];
+function placement(points) {
+  if (!jitter) return { center: [0, 0, 0], outline: { shape: 'contour', points } };
+  // A few millimetres of edge noise per vertex, like a segmenter's frame-to-frame wobble.
+  noisy.length = points.length;
+  for (let i = 0; i < points.length; i++) {
+    const [x, y] = points[i];
+    noisy[i] = [x + (Math.random() - 0.5) * 0.006, y + (Math.random() - 0.5) * 0.006];
+  }
+  return { center: [0, 0, 0], outline: { shape: 'contour', points: noisy.slice() } };
+}
+function current() {
+  const c = cases[selected];
+  return { name: c ? c.name : 'Caliper (tracker)', mode: c ? c.mode : 'object', points: pts() };
+}
+function show(i) {
+  selected = i;
+  const c = current();
+  if (!c.points) return;
+  view.show(placement(c.points), c.name, c.mode);
+  renderButtons();
+  resize();
+}
+const controls = document.querySelector('#controls');
+function button(text, onClick, pressed) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = text;
+  b.onclick = onClick;
+  if (pressed !== undefined) b.setAttribute('aria-pressed', String(pressed()));
+  b.pressed = pressed;
+  controls.append(b);
+  return b;
+}
+const buttons = [];
+for (const [i, c] of cases.entries()) buttons.push(button(c.name, () => show(i), () => selected === i));
+buttons.push(button('Tracker mask', () => startTracker(), () => selected === cases.length));
+buttons.push(button('Jitter', () => { jitter = !jitter; renderButtons(); }, () => jitter));
+buttons.push(button('Orbit', () => { orbit = !orbit; renderButtons(); }, () => orbit));
+buttons.push(button('Close-up', () => { detail = !detail; show(selected); }, () => detail));
+buttons.push(button('Glow', () => { glowOn = !glowOn; view.object.visible = glowOn; renderButtons(); }, () => glowOn));
+buttons.push(button('Refind', () => { view.fade(); setTimeout(() => show(selected), 700); }));
+buttons.push(button('Measure', () => measure()));
+function renderButtons() {
+  for (const b of buttons) if (b.pressed) b.setAttribute('aria-pressed', String(b.pressed()));
+}
+
+function measure() {
+  // Batches of updates: the browser's clock is too coarse to time one.
+  const c = current();
+  const inputs = Array.from({ length: 50 }, () => placement(c.points));
+  const runs = [];
+  for (let k = 0; k < 15; k++) {
+    const t0 = performance.now();
+    for (const p of inputs) view.show(p, c.name, c.mode);
+    runs.push((performance.now() - t0) / inputs.length);
+  }
+  runs.sort((a, b) => a - b);
+  const out = { median: runs[7], min: runs[0], max: runs[14], points: c.points.length };
+  document.querySelector('#cost').textContent =
+    'update ' + out.median.toFixed(3) + ' ms median (' + out.points + ' points)';
+  window.__cost = out;
+  return out;
+}
+window.measure = measure;
+
+// Real masks for this photo from the local tracker (free: YOLOE on this Mac, no jev).
+async function startTracker() {
+  const img = await createImageBitmap(await (await fetch('/demo/caliper.jpg')).blob());
+  const canvas = new OffscreenCanvas(640, Math.round((640 * 849) / 1280));
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  const jpeg = new Uint8Array(await (await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.8 })).arrayBuffer());
+  const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/track');
+  let seq = 0;
+  const send = () => {
+    const header = new TextEncoder().encode(JSON.stringify({ type: 'frame', seq: ++seq, t: performance.now(), width: canvas.width, height: canvas.height }));
+    const msg = new Uint8Array(4 + header.length + jpeg.length);
+    new DataView(msg.buffer).setUint32(0, header.length);
+    msg.set(header, 4);
+    msg.set(jpeg, 4 + header.length);
+    ws.send(msg);
+  };
+  ws.onopen = () => {
+    send();
+    ws.send(JSON.stringify({ type: 'target', seq: 1, box: [0.18, 0.21, 1.0, 0.88], name: 'caliper' }));
+  };
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.type !== 'mask') return;
+    window.__trackerState = m.state;
+    if (m.found && m.outline) {
+      live = m.outline.map(([u, v]) => [(u - 0.5) * W, (0.5 - v) * H]);
+      window.__live = live;
+      if (selected !== cases.length) show(cases.length);
+      ws.close();
+      return;
+    }
+    if (seq < 60) setTimeout(send, 40);
+    else ws.close();
+  };
+}
+
+function resize() {
+  camera.aspect = innerWidth / innerHeight;
+  let height = 0.44, width = 0.58, x = 0, y = 0;
+  const p = pts();
+  if (detail && p) {
+    const xs = p.map((q) => q[0]), ys = p.map((q) => q[1]);
+    const l = Math.min(...xs), r = Math.max(...xs), b = Math.min(...ys), t = Math.max(...ys);
+    height = (t - b) * 2.2; width = (r - l) * 1.6; x = (l + r) / 2; y = (b + t) / 2;
+  }
+  // ?zoom=4&fx=0.1&fy=0.05: magnify around a point (m) to inspect the rim's pixels.
+  const zoom = Number(params.get('zoom') ?? 1);
+  if (zoom > 1) {
+    height /= zoom; width /= zoom;
+    x = Number(params.get('fx') ?? x); y = Number(params.get('fy') ?? y);
+  }
+  camera.userData.target = new THREE.Vector3(x, y, 0);
+  camera.fov = (2 * Math.atan(Math.max(height, width / camera.aspect) / (2 * 0.78)) * 180) / Math.PI;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+}
+addEventListener('resize', resize);
+show(selected);
+let last = performance.now();
+let lastMask = 0;
+renderer.setAnimationLoop((t) => {
+  const target = camera.userData.target;
+  const swing = orbit ? Math.sin(t / 1400) * 0.35 : 0;
+  camera.position.set(target.x + Math.sin(swing) * 0.78, target.y + (orbit ? 0.08 : 0), Math.cos(swing) * 0.78);
+  camera.lookAt(target);
+  if (jitter && t - lastMask > 40) {
+    lastMask = t;
+    const c = current();
+    if (c.points) view.show(placement(c.points), c.name, c.mode);
+  }
+  view.update(camera.position, t - last, t);
+  last = t;
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

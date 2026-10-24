@@ -1,59 +1,37 @@
-import {
-  BufferAttribute,
-  BufferGeometry,
-  DoubleSide,
-  Group,
-  Mesh,
-  MeshBasicMaterial,
-  type Vector3,
-} from 'three';
+import { Group, type Vector3 } from 'three';
 import type { Text } from 'troika-three-text';
-import {
-  cornerBrackets,
-  mergeStrokes,
-  type Stroke,
-  strokePolyline,
-} from '../adapters/render/stroke';
+import { type ObjectGlowMode, ObjectHighlight } from '../adapters/render/object-highlight';
 import { makeText, setText } from '../adapters/render/text';
-import type { ObjectOutline } from '../domain/world/outline';
 import type { Placement } from './placement';
 
-// The main object's outline, drawn like the lesson's (adapters/render/presenters/outlines.ts): a
-// contour laid just outside the object, or corner brackets around a box-only answer, on a plane
-// through the object that turns toward the viewer every frame. Its name floats just above. A new
-// answer replaces it at once; "nothing found" fades it out. Nothing is allocated per frame: the
-// group turns with lookAt, whose basis (+z at the eye, x level) is the outline's billboard.
+// The main object's light, drawn like the lesson's (adapters/render/presenters/outlines.ts): the
+// object glows from within its silhouette, or corner brackets frame a box-only answer, on a plane
+// through the object that turns toward the viewer every frame. Its name floats just above the
+// glow's bright edge. Each new mask reshapes the light in place; a newly found object (a new name,
+// or one back after being lost) fades in quickly with a brief flare; "nothing found" fades it out.
+// Nothing is allocated per frame: the group turns with lookAt, whose basis (+z at the eye, x
+// level) is the outline's billboard.
 
-const COLOR = 0x4fe3ff;
-const STROKE_M = 0.004;
-const BRACKET_SHARE = 0.3;
 const LABEL_SIZE = 0.024;
-const LABEL_GAP = 0.012;
-const FADE_IN_MS = 150;
+const LABEL_GAP = 0.01;
+const FADE_IN_MS = 180;
 const FADE_OUT_MS = 600;
+/** An object back after fading below this is found again: it flares like a new one. */
+const RELIGHT_BELOW = 0.35;
 
 /** troika fades the text's outline separately from its fill (missing from troika.d.ts). */
 type FadingText = Text & { outlineOpacity: number };
 
 export class PrimaryOutlineView {
   readonly object = new Group();
-  private readonly mesh: Mesh<BufferGeometry, MeshBasicMaterial>;
+  private readonly highlight = new ObjectHighlight();
   private readonly label: FadingText;
   private placed = false;
   private opacity = 0;
   private target = 0;
+  private name: string | null = null;
 
   constructor() {
-    this.mesh = new Mesh(
-      new BufferGeometry(),
-      new MeshBasicMaterial({
-        color: COLOR,
-        transparent: true,
-        depthWrite: false,
-        side: DoubleSide,
-      }),
-    );
-    this.mesh.renderOrder = 10;
     this.label = makeText({
       size: LABEL_SIZE,
       anchorX: 'center',
@@ -61,19 +39,31 @@ export class PrimaryOutlineView {
       bold: true,
     }) as FadingText;
     this.label.renderOrder = 11;
-    this.object.add(this.mesh, this.label);
+    this.object.add(this.highlight, this.label);
     this.object.visible = false;
   }
 
-  /** Outline a newly found object, replacing whatever was drawn. */
-  show({ center, outline }: Placement, name: string): void {
+  /**
+   * Light up a found object, replacing whatever was drawn. The primary object is a whole object,
+   * so by default its light spills around it.
+   */
+  show({ center, outline }: Placement, name: string, mode: ObjectGlowMode = 'object'): void {
+    // A tracker that drops one frame must not make the light flare again.
+    if (name !== this.name || this.opacity < RELIGHT_BELOW) this.highlight.ignite();
+    this.name = name;
     this.object.position.set(...center);
     this.placed = true;
-    this.mesh.geometry.dispose();
-    this.mesh.geometry = toGeometry(strokeFor(outline));
-    const xs = outline.points.map(([x]) => x);
-    const top = Math.max(...outline.points.map(([, y]) => y));
-    this.label.position.set((Math.min(...xs) + Math.max(...xs)) / 2, top + LABEL_GAP, 0.001);
+    this.highlight.setOutline(outline, mode);
+    let left = Number.POSITIVE_INFINITY;
+    let right = Number.NEGATIVE_INFINITY;
+    let top = Number.NEGATIVE_INFINITY;
+    for (const [x, y] of outline.points) {
+      if (x < left) left = x;
+      if (x > right) right = x;
+      if (y > top) top = y;
+    }
+    const gap = LABEL_GAP + (outline.shape === 'contour' ? this.highlight.reach : 0);
+    this.label.position.set((left + right) / 2, top + gap, 0.001);
     setText(this.label, name);
     this.target = 1;
   }
@@ -83,7 +73,7 @@ export class PrimaryOutlineView {
     this.target = 0;
   }
 
-  update(eye: Vector3, dt: number, t: number): void {
+  update(eye: Vector3, dt: number, _t: number): void {
     const step = dt / (this.target > this.opacity ? FADE_IN_MS : FADE_OUT_MS);
     this.opacity =
       this.target > this.opacity
@@ -92,9 +82,11 @@ export class PrimaryOutlineView {
     this.object.visible = this.placed && this.opacity > 0;
     if (!this.object.visible) return;
     this.object.lookAt(eye);
-    this.mesh.material.opacity = this.opacity * (0.8 + 0.15 * Math.sin(t / 250));
-    this.label.fillOpacity = this.opacity;
-    this.label.outlineOpacity = this.opacity;
+    // Ease out: light comes up fast and settles, and dies away slowly.
+    const shown = this.opacity * (2 - this.opacity);
+    this.highlight.setOpacity(shown);
+    this.label.fillOpacity = shown;
+    this.label.outlineOpacity = shown;
   }
 
   /** Forget the outline (the session ended). */
@@ -102,24 +94,7 @@ export class PrimaryOutlineView {
     this.placed = false;
     this.opacity = 0;
     this.target = 0;
+    this.name = null;
     this.object.visible = false;
   }
-}
-
-function strokeFor(outline: ObjectOutline): Stroke {
-  if (outline.shape === 'contour') {
-    return strokePolyline(outline.points, { width: STROKE_M, closed: true, outside: true });
-  }
-  return mergeStrokes(
-    cornerBrackets(outline.points, BRACKET_SHARE).map((corner) =>
-      strokePolyline(corner, { width: STROKE_M, closed: false }),
-    ),
-  );
-}
-
-function toGeometry({ positions, indices }: Stroke): BufferGeometry {
-  const geometry = new BufferGeometry();
-  geometry.setAttribute('position', new BufferAttribute(positions, 3));
-  geometry.setIndex(new BufferAttribute(indices, 1));
-  return geometry;
 }
