@@ -55,6 +55,9 @@ export const ProcedureSummarySchema = z.object({
   title: z.string(),
   summary: z.string(),
   stepCount: z.number().int(),
+  source: z
+    .enum(['curated', 'draft'])
+    .describe('curated: procedures/ in the repo. draft: LLM-drafted, unreviewed (data/drafts/)'),
 });
 export const ProcedureListResponseSchema = z.object({
   procedures: z.array(ProcedureSummarySchema),
