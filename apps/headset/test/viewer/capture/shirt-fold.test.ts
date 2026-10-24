@@ -135,6 +135,8 @@ describe('shirt-fold as a Capture', () => {
   it('holds what the old grasp replay held, once its dots are movable', () => {
     const movable = structuredClone(meta);
     for (const o of movable.plan.objects) if (o.kind === 'point') o.kind = 'item';
+    // The headset recorded no grasps of its points, so infer them, as for an older episode.
+    delete movable.features;
     const capture = buildCaptureFromClio({ ...episode, meta: movable });
     // Left pinches the shoulder at 2.8 s; right misses the middle at 4.3 s, then gets it at 6.3 s.
     expect(grasps(capture).map((e) => [e.t_us, e.entity_ids])).toEqual([

@@ -1,4 +1,5 @@
 import {
+  EPISODE_FEATURE,
   type EpisodeEvent,
   EpisodeEventSchema,
   type EpisodeMeta,
@@ -28,6 +29,7 @@ import {
   POSITION_VALID,
   type PoseSample,
   type Quat,
+  type Series,
   type Vec3,
 } from './model';
 
@@ -38,14 +40,25 @@ import {
 //   frames   the headset's pose series, and one hand sample per side per frame (WebXR's 25 joints
 //            become OpenXR's 26: the palm, which WebXR lacks, is left invalid). Joint orientations
 //            are not kept, so joints are flagged POSITION_VALID only.
-//   events   every event as a `marker` (details.clio is the original), plus grasp and release
-//            inferred from pinches that start within reach of a movable object
+//   events   every event as a `marker` (details.clio is the original), plus grasp and release:
+//            recorded (object.grasped and object.released), or in older episodes inferred from
+//            pinches that start within reach of a movable object
 //   objects  one pose series per object, starting from meta.objects at t = 0
 //
-// Held spans come from those inferred grasps, and from runs of `pinch` estimates written every XR
-// frame with no pinch grasp to explain them (a fist carry). A `pinch` estimate inside a held span
-// is the hand carrying the object; any other is a pinch registration. Only detector and marker
-// estimates keep their confidence: the headset's other values are fixed, not measured.
+// Episodes whose meta.features include 'object.grasp' record every grasp and release, so held spans
+// come from those events (origin 'runtime') and nothing is inferred. Older episodes get held spans
+// from the inferred grasps, and from runs of `pinch` estimates written every XR frame with no pinch
+// grasp to explain them (a fist carry). An estimate that says it is held (heldBy), or a `pinch`
+// estimate inside a held span, is the hand carrying the object; any other `pinch` estimate is a
+// pinch registration. Only detector and marker estimates keep their confidence: the headset's
+// other values are fixed, not measured.
+//
+// Location flags come from an estimate's locationFlags when recorded ('object.flags'), otherwise
+// from its source. An estimate is placed at its observedT, when its camera frame or tracked hand
+// frame was captured, otherwise at its line's time; a state without a valid position says what is
+// true when written, so it stays at its line's time. An estimate measured before the recording
+// started (observedT < 0) replaces the object's placement from meta.objects, which is older. A
+// change of an object's position validity adds a tracking_lost or tracking_recovered event.
 //
 // The same lines can arrive twice (read again after a server restart). Frames not after the newest
 // frame, object states at a (t, id) already seen and events equal to one at the same t are dropped
@@ -99,16 +112,34 @@ const toUs = (ms: number) => Math.round(ms * 1000);
 
 const measured = (source: PlacementMethod) => source === 'marker' || source === 'detector';
 
-function objectLocation(state: Pick<ObjectState, 'position' | 'orientation' | 'source'>): Location {
+type StateIn = Pick<ObjectState, 'id' | 'position' | 'orientation' | 'source'> &
+  Partial<Pick<ObjectState, 'locationFlags' | 'heldBy' | 'observedT'>> & {
+    /** Null for a placement from meta.objects, which records none. */
+    confidence: number | null;
+  };
+
+/** The recorded flags, or for a legacy estimate the flags its source implies. */
+function flagsOf(state: StateIn): number {
+  if (state.locationFlags !== undefined) return state.locationFlags;
   const tracked = measured(state.source);
   let flags = POSITION_VALID | (tracked ? POSITION_TRACKED : 0);
   if (state.orientation) flags |= ORIENTATION_VALID | (tracked ? ORIENTATION_TRACKED : 0);
+  return flags;
+}
+
+/** `position` is kept without a valid position: it holds the last valid estimate. */
+function objectLocation(state: StateIn): Location {
+  const flags = flagsOf(state);
+  const rotation = state.orientation && flags & ORIENTATION_VALID ? state.orientation : null;
   return {
     translation: rosFromW(state.position),
-    rotation: state.orientation ? rosQuatFromW(state.orientation) : null,
+    rotation: rotation ? rosQuatFromW(rotation) : null,
     location_flags: flags,
   };
 }
+
+const positionValid = (sample: PoseSample) =>
+  (sample.location.location_flags & POSITION_VALID) !== 0;
 
 /** Frame lines were validated at ingest; parsing every hand sample again would be slow. */
 function isFrame(value: unknown): value is FrameRecord {
@@ -148,16 +179,22 @@ export class ClioCaptureBuilder {
   duplicates = 0;
   readonly #meta: EpisodeMeta;
   readonly #estimate: EstimateType;
+  /** The headset recorded every grasp and release, so none are inferred. */
+  readonly #recordsGrasps: boolean;
   readonly #known = new Map<string, Known>();
   readonly #sequence = new Map<string, number>();
   readonly #grasped: Record<Handedness, string[]> = { left: [], right: [] };
   #lastFrameUs = Number.NEGATIVE_INFINITY;
   /** Each placement from meta.objects, until an objects line at t = 0 restates it. */
   readonly #placements = new Set<PoseSample>();
+  /** Each object's placement from meta.objects, restated or not, until an estimate replaces it. */
+  readonly #seeded = new Map<string, PoseSample>();
   /** The events received, as JSON, by time. */
   readonly #events = new Map<number, string[]>();
   /** Each object's `pinch` estimates in time order: registrations and carries. */
   readonly #pinches = new Map<string, PoseSample[]>();
+  /** Estimates recorded as held (heldBy set). */
+  readonly #heldEstimates = new WeakSet<PoseSample>();
   /** Each object's carries inferred from its `pinch` estimates. */
   readonly #carries = new Map<string, readonly HeldSpan[]>();
   /** Objects whose carries and estimate types need working out again. */
@@ -174,6 +211,7 @@ export class ClioCaptureBuilder {
     }
     // The emulator's hands and head are generated, not measured.
     this.#estimate = this.#meta.device.emulated ? 'synthetic' : 'runtime_estimate';
+    this.#recordsGrasps = this.#meta.features?.includes(EPISODE_FEATURE.objectGrasp) ?? false;
     this.capture = new Capture(procedure?.title ?? 'Free recording');
     this.capture.space = {
       worldFromWorkspace: [...space.worldFromWorkspace],
@@ -221,7 +259,10 @@ export class ClioCaptureBuilder {
         confidence: null,
         source: o.method,
       });
-      if (placed) this.#placements.add(placed);
+      if (placed) {
+        this.#placements.add(placed);
+        this.#seeded.set(o.id, placed);
+      }
     }
   }
 
@@ -280,7 +321,8 @@ export class ClioCaptureBuilder {
         continue;
       }
       this.#addEvent(e, 'marker', 'runtime', entitiesOf(e));
-      if (e.type === 'hand.pinch') this.#pinch(e);
+      if (e.type === 'object.grasped' || e.type === 'object.released') this.#recordedGrasp(e);
+      else if (e.type === 'hand.pinch' && !this.#recordsGrasps) this.#pinch(e);
     }
     this.#settle();
   }
@@ -339,22 +381,27 @@ export class ClioCaptureBuilder {
   }
 
   /** Adds the estimate, or restates a placement; returns null for a duplicate. */
-  #addObjectPose(
-    tMs: number,
-    state: Pick<ObjectState, 'id' | 'position' | 'orientation' | 'source'> & {
-      /** Null for a placement from meta.objects, which records none. */
-      confidence: number | null;
-    },
-  ): PoseSample | null {
+  #addObjectPose(tMs: number, state: StateIn): PoseSample | null {
     this.#object(state.id);
-    const t = toUs(tMs);
-    const fields = {
-      source_id: `clio-${state.source}`,
-      estimate_type: ESTIMATE[state.source],
-      location: objectLocation(state),
-      confidence: measured(state.source) ? state.confidence : null,
-    };
+    const location = objectLocation(state);
+    const valid = (location.location_flags & POSITION_VALID) !== 0;
+    const t = toUs(valid && state.observedT !== undefined ? state.observedT : tMs);
+    const held = state.heldBy !== undefined && state.heldBy !== null;
+    const fields = held
+      ? {
+          source_id: GRIP_SOURCE,
+          estimate_type: 'runtime_estimate' as const,
+          location,
+          confidence: null,
+        }
+      : {
+          source_id: `clio-${state.source}`,
+          estimate_type: ESTIMATE[state.source],
+          location,
+          confidence: measured(state.source) ? state.confidence : null,
+        };
     const series = this.capture.poses.get(state.id);
+    if (valid && series) this.#unseed(series, state.id, t);
     const existing = series?.samples[series.indexAt(t)];
     let sample: PoseSample;
     if (existing?.t_us === t) {
@@ -373,8 +420,12 @@ export class ClioCaptureBuilder {
         ...fields,
       };
       this.capture.addPose(sample);
+      this.#tracking(sample);
     }
-    if (state.source === 'pinch') {
+    if (held) this.#heldEstimates.add(sample);
+    // A held estimate in an episode that records grasps is typed already and feeds no carry, so a
+    // live carry (one line per XR frame) does not make #settle walk the object's estimates again.
+    if (state.source === 'pinch' && !(held && this.#recordsGrasps)) {
       const pinches = this.#pinches.get(state.id) ?? [];
       if (pinches.length === 0) this.#pinches.set(state.id, pinches);
       let at = pinches.length;
@@ -383,6 +434,28 @@ export class ClioCaptureBuilder {
       this.#unsettled.add(state.id);
     }
     return sample;
+  }
+
+  /**
+   * Drops the object's placement from meta.objects when an estimate measured before the recording
+   * started (observedT < 0) arrives. meta.objects is the registry as the recording started, and the
+   * registry takes no observation older than its estimate, so that estimate is newer than the
+   * placement even though it is placed earlier; kept, the placement at t = 0 would hide it.
+   */
+  #unseed(series: Series<PoseSample>, id: string, t: number): void {
+    const seeded = this.#seeded.get(id);
+    if (!seeded || t >= seeded.t_us) return;
+    this.#seeded.delete(id);
+    this.#placements.delete(seeded);
+    this.#heldEstimates.delete(seeded);
+    const at = series.samples.indexOf(seeded);
+    if (at >= 0) series.samples.splice(at, 1);
+    const pinches = this.#pinches.get(id);
+    const pinchAt = pinches?.indexOf(seeded) ?? -1;
+    if (pinches && pinchAt >= 0) {
+      pinches.splice(pinchAt, 1);
+      this.#unsettled.add(id);
+    }
   }
 
   /**
@@ -396,7 +469,7 @@ export class ClioCaptureBuilder {
       const previous = this.#carries.get(id) ?? [];
       const grasps = this.capture.heldSpans(id).filter((span) => !previous.includes(span));
       const carries: HeldSpan[] = [];
-      if (this.#graspRadius(id) !== null) {
+      if (!this.#recordsGrasps && this.#graspRadius(id) !== null) {
         // A stretch of a run that no grasp covers is a carry, even after a pinch grasp in the same
         // run: GraspTracker releases on pinch end and the closed hand picks the object up again.
         let first: PoseSample | null = null;
@@ -429,12 +502,35 @@ export class ClioCaptureBuilder {
       this.capture.setSampleHeldSpans(id, carries);
       const spans = this.capture.heldSpans(id);
       for (const sample of pinches) {
-        const carried = spans.some((span) => covers(span, sample.t_us));
+        const carried =
+          this.#heldEstimates.has(sample) || spans.some((span) => covers(span, sample.t_us));
         sample.source_id = carried ? GRIP_SOURCE : 'clio-pinch';
         sample.estimate_type = carried ? 'runtime_estimate' : 'manual';
       }
     }
     this.#unsettled.clear();
+  }
+
+  /**
+   * A tracking_lost or tracking_recovered event when a new newest estimate changes whether the
+   * object's position is valid. An estimate placed back at its observedT changes no event.
+   */
+  #tracking(sample: PoseSample): void {
+    const samples = this.capture.poses.get(sample.entity_id)?.samples ?? [];
+    const previous = samples.at(-2);
+    if (samples.at(-1) !== sample || !previous) return;
+    const valid = positionValid(sample);
+    if (valid === positionValid(previous)) return;
+    this.capture.addEvent({
+      kind: 'event',
+      t_us: sample.t_us,
+      sequence: this.#next('events'),
+      source_id: 'clio',
+      event: valid ? 'tracking_recovered' : 'tracking_lost',
+      entity_ids: [sample.entity_id],
+      origin: 'runtime',
+      details: { location_flags: sample.location.location_flags },
+    });
   }
 
   #hand(t: number, side: Handedness, frame: FrameRecord): HandSample {
@@ -487,6 +583,17 @@ export class ClioCaptureBuilder {
     });
   }
 
+  /** A grasp or release the headset recorded: a held span with origin 'runtime'. */
+  #recordedGrasp(e: Extract<EpisodeEvent, { type: 'object.grasped' | 'object.released' }>): void {
+    const entities = [HAND_ENTITY[e.hand], e.objectId];
+    if (e.type === 'object.grasped') {
+      this.#addEvent(e, 'grasp', 'runtime', entities, { grip: e.grip });
+    } else {
+      this.#addEvent(e, 'release', 'runtime', entities, { reason: e.reason });
+    }
+    this.#unsettled.add(e.objectId);
+  }
+
   /** Like GraspTracker: a pinch picks up the movable object in reach that no other hand holds. */
   #pinch(e: Extract<EpisodeEvent, { type: 'hand.pinch' }>): void {
     const hand = HAND_ENTITY[e.hand];
@@ -518,6 +625,9 @@ function entitiesOf(e: EpisodeEvent): string[] {
       return [e.objectId];
     case 'hand.pinch':
       return [HAND_ENTITY[e.hand]];
+    case 'object.grasped':
+    case 'object.released':
+      return [HAND_ENTITY[e.hand], e.objectId];
     default:
       return [];
   }

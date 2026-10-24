@@ -640,3 +640,229 @@ describe('ClioCaptureBuilder input checks', () => {
     expect(builder.duplicates).toBe(2);
   });
 });
+
+/** Meta for an episode that records grasps and location flags. */
+const recording = (objects: { id: string; kind: Kind }[]) => ({
+  ...planned(objects),
+  features: ['object.flags', 'object.grasp'],
+});
+
+const grasped = (
+  t: number,
+  objectId: string,
+  grip: 'pinch' | 'fist' = 'pinch',
+  which: 'left' | 'right' = 'right',
+): EpisodeEvent => ({
+  t,
+  type: 'object.grasped',
+  objectId,
+  hand: which,
+  grip,
+  position: [0.1, 0.05, -0.1],
+});
+
+const released = (
+  t: number,
+  objectId: string,
+  reason: 'opened' | 'hand_lost' | 'plan_changed' = 'opened',
+  which: 'left' | 'right' = 'right',
+): EpisodeEvent => ({
+  t,
+  type: 'object.released',
+  objectId,
+  hand: which,
+  reason,
+  position: [0.1, 0.05, -0.1],
+});
+
+/** An objects line with the recorded fields. */
+const flagged = (t: number, fields: Partial<ObjectState>): ObjectTrackRecord => ({
+  t,
+  objects: [{ ...state('syringe', 'pinch'), locationFlags: 2, heldBy: null, ...fields }],
+});
+
+describe('ClioCaptureBuilder recorded grasps and flags', () => {
+  it('takes held spans from recorded grasps and infers none from pinches', () => {
+    const objects = track('syringe', 'pinch', frameTimes(1000, 3000));
+    const events = [
+      pinchAt(1000, 'start', 'syringe'),
+      grasped(1000, 'syringe'),
+      pinchAt(1500, 'end', 'syringe'),
+      released(1500, 'syringe'),
+      grasped(1506, 'syringe', 'fist'),
+      released(3000, 'syringe', 'opened'),
+    ];
+    for (const eventsFirst of [true, false]) {
+      const builder = new ClioCaptureBuilder(recording([{ id: 'syringe', kind: 'tool' }]));
+      if (eventsFirst) builder.addEvents(events);
+      builder.addObjects(objects);
+      if (!eventsFirst) builder.addEvents(events);
+      const { capture } = builder;
+      expect(
+        capture.heldSpans('syringe').map((s) => [s.startUs, s.endUs, s.hand, s.grip, s.origin]),
+      ).toEqual([
+        [1_000_000, 1_500_000, 'right', 'pinch', 'runtime'],
+        [1_506_000, 3_000_000, 'right', 'fist', 'runtime'],
+      ]);
+      // Every Clio event is still a marker; the grasps and releases are runtime events beside them.
+      expect(
+        capture.events.samples
+          .filter((e) => e.event !== 'marker')
+          .map((e) => [e.t_us, e.event, e.origin, e.entity_ids]),
+      ).toEqual([
+        [1_000_000, 'grasp', 'runtime', ['right_hand', 'syringe']],
+        [1_500_000, 'release', 'runtime', ['right_hand', 'syringe']],
+        [1_506_000, 'grasp', 'runtime', ['right_hand', 'syringe']],
+        [3_000_000, 'release', 'runtime', ['right_hand', 'syringe']],
+      ]);
+      expect(capture.events.samples.filter((e) => e.event === 'marker')).toHaveLength(6);
+      expect(capture.events.samples.find((e) => e.event === 'release')?.details).toMatchObject({
+        reason: 'opened',
+      });
+      // Legacy `pinch` estimates (no heldBy) inside the recorded spans are carried.
+      expect(
+        typesOf(capture, 'syringe')
+          ?.slice(1)
+          .every(([, type, source]) => type === 'runtime_estimate' && source === GRIP_SOURCE),
+      ).toBe(true);
+    }
+  });
+
+  it('still infers grasps and carries in an episode that does not record them', () => {
+    const builder = new ClioCaptureBuilder({
+      ...planned([{ id: 'syringe', kind: 'tool' }]),
+      features: ['object.flags'],
+    });
+    builder.addEvents([pinchAt(1000, 'start', 'syringe'), pinchAt(1500, 'end', 'syringe')]);
+    builder.addObjects(track('syringe', 'pinch', frameTimes(2000, 2100)));
+    expect(builder.capture.heldSpans('syringe').map((s) => [s.startUs, s.origin])).toEqual([
+      [1_000_000, 'inferred'],
+      [2_000_000, 'inferred'],
+    ]);
+  });
+
+  it('types estimates by heldBy and takes the recorded flags', () => {
+    const builder = new ClioCaptureBuilder(recording([{ id: 'syringe', kind: 'tool' }]));
+    builder.addObjects([
+      // A pinch registration, then carried with and without an orientation, then lost.
+      flagged(100, { confidence: 0.9 }),
+      flagged(200, { heldBy: 'right', confidence: 0.9 }),
+      flagged(211, { heldBy: 'right', orientation: [0, 0, 0, 1], locationFlags: 3 }),
+      flagged(222, { heldBy: 'right', locationFlags: 0 }),
+      flagged(300, { source: 'marker', orientation: [0, 0, 0, 1], locationFlags: 15 }),
+      flagged(400, { source: 'detector', confidence: 0.7, locationFlags: 10 }),
+    ]);
+    const samples = builder.capture.poses.get('syringe')?.samples ?? [];
+    expect(
+      samples.map((s) => [
+        s.t_us / 1000,
+        s.source_id,
+        s.estimate_type,
+        s.location.location_flags,
+        s.location.rotation,
+        s.confidence,
+      ]),
+    ).toEqual([
+      [0, 'clio-layout', 'manual', POSITION_VALID, null, null],
+      [100, 'clio-pinch', 'manual', POSITION_VALID, null, null],
+      [200, GRIP_SOURCE, 'runtime_estimate', POSITION_VALID, null, null],
+      [211, GRIP_SOURCE, 'runtime_estimate', 3, [-0, -0, 0, 1], null],
+      [222, GRIP_SOURCE, 'runtime_estimate', 0, null, null],
+      [300, 'clio-marker', 'vision_estimate', 15, [-0, -0, 0, 1], 1],
+      [400, 'clio-detector', 'vision_estimate', 10, null, 0.7],
+    ]);
+    // No grasp was recorded here, so heldBy alone says carried; nothing is inferred.
+    expect(builder.capture.heldSpans('syringe')).toEqual([]);
+    // Lost: drawn at the last valid position.
+    const series = builder.capture.poses.get('syringe');
+    expect(series && entityAt(series, 250_000)).toMatchObject({
+      lost: true,
+      position: samples[3]?.location.translation,
+    });
+  });
+
+  it('places an estimate at its observedT, but a lost one at its line time', () => {
+    const builder = new ClioCaptureBuilder(recording([{ id: 'syringe', kind: 'tool' }]));
+    builder.addObjects([
+      flagged(1000, { heldBy: 'right' }),
+      flagged(1011, { heldBy: 'right', locationFlags: 0, observedT: 1000 }),
+      flagged(1100, {}),
+      flagged(2500, { source: 'detector', locationFlags: 10, observedT: 1300 }),
+      flagged(2600, { source: 'detector', locationFlags: 10, observedT: -40 }),
+    ]);
+    // The estimate measured before the start also replaces the placement from meta.objects.
+    expect(builder.capture.poses.get('syringe')?.samples.map((s) => s.t_us / 1000)).toEqual([
+      -40, 1000, 1011, 1100, 1300,
+    ]);
+    expect(builder.duplicates).toBe(0);
+  });
+
+  it('shows an estimate measured before the start rather than the older placement', () => {
+    const answer = flagged(900, {
+      source: 'detector',
+      confidence: 0.8,
+      locationFlags: 10,
+      observedT: -600,
+      position: [0.3, 0.02, -0.2],
+    });
+    // A slow finder answer to a locate made before recorder.start, read twice.
+    const builder = new ClioCaptureBuilder(recording([{ id: 'syringe', kind: 'tool' }]));
+    builder.addObjects([answer, answer]);
+    const series = builder.capture.poses.get('syringe');
+    expect(series?.samples.map((s) => [s.t_us / 1000, s.source_id])).toEqual([
+      [-600, 'clio-detector'],
+    ]);
+    expect(builder.duplicates).toBe(1);
+    expect(series && entityAt(series, 5_000_000)).toMatchObject({
+      position: rosFromW([0.3, 0.02, -0.2]),
+      tracked: true,
+      sample: { confidence: 0.8 },
+    });
+    // The same when an objects line at t = 0 restated the placement first.
+    const restated = new ClioCaptureBuilder(recording([{ id: 'syringe', kind: 'tool' }]));
+    restated.addObjects([flagged(0, { source: 'layout' }), answer]);
+    expect(
+      restated.capture.poses.get('syringe')?.samples.map((s) => [s.t_us / 1000, s.source_id]),
+    ).toEqual([[-600, 'clio-detector']]);
+    // A later estimate measured after the start is shown after it as usual.
+    restated.addObjects([flagged(1500, { source: 'detector', locationFlags: 10, observedT: 400 })]);
+    expect(restated.capture.poses.get('syringe')?.samples.map((s) => s.t_us / 1000)).toEqual([
+      -600, 400,
+    ]);
+  });
+
+  it('adds tracking_lost and tracking_recovered where the position validity changes', () => {
+    const lines = [
+      flagged(1000, { heldBy: 'right' }),
+      flagged(1011, { heldBy: 'right', locationFlags: 0 }),
+      flagged(1022, { heldBy: 'right', locationFlags: 0 }),
+      flagged(1100, { heldBy: null }),
+      // A late finder answer, placed before the newest estimate, changes no event.
+      flagged(1200, { source: 'detector', locationFlags: 10, observedT: 1015 }),
+      flagged(1300, { heldBy: 'right' }),
+    ];
+    const builder = new ClioCaptureBuilder(recording([{ id: 'syringe', kind: 'tool' }]));
+    builder.addObjects(lines);
+    builder.addObjects(lines);
+    expect(
+      builder.capture.events.samples.map((e) => [
+        e.t_us / 1000,
+        e.event,
+        e.entity_ids,
+        e.origin,
+        e.details,
+      ]),
+    ).toEqual([
+      [1011, 'tracking_lost', ['syringe'], 'runtime', { location_flags: 0 }],
+      [1100, 'tracking_recovered', ['syringe'], 'runtime', { location_flags: POSITION_VALID }],
+    ]);
+    // An older episode's flags come from the source, which always has a valid position.
+    const old = buildCaptureFromClio({
+      meta: meta(),
+      frames: [],
+      events: [],
+      objects: track('shoulder', 'detector', [10, 20]),
+    });
+    expect(old.events.samples).toEqual([]);
+  });
+});
