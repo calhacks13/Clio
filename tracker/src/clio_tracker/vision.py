@@ -373,16 +373,19 @@ class YoloeVision:
 
 
 def load_vision(
-    model: str = "yoloe-26l-seg",
+    model: str = "l",
     backend: str = "auto",
     device: str = "auto",
     models_dir: Path | None = None,
 ) -> YoloeVision:
-    """Load a YOLOE-26 checkpoint and compile its vision graph.
+    """Load a YOLOE-26 checkpoint (`s`, `m`, `l`, ... or its name) and compile its vision graph.
 
     backend "coreml" runs the graph on the Apple Neural Engine (exported and cached on first
     use), "torch" on MPS/CUDA/CPU; "auto" prefers Core ML on a Mac that has coremltools.
     """
+    from .config import model_name
+
+    model = model_name(model)
     models_dir = models_dir or default_models_dir()
     models_dir.mkdir(parents=True, exist_ok=True)
     weights = models_dir / f"{model}.pt"

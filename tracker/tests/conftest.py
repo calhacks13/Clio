@@ -29,6 +29,21 @@ from clio_tracker.vision import Encoding
 W, H = 960, 720
 
 
+def models_under_test() -> list[str]:
+    """The checkpoints the real-model tests run on: CLIO_TRACKER_TEST_MODELS (e.g. "s,m,l"),
+    else s (downloaded when missing) and every other size already in models/."""
+    import os
+
+    from clio_tracker.config import MODELS, model_name
+    from clio_tracker.vision import default_models_dir
+
+    wanted = os.environ.get("CLIO_TRACKER_TEST_MODELS")
+    if wanted:
+        return [model_name(m) for m in wanted.split(",") if m.strip()]
+    here = default_models_dir()
+    return [name for size, name in MODELS.items() if size == "s" or (here / f"{name}.pt").exists()]
+
+
 def unit(v) -> np.ndarray:
     v = np.asarray(v, dtype=np.float32)
     return v / np.linalg.norm(v)

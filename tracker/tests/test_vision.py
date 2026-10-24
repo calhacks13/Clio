@@ -19,9 +19,9 @@ from clio_tracker.vision import (  # noqa: E402
     load_yoloe,
     prompt_masks,
 )
+from conftest import models_under_test  # noqa: E402
 
 pytestmark = pytest.mark.model
-MODEL = "yoloe-26s-seg"
 # The person on the left of Ultralytics' bus.jpg (810 x 1080), from its visual-prompt docs.
 PERSON = np.array([221.52, 405.8, 344.98, 857.54], dtype=np.float32)
 
@@ -37,18 +37,23 @@ def bus():
     return bgr[..., ::-1].copy()
 
 
-@pytest.fixture(scope="module")
-def vision():
-    net = load_yoloe(default_models_dir() / f"{MODEL}.pt")
-    return YoloeVision(net, TorchGraph(net, "cpu"), MODEL)
+@pytest.fixture(scope="module", params=models_under_test())
+def model(request) -> str:
+    return request.param
 
 
 @pytest.fixture(scope="module")
-def reference():
+def vision(model):
+    net = load_yoloe(default_models_dir() / f"{model}.pt")
+    return YoloeVision(net, TorchGraph(net, "cpu"), model)
+
+
+@pytest.fixture(scope="module")
+def reference(model):
     """An untouched (unfused) YOLOE-26 model."""
     from ultralytics import YOLOE
 
-    return YOLOE(str(default_models_dir() / f"{MODEL}.pt")).model.float().eval()
+    return YOLOE(str(default_models_dir() / f"{model}.pt")).model.float().eval()
 
 
 def _input(vision, rgb):
@@ -128,13 +133,13 @@ def test_tiny_boxes_still_prompt_one_cell():
     assert masks.sum() == 1 and masks[0, 12, 12] == 1
 
 
-def test_coreml_graph_agrees_with_torch(vision, bus):
+def test_coreml_graph_agrees_with_torch(vision, bus, model):
     from clio_tracker.coreml import CoreMLGraph, coreml_available
 
     if not coreml_available():
         pytest.skip("Core ML needs an Apple silicon Mac and the coreml extra")
-    net = load_yoloe(default_models_dir() / f"{MODEL}.pt")
-    ane = YoloeVision(net, CoreMLGraph.load_or_export(net, default_models_dir() / MODEL), MODEL)
+    net = load_yoloe(default_models_dir() / f"{model}.pt")
+    ane = YoloeVision(net, CoreMLGraph.load_or_export(net, default_models_dir() / model), model)
     ref, enc = vision.encode(bus), ane.encode(bus)
     prompt_ref, prompt = vision.prompts(ref, PERSON), ane.prompts(enc, PERSON)
     assert float(prompt_ref[0] @ prompt[0]) > 0.995  # float16 on the Neural Engine
