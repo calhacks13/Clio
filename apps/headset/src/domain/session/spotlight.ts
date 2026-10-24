@@ -11,7 +11,10 @@ import type { ObjectRegistry } from '../world/object-registry';
 // runs so the outlines follow the real objects.
 
 export interface SpotlightOptions {
-  /** How long after an answer to look again at what the step shows (ms); 0 never refreshes. */
+  /**
+   * How long after an answer to look again at what the step shows (ms); 0 never refreshes. A
+   * finder that tracks (tracker/) answers with its own, shorter refreshMs, which wins.
+   */
   refreshMs?: number;
 }
 
@@ -71,7 +74,9 @@ export class Spotlight {
       // A camera or network failure is a missed look; the next refresh tries again.
     } finally {
       this.looking--;
-      this.nextLookT = this.deps.clock.now() + this.refreshMs;
+      const hint = result?.ok ? result.refreshMs : undefined;
+      const wait = hint === undefined ? this.refreshMs : Math.min(this.refreshMs, hint);
+      this.nextLookT = this.deps.clock.now() + wait;
     }
     if (result?.ok) this.report(result, step, generation === this.generation);
     return unplaced();

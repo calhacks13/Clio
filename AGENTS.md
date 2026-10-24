@@ -23,3 +23,10 @@ Prettier/ESLint/test checks (`pnpm visualizer:install`, `pnpm visualizer:dev`,
 `pnpm visualizer:check`). It is outside the pnpm workspace globs and excluded from root Biome.
 Read its own `AGENTS.md` when editing that folder. Preserve unrelated ongoing changes, including
 the headset tracking/viewer and episode-server work.
+
+## Tracker
+
+`tracker/` is the real-time object finder (Python + uv, its own `pyproject.toml`; outside the
+pnpm workspace and Biome, like `pipeline/`). Read `tracker/README.md` before changing how objects
+are found or followed. It reaches into YOLOE-26's head, so Ultralytics is pinned to a narrow range
+and `tracker/tests/test_vision.py` checks the split graph against Ultralytics' own forward pass.

@@ -7,9 +7,10 @@ import type { JsonSchema } from './plan-schema';
 import { alignDetections, type LocateAnswer, type VisionLocator } from './vision';
 
 // The primary-object demo (POST /api/vision/primary). Gemini names the single most prominent
-// object in a camera frame, then the object finder at CLIO_PRIMARY_FINDER_URL (jev boxes refined
-// into an outline by SAM 2.1) finds it. While that finder is down or failing, Gemini's own locator
-// boxes the object instead, so the headset draws corner brackets rather than nothing.
+// object in a camera frame, then the object finder at CLIO_PRIMARY_FINDER_URL (tracker/: jev
+// confirms it, YOLOE-26 outlines and follows it) finds it. While that finder is down or failing,
+// Gemini's own locator boxes the object instead, so the headset draws corner brackets rather
+// than nothing.
 
 /** The id the finder is asked about, and the id of the returned detection. */
 export const PRIMARY_ID = 'primary';
@@ -120,7 +121,7 @@ export interface PrimaryObjectFinder {
 
 export interface PrimaryObjectOptions {
   picker: PrimaryPicker;
-  /** The jev+SAM service, through the HTTP locator so outlines are clamped and simplified. */
+  /** The tracker (jev + YOLOE-26), through the HTTP locator: outlines clamped and simplified. */
   finder: VisionLocator;
   /** Gemini's locator: a box and a point, used when the finder is unreachable or fails. */
   fallback: VisionLocator;

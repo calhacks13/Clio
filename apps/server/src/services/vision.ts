@@ -16,6 +16,8 @@ export interface LocateAnswer {
   detections: Detection[];
   /** The model that answered. The headset records it as each detection's source. */
   model: string;
+  /** A tracking finder's hint: how soon to send the next frame. */
+  refreshMs?: number;
 }
 
 /** Port: an object finder (Gemini, or an external service such as jev behind CLIO_VISION_URL). */

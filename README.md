@@ -26,6 +26,7 @@ pnpm dev                 # server :8787 + headset app :5173
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)   | how it works and why: start here                  |
 | [docs/procedures.md](docs/procedures.md)       | the plan language (checks, actions, what to show) |
 | [docs/object-finder.md](docs/object-finder.md) | plugging in jev or another object finder          |
+| [tracker/README.md](tracker/README.md)         | real-time tracking: YOLOE-26 + ByteTrack + jev    |
 | [docs/data-format.md](docs/data-format.md)     | episodes on disk                                  |
 | [docs/dev-setup.md](docs/dev-setup.md)         | laptop, emulator, Quest, data, demo day           |
 
@@ -34,6 +35,7 @@ packages/protocol   shared contracts (zod → TS types + JSON Schema)
 apps/headset        the WebXR app (three.js); domain logic is framework-free and unit-tested
 apps/server         Gemini relay, planner, vision, episode ingest (Node + Hono)
 pipeline            validate, Rerun replay, LeRobot export (Python + uv)
+tracker             real-time object tracking for the finder: YOLOE-26 + ByteTrack + jev (Python + uv)
 procedures          curated golden lessons (shirt fold, pH indicator)
 ```
 

@@ -7,7 +7,7 @@ export const REPO_ROOT = resolve(import.meta.dirname, '..', '..', '..');
 export const DEFAULT_LIVE_MODEL = 'gemini-3.8-live';
 export const DEFAULT_PLANNER_MODEL = 'gemini-3.5-flash-lite';
 export const DEFAULT_VISION_MODEL = 'gemini-3.5-flash-lite';
-/** The jev + SAM 2.1 service that outlines the main object for /api/vision/primary. */
+/** The finder that outlines the main object for /api/vision/primary: tracker/ (jev + YOLOE-26). */
 export const DEFAULT_PRIMARY_FINDER_URL = 'http://127.0.0.1:8790/locate';
 /** The visualizer viewer (`pnpm visualizer:dev`) open in a browser on this laptop. */
 export const DEFAULT_CORS_ORIGINS: readonly string[] = [

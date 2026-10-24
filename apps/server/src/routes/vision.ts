@@ -32,6 +32,7 @@ export function visionRoutes({ locator, primary, now, logger, limits }: ServerDe
       ),
       model: answer.model,
       latencyMs,
+      ...(answer.refreshMs !== undefined && { refreshMs: answer.refreshMs }),
     } satisfies LocateResponse);
   });
 

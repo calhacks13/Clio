@@ -76,6 +76,15 @@ describe('createHttpLocator', () => {
     });
   });
 
+  it("returns a tracking finder's refreshMs, and rejects a nonsensical one", async () => {
+    expect(await locate(json({ model: 'yoloe+jev', detections: [], refreshMs: 50 }))).toEqual({
+      model: 'yoloe+jev',
+      detections: [],
+      refreshMs: 50,
+    });
+    await expect(locate(json({ detections: [], refreshMs: -1 }))).rejects.toThrow(/refreshMs/);
+  });
+
   it('fills in what a finder leaves out: box and point from the outline, found, confidence', async () => {
     const outline = [
       [0.25, 0.125],

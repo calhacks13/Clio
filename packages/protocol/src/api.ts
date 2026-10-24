@@ -105,6 +105,12 @@ export const LocateRequestSchema = z.object({
     )
     .min(1)
     .max(16),
+  session: z
+    .string()
+    .min(1)
+    .max(128)
+    .optional()
+    .describe('One headset run, so a tracking object finder keeps its state per client'),
 });
 export const DetectionSchema = z.object({
   id: z.string(),
@@ -120,6 +126,15 @@ export const LocateResponseSchema = z.object({
   detections: z.array(DetectionSchema),
   model: z.string(),
   latencyMs: z.number().nonnegative(),
+  refreshMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe(
+      'How soon the finder wants the next frame. A tracking finder sends this: it answers each ' +
+        'frame from its own state, so it is cheap to ask often',
+    ),
 });
 
 export const EpisodeCreateResponseSchema = z.object({ episodeId: z.string() });

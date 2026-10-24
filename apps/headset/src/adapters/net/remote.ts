@@ -1,7 +1,12 @@
 import type { DemoClip, PlanRequest, PlanResponse } from '@clio/protocol';
 import type { ClipSource } from '../../domain/demo/demo-library';
 import type { LessonPlanner } from '../../domain/session/lesson-controller';
-import type { CameraFrame, LocateObject, VisionLocator } from '../../domain/world/grounding';
+import type {
+  CameraFrame,
+  LocateAnswer,
+  LocateObject,
+  VisionLocator,
+} from '../../domain/world/grounding';
 import type { ApiClient } from './api-client';
 
 // Domain ports implemented by the laptop server.
@@ -14,14 +19,28 @@ export class RemotePlanner implements LessonPlanner {
 }
 
 export class RemoteLocator implements VisionLocator {
-  constructor(private readonly api: ApiClient) {}
-  async locate(frame: CameraFrame, objects: LocateObject[]) {
-    const { detections, model } = await this.api.locate({
+  /**
+   * `session` names this run of the app, so a tracking finder (tracker/) keeps one set of tracks
+   * per headset instead of mixing frames from two.
+   */
+  constructor(
+    private readonly api: ApiClient,
+    private readonly session: string = newSessionId(),
+  ) {}
+  async locate(frame: CameraFrame, objects: LocateObject[]): Promise<LocateAnswer> {
+    const { detections, model, refreshMs } = await this.api.locate({
       image: { mimeType: 'image/jpeg', data: frame.jpegBase64 },
       objects,
+      session: this.session,
     });
-    return { detections, model };
+    return { detections, model, ...(refreshMs !== undefined && { refreshMs }) };
   }
+}
+
+function newSessionId(): string {
+  return (
+    globalThis.crypto?.randomUUID?.() ?? `s-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
 }
 
 export class RemoteClipSource implements ClipSource {

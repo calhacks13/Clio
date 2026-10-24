@@ -33,12 +33,17 @@ export interface SurfaceRaycaster {
 
 export type LocateObject = LocateRequest['objects'][number];
 
+/** What an object finder answered for one frame. */
+export interface LocateAnswer {
+  detections: Detection[];
+  model: string;
+  /** A tracking finder's hint: how soon to send the next frame (ms). */
+  refreshMs?: number;
+}
+
 /** Port: an open-vocabulary object finder. */
 export interface VisionLocator {
-  locate(
-    frame: CameraFrame,
-    objects: LocateObject[],
-  ): Promise<{ detections: Detection[]; model: string }>;
+  locate(frame: CameraFrame, objects: LocateObject[]): Promise<LocateAnswer>;
 }
 
 /** What to find: a declared object and, optionally, the words for it at this moment. */
@@ -73,6 +78,8 @@ export type GroundingResult =
       source: string;
       /** When the camera frame was captured, on the performance.now() timeline. */
       frameT: number;
+      /** The finder's hint for when to look again (ms), when it gives one. */
+      refreshMs?: number;
     }
   | {
       ok: false;
@@ -123,7 +130,7 @@ export class ObjectGrounder implements Grounder {
     if (!head) return { ok: false, reason: 'no-head-pose' };
 
     const objects = this.wording(requests);
-    let answer: { detections: Detection[]; model: string };
+    let answer: LocateAnswer;
     try {
       answer = await locator.locate(frame, objects);
     } catch (err) {
@@ -161,7 +168,15 @@ export class ObjectGrounder implements Grounder {
         outline: points && { points, shape: detection.outline ? 'contour' : 'box' },
       });
     }
-    return { ok: true, located, missing, sightings, source: answer.model, frameT: frame.t };
+    return {
+      ok: true,
+      located,
+      missing,
+      sightings,
+      source: answer.model,
+      frameT: frame.t,
+      ...(answer.refreshMs !== undefined && { refreshMs: answer.refreshMs }),
+    };
   }
 
   /** One entry per declared object, in this moment's words or the object's own. */

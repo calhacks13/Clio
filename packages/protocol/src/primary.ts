@@ -2,8 +2,8 @@ import { z } from 'zod';
 import { DetectionSchema, ImagePayloadSchema } from './api';
 
 // "What is the main object in view?" for the primary-object demo: the server asks Gemini to name
-// the most prominent object in a camera frame, then the object finder (jev boxes refined by SAM
-// 2.1) outlines it. POST /api/vision/primary.
+// the most prominent object in a camera frame, then the object finder (tracker/: jev confirms it,
+// YOLOE-26 outlines it) finds it. POST /api/vision/primary.
 
 export const PrimaryRequestSchema = z.object({
   image: ImagePayloadSchema,

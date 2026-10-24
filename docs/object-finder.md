@@ -7,8 +7,9 @@ passthrough camera frame and those texts to an **object finder**, lifts what it 
 and outlines it in AR.
 
 Gemini is the built-in finder (points and boxes, so Clio draws corner brackets). Any other finder
-(jev, a SAM 3 or Grounding DINO server, a VLM) plugs in over HTTP: set `CLIO_VISION_URL` and the
-server sends it every locate request instead. A finder that returns outlines gets real contours.
+(jev, the [tracker](../tracker/README.md), a SAM 3 or Grounding DINO server, a VLM) plugs in over
+HTTP: set `CLIO_VISION_URL` and the server sends it every locate request instead. A finder that
+returns outlines gets real contours.
 
 ```
 headset ── POST /api/vision/locate ──▶ Clio server ── POST $CLIO_VISION_URL ──▶ object finder
@@ -33,7 +34,8 @@ using the head pose at capture time.
       "phrase": "blue washer fluid cap",
       "query": "Round blue plastic cap with a windshield-spray symbol, at the front left of the engine bay, next to a yellow coolant cap"
     }
-  ]
+  ],
+  "session": "6f1c2b0e-..."
 }
 ```
 
@@ -42,6 +44,10 @@ using the head pose at capture time.
 | `id`     | Echo it back in the detection.                                                                                                                                                                                                                            |
 | `phrase` | 2 to 5 words, for detectors and segmenters that take category prompts (SAM 3, Grounding DINO, OWLv2, YOLO-World). It can be absent.                                                                                                                       |
 | `query`  | A referring expression that stands on its own, for models that take free text (VLMs, referring segmentation). Always present. It says what the object is, its color, shape, size, markings and where it is now, and what tells it apart from look-alikes. |
+
+`session` names one run of the headset app (the same value for every frame of the run). A
+finder that keeps state between frames, such as the tracker, keeps it per session; others can
+ignore it.
 
 A request asks for 1 to 16 objects. The image is a Quest 3 passthrough camera frame, a JPEG of
 about 1280×960.
@@ -84,6 +90,7 @@ Only `id` is required. Clio fills in the rest:
 | `found`      | `true` when there is a point, box or outline.                                                                                             |
 | `confidence` | 0.5. Clio ignores detections below 0.3.                                                                                                   |
 | `model`      | `"http"`. It is recorded as each detection's `source`.                                                                                    |
+| `refreshMs`  | Clio asks again on its own schedule (below). A finder that is cheap per frame sends how soon it wants the next one.                       |
 - `outline` is one closed polygon: the outer contour of the object. Don't repeat the first point
   at the end. Clio simplifies it to at most 64 points. For a mask, take the largest external
   contour (OpenCV: `findContours(mask, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE)`), then divide x by
@@ -101,6 +108,18 @@ found yet. While the step runs, it asks again for the `show` items every few sec
 stay on objects that were moved. It skips objects in the learner's hand, because hand tracking
 moves those, and it never sends a second request while one is in flight. Expect a request every
 2 to 4 seconds during a lesson. Latency adds directly to how long an outline takes to appear.
+
+A finder that answers with `refreshMs` sets a faster pace: the headset sends its next frame that
+many milliseconds after each answer (never later than `?showRefresh`, and never with
+`?showRefresh=0`). `refreshMs` is passed through to the headset in Clio's own answer.
+
+## A tracking finder
+
+[tracker/](../tracker/README.md) answers this contract from tracking state instead of a fresh
+model call per request: YOLOE-26's vision graph and ByteTrack follow each object on every frame
+(about 35 ms a round trip on an M5), and jev is asked which object the words mean only about once
+a second, in the background. It replaces the jev + SAM 2.1 service on `:8790` and answers with
+`refreshMs: 50`, so outlines follow moving objects at around 10 to 15 frames a second.
 
 ## Minimal adapter
 
