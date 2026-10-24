@@ -95,7 +95,7 @@ Every event has `t` and `type`.
 | `demo.playback`                             | `stepId, clipId, phase`                                                                                      | when ghost hands were on screen                                                                                                                                                                                                                                                                                                                       |
 | `media.started`                             | `name, mimeType`                                                                                             | aligns `media/<name>` with `t`                                                                                                                                                                                                                                                                                                                        |
 | `environment.planes`                        | `planes: [{ id, kind, label, orientation, pose, polygon }]`                                                  | every plane the headset detects (`"environment.planes"` feature): a full snapshot at the start and whenever a plane appears, disappears or changes, at most once a second. `pose` is in `W` with the polygon in its local x/z plane (+y is the normal). `kind` is `table`, `floor`, `wall`, `ceiling`, `couch` or `other`, from the raw WebXR `label` |
-| `annotation`                                | `label, data?`                                                                                               | free-form labels (an escape hatch, so you don't have to change the schema)                                                                                                                                                                                                                                                                            |
+| `annotation`                                | `label, data?`                                                                                               | free-form labels (an escape hatch, so you don't have to change the schema; see [Annotations](#annotations))                                                                                                                                                                                                                                           |
 
 ## `objects.ndjson`: `ObjectTrackRecord` (one per update that changed an estimate)
 
@@ -158,10 +158,17 @@ Rules, checked by the protocol schema at ingest (the JSON Schema checks only the
 - `orientation` is non-null exactly when the orientation-valid bit is set.
 
 What the headset writes: 2 for `layout`, `pinch` and `manual` placements; 10 for `detector`; 15 for
-`marker` with an orientation, 10 without. Sources recorded through `ObjectTrackRecorder` (the
-tracker seam) also write 2 (3 with an orientation) for a predicted estimate and 0 at the last
-position when the object is lost or absent. A held object has 2 while its wrist is tracked (3 if
-its orientation is known) and 0 while the wrist is lost.
+`marker` with an orientation, 10 without. A one-shot finder answer (`object.detected`) is lifted
+onto the table or a detected plane on its own frame and keeps 10. A live tracker's estimate (the
+lesson's `/track` objects, the primary page, `ObjectTrackRecorder`) is tracked only when the box
+was seen on its frame and its distance measured there by depth sensing or hit-test; otherwise it
+is valid but never tracked, 2 (3 with an orientation): a tracker coasting on a predicted box, a
+distance reused from an earlier frame, or where the box's ray meets a surface. A distance the
+headset made up (the primary page's fixed guess) records no state at all. When a live source loses
+an object, or says it is absent, one state with 0 is written at its last position (confidence 0,
+no `observedT`), until it is seen again. A held object has 2 while its wrist is tracked (3 if its
+orientation is known) and 0 while the wrist is lost; where the hand let go it has 2, whatever
+placed it before.
 
 Without `locationFlags` (older episodes), derive them from `source`: position valid always, plus
 position tracked for `marker` and `detector`; when `orientation` is non-null, also orientation valid,
@@ -203,6 +210,40 @@ camera image, separately from the 3D estimates in `objects.ndjson`:
 - `role`: `tracker` (every frame), `identifier` (about once a second, e.g. jev) or `detector`
   (one-shot, e.g. Gemini). `score` is the raw score as reported, not a calibrated probability.
   `trackId` is the tracker's own id, provenance only.
+
+Who writes them: a lesson while the live tracker follows its objects (one line per tracked frame
+and object, a loss once), and the synthetic `tracked-objects` capture. In a lesson the 3D estimates
+come from the object registry instead (flags as above, source `detector`), so an observation and a
+state about the same frame share `objectId` and `observedT` but are written by different parts of
+the app. Observations are recorded for the dataset only: nothing in them reaches a Gemini coach.
+`clio compile` sums them up per object in `tracks.json` (`observations`: counts by status, roles,
+models, track ids, first and last frame time); the 2D geometry stays here.
+
+## `meta.camera`
+
+The passthrough camera model the 2D answers were lifted with, written when the episode is created
+by any app that has a camera open (lessons, and the primary-object page):
+- `intrinsics`: pinhole focal lengths and principal point in pixels of an image `width` x `height`.
+  Image coordinates in episodes are normalized, so scale them to that size to use the intrinsics.
+- `headFromCamera`: the camera's pose in the XR viewer (head) frame, a Pose7.
+- `source`: where the model came from. `override` when URL parameters (`?camX=` and the like on
+  `primary.html`) moved it, `calibrated` when calibrate.html's stored calibration fits the camera,
+  `lens-metadata` when the browser reported lens intrinsics, `default` for the Quest 3 guess (Quest
+  Browser 154 reports no lens fields).
+
+## Annotations
+
+`annotation` events carry labels a new app needs without a new event type (an older server would
+answer 400 to one), so readers skip labels they don't know. Among them:
+
+| `label`               | Written by                                      | `data`                                                                             |
+| --------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `primary.target`      | `primary.html`, when the tracked target changes | `{ objectId, name, previous }`: what the tracker follows now (null for nothing)    |
+| `lesson.first_step`   | a lesson, as its first step starts              | how `start_lesson` got there and how long it took ([coach-plan.md](coach-plan.md)) |
+| `lesson.first_locate` | a lesson, once its first look has answered      | `{ locateMs, sinceStartMs, located, missing }`                                     |
+
+A change of what a tracker follows is an annotation for the same reason. The coach's own labels
+(`plan.*`, `step.watch`, `coach.*`) are described in [coach-plan.md](coach-plan.md).
 
 ## `finish.json`: `EpisodeFinish`
 

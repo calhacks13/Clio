@@ -56,7 +56,7 @@ runs on the headset:
 | ---------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | Lifting 2D detections into 3D                  | Camera frames are not stored, and the head pose at capture time comes from a live pose history |
 | Grasp and release detection                    | The lesson reacts to it (checks, held objects riding the wrist)                                |
-| Recording 2D observations and the camera model | Without them nothing can be lifted again offline (ready as a seam; see below)                  |
+| Recording 2D observations and the camera model | Without them nothing can be lifted again offline (see below)                                   |
 | Snapshotting detected planes                   | `XRFrame.detectedPlanes` exists only inside an XR frame                                        |
 
 | After the episode, in `pipeline/`                              | Why later is better                                                                                                     |
@@ -72,9 +72,10 @@ runs on the headset:
 
 Older episodes stay valid, and readers check `meta.features` before trusting a new field. What a
 lesson records today: head, hands, object estimates and lesson events as before, plus detected
-planes when the session has plane detection. 2D observations and `meta.camera` are written only by
-sources that set them, which today means the synthetic `tracked-objects` fixture; the tracker
-integration will add them to real recordings.
+planes when the session has plane detection, `meta.camera` whenever the passthrough camera is open,
+and 2D observations while the live tracker follows the lesson's objects (see below). The
+primary-object page (`primary.html`) records detected planes and `meta.camera` too. The synthetic
+`tracked-objects` fixture has all of them.
 
 | Feature               | What it adds                                                                                                                                          |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -86,8 +87,11 @@ integration will add them to real recordings.
 to `objects.ndjson` as an `ObjectState`, with the same `objectId` and its `observedT`. Its
 `status` is never upgraded: a tracker coasting on a predicted box writes `predicted`, and the 3D
 state it implies is valid but not tracked (location flags 2, or 3 with a measured orientation),
-never measured. A lost or absent object gets one state with flags 0 at its last position. A
-sample without a score records its 2D observation but no 3D state, so no confidence is invented.
+never measured. The same goes for a box seen on its frame whose distance was not measured on that
+frame (a depth reused from an earlier frame, or where its ray meets a surface): flags 2. A made-up
+distance gives no 3D state at all. A lost or absent object gets one state with flags 0 at its last
+position. A sample without a score records its 2D observation but no 3D state, so no confidence is
+invented.
 
 A server on an older protocol silently drops `observations` and `meta.camera` and answers 400 to
 `environment.planes` events, so restart the server whenever the headset changes (as for every
@@ -102,12 +106,12 @@ a silently filled gap. Where the recorded frames around a grid time are more tha
 (`policy.maxFrameGapMs`: a lost batch, or the XR loop paused while the headset was off), the head
 and wrists are `null` and the robot arms get no target.
 
-| File                      | Contents                                                                                                                                                                    |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `manifest.json`           | Compiler version, the raw inputs with byte counts and SHA-256, each stage's status, the artifacts written and the quality verdict                                           |
-| `tracks.json`             | The head, both wrists (pose and pinch) and every object on one grid (default 30 fps): position, orientation, tracked, interpolated, held by, confidence, source, held spans |
-| `environment.json`        | The table (from calibration, the plan, or placed on a detected table plane), the floor of the WebXR space with the table height when it is known, and every detected plane  |
-| `retarget-<profile>.json` | Per robot arm: joint values, gripper, tool target and achieved pose, residuals, reachability, and joint positions for drawing                                               |
+| File                      | Contents                                                                                                                                                                                                                   |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `manifest.json`           | Compiler version, the raw inputs with byte counts and SHA-256, each stage's status, the artifacts written and the quality verdict                                                                                          |
+| `tracks.json`             | The head, both wrists (pose and pinch) and every object on one grid (default 30 fps): position, orientation, tracked, interpolated, held by, confidence, source, held spans, and a summary of the object's 2D observations |
+| `environment.json`        | The table (from calibration, the plan, or placed on a detected table plane), the floor of the WebXR space with the table height when it is known, and every detected plane                                                 |
+| `retarget-<profile>.json` | Per robot arm: joint values, gripper, tool target and achieved pose, residuals, reachability, and joint positions for drawing                                                                                              |
 
 The quality verdict marks an episode **usable** only when it finished as `completed`, every batch
 arrived, no frames are missing for more than a second, the hands were tracked for most of it, and
@@ -115,23 +119,43 @@ every line passed validation. `reasons` says why not otherwise.
 
 ## Where the object tracker plugs in
 
-The tracker is not wired into lessons yet. Three seams are ready for it:
+The live tracker (YOLOE-26 + ByteTrack over `/track`, [object-finder.md](object-finder.md)) follows
+the objects a lesson shows. It feeds only the learner's AR view and the recording: nothing it says
+reaches a Gemini coach, completes a step or fires a rule under one ([coach-plan.md](coach-plan.md)).
+Four seams carry its answers into the data:
 1. **Headset: `TrackedObjectSample`** (`apps/headset/src/domain/world/tracked-object.ts`). Any
-   object source (YOLOE-26 + ByteTrack over `/track`, a session `/locate`, a marker tracker, a
-   future 6DoF tracker) converts its answers into this one class: object id, capture time, status
-   (measured, predicted, lost, absent, unknown), role, model name, raw score, optional 2D image
-   geometry, optional 3D position and orientation. The source implements `TrackedObjectSource`.
-   `ObjectTrackRecorder` records each sample: the 2D part as an `ObjectObservation`, the 3D part as
-   an `ObjectState` with honest location flags. In the lesson, where `ObjectRegistry` owns 3D
-   estimates, the recorder can record 2D only and the registry keeps fusing held objects.
-2. **Pipeline: `ObjectSeries`** (`pipeline/src/clio_pipeline/objects.py`). The compiler turns any
+   object source (`/track`, a session `/locate`, a marker tracker, a future 6DoF tracker) converts
+   its answers into this one class: object id, capture time, status (measured, predicted, lost,
+   absent, unknown), role, model name, raw score, optional 2D image geometry, optional 3D position
+   and orientation, and `positionMeasured: false` when that position was not measured on the
+   frame. `ObjectTrackRecorder` records each sample: the 2D part as an `ObjectObservation`, the 3D
+   part (when asked to) as an `ObjectState` with honest location flags.
+2. **Headset, in a lesson: `ObjectRegistry`** owns the 3D estimates, so the recorder writes only
+   the 2D observations (`states: 'none'`, feature `object.observations`). The live tracker puts
+   about five lifted positions a second per object into the registry as `detector` observations,
+   the camera's untrusted source: `measured: false` gives flags 2 instead of 10, and
+   `registry.lose(id, t)` writes one state with flags 0 at the last position. The lesson keeps that
+   last position for its checks, pinch targets and overlays, as it always has; under a Gemini coach
+   checks ignore `detector` positions anyway. A held object belongs to the hand: the registry
+   ignores camera answers and losses about it, and a lost object a hand grasps is carried again.
+3. **Pipeline: `ObjectSeries`** (`pipeline/src/clio_pipeline/objects.py`). The compiler turns any
    object's raw states into one series on the grid, with masks for valid, tracked and
-   interpolated values. Retargeting, export and the visualizer read this, so they do not care
-   which tracker produced the data.
-3. **Visualizer.** Compiled files arrive through `/api/clio/episodes/<id>/derived/<name>`. The
-   viewer draws the compiled planes, table and floor, the retargeted arms (inferred look) and the
-   compile state. `tracks.json` is not drawn yet: the scene still shows objects from the raw
-   estimates, which carry the same flags.
+   interpolated values; a predicted (flags 2) detector state is valid there but never tracked.
+   Each object's entry in `tracks.json` also gets an `observations` summary
+   (`pipeline/src/clio_pipeline/observations.py`): how many lines `observations.ndjson` has about
+   it, by status, the roles and models that answered, the trackers' own ids and the first and last
+   frame times. The 2D geometry stays in the raw file; an object with observations but no 3D state
+   gets no track. Retargeting, export and the visualizer read the series, so they do not care which
+   tracker produced the data.
+4. **Visualizer.** It reads `observations.ndjson` for episodes that list `object.observations`
+   (the inspector says what the camera last saw) and types a valid but untracked camera estimate as
+   predicted. Compiled files arrive through `/api/clio/episodes/<id>/derived/<name>`. The viewer
+   draws the compiled planes, table and floor, the retargeted arms (inferred look) and the compile
+   state. `tracks.json` is not drawn yet: the scene still shows objects from the raw estimates,
+   which carry the same flags.
+
+Pipeline 0.4.0 added the observations summary. A version change makes every compile stale, so the
+server's startup sweep recompiles the library once, one episode at a time.
 
 ## Robot retargeting
 
