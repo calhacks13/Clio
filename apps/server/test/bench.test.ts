@@ -780,9 +780,13 @@ describe('watcher tests', () => {
     ]);
   });
 
-  it('asks the saved look again with any model and grades the answer', async () => {
+  it('asks the saved look again with any model, as the headset asks, and grades the answer', async () => {
     const models = fakeModels({
-      check: '{"verdict":"done","observation":"holding a white carton"}',
+      check: JSON.stringify({
+        criteria: [{ met: 'yes', seen: 'a white carton in hand' }],
+        observation: 'holding a white carton',
+        verdict: 'done',
+      }),
     });
     const h = await benchHarness(models);
     const { test } = await createTest(h);
@@ -794,9 +798,17 @@ describe('watcher tests', () => {
     expect(run).toMatchObject({
       model: 'gemini-3.8-flash',
       expect: 'wrong',
-      result: { ok: true, answer: { verdict: 'done', observation: 'holding a white carton' } },
+      result: {
+        ok: true,
+        answer: {
+          verdict: 'done',
+          observation: 'holding a white carton',
+          criteria: [{ text: 'The cap is off.', met: 'yes', seen: 'a white carton in hand' }],
+        },
+      },
       passed: false,
     });
+    // The step's criteria first, from its start view, as the headset asks them.
     expect(models.checks[0]).toEqual({
       goal: 'Get a yogurt drink from the fridge',
       step: STEP,
@@ -804,6 +816,7 @@ describe('watcher tests', () => {
       before: [BEFORE],
       objects: OBJECTS,
       confusions: CONFUSIONS,
+      criteria: ['The cap is off.'],
       model: 'gemini-3.8-flash',
     });
     expect(h.logger.lines.some((l) => l.includes('said done, FAIL'))).toBe(true);

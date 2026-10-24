@@ -103,9 +103,10 @@ and mix-ups it was asked with, what the watcher answered, and the answer it shou
 This is how a failure seen live, like the milk taken for the yogurt drink and called done, becomes
 a regression test. **Watcher tests** under the scenarios lists them with their passes per model.
 Open one to see its frames and answers, change the answer it should get, or run it with the ticked
-models; **Run all tests** runs every test with every ticked model. Each answer is saved with the
-test, with how it was asked when that was not the headset's way (its `variant`, e.g. "quick,
-criteria seen") and its criteria as judged.
+models; **Run all tests** runs every test with every ticked model. A run asks as the headset's
+careful look does: the step's criteria first, from the test's `before` frame, then the look. Each
+answer is saved with the test, with its criteria as judged and, when it was asked another way,
+how (its `variant`, e.g. "quick" or "no criteria").
 
 ### Painted watcher tests
 
@@ -155,11 +156,11 @@ pnpm bench --staged --thinking first=low --thinking rest=high
 pnpm bench --staged --thinking first=minimal --repeat 3   # how stage first was picked
 pnpm bench ph-lesson-cup-a-already-pink-knife-on-the-table --no-judge
 pnpm bench --list
-pnpm bench --checks                            # every watcher test, the planner model
+pnpm bench --checks                            # every watcher test as the headset's careful look
 pnpm bench --checks --model gemini-robotics-er-2-preview --model gemini-3.8-flash --repeat 3
 pnpm bench --checks milk-taken-for-the-yogurt-drink
-pnpm bench --checks --criteria seen --parallel 2   # as the headset's careful look
-pnpm bench --checks --criteria seen --quick        # as its quick look (minimal thinking)
+pnpm bench --checks --quick --parallel 2       # as its quick look (minimal thinking)
+pnpm bench --checks --criteria none            # as the watcher asked before criteria
 pnpm bench --checks --thinking check=minimal --criteria words --thinking criteria=low
 pnpm bench --checks --list
 ```
@@ -172,9 +173,10 @@ with: stage rest's steps, with the warnings of both stages, as the coach heard t
 `--thinking <stage>=<level>` tries another thinking level for a stage (`default` is the model's
 own). With `--checks` the table has looks, passes, the pass rate, passes by expected answer (done,
 not done, wrong, unsure), how often it said done when it wasn't (false done) and the median and
-p90 time of a look. `--criteria seen` asks each test's criteria first, from its `before` frame, as
-the headset does (`words`: from the step's words alone; `inline`: the model writes its own in
-every answer), once per test and repeat, and reports their time on a line of their own.
+p90 time of a look. Each test's criteria are asked first, from its `before` frame, as the headset
+does, once per test and repeat, and their time is reported on a line of their own; `--criteria`
+asks them another way (`words`: from the step's words alone; `inline`: the model writes its own
+in every answer; `none`: no criteria).
 `--thinking check=<level>` and `criteria=<level>` change the two calls' thinking, `--quick` asks
 quick looks, and `--parallel <n>` asks n looks at a time (2 kept latencies steady).
 

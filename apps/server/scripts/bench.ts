@@ -58,9 +58,9 @@ Options:
   --slow                Allow 2 minutes per plan instead of the headset's 40 s
   --checks              Run the watcher tests instead of the scenarios
   --thinking check=<l>  With --checks: thinking for the check, or criteria=<l> for the criteria
-  --criteria <how>      With --checks: judge criteria the model writes first, from the views at
-                        the start of the step (seen) or the words alone (words), or that it
-                        writes in each answer (inline)
+  --criteria <how>      With --checks: the criteria to judge. seen (the default, as the headset):
+                        written first from the view at the start of the step; words: from the
+                        step's words alone; inline: written in each answer; none: no criteria
   --quick               With --checks: ask as quick looks (minimal thinking), as the watcher
                         does while a step is far from done
   --parallel <n>        With --checks: ask n looks at a time (default 1)
@@ -287,7 +287,8 @@ interface CheckTally {
 }
 
 const EXPECTS: readonly BenchCheckExpect[] = ['done', 'not_done', 'wrong', 'unsure'];
-const CRITERIA_MODES = ['seen', 'words', 'inline'] as const;
+/** seen, the headset's way: criteria from the step's start view, asked once per test and repeat. */
+const CRITERIA_MODES = ['seen', 'words', 'inline', 'none'] as const;
 type CriteriaMode = (typeof CRITERIA_MODES)[number];
 
 interface CheckOptions {
@@ -316,16 +317,17 @@ function parseCheckThinking(args: readonly string[]): GeminiStepCheckerOptions {
   return options;
 }
 
-/** How a run was asked, for its `variant`: empty when the headset's way. */
+/** How a run was asked, for its `variant`: empty when the way the headset's careful look is. */
 function checkVariant(
   options: GeminiStepCheckerOptions,
-  criteria: CriteriaMode | null,
+  criteria: CriteriaMode,
   quick: boolean,
 ): string {
   const parts: string[] = quick ? ['quick'] : [];
   if (options.thinking !== undefined) parts.push(`thinking ${options.thinking ?? 'default'}`);
-  if (criteria) parts.push(`criteria ${criteria}`);
-  if (criteria && criteria !== 'inline' && options.criteriaThinking !== undefined) {
+  if (criteria === 'none') parts.push('no criteria');
+  else if (criteria !== 'seen') parts.push(`criteria ${criteria}`);
+  if ((criteria === 'seen' || criteria === 'words') && options.criteriaThinking !== undefined) {
     parts.push(`criteria thinking ${options.criteriaThinking ?? 'default'}`);
   }
   return parts.join(', ');
@@ -351,11 +353,11 @@ async function runChecks(
     );
   }
   if (!isGeminiConfigured(config.geminiApiKey)) throw new Error('Set GEMINI_API_KEY in .env');
-  const criteria = options.criteria ?? null;
-  if (criteria !== null && !CRITERIA_MODES.includes(criteria as CriteriaMode)) {
+  const criteria = options.criteria ?? 'seen';
+  if (!CRITERIA_MODES.includes(criteria as CriteriaMode)) {
     throw new Error(`--criteria ${criteria}: use ${CRITERIA_MODES.join(', ')}`);
   }
-  const mode = criteria as CriteriaMode | null;
+  const mode = criteria as CriteriaMode;
   const checkerOptions: GeminiStepCheckerOptions = {
     ...parseCheckThinking(options.thinking),
     ...(mode === 'inline' ? { inline: true } : {}),

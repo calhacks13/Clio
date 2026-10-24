@@ -28,7 +28,7 @@ import { ApiError, geminiNotConfigured, invalidId, notFound } from '../errors';
 import { isSafeId } from '../ids';
 import { describeError } from '../log';
 import { type BenchModels, benchPlan, judgeRun, scenarioPlanRequest } from '../services/bench';
-import { expectLabel, runCheckTest } from '../services/bench-checks';
+import { criteriaTestRequest, expectLabel, runCheckTest } from '../services/bench-checks';
 import type { PlanRequestBody } from '../services/plan-service';
 import { askStepCheck, askStepCriteria } from '../services/step-check-service';
 import { limitBody, parseBody, safeId } from './request';
@@ -271,7 +271,13 @@ export function benchRoutes({ bench, now, logger, limits }: ServerDeps): Hono {
       emptyAsObject: true,
     });
     const checker = models.checker(model ?? models.plannerModel);
-    const run = await runCheckTest({ checker, now }, test, await on().checks.readFrames(test));
+    const frames = await on().checks.readFrames(test);
+    // As the headset asks: the step's criteria first, from its start view, then the look.
+    const criteria = await askStepCriteria(checker, criteriaTestRequest(test, frames), now).then(
+      (asked) => asked.criteria,
+      () => [],
+    );
+    const run = await runCheckTest({ checker, now }, test, frames, { criteria });
     await on().checks.addRun(test.id, run);
     const said = run.result.ok ? run.result.answer.verdict : `failed (${run.result.code})`;
     logger.info(
