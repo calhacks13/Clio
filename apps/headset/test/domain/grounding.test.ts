@@ -182,6 +182,15 @@ describe('ObjectGrounder', () => {
     expect(registry.get('cup')?.position[2]).toBeCloseTo(-1);
   });
 
+  it('places nothing when its asker no longer wants the answer once it comes', async () => {
+    const { grounder, registry } = setup([cupSeen]);
+    let wanted = true;
+    const asked = grounder.ground([{ id: 'cup' }], { current: () => wanted });
+    wanted = false;
+    expect(await asked).toEqual({ ok: false, reason: 'dropped' });
+    expect(registry.get('cup')).toBeUndefined();
+  });
+
   it('says so when there is no camera, instead of guessing', async () => {
     const { grounder } = setup([cupSeen], { capture: async () => null });
     expect(await grounder.ground([{ id: 'cup' }])).toEqual({

@@ -322,7 +322,7 @@ function renderPlan(
   const count = procedure.steps.length;
   const outline =
     outlineFrom !== undefined && outlineFrom < count
-      ? `<p class="note outline-note">${outlineFrom + 1 === count ? `Step ${count} is` : `Steps ${outlineFrom + 1} to ${count} are`} only an outline: stage 1 writes step 1 in full so the lesson can start, and the rest stage rewrites the outline.</p>`
+      ? `<p class="note outline-note">${outlineFrom + 1 === count ? `Step ${count} is` : `Steps ${outlineFrom + 1} to ${count} are`} only an outline: stage 1 writes step 1 as a short card so the lesson can start, and the rest stage writes the outline in full.</p>`
       : '';
   return `
     ${

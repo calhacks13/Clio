@@ -218,7 +218,7 @@ function layout(): string {
             <summary id="models-summary">Models</summary>
             <div id="model-list" class="model-list"></div>
           </details>
-          <label class="check" title="Stage 1 writes step 1 in full and the rest as an outline, so a lesson can start quickly; then the rest is refined in full while the learner works on step 1">
+          <label class="check" title="Stage 1 writes step 1 as a short card and the rest as an outline, so a lesson can start quickly; then the rest is written in full while the learner works on step 1">
             <input id="two-stage" type="checkbox"> Plan in two stages: step 1 first, the rest refined after
           </label>
           <label class="check" title="The headset gives the planner 40 s, retry included">
@@ -737,8 +737,9 @@ function twoStages(): boolean {
 }
 
 /**
- * A plan in two stages, as the headset would make it: stage 1 writes step 1 in full and the rest
- * as an outline; as soon as it is in, the rest stage rewrites the outline from the same frames.
+ * A plan in two stages, as the headset would make it: stage 1 writes step 1 as a short card and
+ * the rest as an outline; as soon as it is in, the rest stage writes the outline in full from the
+ * same frames.
  */
 async function planInStages(
   model: string,

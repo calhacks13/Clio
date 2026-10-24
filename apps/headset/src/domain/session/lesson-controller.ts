@@ -221,7 +221,10 @@ export class LessonController {
   private readonly guessed = new Set<string>();
   /** Gives up on planning work in flight (see stop()). */
   private readonly abandons = new Set<() => void>();
-  /** Counts lessons, so an answer about one lesson is never applied to the next. */
+  /**
+   * Bumped as a lesson starts and as it ends, so an answer about one lesson is never applied to
+   * the next, nor heard while the next is being planned.
+   */
   private lessonSeq = 0;
   private demo: Demonstration | null = null;
   private demoClipId = '';
@@ -1413,7 +1416,7 @@ export class LessonController {
 
   /**
    * The lesson's objects, found once it has started. A planned lesson records when the look
-   * answered (lesson.first_locate), unless another lesson has started since.
+   * answered (lesson.first_locate), unless the lesson has ended since.
    */
   private async locateStarted(timing: FirstStepTiming | undefined): Promise<void> {
     const { bus, clock, registry } = this.deps;
@@ -1494,6 +1497,9 @@ export class LessonController {
       this.planning = null;
       this.attempt++;
     }
+    // Its late answers (a look, a demonstration, a watcher check) belong to no lesson now, also
+    // while the next one is still being planned.
+    this.lessonSeq++;
     this.spotlight.stop();
     this.endDemo(t);
     this.setPhase('done');
@@ -1528,13 +1534,18 @@ export class LessonController {
         anchored: workspace.anchored,
       },
       hands: HAND_LAYOUT,
-      objects: registry.all().map((e) => ({
-        id: e.id,
-        label: e.spec.label,
-        position: e.position,
-        radius: e.spec.radius,
-        method: e.source,
-      })),
+      // Placements at the start, which readers take as valid. An object a live source lost in an
+      // earlier lesson is still read where it was last seen, but it has no valid pose to record.
+      objects: registry
+        .all()
+        .filter((e) => e.lostAt === undefined)
+        .map((e) => ({
+          id: e.id,
+          label: e.spec.label,
+          position: e.position,
+          radius: e.spec.radius,
+          method: e.source,
+        })),
       coach: context.coach,
       device: context.device,
       app: context.app,

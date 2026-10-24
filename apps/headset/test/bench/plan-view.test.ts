@@ -173,7 +173,9 @@ describe('two-stage plans', () => {
     expect([0, 1].map((i) => stepMark(first, i))).toEqual([null, 'outline']);
     expect([0, 1].map((i) => stepMark(rest, i))).toEqual(['stage1', 'refined']);
     const refining = renderRun(first, { ...options, stage: { first, refining: true } });
-    expect(refining).toContain('Step 2 is only an outline');
+    expect(refining).toContain(
+      'Step 2 is only an outline: stage 1 writes step 1 as a short card so the lesson can start',
+    );
     expect(refining).toContain('<li class="step outline" data-step="1">');
     expect(refining).toContain('Step 1 ready in 3.0 s; refining the rest…');
     const done = renderRun(first, { ...options, stage: { first, rest, refining: false } });

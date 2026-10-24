@@ -4,9 +4,17 @@ import { ManualClock } from '../../src/core/clock';
 import { Emitter } from '../../src/core/emitter';
 import type { AppEvents } from '../../src/domain/events';
 import { Spotlight } from '../../src/domain/session/spotlight';
-import type { FindRequest, Grounder, GroundingResult } from '../../src/domain/world/grounding';
+import type { CameraModel } from '../../src/domain/world/camera-model';
+import {
+  type FindRequest,
+  type Grounder,
+  type GroundingResult,
+  ObjectGrounder,
+} from '../../src/domain/world/grounding';
 import { ObjectRegistry } from '../../src/domain/world/object-registry';
 import type { ObjectOutline } from '../../src/domain/world/outline';
+import { PoseHistory } from '../../src/domain/world/pose-history';
+import { Workspace } from '../../src/domain/world/workspace';
 
 const procedure = parseProcedure({
   schema: 'clio.procedure/1',
@@ -396,6 +404,57 @@ describe('Spotlight', () => {
       'jug:pour',
       'cap:pour',
     ]);
+  });
+
+  it("leaves an ended lesson's late answer out of the registry", async () => {
+    const bus = new Emitter<AppEvents>();
+    const clock = new ManualClock(1000);
+    const registry = new ObjectRegistry(bus);
+    registry.load(procedure.objects, 0);
+    const registered: string[] = [];
+    bus.on('object.registered', (e) => registered.push(e.objectId));
+    const poses = new PoseHistory(16);
+    poses.push(890, { p: [0, 0.3, 0], q: [0, 0, 0, 1] });
+    poses.push(910, { p: [0, 0.3, 0], q: [0, 0, 0, 1] });
+    let answer: () => void = () => {};
+    const answered = new Promise<void>((resolve) => (answer = resolve));
+    const camera: CameraModel = {
+      intrinsics: { width: 1280, height: 720, fx: 800, fy: 800, cx: 640, cy: 360 },
+      headFromCamera: { p: [0, 0, 0], q: [0, 0, 0, 1] },
+    };
+    const grounder = new ObjectGrounder({
+      camera: {
+        capture: async () => ({ t: 900, width: 1280, height: 720, jpegBase64: 'AAAA' }),
+        model: () => camera,
+      },
+      locator: {
+        locate: async (_frame, objects) => {
+          await answered;
+          return {
+            model: 'jev',
+            detections: objects.map((o) => ({
+              id: o.id,
+              found: true,
+              point: [0.5, 560 / 720] as [number, number],
+              box: null,
+              outline: null,
+              confidence: 0.9,
+            })),
+          };
+        },
+      },
+      registry,
+      poses,
+      workspace: () => new Workspace({ p: [0, 0, 0], q: [0, 0, 0, 1] }),
+    });
+    const spotlight = new Spotlight({ bus, clock, registry, grounder });
+    const look = spotlight.enterStep(OPEN);
+    // The lesson ends while the cap is being looked for; the next one may use the id for another.
+    spotlight.stop();
+    answer();
+    expect(await look).toEqual(['cap', 'rag']);
+    expect(registry.get('cap')).toBeUndefined();
+    expect(registered).toEqual([]);
   });
 
   it('stops outlining and refreshing when the lesson ends', async () => {

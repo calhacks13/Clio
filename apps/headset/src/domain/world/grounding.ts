@@ -84,9 +84,17 @@ export type GroundingResult =
     }
   | {
       ok: false;
-      reason: 'no-camera-frame' | 'no-camera-model' | 'no-head-pose' | 'locator-failed';
+      reason: 'no-camera-frame' | 'no-camera-model' | 'no-head-pose' | 'locator-failed' | 'dropped';
       detail?: string;
     };
+
+export interface GroundOptions {
+  /**
+   * Asked once the finder has answered: false drops the answer before anything is placed (it is
+   * `dropped`), as when the lesson that asked has ended and the next may use its ids for others.
+   */
+  current?: () => boolean;
+}
 
 export interface GrounderDeps {
   camera: CameraFrameSource;
@@ -103,7 +111,7 @@ export interface GrounderDeps {
 
 /** Port used by the lesson: anything that can find objects by id. */
 export interface Grounder {
-  ground(requests: readonly FindRequest[]): Promise<GroundingResult>;
+  ground(requests: readonly FindRequest[], opts?: GroundOptions): Promise<GroundingResult>;
 }
 
 const missed = (id: string): Detection => ({
@@ -118,7 +126,10 @@ const missed = (id: string): Detection => ({
 export class ObjectGrounder implements Grounder {
   constructor(private readonly deps: GrounderDeps) {}
 
-  async ground(requests: readonly FindRequest[]): Promise<GroundingResult> {
+  async ground(
+    requests: readonly FindRequest[],
+    opts: GroundOptions = {},
+  ): Promise<GroundingResult> {
     const { camera, locator, poses } = this.deps;
     const frame = await camera.capture();
     if (!frame) return { ok: false, reason: 'no-camera-frame' };
@@ -132,6 +143,7 @@ export class ObjectGrounder implements Grounder {
     } catch (err) {
       return { ok: false, reason: 'locator-failed', detail: String(err) };
     }
+    if (opts.current && !opts.current()) return { ok: false, reason: 'dropped' };
     return this.place(frame, objects, answer);
   }
 

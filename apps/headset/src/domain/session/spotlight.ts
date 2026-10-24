@@ -103,8 +103,8 @@ export class Spotlight {
   }
 
   /**
-   * The lesson ended: stop looking, and leave answers still in flight unoutlined, unjoined and
-   * unrecorded (their step ids belong to the lesson that ended).
+   * The lesson ended: stop looking, and leave answers still in flight unplaced, unoutlined,
+   * unjoined and unrecorded (their step ids belong to the lesson that ended).
    */
   stop(): void {
     this.step = null;
@@ -133,7 +133,8 @@ export class Spotlight {
     this.looking++;
     let result: GroundingResult | null = null;
     try {
-      result = await grounder.ground(worded);
+      // An ended lesson's answer places nothing: the next lesson may use its ids for others.
+      result = await grounder.ground(worded, { current: () => lesson === this.lesson });
     } catch {
       // A camera or network failure is a missed look; the next refresh tries again.
     } finally {
