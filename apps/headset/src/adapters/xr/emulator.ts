@@ -18,6 +18,8 @@ export async function installEmulator(room = 'sunlit_living_room'): Promise<Emul
     import('@iwer/sem'),
   ]);
   const device = new XRDevice(metaQuest3);
+  // Hands, not controllers. Must be set before installDevUI, which reads it once at install.
+  device.primaryInputMode = 'hand';
   // Chrome ships a native navigator.xr; force the emulated runtime over it.
   device.installRuntime({ forceInstall: true });
   device.installDevUI(DevUI);
@@ -27,7 +29,6 @@ export async function installEmulator(room = 'sunlit_living_room'): Promise<Emul
   } catch (err) {
     log.warn(`synthetic room "${room}" failed to load: ${String(err)}`);
   }
-  device.primaryInputMode = 'hand';
   log.info('IWER Quest 3 emulator installed (hand input)');
   return {
     pinch: (hand, value = 1) => device.hands[hand]?.updatePinchValue(value),
