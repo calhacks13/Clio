@@ -60,3 +60,8 @@ on the demo photo with saved masks, a live local tracker mask, jitter and an orb
 The instruction panel's coach status mark borrows this cyan, and the 3.6 s breath while Clio
 listens. It is solid and opaque (white bars speaking, amber connecting, red offline) and keeps the
 header row's right end, so the light never moves when its word changes.
+
+The instruction panel itself is solid and opaque: navy `#0b1220`, the Done button solid green
+`#2a7d5a`. Its text stacks from the panel's top edge (header row, instruction, detail) above a
+bottom row where the status line wraps beside the Done button, and the panel grows downward to
+fit, never shorter than 17 cm. The header's title gives way to the step count, mark or not.

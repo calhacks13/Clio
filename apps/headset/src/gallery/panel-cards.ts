@@ -10,7 +10,11 @@ import {
   WebGLRenderer,
 } from 'three';
 import type { PresentContext } from '../adapters/render/presenter';
-import { InstructionPanelPresenter } from '../adapters/render/presenters/instruction-panel';
+import {
+  InstructionPanelPresenter,
+  PANEL_TOP,
+  PANEL_WIDTH,
+} from '../adapters/render/presenters/instruction-panel';
 import type { Pose } from '../core/math';
 import type { PanelState } from './states';
 
@@ -18,12 +22,12 @@ import type { PanelState } from './states';
 // and the state's snapshot every animation frame (ctx.t moves its animated parts). Browsers cap
 // WebGL contexts, so one renderer draws every visible card in turn and each card copies the
 // result into its own 2D canvas. Behind the panel, the demo photo dimmed to about 60% stands in
-// for passthrough.
+// for passthrough. The panel grows downward with its text, so each card frames its whole height.
 
-/** The panel's width in metres (instruction-panel.ts W). */
-const PANEL_WIDTH = 0.44;
 /** Share of the card's width the panel fills; the rest shows the room and any overflowing text. */
 const FILL = 0.78;
+/** The most of the card's height a tall panel fills. */
+const FILL_HEIGHT = 0.9;
 const FOV = 40;
 const BACKDROP_BEHIND = 0.8;
 const BACKDROP = '/demo/caliper.jpg';
@@ -57,7 +61,6 @@ export function mountPanelCards(grid: HTMLElement, states: readonly PanelState[]
     backdrop.material.needsUpdate = true;
     photoAspect = texture.image.width / texture.image.height;
     backdrop.visible = true;
-    resize();
   });
 
   const cards: Card[] = states.map((state) => {
@@ -90,7 +93,8 @@ export function mountPanelCards(grid: HTMLElement, states: readonly PanelState[]
   });
   for (const card of cards) seen.observe(card.canvas);
 
-  let distance = 1;
+  let aspect = 2;
+  const tan = Math.tan(((FOV / 2) * Math.PI) / 180);
   function resize(): void {
     const first = cards[0]?.canvas;
     if (!first) return;
@@ -102,12 +106,17 @@ export function mountPanelCards(grid: HTMLElement, states: readonly PanelState[]
       card.canvas.width = width;
       card.canvas.height = height;
     }
-    const aspect = width / height;
+    aspect = width / height;
     camera.aspect = aspect;
     camera.updateProjectionMatrix();
-    const tan = Math.tan(((FOV / 2) * Math.PI) / 180);
-    distance = PANEL_WIDTH / FILL / aspect / 2 / tan;
-    // Cover the view behind the panel with the photo, like object-fit: cover.
+  }
+  /** Moves the camera back far enough for the whole panel, and covers its view with the photo. */
+  function fit(panelHeight: number): number {
+    const distance = Math.max(
+      PANEL_WIDTH / FILL / aspect / 2 / tan,
+      panelHeight / FILL_HEIGHT / 2 / tan,
+    );
+    // Like object-fit: cover.
     const viewHeight = 2 * (distance + BACKDROP_BEHIND) * tan;
     const viewWidth = viewHeight * aspect;
     const wider = aspect > photoAspect;
@@ -116,6 +125,7 @@ export function mountPanelCards(grid: HTMLElement, states: readonly PanelState[]
       wider ? viewWidth / photoAspect : viewHeight,
       1,
     );
+    return distance;
   }
   new ResizeObserver(resize).observe(grid);
   resize();
@@ -137,11 +147,14 @@ export function mountPanelCards(grid: HTMLElement, states: readonly PanelState[]
     };
     scene.add(card.presenter.object);
     card.presenter.update(ctx);
-    // The panel settles in front of the head, facing it; look straight at it.
+    // The panel settles in front of the head, facing it; look straight at its middle.
     const at = card.presenter.object.position;
-    camera.position.set(at.x, at.y, at.z + distance);
-    camera.lookAt(at);
-    backdrop.position.set(at.x, at.y, at.z - BACKDROP_BEHIND);
+    const h = card.presenter.panelHeight;
+    const y = at.y + PANEL_TOP - h / 2;
+    const distance = fit(h);
+    camera.position.set(at.x, y, at.z + distance);
+    camera.lookAt(at.x, y, at.z);
+    backdrop.position.set(at.x, y, at.z - BACKDROP_BEHIND);
     renderer.render(scene, camera);
     scene.remove(card.presenter.object);
     card.context.drawImage(renderer.domElement, 0, 0);
