@@ -1,16 +1,20 @@
-import type { Procedure, Step } from '@clio/protocol';
+import type { ObjectSpec, Procedure, Step } from '@clio/protocol';
 import type { AppBus, HighlightStyle } from '../events';
 import { COACH_HIGHLIGHT_MS } from '../overlay/overlay-model';
 import { findWords } from '../world/find-words';
 import type { ObjectRegistry } from '../world/object-registry';
 
 // Which objects the tracker follows live (tracker/TRACK.md, objects mode), and in which words. The
-// lesson names them, never the tracker: the focused step's show items, in rank order, and for as
-// long as a coach highlight lasts (5 s, like OverlayModel's), the object it points at, the closer
-// look's included. Each object is followed in its show item's description (else its tracking
-// query, else its label), with one phrase for the whole lesson: the tracker starts an object's
-// track over whenever its phrase changes, so the first phrase the lesson gives an object is kept
-// (its first show item's, else its label). The set empties when the lesson ends.
+// lesson names them, never the tracker: every object the plan declares, from the moment the
+// lesson starts until it ends, so the recording has each one wherever the learner takes it. The
+// focused step's show items come first, in rank order, then for as long as a coach highlight lasts
+// (5 s, like OverlayModel's) the object it points at, the closer look's included, then the plan's
+// other objects in its order, as far as there is room. Only the show items and the highlights are
+// lit (isShown); the rest is followed for the data. Hidden zones and points are left out: the
+// camera cannot find them. Each object is followed in its show item's description (else its
+// tracking query, else its label), with one phrase for the whole lesson: the tracker starts an
+// object's track over whenever its phrase changes, so the first phrase the lesson gives an object
+// is kept (its first show item's, else its label). The set empties when the lesson ends.
 //
 // The dependency runs one way (docs/coach-plan.md, the perception boundary): the plan and the
 // coach say what to follow, and nothing the tracker sees comes back through here.
@@ -29,6 +33,13 @@ export interface LiveObject {
   /** The coach's highlight on it, while that lasts. */
   style: HighlightStyle | null;
 }
+
+/** Whether a followed object's light is on: the step shows it or the coach highlights it. */
+export const isShown = (object: Pick<LiveObject, 'rank' | 'style'>): boolean =>
+  object.rank !== null || object.style !== null;
+
+/** Whether the camera can be asked to find a declared object: not a hidden zone, not a point. */
+const findable = (spec: ObjectSpec): boolean => !spec.hidden && spec.kind !== 'point';
 
 export interface LiveTrackingDeps {
   bus: AppBus;
@@ -50,6 +61,8 @@ export class LiveTracking {
   /** The phrase each object was first followed with, this lesson. */
   private readonly phrases = new Map<string, string>();
   private list: LiveObject[] = [];
+  /** A lesson is under way: its declared objects are followed. */
+  private active = false;
 
   constructor(private readonly deps: LiveTrackingDeps) {}
 
@@ -58,6 +71,7 @@ export class LiveTracking {
     const offs = [
       bus.on('procedure.started', () => {
         this.phrases.clear();
+        this.active = true;
         this.clear();
       }),
       // Every focus change enters a step: the next one, a skip, a refocus, a revised plan.
@@ -79,8 +93,8 @@ export class LiveTracking {
       bus.on('plan.ready', ({ revision }) => {
         if (revision) this.rebuild();
       }),
-      bus.on('procedure.completed', () => this.clear()),
-      bus.on('procedure.aborted', () => this.clear()),
+      bus.on('procedure.completed', () => this.end()),
+      bus.on('procedure.aborted', () => this.end()),
     ];
     return () => {
       for (const off of offs) off();
@@ -98,7 +112,10 @@ export class LiveTracking {
     if (expired) this.rebuild();
   }
 
-  /** What to follow now: the step's show items in rank order, then highlighted objects. */
+  /**
+   * What to follow now: the step's show items in rank order, then highlighted objects, then the
+   * plan's other objects (unlit, for the recording), while there is room.
+   */
   get objects(): readonly LiveObject[] {
     return this.list;
   }
@@ -107,10 +124,17 @@ export class LiveTracking {
     return this.list.find((o) => o.id === id);
   }
 
+  /** No step is focused: only the lesson's objects are followed, none lit. */
   private clear(): void {
     this.shown = [];
     this.highlights.clear();
     this.rebuild();
+  }
+
+  /** The lesson ended: nothing is followed. */
+  private end(): void {
+    this.active = false;
+    this.clear();
   }
 
   private rebuild(): void {
@@ -132,15 +156,25 @@ export class LiveTracking {
     for (const [id, { style }] of this.highlights) {
       const spec = this.deps.registry.spec(id);
       if (!spec) continue;
-      add({
-        id,
-        phrase: this.phraseFor(id, this.firstShowPhrase(id) ?? spec.label),
-        query: findWords(spec),
-        rank: null,
-        style,
-      });
+      add({ ...this.followed(spec), style });
+    }
+    if (this.active) {
+      for (const spec of this.deps.procedure()?.objects ?? []) {
+        if (findable(spec)) add(this.followed(spec));
+      }
     }
     this.list = list;
+  }
+
+  /** A declared object followed outside any show item: unlit, in the finder's words. */
+  private followed(spec: ObjectSpec): LiveObject {
+    return {
+      id: spec.id,
+      phrase: this.phraseFor(spec.id, this.firstShowPhrase(spec.id) ?? spec.label),
+      query: findWords(spec),
+      rank: null,
+      style: null,
+    };
   }
 
   /** The phrase `id` was first followed with this lesson, else `candidate` (kept from now on). */

@@ -487,6 +487,30 @@ describe('mergeRevision', () => {
       expect(p.steps[0]).toEqual(first.steps[0]);
     });
 
+    it('lets stage rest make a card a part of a whole object it declares then', () => {
+      const answer = modelRestStage();
+      const whole = {
+        id: 'reservoir',
+        label: 'washer reservoir',
+        kind: 'container',
+        radius: 0.12,
+        placement: { method: 'detect' },
+        tracking: { query: 'The white washer fluid tank at the front left', moves: false },
+      };
+      const part = { ...answer.objects[0], partOf: 'reservoir' };
+      const p = parsed(
+        mergeRevision(
+          first,
+          { ...answer, objects: [part, ...answer.objects.slice(1), whole] },
+          1,
+          restCtx,
+          { upgrade: true },
+        ).candidate,
+      );
+      expect(p.objects[0]).toMatchObject({ id: 'washer_cap', partOf: 'reservoir' });
+      expect(p.objects.at(-1)).toMatchObject({ id: 'reservoir', kind: 'container' });
+    });
+
     it('keeps the card when the new declaration is not a valid object', () => {
       const answer = modelRestStage();
       const broken = { ...answer.objects[0], kind: 'banana', radius: 9 };

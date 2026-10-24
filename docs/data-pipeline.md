@@ -106,12 +106,12 @@ a silently filled gap. Where the recorded frames around a grid time are more tha
 (`policy.maxFrameGapMs`: a lost batch, or the XR loop paused while the headset was off), the head
 and wrists are `null` and the robot arms get no target.
 
-| File                      | Contents                                                                                                                                                                                                                   |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `manifest.json`           | Compiler version, the raw inputs with byte counts and SHA-256, each stage's status, the artifacts written and the quality verdict                                                                                          |
-| `tracks.json`             | The head, both wrists (pose and pinch) and every object on one grid (default 30 fps): position, orientation, tracked, interpolated, held by, confidence, source, held spans, and a summary of the object's 2D observations |
-| `environment.json`        | The table (from calibration, the plan, or placed on a detected table plane), the floor of the WebXR space with the table height when it is known, and every detected plane                                                 |
-| `retarget-<profile>.json` | Per robot arm: joint values, gripper, tool target and achieved pose, residuals, reachability, and joint positions for drawing                                                                                              |
+| File                      | Contents                                                                                                                                                                                                                                                 |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `manifest.json`           | Compiler version, the raw inputs with byte counts and SHA-256, each stage's status, the artifacts written and the quality verdict                                                                                                                        |
+| `tracks.json`             | The head, both wrists (pose and pinch) and every object on one grid (default 30 fps): position, orientation, tracked, interpolated, held by, confidence, source, held spans, the plan's kind and `partOf`, and a summary of the object's 2D observations |
+| `environment.json`        | The table (from calibration, the plan, or placed on a detected table plane), the floor of the WebXR space with the table height when it is known, and every detected plane                                                                               |
+| `retarget-<profile>.json` | Per robot arm: joint values, gripper, tool target and achieved pose, residuals, reachability, and joint positions for drawing                                                                                                                            |
 
 The quality verdict marks an episode **usable** only when it finished as `completed`, every batch
 arrived, no frames are missing for more than a second, the hands were tracked for most of it, and
@@ -120,8 +120,11 @@ every line passed validation. `reasons` says why not otherwise.
 ## Where the object tracker plugs in
 
 The live tracker (YOLOE-26 + ByteTrack over `/track`, [object-finder.md](object-finder.md)) follows
-the objects a lesson shows. It feeds only the learner's AR view and the recording: nothing it says
-reaches a Gemini coach, completes a step or fires a rule under one ([coach-plan.md](coach-plan.md)).
+every object a lesson declares, for the whole lesson (8 at a time, the focused step's show items
+first), including the whole object a shown part belongs to (`partOf`). Only the show items and the
+coach's highlights are lit; the rest is followed for the recording. It feeds only the learner's AR
+view and the recording: nothing it says reaches a Gemini coach, completes a step or fires a rule
+under one ([coach-plan.md](coach-plan.md)).
 Four seams carry its answers into the data:
 1. **Headset: `TrackedObjectSample`** (`apps/headset/src/domain/world/tracked-object.ts`). Any
    object source (`/track`, a session `/locate`, a marker tracker, a future 6DoF tracker) converts
@@ -154,7 +157,7 @@ Four seams carry its answers into the data:
    state. `tracks.json` is not drawn yet: the scene still shows objects from the raw estimates,
    which carry the same flags.
 
-Pipeline 0.4.0 added the observations summary. A version change makes every compile stale, so the
+Pipeline 0.4.0 added the observations summary, 0.5.0 each object's `partOf`. A version change makes every compile stale, so the
 server's startup sweep recompiles the library once, one episode at a time.
 
 ## Robot retargeting

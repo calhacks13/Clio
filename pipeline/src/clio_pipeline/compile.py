@@ -287,6 +287,7 @@ def _object_doc(s: ObjectSeries, observations: dict[str, Any] | None) -> dict[st
         "kind": s.kind,
         "radius": s.radius,
         "hidden": s.hidden,
+        "partOf": s.part_of,
         "position": rounded(s.position.reshape(-1, 3), valid=s.valid),
         "orientation": rounded(s.orientation.reshape(-1, 4)),
         "tracked": s.tracked.tolist(),

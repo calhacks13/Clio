@@ -204,6 +204,13 @@
           "hidden": {
             "type": "boolean"
           },
+          "partOf": {
+            "description": "The declared object this one is a component of (plan partOf); null when none, absent from compilers before 0.5.0",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "position": {
             "type": "array",
             "items": {

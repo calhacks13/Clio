@@ -26,7 +26,7 @@ import type { Clock } from '../core/clock';
 import { createLogger } from '../core/log';
 import type { AppBus } from '../domain/events';
 import { ObjectTrackRecorder } from '../domain/recording/object-track-recorder';
-import { LiveTracking } from '../domain/session/live-tracking';
+import { isShown, LiveTracking } from '../domain/session/live-tracking';
 import type { DepthSource } from '../domain/world/depth-source';
 import type { SurfaceRaycaster } from '../domain/world/grounding';
 import { LiveObjects } from '../domain/world/live-objects';
@@ -183,14 +183,14 @@ export class LiveTracker {
     document.addEventListener('visibilitychange', this.onVisibility);
   }
 
-  /** The tracker is connected and follows what the step shows: Spotlight stops looking again. */
+  /** The tracker is connected and follows the lesson's objects: Spotlight stops looking again. */
   get live(): boolean {
     return this.client.connected;
   }
 
-  /** Whether an object's live light is on. */
+  /** Whether an object's live light is on (prepare() decided, this frame). */
   lit(id: string): boolean {
-    return this.objects.lit(id);
+    return this.highlights.some((h) => h.id === id);
   }
 
   /** Perceive stage: what to follow, depth reads, and the tracker's answers since the last frame. */
@@ -212,14 +212,18 @@ export class LiveTracker {
     this.stream.tick();
   }
 
-  /** Before the presenters: the hands' occluders, and what each live light shows now. */
+  /**
+   * Before the presenters: the hands' occluders, and what each live light shows now. Only the
+   * step's show items and the coach's highlights are lit; the lesson's other objects are followed
+   * for the recording alone.
+   */
   prepare(frame: XRFrame, space: XRReferenceSpace): void {
     const { registry, clock } = this.deps;
     this.occluders.update(frame, space);
     this.highlights = this.objects.views(clock.now()).flatMap((view) => {
       const object = this.tracking.get(view.id);
       const spec = registry.spec(view.id);
-      if (!object || !spec) return [];
+      if (!object || !spec || !isShown(object)) return [];
       return [
         {
           ...view,

@@ -165,6 +165,13 @@ export const CompiledObjectTrackSchema = z.object({
   kind: z.string().nullable().describe('Plan object kind (item, tool, container, point, region)'),
   radius: z.number().positive().nullable(),
   hidden: z.boolean(),
+  partOf: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      'The declared object this one is a component of (plan partOf); null when none, absent from compilers before 0.5.0',
+    ),
   position: z.array(Vec3Schema.nullable()).describe('Null where no valid estimate'),
   orientation: z.array(QuatSchema.nullable()).describe('Null where the orientation is unknown'),
   tracked: z

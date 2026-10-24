@@ -122,15 +122,20 @@ While the step runs, the show items are followed one of two ways:
 - **Live, with the tracker** (the default whenever the tracker answers on `/track`). The headset
   streams its camera frames (480 px, as fast as the Mac answers) to the tracker's WebSocket
   ([tracker/TRACK.md](../tracker/TRACK.md), objects mode) and tells it what to follow, in words:
-  the focused step's show items in rank order, plus, for 5 s, whatever the coach highlights (a
-  closer look's highlights included). Each object keeps one `phrase` for the whole lesson (its
-  first show item's, else its label), because the tracker starts a track over when the phrase
-  changes; the step's description goes in `query`. The tracker asks jev about the objects about
-  once a second and follows them on every frame. The headset places each outline at the object's
-  measured distance (depth sensing, then hit-test), smooths it and draws it with a depth-correct
-  glow. While this runs, the show items are not asked about again over HTTP. `?live=0` turns it
-  off, `?tracker=<port>` picks another tracker (adb reverse the port), and `?frame=640` streams
-  wider frames for small parts.
+  every object the plan declares, from the moment the lesson starts until it ends, so the
+  recording has each one wherever the learner takes it. The focused step's show items come first,
+  in rank order, then, for 5 s, whatever the coach highlights (a closer look's highlights
+  included), then the plan's other objects in its order, as far as the 8 slots allow; hidden
+  zones and points are left out. Only the show items and the highlights are lit; the rest is
+  followed for the data alone, including the whole object a shown part belongs to (`partOf` in
+  [procedures.md](procedures.md#objects)). Each object keeps one `phrase` for the whole lesson
+  (its first show item's, else its label), because the tracker starts a track over when the
+  phrase changes; the step's description goes in `query`, else the object's tracking query. The
+  tracker asks jev about the objects about once a second and follows them on every frame. The
+  headset places each outline at the object's measured distance (depth sensing, then hit-test),
+  smooths it and draws it with a depth-correct glow. While this runs, the show items are not asked
+  about again over HTTP. `?live=0` turns it off, `?tracker=<port>` picks another tracker (adb
+  reverse the port), and `?frame=640` streams wider frames for small parts.
 - **Over HTTP**, when the tracker is not running or its connection drops (the headset keeps
   retrying, with backoff). Clio asks again for the `show` items every few seconds, so outlines
   stay on objects that were moved, skipping objects in the learner's hand, because hand tracking

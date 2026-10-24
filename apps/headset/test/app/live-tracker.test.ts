@@ -97,6 +97,8 @@ const model: CameraModel = {
 };
 
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+/** A frame with no hands in it, for the presenters' stage. */
+const xrFrame = { session: { inputSources: [] } } as unknown as XRFrame;
 const frame = {} as XRFrame;
 
 function setup() {
@@ -181,8 +183,8 @@ describe('LiveTracker', () => {
     expect(live.live).toBe(false);
   });
 
-  it('tells the tracker what the step shows, once per change, and again on a new connection', async () => {
-    const { live, sockets, start, enter } = setup();
+  it("tells the tracker the lesson's objects, once per change, and again on a new connection", async () => {
+    const { live, sockets, start, enter, bus } = setup();
     const connected = live.connect();
     sockets[0]?.accept();
     await connected;
@@ -190,9 +192,13 @@ describe('LiveTracker', () => {
     enter(OPEN);
     live.perceive(frame, 1000);
     live.perceive(frame, 1016);
+    // The step's show item in its words, then the plan's other objects in the finder's words.
     const set = {
       type: 'objects',
-      objects: [{ id: 'cap', phrase: 'blue washer cap', query: 'Round blue cap, front left' }],
+      objects: [
+        { id: 'cap', phrase: 'blue washer cap', query: 'Round blue cap, front left' },
+        { id: 'jug', phrase: 'fluid jug', query: 'fluid jug' },
+      ],
     };
     expect(sockets[0]?.messages).toEqual([set]);
 
@@ -206,10 +212,64 @@ describe('LiveTracker', () => {
     live.perceive(frame, 1032);
     expect(sockets[1]?.messages).toEqual([set]);
 
-    // A step that shows nothing stops tracking and every jev call.
+    // A step that shows nothing still follows every object, so the recording covers it.
     enter(DONE);
     live.perceive(frame, 1048);
+    expect(sockets[1]?.messages.at(-1)).toEqual({
+      type: 'objects',
+      objects: [
+        { id: 'cap', phrase: 'blue washer cap', query: 'washer cap' },
+        { id: 'jug', phrase: 'fluid jug', query: 'fluid jug' },
+      ],
+    });
+
+    // The end of the lesson stops tracking and every jev call.
+    bus.emit('procedure.completed', { t: 1060, durationMs: 1060 });
+    live.perceive(frame, 1064);
     expect(sockets[1]?.messages.at(-1)).toEqual({ type: 'objects', objects: [] });
+    live.stop();
+  });
+
+  it('lights only what the step shows; the rest is followed for the recording', async () => {
+    const { live, sockets, start, enter, registry, bus } = setup();
+    const observed: string[] = [];
+    bus.on('objects.observed', ({ observation }) => observed.push(observation.objectId));
+    const connected = live.connect();
+    sockets[0]?.accept();
+    await connected;
+    start();
+    enter(OPEN);
+    live.perceive(frame, 1000);
+    const seen = (id: string, x: number) => ({
+      id,
+      found: true,
+      state: 'tracking',
+      box: [x - 0.05, 0.55, x + 0.05, 0.7],
+      outline: [
+        [x - 0.05, 0.7],
+        [x + 0.05, 0.7],
+        [x, 0.55],
+      ],
+      point: [x, 0.64],
+      contact: [x, 0.7],
+      score: 0.9,
+      track: 1,
+    });
+    sockets[0]?.receive({
+      type: 'detections',
+      seq: 1,
+      t: 990,
+      model: 'yoloe-26l-seg',
+      detections: [seen('cap', 0.5), seen('jug', 0.3)],
+    });
+    live.perceive(frame, 1016);
+    await flush();
+    live.prepare(xrFrame, {} as XRReferenceSpace);
+    expect(live.lit('cap')).toBe(true);
+    expect(live.lit('jug')).toBe(false);
+    // Unlit, the jug is still placed and recorded like the cap.
+    expect(registry.get('jug')).toMatchObject({ source: 'detector', confidence: 0.9 });
+    expect(observed.sort()).toEqual(['cap', 'jug']);
     live.stop();
   });
 

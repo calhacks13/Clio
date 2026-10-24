@@ -216,6 +216,20 @@ def test_plan_details_label_each_series(planned_episode_dir):
         0.025,
         False,
     )
+    assert shoulder.part_of is None
+
+
+def test_a_part_names_the_whole_object_it_belongs_to(new_episode, plan):
+    hook = {"id": "hook", "label": "hanger hook", "position": [0.1, 0.0, -0.2], "radius": 0.02}
+    b = _episode(new_episode, objects=({**hook, "method": "layout"},))
+    b.track(300.0, b.object_state("hanger", [0.1, 0.0, -0.2], source="detector"))
+    plan["objects"].append({**plan["objects"][3], "id": "hook", "kind": "item", "partOf": "hanger"})
+    b.meta["plan"] = plan
+
+    series = _series(b)
+
+    assert series["hook"].part_of == "hanger"
+    assert series["hanger"].part_of is None
 
 
 @pytest.mark.parametrize("gap, interpolated", [(80.0, False), (200.0, True), (300.0, False)])

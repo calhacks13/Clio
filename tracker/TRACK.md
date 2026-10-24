@@ -6,8 +6,8 @@ still run about once a second (`POST /api/vision/primary` on the Clio server, wh
 service's `/locate`) to decide _what_ the target is; the page sends their box to the tracker,
 which matches it against the object it is already following.
 
-A lesson uses [objects mode](#objects-mode) instead: it names each step's objects in words, and
-the tracker asks jev about them itself and follows all of them on every frame.
+A lesson uses [objects mode](#objects-mode) instead: it names its objects in words (the focused
+step's first), and the tracker asks jev about them itself and follows all of them on every frame.
 
 Endpoint: WebSocket `ws://127.0.0.1:8790/track`. The headset reaches it through Vite's proxy at
 `ws://localhost:5173/track` (USB `adb reverse tcp:5173`). A connection whose `Origin` (or `Host`)
@@ -152,7 +152,8 @@ motion with a lag of a few pixels, and a one-frame glitch in the mask does not s
 ## Objects mode
 
 A lesson follows several objects at once and knows them by their words, not by a box: the
-phrase and description the plan gives each of a step's objects. In objects mode the tracker asks
+phrase and description the plan gives each of its objects (a step's show items first, then the
+rest of the plan, for the recording). In objects mode the tracker asks
 jev itself, as `POST /locate` with a session does ([README.md](README.md#how-it-works)): jev
 places the objects about once a second (`CLIO_TRACKER_IDENTIFY_INTERVAL_MS`), all that are due
 in one background call and sooner for an object that is new, lost or in doubt, never more

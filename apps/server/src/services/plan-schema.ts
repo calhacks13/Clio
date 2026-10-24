@@ -131,6 +131,10 @@ const DEFS: Record<string, JsonSchema> = {
       id: str('Lowercase slug, e.g. "washer_cap"'),
       label: str('Short spoken name, 1 to 3 words'),
       kind: oneOf(['point', 'item', 'container', 'tool', 'region']),
+      partOf: str(
+        "Only for a component or a bounded area of a larger declared object: that object's id. " +
+          'Leave it out otherwise',
+      ),
       description: str(),
       radius: num(0.01, 0.5, 'Approximate size in meters (half the largest dimension)'),
       placement: obj(

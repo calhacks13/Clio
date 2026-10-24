@@ -50,6 +50,7 @@ class ObjectSeries:
     kind: str | None  # plan object kind (item, tool, container, point, region); None if unplanned
     radius: float | None
     hidden: bool
+    part_of: str | None  # the declared object this one is a component of (plan `partOf`), if any
     t: np.ndarray  # (M,) grid times, ms
     position: np.ndarray  # (M, 3) workspace frame; NaN where not `valid`
     orientation: np.ndarray  # (M, 4) [x, y, z, w]; NaN where unknown
@@ -107,6 +108,7 @@ def object_series(
             kind=spec.get("kind"),
             radius=float(radius) if radius is not None else None,
             hidden=bool(spec.get("hidden", False)),
+            part_of=spec.get("partOf"),
             t=grid,
             held_spans=own,
             held=_held(own, grid),

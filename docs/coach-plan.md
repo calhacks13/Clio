@@ -351,8 +351,9 @@ Gemini coach isn't told rule mistakes then, because those rules saw untrusted po
 
 The AR side still reads the focused step to know what to outline, so the dependency runs one way:
 the plan feeds perception, and perception never feeds a Gemini coach. The live tracker works the
-same way: it is told what to follow (the focused step's show items, and for 5 s what the coach
-highlights) and nothing it sees comes back. Its positions reach the registry as `detector`
+same way: it is told what to follow (every declared object for the whole lesson, with the focused
+step's show items first, and for 5 s what the coach highlights; only those two are lit) and
+nothing it sees comes back. Its positions reach the registry as `detector`
 estimates, it adds no narrated events, and `highlight` still answers only `shown`. The scripted
 coach can't see, so it still hears about missing objects and pinches, as on main.
 

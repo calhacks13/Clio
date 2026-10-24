@@ -53,7 +53,18 @@ a robot policy could be conditioned on: "Add vinegar to cup A."
 
 Grasped movable objects (`item`, `tool`, `container`) ride with the hand that holds them.
 
+**`partOf`** (optional) names the declared object this one is a component or a bounded area of:
+a caliper's vernier scale is its own object (`kind: "item"`, its own `tracking.query`) with
+`partOf: "caliper"`, and the caliper is declared too. A step that shows the part lights only the
+part; the camera follows and records both, so the dataset has the whole object wherever the
+learner takes it. The whole must be declared, and an object is never a part of itself.
+
 **`hidden: true`** objects aren't drawn. Use them as zones for mistake rules.
+
+While a lesson runs, the live tracker follows every declared object the camera can find (not
+hidden zones or points), up to 8 at a time, with the focused step's `show` items first. Only the
+show items and the coach's highlights are lit; the rest is recorded
+([object-finder.md](object-finder.md#when-clio-asks)).
 
 **Positions** are reference points in the workspace frame (x along the near edge, y up, z toward
 the learner, so tabletop positions have z < 0). Put the point where the hand or tool goes, such as

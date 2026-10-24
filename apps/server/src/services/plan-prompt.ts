@@ -125,13 +125,16 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
   '',
   'OBJECTS',
   '- Declare every object that any step targets, acts on or checks (a look-alike that a ' +
-    'mistake checks counts), and nothing else. Ids are lowercase slugs (a-z, 0-9, "_" or "-"), ' +
-    'e.g. "washer_cap".',
+    'mistake checks counts, and so does the whole object a component is part of), and nothing ' +
+    'else. Ids are lowercase slugs (a-z, 0-9, "_" or "-"), e.g. "washer_cap".',
   '- `label`: a short spoken name, 1 to 3 words, e.g. "washer cap".',
   '- Object `kind`: "tool" or "container" only when the whole tool or container is meant; ' +
     '"item" otherwise. An attached component or a bounded area of a larger object, such as a ' +
-    "caliper's vernier scale or locking screw, is an object of its own, with its own id and kind " +
-    '"item": describe only that part, so its glow stays on the component.',
+    "caliper's vernier scale or locking screw, is an object of its own, with its own id, kind " +
+    '"item" and `partOf` naming the whole object it sits on. Declare that whole object too, ' +
+    'with its own `tracking.query`, even when no step acts on it as a whole: the camera ' +
+    'follows and records both. In `show`, describe only that part, so its glow stays on the ' +
+    'component.',
   '- `placement.method` is always "detect": the headset camera finds the object. Add ' +
     '`placement.hint` with where to look when it helps; it never replaces saying where in ' +
     '`tracking.query`.',

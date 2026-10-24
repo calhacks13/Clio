@@ -137,6 +137,12 @@ describe.each(['plan', 'revision'] as const)('buildPlanJsonSchema(%s) in full', 
     expect(props(step).mistakes).toMatchObject({ type: 'array', maxItems: 2 });
   });
 
+  it('lets a component name the declared object it is a part of, and nothing more', () => {
+    const object = defs(schema).object as JsonSchema;
+    expect(props(object).partOf).toMatchObject({ type: 'string' });
+    expect(object.required).not.toContain('partOf');
+  });
+
   it('asks every step for doneWhen: its finished state, as a camera would see it', () => {
     const step = defs(schema).step as JsonSchema;
     const doneWhen = props(step).doneWhen as JsonSchema;

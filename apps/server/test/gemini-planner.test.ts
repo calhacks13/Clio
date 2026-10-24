@@ -460,9 +460,12 @@ describe('PLANNER_SYSTEM_INSTRUCTION', () => {
     'sharp tools (knives, blades, scissors, needles)',
     'hot things (kettles, stoves, pans, irons)',
     'what it looks like, where it is, and what to do',
-    // Parts: an attached component is its own object, and kind "region" is left to the mat.
+    // Parts: an attached component is its own object that names its whole, which is declared
+    // too, so the camera follows and records both; kind "region" is left to the mat.
     'Object `kind`: "tool" or "container" only when the whole tool or container is meant',
     "caliper's vernier scale or locking screw, is an object of its own",
+    '`partOf` naming the whole object it sits on',
+    'Declare that whole object too',
     'describe only that part',
   ])('covers %j', (phrase) => {
     expect(PLANNER_SYSTEM_INSTRUCTION).toContain(phrase);

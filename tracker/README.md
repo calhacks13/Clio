@@ -14,8 +14,8 @@ Clio server ───────────┤   (primary-object route, ~1/s)
 headset primary.html ──── ws /track ─────────────────▶ YOLOE-26 + ByteTrack on every frame
   (via Vite's proxy)       frames + jev's box as `target`
 headset lesson ────────── ws /track, objects mode ───▶ every object on every frame;
-  (via Vite's proxy)       frames + the step's objects   jev ~1/s in the background
-                           in words
+  (via Vite's proxy)       frames + the lesson's         jev ~1/s in the background
+                           objects in words
 ```
 
 | Endpoint                  | Who calls it                                                    | What it does                                                                                                                                                  |
@@ -23,7 +23,7 @@ headset lesson ────────── ws /track, objects mode ───�
 | `POST /locate`            | Clio's primary-object route (`CLIO_PRIMARY_FINDER_URL`)         | One jev call for the frame, then YOLOE outlines each box jev found (`model`: `jev-1.14.0+yoloe-26l-seg`). One request at a time; another gets 503. |
 | `POST /locate` + `session` | Clio's locate route (`CLIO_VISION_URL`), for lesson outlines   | Answers at once from tracking state, with `refreshMs: 50` so the headset sends the next frame soon; jev looks again about once a second.                    |
 | `WS /track`               | `apps/headset/primary.html`                                     | Frames in, one mask per frame out; the page forwards each primary answer's box as the target. Protocol: [TRACK.md](TRACK.md).                              |
-| `WS /track`, objects mode | the headset's lesson                                            | Frames and the step's objects in words in, every object's outline per frame out; jev about once a second, as with a session. [TRACK.md](TRACK.md#objects-mode). |
+| `WS /track`, objects mode | the headset's lesson                                            | Frames and the lesson's objects in words in, every object's outline per frame out; jev about once a second, as with a session. [TRACK.md](TRACK.md#objects-mode). |
 | `GET /health`             |                                                                 | `{ok, model, backend, sessions}`                                                                                                                               |
 
 The contract for `/locate` is [docs/object-finder.md](../docs/object-finder.md). The service
@@ -75,9 +75,11 @@ pace (`?showRefresh=0` still turns refreshing off).
 Objects mode ([TRACK.md](TRACK.md#objects-mode)) does what `/locate` with a session does, over
 the stream instead of one HTTP request per frame through Clio's server. The headset opens
 `/track` (through Vite's proxy, as `primary.html` does) and sends the objects to follow in words
-whenever they change: the focused step's objects, each with its id, a phrase that stays the same
-from step to step, and the step's description as the query; `"objects": []` when nothing is to
-be shown, which stops jev. It streams frames as `primary.html` does and gets every object's box,
+whenever they change: every object the plan declares (up to 8, the focused step's show items
+first, then the coach's highlights, then the rest; only the first two kinds are lit), each with
+its id, a phrase that stays the same from step to step, and the step's description (else the
+object's tracking query) as the query; `"objects": []` once the lesson ends, which stops jev. It
+streams frames as `primary.html` does and gets every object's box,
 outline, point and contact on each one. The tracker asks jev itself, about once a second, in
 one call for all the objects that are due, and less often while jev fails (up to 16 s apart,
 as with a session). What comes back feeds the learner's AR view and the recording only, never a

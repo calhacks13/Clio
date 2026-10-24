@@ -64,6 +64,9 @@ export const ObjectSpecSchema = z.object({
     .describe('Not drawn; used only by checks (e.g. mistake zones)'),
   placement: ObjectPlacementSchema,
   tracking: TrackingSpecSchema.optional(),
+  partOf: SlugSchema.optional().describe(
+    'The declared object this one is a component or a bounded area of (a vernier scale of a caliper); the whole is followed and recorded with it',
+  ),
 });
 
 export const MistakeRuleSchema = z.object({
@@ -178,6 +181,22 @@ export const ProcedureSchema = ProcedureObjectSchema.superRefine((p, ctx) => {
       });
     }
     objectIds.add(o.id);
+  });
+  p.objects.forEach((o, i) => {
+    if (o.partOf === undefined) return;
+    if (o.partOf === o.id) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['objects', i, 'partOf'],
+        message: `Object "${o.id}" cannot be a part of itself`,
+      });
+    } else if (!objectIds.has(o.partOf)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['objects', i, 'partOf'],
+        message: `Unknown object "${o.partOf}"`,
+      });
+    }
   });
 
   const markerOwners = new Map<string, string>();

@@ -405,6 +405,11 @@
                 ],
                 "additionalProperties": false,
                 "description": "How the camera can find this object. Without it the object stays where placed."
+              },
+              "partOf": {
+                "description": "The declared object this one is a component or a bounded area of (a vernier scale of a caliper); the whole is followed and recorded with it",
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
               }
             },
             "required": [

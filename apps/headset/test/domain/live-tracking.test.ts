@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ManualClock } from '../../src/core/clock';
 import { Emitter } from '../../src/core/emitter';
 import type { AppEvents, HighlightStyle } from '../../src/domain/events';
-import { LiveTracking, MAX_LIVE_OBJECTS } from '../../src/domain/session/live-tracking';
+import { isShown, LiveTracking, MAX_LIVE_OBJECTS } from '../../src/domain/session/live-tracking';
 import { Spotlight } from '../../src/domain/session/spotlight';
 import type { Grounder } from '../../src/domain/world/grounding';
 import { ObjectRegistry } from '../../src/domain/world/object-registry';
@@ -89,9 +89,11 @@ function setup(plan: Procedure = procedure) {
 }
 
 const ids = (tracking: LiveTracking) => tracking.objects.map((o) => o.id);
+/** The followed objects whose light is on: the step's show items and the coach's highlights. */
+const shown = (tracking: LiveTracking) => tracking.objects.filter(isShown).map((o) => o.id);
 
 describe('LiveTracking', () => {
-  it("follows the focused step's show items in rank order, in their words", () => {
+  it("follows every declared object for the whole lesson, the step's show items first in their words", () => {
     const { tracking, start, enter } = setup();
     expect(tracking.objects).toEqual([]);
     start();
@@ -104,19 +106,117 @@ describe('LiveTracking', () => {
         rank: 0,
         style: null,
       },
+      // The plan's other objects, in its order: the phrase a step will show them by, else the
+      // label, and their own appearance as the words. Followed and recorded, never lit.
+      {
+        id: 'jug',
+        phrase: 'fluid jug',
+        query: 'blue jug with a white label',
+        rank: null,
+        style: null,
+      },
+      { id: 'rag', phrase: 'rag', query: 'rag', rank: null, style: null },
     ]);
     enter(POUR);
     expect(tracking.objects.map(({ id, rank }) => [id, rank])).toEqual([
       ['jug', 0],
       ['cap', 1],
+      ['rag', null],
     ]);
-    // A step that shows nothing follows nothing, so no frames or jev calls go out.
+    // A step that shows nothing lights nothing, but the recording covers the whole lesson.
     enter(DONE);
-    expect(tracking.objects).toEqual([]);
+    expect(tracking.objects.map(({ id, rank }) => [id, rank])).toEqual([
+      ['cap', null],
+      ['jug', null],
+      ['rag', null],
+    ]);
+    expect(tracking.objects.filter(isShown)).toEqual([]);
+  });
+
+  it('follows them from the moment the lesson starts, before its first step', () => {
+    const { tracking, start } = setup();
+    start();
+    expect(ids(tracking)).toEqual(['cap', 'jug', 'rag']);
+    expect(tracking.objects.filter(isShown)).toEqual([]);
+  });
+
+  it('leaves out what the camera cannot find: hidden zones and points', () => {
+    const plan = lesson(
+      'washer',
+      [OPEN],
+      [
+        {
+          id: 'zone',
+          label: 'spill zone',
+          kind: 'region',
+          hidden: true,
+          placement: { method: 'layout', position: [0.2, 0, -0.1] },
+        },
+        {
+          id: 'spot',
+          label: 'the spot',
+          kind: 'point',
+          placement: { method: 'layout', position: [0.1, 0, -0.1] },
+        },
+      ],
+    );
+    const { tracking, start, enter } = setup(plan);
+    start();
+    enter(plan.steps[0] as Step);
+    expect(ids(tracking)).toEqual(['cap', 'jug', 'rag']);
+  });
+
+  it('follows the whole object a part belongs to along with the part, lighting only the part', () => {
+    const plan = lesson(
+      'measure',
+      [
+        {
+          id: 'read',
+          instruction: 'Read the scale.',
+          targets: ['scale'],
+          show: [
+            {
+              object: 'scale',
+              phrase: 'vernier scale',
+              description: 'The engraved scale on the sliding jaw',
+            },
+          ],
+          success: { type: 'confirm' },
+        },
+      ],
+      [
+        {
+          id: 'caliper',
+          label: 'caliper',
+          kind: 'tool',
+          placement: { method: 'detect' },
+          tracking: { query: 'A silver vernier caliper lying open on the mat' },
+        },
+        {
+          id: 'scale',
+          label: 'vernier scale',
+          partOf: 'caliper',
+          placement: { method: 'detect' },
+          tracking: { query: 'The engraved vernier scale on the sliding jaw of the caliper' },
+        },
+      ],
+    );
+    const { tracking, start, enter } = setup(plan);
+    start();
+    enter(plan.steps[0] as Step);
+    expect(ids(tracking)).toEqual(['scale', 'cap', 'jug', 'rag', 'caliper']);
+    expect(tracking.objects.filter(isShown).map((o) => o.id)).toEqual(['scale']);
+    expect(tracking.get('caliper')).toEqual({
+      id: 'caliper',
+      phrase: 'caliper',
+      query: 'A silver vernier caliper lying open on the mat',
+      rank: null,
+      style: null,
+    });
   });
 
   it('keeps the first phrase it gave an object for the whole lesson, the words follow the step', () => {
-    const { tracking, start, enter } = setup();
+    const { tracking, start, enter, replan } = setup();
     start();
     enter(OPEN);
     enter(POUR);
@@ -126,9 +226,9 @@ describe('LiveTracking', () => {
       query: 'The open reservoir neck',
     });
     expect(tracking.get('jug')?.phrase).toBe('fluid jug');
-    // A new lesson starts afresh.
+    // A new lesson starts afresh: the phrase is the first one its plan shows the object by.
+    replan(lesson('washer-2', [POUR, DONE]));
     start();
-    enter(POUR);
     expect(tracking.get('cap')?.phrase).toBe('open reservoir');
   });
 
@@ -151,10 +251,13 @@ describe('LiveTracking', () => {
     ]);
     tracking.update(5999);
     expect(ids(tracking)).toEqual(['cap', 'jug', 'rag']);
+    // A highlight that ran out leaves the object followed, unlit, after the lit ones.
     tracking.update(6000);
-    expect(ids(tracking)).toEqual(['cap', 'rag']);
+    expect(ids(tracking)).toEqual(['cap', 'rag', 'jug']);
+    expect(shown(tracking)).toEqual(['cap', 'rag']);
     tracking.update(6200);
-    expect(ids(tracking)).toEqual(['cap']);
+    expect(ids(tracking)).toEqual(['cap', 'jug', 'rag']);
+    expect(shown(tracking)).toEqual(['cap']);
   });
 
   it('styles a shown object it highlights without following it twice', () => {
@@ -162,9 +265,14 @@ describe('LiveTracking', () => {
     start();
     enter(OPEN);
     highlight('cap', 'target', 1000);
-    expect(tracking.objects).toEqual([expect.objectContaining({ id: 'cap', style: 'target' })]);
+    expect(ids(tracking)).toEqual(['cap', 'jug', 'rag']);
+    expect(tracking.objects.filter(isShown)).toEqual([
+      expect.objectContaining({ id: 'cap', style: 'target' }),
+    ]);
     tracking.update(6000);
-    expect(tracking.objects).toEqual([expect.objectContaining({ id: 'cap', style: null })]);
+    expect(tracking.objects.filter(isShown)).toEqual([
+      expect.objectContaining({ id: 'cap', style: null }),
+    ]);
   });
 
   it('ignores step highlights and unknown objects', () => {
@@ -173,7 +281,8 @@ describe('LiveTracking', () => {
     enter(OPEN);
     highlight('jug', 'target', 1000, 'auto');
     highlight('kettle', 'target', 1000);
-    expect(ids(tracking)).toEqual(['cap']);
+    expect(shown(tracking)).toEqual(['cap']);
+    expect(ids(tracking)).toEqual(['cap', 'jug', 'rag']);
   });
 
   it('drops a highlight when the focus moves, as the overlay does', () => {
@@ -182,7 +291,8 @@ describe('LiveTracking', () => {
     enter(OPEN);
     highlight('rag', 'attention', 1000);
     enter(POUR);
-    expect(ids(tracking)).toEqual(['jug', 'cap']);
+    expect(ids(tracking)).toEqual(['jug', 'cap', 'rag']);
+    expect(shown(tracking)).toEqual(['jug', 'cap']);
   });
 
   it('follows a revised focused step from the plan as it is now', () => {
@@ -201,9 +311,12 @@ describe('LiveTracking', () => {
     ]);
     replan(revised);
     enter(revised.steps[0] as Step);
+    // The rag was followed by its label from the start, so that stays its phrase: the track goes
+    // on, and the revised step's words become its query.
     expect(tracking.objects.map(({ id, phrase, query }) => [id, phrase, query])).toEqual([
-      ['rag', 'blue rag', 'Folded blue rag on the right'],
+      ['rag', 'rag', 'Folded blue rag on the right'],
       ['cap', 'blue washer cap', 'The cap, now loose'],
+      ['jug', 'fluid jug', 'blue jug with a white label'],
     ]);
   });
 
@@ -282,6 +395,12 @@ describe('LiveTracking', () => {
     const { tracking, start, enter, highlight } = setup(plan);
     start();
     enter(plan.steps[0] as Step);
+    // The show items, then the plan's other objects in its order, as far as there is room.
+    const shownIds = many.slice(0, 4).map((o) => o.id);
+    expect(ids(tracking)).toEqual([...shownIds, 'cap', 'jug', 'rag', 'part-4']);
+    // A highlight takes a slot before the merely followed.
+    highlight('part-9', 'attention');
+    expect(ids(tracking)).toEqual([...shownIds, 'part-9', 'cap', 'jug', 'rag']);
     for (const o of many.slice(4)) highlight(o.id, 'attention');
     expect(tracking.objects).toHaveLength(MAX_LIVE_OBJECTS);
     expect(tracking.objects[0]?.id).toBe('part-0');
@@ -294,7 +413,7 @@ describe('LiveTracking', () => {
     highlight('jug', 'attention');
     const before = events.length;
     tracking.update(10_000);
-    expect(tracking.objects.length).toBe(1);
+    expect(tracking.objects.length).toBe(3);
     expect(events.length).toBe(before);
   });
 });
