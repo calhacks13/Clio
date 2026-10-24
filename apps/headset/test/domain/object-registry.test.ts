@@ -421,4 +421,59 @@ describe('ObjectRegistry', () => {
       expect.objectContaining({ source: 'detector', locationFlags: 2, heldBy: null, observedT: 2 }),
     ]);
   });
+
+  it('writes a declared object again in place: where it is, the hand on it and a loss stay', () => {
+    const { bus, registry } = setup();
+    const released: string[] = [];
+    bus.on('object.released', (e) => released.push(e.objectId));
+    const [cupSpec, jugSpec] = procedure.objects;
+    if (!cupSpec || !jugSpec) throw new Error('fixture');
+    // The jug was seen at a distance not measured on its frame, then lost; the cup is in hand.
+    registry.observe('jug', {
+      position: [0.3, 0.1, -0.3],
+      confidence: 0.8,
+      source: 'detector',
+      t: 5,
+      measured: false,
+    });
+    registry.lose('jug', 8);
+    registry.attach('cup', 'right', { p: [0.1, 0.07, -0.1], q: [0, 0, 0, 1] }, 10);
+    registry.drainChanges();
+    const jugBefore = registry.get('jug');
+    const jug = { ...jugSpec, kind: 'container' as const, radius: 0.12 };
+    const cup = {
+      ...cupSpec,
+      kind: 'tool' as const,
+      tracking: { query: 'white mug', moves: true },
+    };
+    registry.update(jug, 20);
+    registry.update(cup, 20);
+    expect(registry.spec('jug')).toBe(jug);
+    expect(registry.get('jug')).toEqual({ ...jugBefore, spec: jug });
+    expect(registry.get('jug')).toMatchObject({ measured: false, lostAt: 8 });
+    expect(registry.get('cup')).toMatchObject({ spec: cup, heldBy: 'right' });
+    expect(registry.heldBy('right')).toEqual(['cup']);
+    expect(released).toEqual([]);
+    // Nothing about where they are changed, so nothing new is recorded.
+    expect(registry.drainChanges()).toEqual([]);
+    // The hand still carries the cup, with its grip offset, under the new spec.
+    registry.updateHeld({ right: { p: [0.2, 0.07, -0.1], q: [0, 0, 0, 1] } }, 30);
+    expect(near(registry.position('cup'), [0.2, 0.07, -0.2])).toBe(true);
+    expect(registry.get('cup')?.spec).toBe(cup);
+    // An unknown object is not declared this way.
+    registry.update({ ...jugSpec, id: 'kettle' }, 30);
+    expect(registry.spec('kettle')).toBeUndefined();
+  });
+
+  it('places an object still unplaced at the layout spot its new spec gives', () => {
+    const { registry } = setup();
+    const jugSpec = procedure.objects[1];
+    if (!jugSpec) throw new Error('fixture');
+    registry.update(
+      { ...jugSpec, placement: { method: 'layout', position: [0.4, 0.1, -0.3] } },
+      12,
+    );
+    expect(registry.get('jug')).toMatchObject({ position: [0.4, 0.1, -0.3], source: 'layout' });
+    expect(registry.unplaced()).toEqual([]);
+  });
 });

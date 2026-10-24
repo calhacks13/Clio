@@ -1,6 +1,6 @@
 /// <reference path="../../src/adapters/render/troika.d.ts" />
 import { parseProcedure } from '@clio/protocol';
-import { Object3D } from 'three';
+import { type Mesh, Object3D, type TorusGeometry } from 'three';
 import { describe, expect, it, vi } from 'vitest';
 
 // troika's SDF text needs a browser; a plain object stands in for each label.
@@ -213,5 +213,20 @@ describe('ObjectMarkersPresenter with live lights', () => {
     lit = true;
     markers.update(ctx);
     expect([ring?.visible, label?.visible]).toEqual([false, false]);
+  });
+
+  it("sizes the ring again when a plan's later stage writes the object's size", () => {
+    const markers = new ObjectMarkersPresenter();
+    const highlights = [
+      { objectId: 'cap', style: 'target' as const, source: 'auto' as const, until: null },
+    ];
+    const show = (est: ObjectEstimate) =>
+      markers.update({ ...context(0, 16, highlights), objects: [est] } as PresentContext);
+    const ring = () => markers.object.children[0]?.children[1] as Mesh<TorusGeometry> | undefined;
+    show(cap);
+    expect(ring()?.geometry.parameters.radius).toBeCloseTo(0.039);
+    show({ ...cap, spec: { ...cap.spec, radius: 0.12 } });
+    expect(ring()?.geometry.parameters.radius).toBeCloseTo(0.156);
+    expect(markers.object.children).toHaveLength(1);
   });
 });

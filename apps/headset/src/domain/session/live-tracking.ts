@@ -73,6 +73,11 @@ export class LiveTracking {
         this.highlights.set(objectId, { style, until: t + COACH_HIGHLIGHT_MS });
         this.rebuild();
       }),
+      // A revision that keeps the focus (stage rest) may write an object's words again: the query
+      // follows them, the phrase stays.
+      bus.on('plan.ready', ({ revision }) => {
+        if (revision) this.rebuild();
+      }),
       bus.on('procedure.completed', () => this.clear()),
       bus.on('procedure.aborted', () => this.clear()),
     ];
