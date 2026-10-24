@@ -18,8 +18,15 @@ import {
   scenarioPlanRequest,
 } from '../src/services/bench';
 import { expectLabel, runCheckTest } from '../src/services/bench-checks';
-import { createGeminiClient, isGeminiConfigured, type Thinking } from '../src/services/gemini';
-import type { StageThinking } from '../src/services/gemini-planner';
+import {
+  createGeminiClient,
+  type GeminiClient,
+  isGeminiConfigured,
+  type Thinking,
+} from '../src/services/gemini';
+import type { PartThinking, StageThinking } from '../src/services/gemini-planner';
+import type { RestPartReport } from '../src/services/plan-rest';
+import { DEFAULT_REST_MODE } from '../src/services/plan-service';
 import { BenchCheckStore } from '../src/storage/bench-check-store';
 import { BenchStore } from '../src/storage/bench-store';
 import { ProcedureStore } from '../src/storage/procedure-store';
@@ -44,8 +51,11 @@ Options:
   --repeat <n>          Run each scenario or test n times per model, to see how steady it is
   --staged              Plan as the headset does: stage first (the first step and an outline),
                         then stage rest (the outline in full); judges the plan after both
-  --thinking <s>=<lvl>  Thinking for a stage (full, first, rest): minimal, low, medium, high or
-                        default (the model's own); repeat for several stages
+  --thinking <s>=<lvl>  Thinking for a stage (full, first, rest) or a part of a parallel stage
+                        rest (review, step, objects): minimal, low, medium, high or default (the
+                        model's own); repeat for several
+  --rest <mode>         Write stage rest in one call (single) or check the outline and write
+                        its steps in parallel (parallel, the default)
   --judge-model <name>  Judge with this model (default: GEMINI_JUDGE_MODEL)
   --no-judge            Plan only
   --slow                Allow 2 minutes per plan instead of the headset's 40 s
@@ -63,10 +73,60 @@ interface Tally {
   passed: number;
   met: number;
   criteria: number;
+  /** Other serious problems the judge named, over all judged plans. */
+  issues: number;
   /** Until the lesson can start: the whole plan, or stage first. */
   starts: number[];
   /** Until the plan is complete: the whole plan, or both stages. */
   times: number[];
+  /** What each lesson's planning cost: its planner calls and their tokens (not the judge's). */
+  usage: Usage[];
+}
+
+interface Usage {
+  calls: number;
+  input: number;
+  output: number;
+  thoughts: number;
+}
+
+/**
+ * The planner's Gemini client, counting every call and the tokens its answer reports; `take`
+ * returns what was used since the last take. The judge plans with an unmetered client.
+ */
+function metered(ai: GeminiClient): { ai: GeminiClient; take(): Usage } {
+  let used: Usage = { calls: 0, input: 0, output: 0, thoughts: 0 };
+  const client: GeminiClient = {
+    authTokens: ai.authTokens,
+    models: {
+      list: (params) => ai.models.list(params),
+      async generateContent(params) {
+        used.calls++;
+        const response = await ai.models.generateContent(params);
+        const usage = (
+          response as {
+            usageMetadata?: {
+              promptTokenCount?: number;
+              candidatesTokenCount?: number;
+              thoughtsTokenCount?: number;
+            };
+          }
+        ).usageMetadata;
+        used.input += usage?.promptTokenCount ?? 0;
+        used.output += usage?.candidatesTokenCount ?? 0;
+        used.thoughts += usage?.thoughtsTokenCount ?? 0;
+        return response;
+      },
+    },
+  };
+  return {
+    ai: client,
+    take() {
+      const taken = used;
+      used = { calls: 0, input: 0, output: 0, thoughts: 0 };
+      return taken;
+    },
+  };
 }
 
 async function main(): Promise<void> {
@@ -78,6 +138,7 @@ async function main(): Promise<void> {
       repeat: { type: 'string' },
       staged: { type: 'boolean' },
       thinking: { type: 'string', multiple: true },
+      rest: { type: 'string' },
       'judge-model': { type: 'string' },
       'no-judge': { type: 'boolean' },
       slow: { type: 'boolean' },
@@ -113,11 +174,18 @@ async function main(): Promise<void> {
   }
   if (!isGeminiConfigured(config.geminiApiKey)) throw new Error('Set GEMINI_API_KEY in .env');
 
-  const models = createBenchModels(createGeminiClient(config.geminiApiKey), config);
+  const client = createGeminiClient(config.geminiApiKey);
+  const meter = metered(client);
+  const models = createBenchModels(meter.ai, config);
+  const judges = createBenchModels(client, config);
   const plannerModels = values.model?.length ? values.model : [config.plannerModel];
   const repeat = Math.max(1, Number(values.repeat ?? 1) || 1);
   const staged = values.staged ?? false;
   const thinking = parseThinking(values.thinking ?? []);
+  const restMode = values.rest ?? DEFAULT_REST_MODE;
+  if (restMode !== 'single' && restMode !== 'parallel') {
+    throw new Error(`--rest ${restMode}: use single or parallel`);
+  }
   const judgeModel = values['judge-model'] ?? config.judgeModel;
   const judging = !values['no-judge'];
   const budgetMs = values.slow ? SLOW_BUDGET_MS : undefined;
@@ -132,16 +200,13 @@ async function main(): Promise<void> {
   console.log(
     `Planner bench: ${scenarios.length} scenario${scenarios.length === 1 ? '' : 's'} × ` +
       `${plannerModels.length} model${plannerModels.length === 1 ? '' : 's'} × ${repeat} = ` +
-      `${total} run${total === 1 ? '' : 's'}${staged ? ', staged' : ''}` +
+      `${total} run${total === 1 ? '' : 's'}${staged ? `, staged, rest ${restMode}` : ''}` +
       `${thinks.length ? `, thinking ${thinks.join(', ')}` : ''}` +
       `${judging ? `, judged by ${judgeModel}` : ''}${budgetMs ? ', 2 minutes each' : ''}\n`,
   );
-  const tallies = new Map<string, Tally>(
-    plannerModels.map((m) => [
-      m,
-      { runs: 0, planned: 0, judged: 0, passed: 0, met: 0, criteria: 0, starts: [], times: [] },
-    ]),
-  );
+  const tallies = new Map<string, Tally>(plannerModels.map((m) => [m, emptyTally()]));
+  /** The same per model and scene, for the table of scenes. */
+  const sceneTallies = new Map<string, Tally>();
   const width = Math.min(48, Math.max(...scenarios.map((s) => s.id.length)));
 
   for (const summary of scenarios) {
@@ -150,48 +215,64 @@ async function main(): Promise<void> {
     const images = await store.readViews(scenario);
     for (const model of plannerModels) {
       for (let i = 0; i < repeat; i++) {
-        const tally = tallies.get(model) as Tally;
+        const key = `${model}  ${scenario.id}`;
+        if (!sceneTallies.has(key)) sceneTallies.set(key, emptyTally());
+        const counted = [tallies.get(model), sceneTallies.get(key)] as Tally[];
         const planner = models.planner(model, { thinking });
+        meter.take();
         const body = scenarioPlanRequest(scenario, images, { staged });
         const first = await benchPlan({ planner, plans, now, budgetMs }, body);
         // The plan the learner ends up with: the first stage's, written out by stage rest.
         const rest = staged ? restPlanRequest(body, first) : null;
         let run = first;
+        const parts: RestPartReport[] = [];
         if (rest) {
           await store.addRun(scenario.id, first);
           run = withEarlierWarnings(
             first,
-            await benchPlan({ planner, plans, now, budgetMs }, rest),
+            await benchPlan(
+              { planner, plans, now, budgetMs, rest: restMode, onRestPart: (p) => parts.push(p) },
+              rest,
+            ),
           );
         }
+        const usage = meter.take();
         let verdict = '';
         if (judging && run.result.ok && scenario.expect.length) {
           try {
-            const judgement = await judgeRun(models.judge(judgeModel), scenario, run, images, now);
+            const judgement = await judgeRun(judges.judge(judgeModel), scenario, run, images, now);
             run = { ...run, judgement };
             const met = judgement.criteria.filter((c) => c.met).length;
             verdict = `judge ${met}/${judgement.criteria.length} ${judgement.passed ? '✓' : '✗'}`;
-            tally.judged++;
-            tally.met += met;
-            tally.criteria += judgement.criteria.length;
-            if (judgement.passed) tally.passed++;
+            for (const tally of counted) {
+              tally.judged++;
+              tally.met += met;
+              tally.criteria += judgement.criteria.length;
+              tally.issues += judgement.issues.length;
+              if (judgement.passed) tally.passed++;
+            }
           } catch (error) {
             verdict = `judge failed: ${describeError(error)}`;
           }
         }
         await store.addRun(scenario.id, run);
-        tally.runs++;
-        tally.starts.push(first.latencyMs);
-        tally.times.push(first.latencyMs + (rest ? run.latencyMs : 0));
-        if (run.result.ok) tally.planned++;
+        for (const tally of counted) {
+          tally.runs++;
+          tally.starts.push(first.latencyMs);
+          tally.times.push(first.latencyMs + (rest ? run.latencyMs : 0));
+          tally.usage.push(usage);
+          if (run.result.ok) tally.planned++;
+        }
         const time = rest
           ? `${seconds(first.latencyMs)} + ${seconds(run.latencyMs)} rest`
           : seconds(first.latencyMs);
         console.log(
           `  ${scenario.id.slice(0, width).padEnd(width)}  ${model.padEnd(24)} ` +
-            `${time.padStart(7)}  ${describeRun(first, rest ? run : null)}` +
+            `${time.padStart(7)}  ${describeRun(first, rest ? run : null, parts.length > 0)}` +
             `${verdict ? `  ${verdict}` : ''}`,
         );
+        if (parts.length) console.log(`    parts: ${describeParts(parts)}`);
+        for (const p of parts) if (p.detail) console.log(`    ${p.kind}: ${p.detail}`);
       }
     }
   }
@@ -207,21 +288,56 @@ async function main(): Promise<void> {
         `${judged}${met}  ${seconds(median(t.starts)).padStart(12)}  ${seconds(median(t.times)).padStart(12)}`,
     );
   }
+  console.log(
+    '\nModel and scene: met, other issues the judge named, lesson starts and plan complete ' +
+      '(median / p90), and per lesson the planner calls and tokens (median: input, output, ' +
+      'thoughts)',
+  );
+  for (const [key, t] of [...tallies, ...sceneTallies]) {
+    const met = judging ? `${t.met}/${t.criteria}` : '-';
+    const per = (pick: (u: Usage) => number) => Math.round(median(t.usage.map(pick)));
+    console.log(
+      `  ${key.padEnd(width + 26)}  ${met.padStart(6)}  ${`${t.issues} issues`.padStart(9)}  ` +
+        `${seconds(median(t.starts))} / ${seconds(quantile(t.starts, 0.9))}  ` +
+        `${seconds(median(t.times))} / ${seconds(quantile(t.times, 0.9))}  ` +
+        `${per((u) => u.calls)} calls, ${per((u) => u.input)} in, ${per((u) => u.output)} out, ` +
+        `${per((u) => u.thoughts)} thoughts`,
+    );
+  }
   console.log('\nRuns are saved with their scenarios; open bench.html to read the plans.');
 }
 
+const PARTS: readonly string[] = ['review', 'step', 'objects'];
+
 /** "first=high" → { first: 'high' }; "default" leaves the model its own thinking. */
-function parseThinking(args: readonly string[]): Partial<StageThinking> {
-  const thinking: Partial<StageThinking> = {};
+function parseThinking(args: readonly string[]): Partial<StageThinking & PartThinking> {
+  const thinking: Partial<StageThinking & PartThinking> = {};
   for (const arg of args) {
     const [stage = '', level = ''] = arg.split('=');
-    const parsed = PlanStageSchema.safeParse(stage);
-    if (!parsed.success || !LEVELS.includes(level)) {
-      throw new Error(`--thinking ${arg}: use <full|first|rest>=<${LEVELS.join('|')}>`);
+    const known = PlanStageSchema.safeParse(stage).success || PARTS.includes(stage);
+    if (!known || !LEVELS.includes(level)) {
+      throw new Error(
+        `--thinking ${arg}: use <full|first|rest|review|step|objects>=<${LEVELS.join('|')}>`,
+      );
     }
-    thinking[parsed.data] = level === 'default' ? null : (level as Thinking);
+    thinking[stage as keyof StageThinking | keyof PartThinking] =
+      level === 'default' ? null : (level as Thinking);
   }
   return thinking;
+}
+
+/** "review 6.1 s, 4 steps 4.0-6.2 s, objects 5.0 s", with the failed and retried parts. */
+function describeParts(parts: readonly RestPartReport[]): string {
+  const say = (p: RestPartReport) =>
+    `${seconds(p.ms)}${p.ok ? '' : ' FAILED'}${p.attempts > 1 ? ' (retried)' : ''}`;
+  const steps = parts
+    .filter((p) => p.kind === 'step')
+    .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+  return [
+    ...parts.filter((p) => p.kind === 'review' && !p.detail).map((p) => `review ${say(p)}`),
+    ...(steps.length ? [`steps ${steps.map(say).join(', ')}`] : []),
+    ...parts.filter((p) => p.kind === 'objects').map((p) => `objects ${say(p)}`),
+  ].join('; ');
 }
 
 /**
@@ -235,10 +351,12 @@ function withEarlierWarnings(first: BenchRun, rest: BenchRun): BenchRun {
   return { ...rest, result: { ...rest.result, warnings: [...earlier, ...later] } };
 }
 
-function describeRun(first: BenchRun, rest: BenchRun | null): string {
+function describeRun(first: BenchRun, rest: BenchRun | null, parallel = false): string {
+  const calls = (run: BenchRun) =>
+    run === rest && parallel ? ` (${run.attempts} calls)` : run.attempts > 1 ? ' (retried)' : '';
   const what = (run: BenchRun) =>
     run.result.ok
-      ? `${run.result.procedure.steps.length} steps${run.attempts > 1 ? ' (retried)' : ''}`
+      ? `${run.result.procedure.steps.length} steps${calls(run)}`
       : `FAILED ${run.result.code}: ${run.result.message}`;
   if (!rest) return what(first);
   const outline = first.result.ok ? `, outline from ${first.result.outlineFrom}` : '';
@@ -373,6 +491,28 @@ function listChecks(tests: BenchCheckTestSummary[]): void {
         `${t.runCount} runs${tallies ? `: ${tallies}` : ''}`,
     );
   }
+}
+
+function emptyTally(): Tally {
+  return {
+    runs: 0,
+    planned: 0,
+    judged: 0,
+    passed: 0,
+    met: 0,
+    criteria: 0,
+    issues: 0,
+    starts: [],
+    times: [],
+    usage: [],
+  };
+}
+
+/** The value below which a share `q` of the values lie, nearest rank. */
+function quantile(values: number[], q: number): number {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.ceil(q * sorted.length) - 1)] ?? 0;
 }
 
 function median(values: number[]): number {
