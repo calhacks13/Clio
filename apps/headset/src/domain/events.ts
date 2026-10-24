@@ -43,6 +43,7 @@ export interface InternalEvents {
   'objects.updated': Timed<{ objects: ObjectState[] }>;
   'overlay.highlight': Timed<{ objectId: string; style: HighlightStyle; source: 'auto' | 'coach' }>;
   'overlay.demo': Timed<{ stepId: string; playing: boolean }>;
+  'coach.caption': Timed<{ role: 'user' | 'coach'; text: string; final: boolean }>;
   'workspace.calibrated': Timed<{ method: CalibrationMethod; worldFromWorkspace: Pose }>;
   'recorder.status': Timed<{ recording: boolean; episodeId: string | null; queued: number }>;
 }
