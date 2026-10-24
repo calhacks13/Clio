@@ -39,13 +39,18 @@ export interface PrimaryPicker {
 
 export function primaryPrompt(previous?: { name: string }): string {
   return [
-    'This is a camera frame from a headset. Name the single most prominent physical object ' +
-      'near the center of view that a person could pick up or work with. Ignore hands, arms, ' +
-      'people, walls, the floor, the ceiling and the table surface itself.',
+    'This is a camera frame from a headset; the wearer is working with something in front of ' +
+      'them. Name the one object they are most likely working with, in this order: an object ' +
+      'held in or touched by a hand; otherwise the small, hand-sized object closest to the ' +
+      'center of the frame; otherwise the hand-sized object nearest the wearer. Never name ' +
+      'furniture or fixtures (chairs, armchairs, sofas, tables, desks, beds, shelves, cabinets, ' +
+      'doors, windows, lamps, wall art, screens on walls), people, hands, arms, walls, the floor, ' +
+      'the ceiling or the table surface itself.',
     ...(previous
       ? [
-          `The last object named was ${JSON.stringify(previous.name)}. If it is still clearly ` +
-            'in view, return exactly that name.',
+          `The last object named was ${JSON.stringify(previous.name)}. If it is still the best ` +
+            'choice by the rules above, return exactly that name; if the wearer is now holding ' +
+            'or looking at a different object, name that one instead.',
         ]
       : []),
     '',
