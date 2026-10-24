@@ -37,6 +37,8 @@ export class Spotlight {
   /** Bumped on every step change, so answers for an older step are not outlined. */
   private generation = 0;
   private looking = 0;
+  /** The look in flight for each object, which callers that join wait for instead of asking. */
+  private readonly inFlight = new Map<string, Promise<void>>();
   private nextLookT = Number.NEGATIVE_INFINITY;
 
   constructor(private readonly deps: SpotlightDeps) {}
@@ -58,27 +60,26 @@ export class Spotlight {
   /**
    * Look for objects, in the current step's words for the ones it shows. Every answer is
    * recorded; the ones the step shows are outlined. Resolves with the ids still unplaced.
+   *
+   * With `join`, an object that a look in flight is already finding waits for that look instead
+   * of being asked about again: the finder hears one question per object at a time (a tracking
+   * finder restarts a track when the words change). A new step and the refresh don't join; they
+   * ask in the step's words.
    */
-  async find(requests: readonly FindRequest[]): Promise<string[]> {
+  async find(requests: readonly FindRequest[], opts: { join?: boolean } = {}): Promise<string[]> {
     const { grounder, registry } = this.deps;
     const worded = this.inCurrentWords(requests);
     const unplaced = () => worded.map((r) => r.id).filter((id) => !registry.get(id));
     if (!grounder || worded.length === 0) return unplaced();
-    const step = this.step;
-    const generation = this.generation;
-    this.looking++;
-    let result: GroundingResult | null = null;
-    try {
-      result = await grounder.ground(worded);
-    } catch {
-      // A camera or network failure is a missed look; the next refresh tries again.
-    } finally {
-      this.looking--;
-      const hint = result?.ok ? result.refreshMs : undefined;
-      const wait = hint === undefined ? this.refreshMs : Math.min(this.refreshMs, hint);
-      this.nextLookT = this.deps.clock.now() + wait;
+    const joined = new Set<Promise<void>>();
+    const asked: FindRequest[] = [];
+    for (const r of worded) {
+      const look = opts.join ? this.inFlight.get(r.id) : undefined;
+      if (look) joined.add(look);
+      else asked.push(r);
     }
-    if (result?.ok) this.report(result, step, generation === this.generation);
+    // A joined object is never reported missing before the look that is finding it has answered.
+    await Promise.all([...joined, ...(asked.length > 0 ? [this.look(grounder, asked)] : [])]);
     return unplaced();
   }
 
@@ -94,14 +95,42 @@ export class Spotlight {
     return requests.length > 0 ? this.find(requests) : null;
   }
 
-  /** The lesson ended: stop looking, and leave answers still in flight unoutlined. */
+  /** The lesson ended: stop looking, and leave answers still in flight unoutlined and unjoined. */
   stop(): void {
     this.step = null;
     this.generation++;
+    this.inFlight.clear();
   }
 
   private get refreshMs(): number {
     return this.deps.options?.refreshMs ?? DEFAULT_SHOW_REFRESH_MS;
+  }
+
+  /** One question to the finder; its objects count as being looked for until it answers. */
+  private look(grounder: Grounder, worded: readonly FindRequest[]): Promise<void> {
+    const look = this.ask(grounder, worded).finally(() => {
+      for (const r of worded) if (this.inFlight.get(r.id) === look) this.inFlight.delete(r.id);
+    });
+    for (const r of worded) this.inFlight.set(r.id, look);
+    return look;
+  }
+
+  private async ask(grounder: Grounder, worded: readonly FindRequest[]): Promise<void> {
+    const step = this.step;
+    const generation = this.generation;
+    this.looking++;
+    let result: GroundingResult | null = null;
+    try {
+      result = await grounder.ground(worded);
+    } catch {
+      // A camera or network failure is a missed look; the next refresh tries again.
+    } finally {
+      this.looking--;
+      const hint = result?.ok ? result.refreshMs : undefined;
+      const wait = hint === undefined ? this.refreshMs : Math.min(this.refreshMs, hint);
+      this.nextLookT = this.deps.clock.now() + wait;
+    }
+    if (result?.ok) this.report(result, step, generation === this.generation);
   }
 
   /** One request per object, worded the way the current step shows it when it does. */

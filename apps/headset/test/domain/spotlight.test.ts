@@ -351,6 +351,38 @@ describe('Spotlight', () => {
     ]);
   });
 
+  it('lets a caller join the look in flight for an object instead of asking again', async () => {
+    const { spotlight, asked, pause } = setup();
+    const resume = pause();
+    const look = spotlight.enterStep(OPEN);
+    let answer: string[] | null = null;
+    const joined = spotlight.find([{ id: 'cap' }, { id: 'rag' }, { id: 'jug' }], { join: true });
+    void joined.then((ids) => {
+      answer = ids;
+    });
+    // Only the jug had no look out. A step's own look still asks again, in its words.
+    expect(asked.map((r) => r.map((q) => q.id))).toEqual([['cap', 'rag'], ['jug']]);
+    void spotlight.find([{ id: 'cap' }]);
+    expect(asked).toHaveLength(3);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    // Not reported missing (nor found) before the look finding it has answered.
+    expect(answer).toBeNull();
+    resume();
+    expect(await joined).toEqual(['rag']);
+    await look;
+  });
+
+  it('asks anew for an object whose look belongs to a lesson that ended', async () => {
+    const { spotlight, asked, pause } = setup();
+    const resume = pause();
+    const look = spotlight.enterStep(OPEN);
+    spotlight.stop();
+    const again = spotlight.find([{ id: 'cap' }], { join: true });
+    expect(asked.map((r) => r.map((q) => q.id))).toEqual([['cap', 'rag'], ['cap']]);
+    resume();
+    await Promise.all([look, again]);
+  });
+
   it('stops outlining and refreshing when the lesson ends', async () => {
     const { spotlight, clock, pause, of } = setup();
     const resume = pause();
