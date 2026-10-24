@@ -4,6 +4,7 @@ import type { EpisodeCompiler } from './services/episode-compiler';
 import type { Planner } from './services/planner';
 import type { PrimaryObjectFinder } from './services/primary-object';
 import type { SceneAsker } from './services/scene';
+import type { StepChecker } from './services/step-check';
 import type { TokenMinter } from './services/token-minter';
 import type { VisionLocator } from './services/vision';
 import type { BenchCheckStore } from './storage/bench-check-store';
@@ -58,6 +59,8 @@ export interface AppDeps {
   /** Gemini-backed services: null (or absent) when GEMINI_API_KEY is unset, so routes answer 503. */
   tokenMinter?: TokenMinter | null;
   planner?: Planner | null;
+  /** The step watcher's model: step checks and criteria. */
+  checker?: StepChecker | null;
   locator?: VisionLocator | null;
   /** The voice coach's closer look (the smart model). */
   scene?: SceneAsker | null;
@@ -75,6 +78,7 @@ export interface AppDeps {
 type OptionalServices =
   | 'tokenMinter'
   | 'planner'
+  | 'checker'
   | 'locator'
   | 'scene'
   | 'bench'
@@ -84,6 +88,7 @@ type OptionalServices =
 export interface ServerDeps extends Required<Omit<AppDeps, 'limits' | OptionalServices>> {
   tokenMinter: TokenMinter | null;
   planner: Planner | null;
+  checker: StepChecker | null;
   locator: VisionLocator | null;
   scene: SceneAsker | null;
   bench: BenchDeps | null;
@@ -97,6 +102,7 @@ export function resolveDeps(deps: AppDeps): ServerDeps {
     ...deps,
     tokenMinter: deps.tokenMinter ?? null,
     planner: deps.planner ?? null,
+    checker: deps.checker ?? null,
     locator: deps.locator ?? null,
     scene: deps.scene ?? null,
     bench: deps.bench ?? null,

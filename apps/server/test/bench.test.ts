@@ -23,6 +23,7 @@ import type { BenchDeps } from '../src/deps';
 import { type BenchModels, restPlanRequest } from '../src/services/bench';
 import type { BenchJudge, JudgeRequest } from '../src/services/bench-judge';
 import type { Planner, PlannerRequest } from '../src/services/planner';
+import type { StepChecker } from '../src/services/step-check';
 import { BenchCheckStore } from '../src/storage/bench-check-store';
 import { BenchStore } from '../src/storage/bench-store';
 import { ProcedureStore } from '../src/storage/procedure-store';
@@ -69,10 +70,16 @@ function fakeModels(
         if (answer instanceof Error) throw answer;
         return answer ?? '';
       },
-      async checkStep(request) {
+    }),
+    checker: (model): StepChecker => ({
+      model,
+      async check(request) {
         checks.push({ ...request, model });
         if (options.check instanceof Error) throw options.check;
         return options.check ?? '{"verdict":"done","observation":"the cap is off"}';
+      },
+      async criteria() {
+        return '{"criteria":["The cap is off."]}';
       },
     }),
     judge: (model): BenchJudge => ({

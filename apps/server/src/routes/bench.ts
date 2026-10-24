@@ -26,8 +26,9 @@ import { ApiError, geminiNotConfigured, invalidId, notFound } from '../errors';
 import { isSafeId } from '../ids';
 import { describeError } from '../log';
 import { type BenchModels, benchPlan, judgeRun, scenarioPlanRequest } from '../services/bench';
-import { askStepCheck, expectLabel, runCheckTest } from '../services/bench-checks';
+import { expectLabel, runCheckTest } from '../services/bench-checks';
 import type { PlanRequestBody } from '../services/plan-service';
+import { askStepCheck } from '../services/step-check-service';
 import { limitBody, parseBody, safeId } from './request';
 
 // The planner bench (docs/planner-bench.md): the laptop page and `pnpm bench` put the planner in
@@ -88,9 +89,9 @@ export function benchRoutes({ bench, now, logger, limits }: ServerDeps): Hono {
   app.post(BenchPaths.check, limitBody(limits.imageBytes), async (c) => {
     const models = gemini();
     const { model, ...body } = await parseBody(c, BenchCheckRequestSchema, 'bench check request');
-    const planner = models.planner(model ?? models.plannerModel);
-    const { answer, latencyMs } = await askStepCheck(planner, body, now);
-    return c.json({ ...answer, model: planner.model, latencyMs } satisfies StepCheckResponse);
+    const checker = models.checker(model ?? models.plannerModel);
+    const { answer, latencyMs } = await askStepCheck(checker, body, now);
+    return c.json({ ...answer, model: checker.model, latencyMs } satisfies StepCheckResponse);
   });
 
   app.get(BenchPaths.scenarios, async (c) =>
@@ -255,9 +256,8 @@ export function benchRoutes({ bench, now, logger, limits }: ServerDeps): Hono {
     const { model } = await parseBody(c, BenchCheckTestRunRequestSchema, 'watcher test run', {
       emptyAsObject: true,
     });
-    const planner = models.planner(model ?? models.plannerModel);
-    if (!planner.checkStep) throw geminiNotConfigured('Step checks');
-    const run = await runCheckTest({ planner, now }, test, await on().checks.readFrames(test));
+    const checker = models.checker(model ?? models.plannerModel);
+    const run = await runCheckTest({ checker, now }, test, await on().checks.readFrames(test));
     await on().checks.addRun(test.id, run);
     const said = run.result.ok ? run.result.answer.verdict : `failed (${run.result.code})`;
     logger.info(

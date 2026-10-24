@@ -230,10 +230,11 @@ export const BenchJudgeRequestSchema = z.object({ model: ModelNameSchema.optiona
 // Watcher tests: data/bench/checks/<id>/
 
 export const BenchCheckExpectSchema = z
-  .enum(['done', 'not_done', 'wrong'])
+  .enum(['done', 'not_done', 'wrong', 'unsure'])
   .describe(
     'done: the watcher must say done. not_done: it must not say done (unsure passes). ' +
-      'wrong: it must not say done, and must say what the learner did instead',
+      'wrong: it must not say done, and must say what the learner did instead. ' +
+      'unsure: the frame cannot tell (hidden, out of view, blurred): it must say unsure',
   );
 
 const FrameFileSchema = z.object({ file: z.string(), mimeType: ImagePayloadSchema.shape.mimeType });
@@ -284,6 +285,10 @@ export const BenchCheckRunSchema = z.object({
   id: z.string(),
   createdAt: z.iso.datetime(),
   model: z.string(),
+  variant: z
+    .string()
+    .optional()
+    .describe('How it was asked when not as the headset asks, e.g. "thinking minimal"'),
   latencyMs: z.number().nonnegative(),
   expect: BenchCheckExpectSchema.describe('The expectation it was graded against'),
   result: z.discriminatedUnion('ok', [

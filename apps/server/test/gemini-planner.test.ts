@@ -6,29 +6,13 @@ import {
   createGeminiPlanner,
   PLAN_THINKING,
   PLAN_TIMEOUT_MS,
-  STEP_CHECK_THINKING,
-  STEP_CHECK_TIMEOUT_MS,
 } from '../src/services/gemini-planner';
 import { buildPlanCandidate } from '../src/services/plan-build';
 import { PLANNER_SYSTEM_INSTRUCTION, plannerContents } from '../src/services/plan-prompt';
 import { buildPlanJsonSchema } from '../src/services/plan-schema';
-import {
-  STEP_CHECK_INSTRUCTION,
-  stepCheckContents,
-  stepCheckJsonSchema,
-} from '../src/services/step-check';
 import { modelPlan } from './plan-fixtures';
 
 const IMAGE = { mimeType: 'image/jpeg' as const, data: '/9j/4AAQSkZJRgABAQ' };
-const CHECK = {
-  goal: 'Refill the washer fluid',
-  step: {
-    id: 'open-cap',
-    instruction: 'Flip open the blue washer fluid cap.',
-    doneWhen: 'The blue cap is flipped open.',
-  },
-  images: [IMAGE],
-};
 
 function fakeAi(text: string | undefined) {
   const calls: GenerateContentParameters[] = [];
@@ -109,13 +93,11 @@ describe('createGeminiPlanner', () => {
     ]);
   });
 
-  it('gives a draft 45 s and a step check 6 s', async () => {
+  it('gives a draft 45 s', async () => {
     const timeouts = spyOnTimeouts();
-    const planner = createGeminiPlanner(fakeAi('{}'), 'm');
-    await planner.draft({ goal: 'Refill it', images: [] });
-    await planner.checkStep?.(CHECK);
-    expect([PLAN_TIMEOUT_MS, STEP_CHECK_TIMEOUT_MS]).toEqual([45_000, 6_000]);
-    expect(timeouts.mock.calls).toEqual([[45_000], [6_000]]);
+    await createGeminiPlanner(fakeAi('{}'), 'm').draft({ goal: 'Refill it', images: [] });
+    expect(PLAN_TIMEOUT_MS).toBe(45_000);
+    expect(timeouts.mock.calls).toEqual([[45_000]]);
   });
 
   it('gives a draft the time its request has left when the request says', async () => {
@@ -134,42 +116,9 @@ describe('createGeminiPlanner', () => {
     await expect(planner.draft({ goal: 'Refill it', images: [] })).rejects.toThrow(
       'Gemini did not answer within 45 s',
     );
-    await expect(planner.checkStep?.(CHECK)).rejects.toThrow('Gemini did not answer within 6 s');
     await expect(
       planner.draft({ goal: 'Refill it', images: [], timeoutMs: 21_437 }),
     ).rejects.toThrow('Gemini did not answer within 21 s');
-  });
-
-  it('checks a step with the same model, the views and the step-check schema', async () => {
-    const answer = '{"verdict":"done","observation":"The blue cap is open."}';
-    const ai = fakeAi(answer);
-    const planner = createGeminiPlanner(ai, 'planner-x');
-    expect(await planner.checkStep?.(CHECK)).toBe(answer);
-    expect(ai.calls).toEqual([
-      {
-        model: 'planner-x',
-        contents: stepCheckContents(CHECK),
-        config: {
-          systemInstruction: STEP_CHECK_INSTRUCTION,
-          responseMimeType: 'application/json',
-          responseJsonSchema: stepCheckJsonSchema(),
-          abortSignal: expect.any(AbortSignal),
-        },
-      },
-    ]);
-  });
-
-  it('checks a step with low thinking on Gemini 3 models, Robotics-ER 2 among them', async () => {
-    expect(STEP_CHECK_THINKING).toBe('low');
-    for (const [model, level] of [
-      ['gemini-robotics-er-2-preview', 'LOW'],
-      ['gemini-3.5-flash-lite', 'LOW'],
-      ['gemini-2.5-flash', undefined],
-    ] as const) {
-      const ai = fakeAi('{}');
-      await createGeminiPlanner(ai, model).checkStep?.(CHECK);
-      expect(ai.calls[0]?.config?.thinkingConfig?.thinkingLevel).toBe(level);
-    }
   });
 
   it('asks for only the remaining steps when revising, with the revision schema', async () => {
@@ -384,7 +333,6 @@ describe('createGeminiPlanner', () => {
   it('fails when Gemini returns no text', async () => {
     const planner = createGeminiPlanner(fakeAi(undefined), 'm');
     await expect(planner.draft({ goal: 'Refill it', images: [] })).rejects.toThrow(/empty/);
-    await expect(planner.checkStep?.(CHECK)).rejects.toThrow(/empty/);
   });
 });
 
