@@ -3,6 +3,7 @@ import {
   EnvironmentPlaneSchema,
   EpisodeOutcomeSchema,
   GripKindSchema,
+  ObservationRoleSchema,
   PlacementMethodSchema,
 } from './episode';
 import { Pose7Schema, QuatSchema, Vec3Schema } from './geometry';
@@ -126,6 +127,34 @@ export const HeldSpanSchema = z.object({
   grip: GripKindSchema.nullable(),
 });
 
+const count = () => z.number().int().nonnegative();
+
+/**
+ * What object finders saw of one object in the camera image (observations.ndjson), summed up. The
+ * 2D answers themselves stay in the raw file; this says how many there were, who answered and how
+ * each was labelled, so a reader can tell an object a tracker followed from one placed once. It
+ * changes nothing on the grid: a predicted answer's 3D state is valid there but never tracked.
+ */
+export const ObservationSummarySchema = z.object({
+  count: count().describe('observations.ndjson lines about this object'),
+  statuses: z
+    .object({
+      measured: count(),
+      predicted: count(),
+      lost: count(),
+      absent: count(),
+      unknown: count(),
+    })
+    .describe('How many had each status; predicted ones were carried forward without being seen'),
+  roles: z.array(ObservationRoleSchema).describe('The roles that answered, in first-seen order'),
+  sources: z.array(z.string()).describe('The models that answered, in first-seen order'),
+  trackIds: z
+    .array(z.string())
+    .describe("The trackers' own ids, in first-seen order: provenance only"),
+  firstObservedT: ms().describe('Capture time of the earliest frame observed; can be negative'),
+  lastObservedT: ms().describe('Capture time of the latest frame observed'),
+});
+
 /**
  * One object on the grid: the generalized per-object series every source (layout, pinch,
  * detector, a future tracker) compiles into.
@@ -155,6 +184,9 @@ export const CompiledObjectTrackSchema = z.object({
     .describe('Measured confidence (detector or marker); null for placeholders'),
   source: z.array(PlacementMethodSchema.nullable()),
   heldSpans: z.array(HeldSpanSchema),
+  observations: ObservationSummarySchema.optional().describe(
+    'Absent when observations.ndjson says nothing about the object (and from compilers before 0.4.0)',
+  ),
 });
 
 export const CompiledHandTrackSchema = z.object({
@@ -283,6 +315,7 @@ export type EpisodeQuality = z.infer<typeof EpisodeQualitySchema>;
 export type RetargetProfileRef = z.infer<typeof RetargetProfileRefSchema>;
 export type CompileManifest = z.infer<typeof CompileManifestSchema>;
 export type HeldSpanRecord = z.infer<typeof HeldSpanSchema>;
+export type ObservationSummary = z.infer<typeof ObservationSummarySchema>;
 export type CompiledObjectTrack = z.infer<typeof CompiledObjectTrackSchema>;
 export type CompiledHandTrack = z.infer<typeof CompiledHandTrackSchema>;
 export type TracksDoc = z.infer<typeof TracksDocSchema>;

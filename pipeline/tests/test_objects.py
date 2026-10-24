@@ -252,3 +252,25 @@ def test_a_loss_is_placed_at_its_line_not_at_its_observed_t(new_episode):
     cup = _series(b)["cup"]
 
     assert cup.valid.tolist() == [100.0 <= t < 390.0 for t in cup.t]
+
+
+def test_a_predicted_detector_estimate_is_valid_but_never_tracked(new_episode):
+    # A tracker coasting on a predicted box, or a box placed at a reused depth: flags 2.
+    b = _episode(new_episode)
+    state = b.object_state
+    b.track(100.0, state("cup", [0.3, 0.0, -0.2], source="detector", flags=10, confidence=0.8))
+    b.track(
+        250.0,
+        state(
+            "cup", [0.32, 0.0, -0.2], source="detector", flags=2, confidence=0.4, observed_t=200.0
+        ),
+    )
+    b.track(500.0, state("cup", [0.34, 0.0, -0.2], source="detector", flags=10, confidence=0.9))
+
+    cup = _series(b)["cup"]
+
+    assert cup.valid.tolist() == [t >= 100.0 for t in cup.t]
+    assert cup.tracked.tolist() == [100.0 <= t <= 150.0 or 500.0 <= t <= 600.0 for t in cup.t]
+    # Its confidence is the tracker's score for the predicted box, kept like any detector value.
+    assert cup.confidence[_at(cup, 300.0)] == pytest.approx(0.4)
+    assert cup.source[_at(cup, 300.0)] == "detector"
