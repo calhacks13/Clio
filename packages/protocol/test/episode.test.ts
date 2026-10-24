@@ -147,9 +147,30 @@ describe('episode meta', () => {
 
 describe('event type list', () => {
   it('is derived from the schema, so the recorder knows every recordable event', () => {
-    expect(EPISODE_EVENT_TYPES).toHaveLength(16);
+    expect(EPISODE_EVENT_TYPES).toHaveLength(17);
     expect(EPISODE_EVENT_TYPES).toEqual(
       expect.arrayContaining(['step.entered', 'coach.tool_call', 'transcript', 'annotation']),
     );
+  });
+});
+
+describe('detections as labels', () => {
+  it('records what the object finder saw for a description, with the lifted 3D position', () => {
+    const e = EpisodeEventSchema.parse({
+      t: 1200,
+      type: 'object.detected',
+      objectId: 'cap',
+      stepId: 'open-cap',
+      phrase: 'blue cap',
+      description: 'The round blue cap with a wiper icon.',
+      found: true,
+      point: [0.5, 0.4],
+      box: [0.45, 0.35, 0.55, 0.45],
+      outline: null,
+      confidence: 0.9,
+      position: [0.2, 0.1, -0.3],
+      source: 'jev',
+    });
+    expect(e.type === 'object.detected' && e.position).toEqual([0.2, 0.1, -0.3]);
   });
 });

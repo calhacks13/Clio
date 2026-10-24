@@ -52,7 +52,7 @@ function boxCenter(box: unknown): Point | null {
 }
 
 export function notFound(id: string): Detection {
-  return { id, found: false, point: null, box: null, confidence: 0 };
+  return { id, found: false, point: null, box: null, outline: null, confidence: 0 };
 }
 
 /** One Gemini entry `{ id, found, point, box_2d, confidence }` → Detection (null without an id). */
@@ -65,6 +65,7 @@ export function fromGeminiDetection(raw: unknown): Detection | null {
     found: true,
     point,
     box: fromGeminiBox(raw.box_2d),
+    outline: null,
     confidence: isFiniteNumber(raw.confidence) ? clamp01(raw.confidence) : 0.5,
   };
 }

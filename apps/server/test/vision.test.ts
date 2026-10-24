@@ -54,6 +54,7 @@ describe('fromGeminiDetection', () => {
       found: true,
       point: [0.25, 0.5],
       box: [0.2, 0.1, 0.4, 0.3],
+      outline: null,
       confidence: 0.9,
     });
   });
@@ -72,6 +73,7 @@ describe('fromGeminiDetection', () => {
       found: true,
       point: [0.3, 0.2],
       box: [0.2, 0.1, 0.4, 0.3],
+      outline: null,
       confidence: 0.8,
     });
   });
@@ -85,10 +87,10 @@ describe('fromGeminiDetection', () => {
         box_2d: null,
         confidence: 0.4,
       }),
-    ).toEqual({ id: 'jug', found: false, point: null, box: null, confidence: 0 });
+    ).toEqual({ id: 'jug', found: false, point: null, box: null, outline: null, confidence: 0 });
     expect(
       fromGeminiDetection({ id: 'jug', found: true, point: null, box_2d: null, confidence: 0.4 }),
-    ).toEqual({ id: 'jug', found: false, point: null, box: null, confidence: 0 });
+    ).toEqual({ id: 'jug', found: false, point: null, box: null, outline: null, confidence: 0 });
   });
 
   it('clamps confidence and defaults a missing one', () => {
@@ -110,6 +112,7 @@ describe('alignDetections', () => {
     found: true,
     point: [x, 0.5],
     box: null,
+    outline: null,
     confidence: 0.9,
   });
 
@@ -122,7 +125,7 @@ describe('alignDetections', () => {
     ).toEqual([
       found('cap', 0.1),
       found('jug', 0.2),
-      { id: 'funnel', found: false, point: null, box: null, confidence: 0 },
+      { id: 'funnel', found: false, point: null, box: null, outline: null, confidence: 0 },
     ]);
   });
 });
@@ -149,7 +152,9 @@ describe('POST /api/vision/locate', () => {
       model: 'vision-test',
       async locate(request) {
         seen.push(request);
-        return [{ id: 'cap', found: true, point: [0.25, 0.5], box: null, confidence: 0.9 }];
+        return [
+          { id: 'cap', found: true, point: [0.25, 0.5], box: null, outline: null, confidence: 0.9 },
+        ];
       },
     };
     const h = await harness({ locator, now: steppingClock('2026-10-24T03:15:02.000Z', 250) });
@@ -157,8 +162,8 @@ describe('POST /api/vision/locate', () => {
     expect(res.status).toBe(200);
     expect(LocateResponseSchema.parse(await res.json())).toEqual({
       detections: [
-        { id: 'cap', found: true, point: [0.25, 0.5], box: null, confidence: 0.9 },
-        { id: 'jug', found: false, point: null, box: null, confidence: 0 },
+        { id: 'cap', found: true, point: [0.25, 0.5], box: null, outline: null, confidence: 0.9 },
+        { id: 'jug', found: false, point: null, box: null, outline: null, confidence: 0 },
       ],
       model: 'vision-test',
       latencyMs: 250,

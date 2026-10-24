@@ -73,6 +73,25 @@ export const MistakeRuleSchema = z.object({
   cooldownMs: z.number().int().nonnegative().default(4000),
 });
 
+export const ShowItemSchema = z
+  .object({
+    object: SlugSchema.describe('The declared object this item outlines'),
+    phrase: z
+      .string()
+      .min(1)
+      .max(60)
+      .describe('2-5 word noun phrase naming it, for category-style detectors: "blue washer cap"'),
+    description: z
+      .string()
+      .min(1)
+      .max(300)
+      .describe(
+        'Standalone visual description a vision model can find and outline in one camera frame: ' +
+          'what it is, color, shape, size, text or symbols on it, and where it is now',
+      ),
+  })
+  .describe('Something Clio finds with the camera and outlines for the learner during this step.');
+
 export const StepSchema = z.object({
   id: SlugSchema,
   instruction: z
@@ -84,6 +103,11 @@ export const StepSchema = z.object({
   targets: z.array(SlugSchema).default([]),
   hand: z.enum(['left', 'right', 'either', 'both']).default('either'),
   action: ActionSchema.optional().describe('What the hands do; drives the synthesized demo'),
+  show: z
+    .array(ShowItemSchema)
+    .max(4)
+    .default([])
+    .describe('What to outline in AR during this step, most important first'),
   success: CheckSchema,
   mistakes: z.array(MistakeRuleSchema).default([]),
   demo: z
@@ -193,6 +217,7 @@ export const ProcedureSchema = ProcedureObjectSchema.superRefine((p, ctx) => {
     for (const [j, id] of step.targets.entries()) requireObject(id, ['targets', j]);
     for (const id of checkObjectRefs(step.success)) requireObject(id, ['success']);
     if (step.action) for (const id of actionObjectRefs(step.action)) requireObject(id, ['action']);
+    for (const [j, item] of step.show.entries()) requireObject(item.object, ['show', j, 'object']);
     for (const [j, rule] of step.mistakes.entries()) {
       for (const id of checkObjectRefs(rule.when)) requireObject(id, ['mistakes', j, 'when']);
     }
@@ -205,6 +230,7 @@ export type ProcedureOrigin = z.output<typeof ProcedureOriginSchema>;
 export type ObjectPlacement = z.output<typeof ObjectPlacementSchema>;
 export type ObjectSpec = z.output<typeof ObjectSpecSchema>;
 export type MistakeRule = z.output<typeof MistakeRuleSchema>;
+export type ShowItem = z.output<typeof ShowItemSchema>;
 export type Step = z.output<typeof StepSchema>;
 export type Procedure = z.output<typeof ProcedureSchema>;
 export type ProcedureInput = z.input<typeof ProcedureSchema>;

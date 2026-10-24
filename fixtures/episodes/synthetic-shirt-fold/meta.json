@@ -95,6 +95,7 @@
         "instruction": "Lay the shirt flat in the outline, face up, collar on the left.",
         "targets": [],
         "hand": "either",
+        "show": [],
         "success": {
           "type": "confirm",
           "by": "either",
@@ -115,6 +116,7 @@
           "object": "shoulder",
           "hand": "left"
         },
+        "show": [],
         "success": {
           "type": "pinch_near",
           "object": "shoulder",
@@ -150,6 +152,7 @@
           "object": "middle",
           "hand": "right"
         },
+        "show": [],
         "success": {
           "type": "all",
           "of": [
@@ -200,6 +203,7 @@
           "target": "hem",
           "hand": "left"
         },
+        "show": [],
         "success": {
           "type": "all",
           "of": [
@@ -228,6 +232,7 @@
         "instruction": "Lift both hands, uncross them, and lay the shirt down folded.",
         "targets": [],
         "hand": "both",
+        "show": [],
         "success": {
           "type": "sequence",
           "of": [

@@ -1,5 +1,12 @@
 import { z } from 'zod';
-import { Pose7Schema, QuatSchema, Vec3Schema } from './geometry';
+import {
+  NormalizedBoxSchema,
+  NormalizedPointSchema,
+  NormalizedPolygonSchema,
+  Pose7Schema,
+  QuatSchema,
+  Vec3Schema,
+} from './geometry';
 import { HAND_JOINTS, HandednessSchema, HandSampleSchema, JOINT_FIELDS } from './hand';
 import { ProcedureSchema } from './procedure';
 
@@ -130,6 +137,19 @@ export const EpisodeEventSchema = z.discriminatedUnion('type', [
     phase: z.enum(['start', 'end']),
     point: Vec3Schema,
     nearest: z.object({ objectId: z.string(), distance: z.number() }).nullable(),
+  }),
+  event('object.detected', {
+    objectId: z.string(),
+    stepId: z.string().nullable(),
+    phrase: z.string().nullable(),
+    description: z.string().describe('The text the object finder was given'),
+    found: z.boolean(),
+    point: NormalizedPointSchema.nullable(),
+    box: NormalizedBoxSchema.nullable(),
+    outline: NormalizedPolygonSchema.nullable(),
+    confidence: z.number().min(0).max(1),
+    position: Vec3Schema.nullable().describe('Lifted 3D position, workspace frame'),
+    source: z.string().describe('Which object finder answered, e.g. "gemini" or "jev"'),
   }),
   event('object.registered', {
     objectId: z.string(),

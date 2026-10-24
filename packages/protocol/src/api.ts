@@ -5,6 +5,7 @@ import {
   EpisodeModeSchema,
   EpisodeOutcomeSchema,
 } from './episode';
+import { NormalizedBoxSchema, NormalizedPointSchema, NormalizedPolygonSchema } from './geometry';
 import { ProcedureSchema } from './procedure';
 
 // HTTP contract between the headset and the laptop server. Both sides import these schemas, so a
@@ -88,18 +89,20 @@ export const PlanResponseSchema = z.object({
   warnings: z.array(z.string()).describe('Non-fatal issues the planner fixed or skipped'),
 });
 
-const unit = () => z.number().min(0).max(1);
-export const NormalizedPointSchema = z
-  .tuple([unit(), unit()])
-  .describe('[x, y] in 0..1 of the image; x right, y down');
-export const NormalizedBoxSchema = z
-  .tuple([unit(), unit(), unit(), unit()])
-  .describe('[x0, y0, x1, y1] in 0..1 of the image');
-
 export const LocateRequestSchema = z.object({
   image: ImagePayloadSchema,
   objects: z
-    .array(z.object({ id: z.string(), query: z.string().min(1) }))
+    .array(
+      z.object({
+        id: z.string(),
+        query: z.string().min(1).describe('Full visual description of the thing to find'),
+        phrase: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('Short noun phrase, for detectors that take category-style prompts'),
+      }),
+    )
     .min(1)
     .max(16),
 });
@@ -108,6 +111,9 @@ export const DetectionSchema = z.object({
   found: z.boolean(),
   point: NormalizedPointSchema.nullable().describe('Best single point on the object'),
   box: NormalizedBoxSchema.nullable(),
+  outline: NormalizedPolygonSchema.nullable()
+    .default(null)
+    .describe('Segmentation outline, when the object finder provides one'),
   confidence: z.number().min(0).max(1),
 });
 export const LocateResponseSchema = z.object({
@@ -178,7 +184,8 @@ export type ImagePayload = z.infer<typeof ImagePayloadSchema>;
 export type PlanRequest = z.input<typeof PlanRequestSchema>;
 export type PlanResponse = z.infer<typeof PlanResponseSchema>;
 export type LocateRequest = z.infer<typeof LocateRequestSchema>;
-export type Detection = z.infer<typeof DetectionSchema>;
+export type Detection = z.output<typeof DetectionSchema>;
+export type DetectionInput = z.input<typeof DetectionSchema>;
 export type LocateResponse = z.infer<typeof LocateResponseSchema>;
 export type EpisodeCreateResponse = z.infer<typeof EpisodeCreateResponseSchema>;
 export type EpisodeBatchResponse = z.infer<typeof EpisodeBatchResponseSchema>;

@@ -32,8 +32,15 @@ describe('createGeminiLocator', () => {
     const locator = createGeminiLocator(ai, 'vision-x');
     expect(locator.model).toBe('vision-x');
     expect(await locator.locate({ image: IMAGE, objects: OBJECTS })).toEqual([
-      { id: 'cap', found: true, point: [0.25, 0.5], box: [0.2, 0.1, 0.4, 0.3], confidence: 0.9 },
-      { id: 'jug', found: false, point: null, box: null, confidence: 0 },
+      {
+        id: 'cap',
+        found: true,
+        point: [0.25, 0.5],
+        box: [0.2, 0.1, 0.4, 0.3],
+        outline: null,
+        confidence: 0.9,
+      },
+      { id: 'jug', found: false, point: null, box: null, outline: null, confidence: 0 },
     ]);
     expect(ai.calls).toEqual([
       {

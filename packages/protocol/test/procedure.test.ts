@@ -248,3 +248,52 @@ describe('AI-generated plans', () => {
     expect(() => parseProcedure(bad)).toThrow(/"pour" needs a target/);
   });
 });
+
+describe('what each step shows', () => {
+  const step = {
+    id: 'open-cap',
+    instruction: 'Twist the blue cap counterclockwise to open it.',
+    targets: ['cup_a'],
+    success: { type: 'confirm' },
+  };
+
+  it('lets a step describe what to outline, for the object finder', () => {
+    const p = parseProcedure({
+      ...base,
+      steps: [
+        {
+          ...step,
+          show: [
+            {
+              object: 'cup_a',
+              phrase: 'white paper cup',
+              description:
+                'The small white paper cup with a large letter A, front left of the tray.',
+            },
+          ],
+        },
+      ],
+    });
+    expect(p.steps[0]?.show).toEqual([
+      {
+        object: 'cup_a',
+        phrase: 'white paper cup',
+        description: 'The small white paper cup with a large letter A, front left of the tray.',
+      },
+    ]);
+  });
+
+  it('defaults to showing nothing extra', () => {
+    expect(parseProcedure({ ...base, steps: [step] }).steps[0]?.show).toEqual([]);
+  });
+
+  it('rejects a show item for an undeclared object', () => {
+    const bad = {
+      ...base,
+      steps: [
+        { ...step, show: [{ object: 'funnel', phrase: 'funnel', description: 'A funnel.' }] },
+      ],
+    };
+    expect(() => parseProcedure(bad)).toThrow(/Unknown object "funnel"/);
+  });
+});

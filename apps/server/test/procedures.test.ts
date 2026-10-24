@@ -121,6 +121,7 @@ describe('GET /api/procedures/:id', () => {
             dwellMs: 250,
           },
           mistakes: [],
+          show: [],
         },
         {
           id: 'done',
@@ -129,6 +130,7 @@ describe('GET /api/procedures/:id', () => {
           hand: 'either',
           success: { type: 'confirm', by: 'either' },
           mistakes: [],
+          show: [],
         },
       ],
       coach: {},

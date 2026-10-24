@@ -529,6 +529,41 @@
                 ],
                 "additionalProperties": false
               },
+              "show": {
+                "default": [],
+                "description": "What to outline in AR during this step, most important first",
+                "maxItems": 4,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+                      "description": "The declared object this item outlines"
+                    },
+                    "phrase": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 60,
+                      "description": "2-5 word noun phrase naming it, for category-style detectors: \"blue washer cap\""
+                    },
+                    "description": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 300,
+                      "description": "Standalone visual description a vision model can find and outline in one camera frame: what it is, color, shape, size, text or symbols on it, and where it is now"
+                    }
+                  },
+                  "required": [
+                    "object",
+                    "phrase",
+                    "description"
+                  ],
+                  "additionalProperties": false,
+                  "description": "Something Clio finds with the camera and outlines for the learner during this step."
+                }
+              },
               "success": {
                 "$ref": "#/$defs/Check"
               },
@@ -595,6 +630,7 @@
               "instruction",
               "targets",
               "hand",
+              "show",
               "success",
               "mistakes"
             ],

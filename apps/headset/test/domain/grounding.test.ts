@@ -75,6 +75,7 @@ const cupSeen: Detection = {
   found: true,
   point: [0.5, 560 / 720],
   box: [0.45, 0.7, 0.55, 600 / 720],
+  outline: null,
   confidence: 0.9,
 };
 
@@ -98,7 +99,7 @@ describe('ObjectGrounder', () => {
   it('reports what the camera could not find, leaving the announcing to the lesson', async () => {
     const { grounder, missing } = setup([
       cupSeen,
-      { id: 'jug', found: false, point: null, box: null, confidence: 0 },
+      { id: 'jug', found: false, point: null, box: null, outline: null, confidence: 0 },
     ]);
     const result = await grounder.ground(['cup', 'jug']);
     expect(result).toEqual({ ok: true, located: ['cup'], missing: ['jug'] });

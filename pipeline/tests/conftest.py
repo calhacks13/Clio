@@ -126,6 +126,7 @@ PLAN = {
             "targets": [],
             "hand": "either",
             "action": {"verb": "other", "hand": "both", "note": "smooth the shirt flat"},
+            "show": [],
             "success": {"type": "confirm", "by": "either"},
             "mistakes": [],
         },
@@ -135,6 +136,14 @@ PLAN = {
             "targets": ["shoulder"],
             "hand": "left",
             "action": {"verb": "pinch", "object": "shoulder", "hand": "left"},
+            "show": [
+                {
+                    "object": "shoulder",
+                    "phrase": "shoulder dot",
+                    "description": "Small blue sticker dot on the shirt's left shoulder seam, "
+                    "nearest the collar",
+                }
+            ],
             "success": _pinch_near("shoulder", "left"),
             "mistakes": [
                 {
@@ -150,6 +159,7 @@ PLAN = {
             "instruction": SHIRT_STEPS[2][1],
             "targets": ["middle"],
             "hand": "right",
+            "show": [],
             "success": _pinch_near("middle", "right"),
             "mistakes": [],
         },
