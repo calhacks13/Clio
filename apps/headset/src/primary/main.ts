@@ -18,6 +18,7 @@ import {
 import { ApiClient } from '../adapters/net/api-client';
 import { HttpEpisodeSink } from '../adapters/net/http-episode-sink';
 import { TrackerClient, type TrackerMask, trackerUrl } from '../adapters/net/tracker-client';
+import { frameGuard, installFrameDebug } from '../adapters/render/frame-guard';
 import { depthOverlay } from '../adapters/render/glow/depth-occlusion';
 import { HandOccluders } from '../adapters/render/hand-occluders';
 import { PrimaryOutlineView } from '../adapters/render/outline-view';
@@ -724,14 +725,22 @@ function track(frame: XRFrame, time: number): void {
   debugBoxes?.update(head, orientation, dt, time);
 }
 
-renderer.setAnimationLoop((time, frame) => {
-  if (frame) track(frame, time);
-  renderer.render(scene, camera);
-  if (drawnMaskT !== null) {
-    drawnMs.add(performance.now() - drawnMaskT);
-    drawnMaskT = null;
-  }
-});
+// Each step guarded (frame-guard.ts): one that throws costs that frame, never the loop.
+installFrameDebug();
+renderer.setAnimationLoop(
+  frameGuard.loop<XRFrame>(
+    (time, frame) => {
+      if (frame) track(frame, time);
+    },
+    () => {
+      renderer.render(scene, camera);
+      if (drawnMaskT !== null) {
+        drawnMs.add(performance.now() - drawnMaskT);
+        drawnMaskT = null;
+      }
+    },
+  ),
+);
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
