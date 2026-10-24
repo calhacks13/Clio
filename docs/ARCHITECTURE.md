@@ -43,13 +43,13 @@ boundary. The exact data formats are in [data-format.md](data-format.md), the pl
 │        ════════════════════ typed event bus · one clock ═══╪═════════════════════              │
 │        │                                │                  │                                   │
 │   OverlayModel ─► three.js presenters  EpisodeRecorder ─► EpisodeUploader                      │
-│   (instruction, highlights,            (frames, events, object tracks)                         │
+│   (instruction, outlines, highlights,  (frames, events, object tracks)                         │
 │    synthesized ghost hands, glyphs)                                                            │
 └──────────┬─────────────────────────────────────┬──────────────────────┬───────────────────────┘
            │ /gemini WS relay                    │ /api/plans,          │ /api/episodes
            ▼                                     ▼ /api/vision/locate   ▼
 ┌──────────────────────────────────── Laptop: apps/server (Node · Hono) ────────────────────────┐
-│ relay → Google (injects key) · planner LLM (structured output) · vision locator (2D boxes)    │
+│ relay → Google (injects key) · planner LLM (structured output) · object finder (Gemini / jev) │
 │ data/episodes/<id>/ · data/plans/<id>.json · data/clips/                                       │
 │ pipeline/ (Python · uv): validate · Rerun replay · LeRobot export                              │
 └────────────────────────────────────────────────────────────────────────────────────────────────┘
@@ -142,7 +142,8 @@ Once per XR frame:
    ├─ locate:  every unplaced object ─► Grounder (camera → /api/vision/locate → 3D) ─► registry
    │           still missing? announced once → coach asks the learner to look or pinch it
    ├─ run:     ProcedureRunner + EpisodeRecorder (the episode embeds the full plan)
-   ├─ per step: briefing narration · targets highlighted · demo auto-played · targets re-located
+   ├─ per step: briefing narration · show items found and outlined (Spotlight, refreshed every
+   │            few seconds) · missing targets located · demo auto-played
    └─ revise_plan(reason) ─► POST /api/plans {revise: {planId, fromStepIndex}} ─► runner.replacePlan
 ```
 
@@ -178,16 +179,34 @@ action and the objects' live positions:
 `DemoLibrary` prefers an expert recording when one exists: every good `record_demo` episode can be
 sliced into clips by the server, and that is the flywheel.
 
-### 5.6 Finding and tracking objects (`domain/world`)
+### 5.6 Finding and tracking objects (`domain/world`, `domain/session/spotlight.ts`)
+
+Every step says what to **show**: the objects to outline, each with a short phrase and a
+standalone visual description written by the planner (see procedures.md). `Spotlight` is the
+lesson's only use of the camera:
+
+```
+ step.entered ─► Spotlight.enterStep: show items (in the step's words) + targets not found yet
+    ─► ObjectGrounder: camera frame + words ─► VisionLocator (POST /api/vision/locate)
+         └─ server: Gemini (points, boxes) or any HTTP finder at CLIO_VISION_URL (jev: outlines)
+    ─► lift the point into 3D (registry) and the outline onto a camera-facing plane
+    ─► object.detected (recorded label) + overlay.outline ─► OutlinesPresenter
+ every ~3 s while the step runs: the show items again, never two looks at once, skipping
+ objects in hand; answers for a step that is over are recorded but not drawn
+```
+
+Outlines hang on the object's current estimate, so they follow carried objects, and turn toward
+the learner every frame. A contour is drawn just outside the object; a box-only answer (Gemini)
+gets corner brackets.
 
 Tracking is layered. Each layer covers the others' blind spots:
 
-| Layer                  | When                                                    | How                                                                                                                                                                                                                                                                                                                                                                    | Accuracy                                                 |
-| ---------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| **Camera grounding**   | plan start, step start, after a release, on `highlight` | A passthrough camera frame and each object's text query go to `/api/vision/locate` (Gemini spatial understanding → 2D point + box). `liftDetection` casts camera rays using the head pose at capture time: depth comes from where the box's bottom meets a real surface (WebXR plane detection, falling back to the workspace plane), height from the detection point. | ±1–2 cm for static props when calibrated (see dev-setup) |
-| **Held objects**       | while pinched or fist-gripped                           | `GraspTracker` attaches the object to the wrist with the grip offset, so it rides the 90 Hz hand tracking with no camera latency                                                                                                                                                                                                                                       | hand-tracking accuracy                                   |
-| **Pinch registration** | the camera can't find something                         | The next free-space pinch registers the next missing object (current step's targets first)                                                                                                                                                                                                                                                                             | fingertip accuracy                                       |
-| **Layout**             | curated demos on a taped mat                            | Fixed workspace positions                                                                                                                                                                                                                                                                                                                                              | as good as the tape                                      |
+| Layer                  | When                                                                                                  | How                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Accuracy                                                 |
+| ---------------------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| **Camera grounding**   | plan start, step start and every few seconds for what the step shows, after a release, on `highlight` | A passthrough camera frame and each object's words (the step's show description, else its tracking query) go to `/api/vision/locate` (Gemini spatial understanding → 2D point + box, or an HTTP finder such as jev → outline). `liftDetection` casts camera rays using the head pose at capture time: depth comes from where the box's bottom meets a real surface (WebXR plane detection, falling back to the workspace plane), height from the detection point. | ±1–2 cm for static props when calibrated (see dev-setup) |
+| **Held objects**       | while pinched or fist-gripped                                                                         | `GraspTracker` attaches the object to the wrist with the grip offset, so it rides the 90 Hz hand tracking with no camera latency                                                                                                                                                                                                                                                                                                                                  | hand-tracking accuracy                                   |
+| **Pinch registration** | the camera can't find something                                                                       | The next free-space pinch registers the next missing object (current step's targets first)                                                                                                                                                                                                                                                                                                                                                                        | fingertip accuracy                                       |
+| **Layout**             | curated demos on a taped mat                                                                          | Fixed workspace positions; camera detections don't overwrite them until the object has been carried                                                                                                                                                                                                                                                                                                                                                               | as good as the tape                                      |
 
 Camera facts that shaped this (October 2026):
 - Quest Browser exposes the passthrough cameras via `getUserMedia` at 1280×960, 30 fps. Ask for
@@ -240,17 +259,17 @@ exponential-backoff retries, dropping only batches the server rejects as invalid
 
 ## 6. Server (`apps/server`)
 
-| Route                                                                 | Purpose                                                                                  |
-| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `GET /api/health`                                                     | liveness; whether a Gemini key is set; live model                                        |
-| `WS /gemini/*`                                                        | Gemini Live relay (allowlisted path, injects `GEMINI_API_KEY`)                           |
-| `POST /api/coach/token`                                               | ephemeral Live token (direct transport)                                                  |
-| `POST /api/plans`, `GET /api/plans/:id`                               | the planner: goal + images (+ revision) → validated `Procedure`, stored in `data/plans/` |
-| `POST /api/vision/locate`                                             | open-vocabulary 2D detection for grounding                                               |
-| `GET /api/procedures[/:id]`                                           | curated (`procedures/`) + generated (`data/plans/`)                                      |
-| `POST /api/episodes` → `…/batches` → `…/finish`, `PUT …/media/:name`  | ingest (idempotent by `seq`)                                                             |
-| `GET /api/episodes[/:id[/frames\|events\|objects]]`                   | browse / replay                                                                          |
-| `POST /api/clips/from-episode`, `GET /api/clips/:procedureId/:stepId` | expert demos → ghost-hand clips                                                          |
+| Route                                                                 | Purpose                                                                                    |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `GET /api/health`                                                     | liveness; whether a Gemini key is set; live model                                          |
+| `WS /gemini/*`                                                        | Gemini Live relay (allowlisted path, injects `GEMINI_API_KEY`)                             |
+| `POST /api/coach/token`                                               | ephemeral Live token (direct transport)                                                    |
+| `POST /api/plans`, `GET /api/plans/:id`                               | the planner: goal + images (+ revision) → validated `Procedure`, stored in `data/plans/`   |
+| `POST /api/vision/locate`                                             | the object finder: Gemini, or any HTTP finder at `CLIO_VISION_URL` (docs/object-finder.md) |
+| `GET /api/procedures[/:id]`                                           | curated (`procedures/`) + generated (`data/plans/`)                                        |
+| `POST /api/episodes` → `…/batches` → `…/finish`, `PUT …/media/:name`  | ingest (idempotent by `seq`)                                                               |
+| `GET /api/episodes[/:id[/frames\|events\|objects]]`                   | browse / replay                                                                            |
+| `POST /api/clips/from-episode`, `GET /api/clips/:procedureId/:stepId` | expert demos → ghost-hand clips                                                            |
 
 Vite proxies `/api` and `/gemini`, so the headset talks to a single origin (and to `localhost` over
 `adb reverse`).
@@ -259,21 +278,22 @@ Vite proxies `/api` and `/gemini`, so the headset talks to a single origin (and 
 
 `clio validate | info | view | export-lerobot` (uv, Python 3.12):
 - **Validation:** against `packages/protocol/schema`.
-- **Rerun replay:** skeletons, head, objects, aperture, steps, mistakes, tools, transcripts.
+- **Rerun replay:** skeletons, head, objects, object-finder detections, aperture, steps, mistakes,
+  tools, transcripts.
 - **LeRobot v3 export:** 16-d wrist pose + aperture state, next-frame action, hand mask, object
   environment state, the per-frame language `task`, and the `step.action_verb`.
 - **Coordinates:** the export converts y-up to robotics z-up.
 
 ## 8. Extension points
 
-| Want to...             | Do this                                                                                                                                                                                                                                     |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Better object tracking | Implement `VisionLocator` (on-device ArUco via js-aruco2, YOLO via ONNX Runtime Web/WebGPU, or a laptop detector) or a `Grounder` with depth/hit-test lifting; self-calibrate the camera from a marker (see Google XR Blocks' ArUco add-on) |
-| Another realtime model | Implement `RealtimeAgent`                                                                                                                                                                                                                   |
-| A new action verb      | Add it to `ACTION_VERBS` (protocol) and a choreography in `domain/demo/synthesizer.ts`                                                                                                                                                      |
-| A new check type       | Add it to `@clio/protocol/checks.ts` and an evaluator in `domain/procedure/checks/`                                                                                                                                                         |
-| A new coach tool       | Add it to `@clio/protocol/coach-tools.ts` and a handler in `LessonController.handlers()`                                                                                                                                                    |
-| A new recorded signal  | Add the event to `@clio/protocol/episode.ts`, emit it on the bus, then run `pnpm gen:schema`                                                                                                                                                |
+| Want to...             | Do this                                                                                                                                                                                                                                                                                                                                        |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Better object tracking | Serve the HTTP contract in docs/object-finder.md and set `CLIO_VISION_URL` (no headset change), or implement `VisionLocator` (on-device ArUco via js-aruco2, YOLO via ONNX Runtime Web/WebGPU, or a laptop detector) or a `Grounder` with depth/hit-test lifting; self-calibrate the camera from a marker (see Google XR Blocks' ArUco add-on) |
+| Another realtime model | Implement `RealtimeAgent`                                                                                                                                                                                                                                                                                                                      |
+| A new action verb      | Add it to `ACTION_VERBS` (protocol) and a choreography in `domain/demo/synthesizer.ts`                                                                                                                                                                                                                                                         |
+| A new check type       | Add it to `@clio/protocol/checks.ts` and an evaluator in `domain/procedure/checks/`                                                                                                                                                                                                                                                            |
+| A new coach tool       | Add it to `@clio/protocol/coach-tools.ts` and a handler in `LessonController.handlers()`                                                                                                                                                                                                                                                       |
+| A new recorded signal  | Add the event to `@clio/protocol/episode.ts`, emit it on the bus, then run `pnpm gen:schema`                                                                                                                                                                                                                                                   |
 
 ## 9. Frames, units, time
 
@@ -293,6 +313,7 @@ Vite proxies `/api` and `/gemini`, so the headset talks to a single origin (and 
 | Venue Wi-Fi                         | Phone hotspot on the laptop + USB `adb reverse`; the coach relays through the laptop   |
 | Camera permission missing or broken | Grant over adb (dev-setup); otherwise pinch-to-register and layouts                    |
 | Detection misses an object          | Announced once; the learner looks at or pinches it; `highlight` re-locates             |
+| Object finder slow or rate-limited  | Outlines appear later; `?showRefresh=<ms>` looks less often (0: only at step start)    |
 | Server down mid-session             | The uploader retries with backoff; nothing is lost while the tab lives                 |
 | Tracking flicker (crossed hands)    | Dwell gates bridge dropouts; looser radii on those steps                               |
 | No headset                          | Desktop Chrome + IWER (`?emulate=1`); `pnpm synth` for data work                       |

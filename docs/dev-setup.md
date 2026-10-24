@@ -16,7 +16,13 @@ pnpm dev                      # server on :8787 + headset app on :5173 (proxies 
 ```
 
 Without a `GEMINI_API_KEY` everything still runs. The coach falls back to the scripted (offline)
-coach, and planning and vision return 503.
+coach, planning returns 503, and so does finding objects unless an external finder is set.
+
+**Object finder.** Clio finds and outlines what each step shows with Gemini by default (boxes,
+drawn as corner brackets). To use jev or another segmenter instead (real contours), set
+`CLIO_VISION_URL` (and `CLIO_VISION_TOKEN` if it needs one) in `.env`. The contract and a
+minimal adapter are in [object-finder.md](object-finder.md). The server's startup log names the
+finder in use.
 
 ## 2. Desktop development (no headset)
 
@@ -26,6 +32,10 @@ Open `http://localhost:5173/?emulate=1&debug=1` in Chrome.
 with hand tracking and a synthetic room. The control panel moves the head and hands. From the
 console, `clio.pinch('right')` and `clio.pinch('right', 0)` pinch and release. Your laptop webcam
 stands in for the passthrough camera, which is handy for testing object grounding.
+
+To see outlines, open `?emulate=1&debug=1&procedure=ph-indicator` (its steps show cups and
+bottles) or plan a lesson, and point the webcam at the objects. Outlines appear around what the
+finder reports. `?showRefresh=1000` makes them follow faster while you test.
 
 ## 3. Quest 3
 
@@ -76,19 +86,20 @@ offset, adjust `DEFAULT_HEAD_FROM_CAMERA`, or better, implement marker self-cali
 
 ## 4. URL options
 
-| Option                        | Default             | Meaning                                                    |
-| ----------------------------- | ------------------- | ---------------------------------------------------------- |
-| `coach=gemini\|scripted\|off` | `gemini`            | voice coach (falls back to scripted without a key)         |
-| `transport=relay\|direct`     | `relay`             | Gemini through the laptop, or with an ephemeral token      |
-| `goal=…`                      |                     | plan this lesson right away                                |
-| `procedure=<id>`              |                     | run a saved lesson (e.g. `shirt-fold`, `ph-indicator`)     |
-| `mode=learn\|record_demo`     | `learn`             | `record_demo`: an expert records ghost-hand demos          |
-| `calibrate=1`                 | off                 | pinch two table corners first                              |
-| `camera=0`                    | on                  | disable the passthrough camera (pinch to register objects) |
-| `autoDemo=0`                  | on                  | don't auto-play each step's demo                           |
-| `emulate=1`                   | auto on desktop dev | IWER Quest 3 emulator                                      |
-| `debug=1`                     | off                 | HUD, tracked-hand overlay, hidden zones, workspace outline |
-| `voice=<name>`                |                     | Gemini prebuilt voice (e.g. `Kore`)                        |
+| Option                        | Default             | Meaning                                                                       |
+| ----------------------------- | ------------------- | ----------------------------------------------------------------------------- |
+| `coach=gemini\|scripted\|off` | `gemini`            | voice coach (falls back to scripted without a key)                            |
+| `transport=relay\|direct`     | `relay`             | Gemini through the laptop, or with an ephemeral token                         |
+| `goal=…`                      |                     | plan this lesson right away                                                   |
+| `procedure=<id>`              |                     | run a saved lesson (e.g. `shirt-fold`, `ph-indicator`)                        |
+| `mode=learn\|record_demo`     | `learn`             | `record_demo`: an expert records ghost-hand demos                             |
+| `calibrate=1`                 | off                 | pinch two table corners first                                                 |
+| `camera=0`                    | on                  | disable the passthrough camera (pinch to register objects)                    |
+| `autoDemo=0`                  | on                  | don't auto-play each step's demo                                              |
+| `emulate=1`                   | auto on desktop dev | IWER Quest 3 emulator                                                         |
+| `debug=1`                     | off                 | HUD, tracked-hand overlay, hidden zones, workspace outline                    |
+| `voice=<name>`                |                     | Gemini prebuilt voice (e.g. `Kore`)                                           |
+| `showRefresh=<ms>`            | `3000`              | how often to look again at what the step shows (0: only when the step starts) |
 
 ## 5. Data
 
@@ -124,5 +135,7 @@ cd pipeline && uv run pytest -q
 - Run `pnpm dev` on the laptop, tethered to the hotspot, and `pnpm quest:reverse` over USB.
 - Check the camera grant (`dumpsys`, above).
 - **Fallback ladder:** Gemini fails → `?coach=scripted`. Camera fails → `?camera=0` (pinch to
-  register). Planning fails → `?procedure=shirt-fold`.
+  register). Planning fails → `?procedure=shirt-fold`. The object finder lags or hits a rate limit →
+  `?showRefresh=0` (look only when a step starts), or unset `CLIO_VISION_URL` to fall back to
+  Gemini.
 - Record a backup video the night before, and keep a recorded episode open in Rerun.

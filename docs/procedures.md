@@ -1,7 +1,8 @@
 # The plan language
 
-A procedure is a lesson: the objects involved, plus ordered steps, each with a machine-checkable
-success condition and an action Clio can demonstrate. **Most procedures are written at runtime by
+A procedure is a lesson: the objects involved, plus ordered steps. Each step has a
+machine-checkable success condition, an action Clio can demonstrate, and the things Clio outlines
+for the learner. **Most procedures are written at runtime by
 the planner LLM** (`POST /api/plans`, saved to `data/plans/`). The files in `procedures/` are
 curated golden lessons used for demos, as planner examples and as test fixtures. Both use the same
 schema, `packages/protocol/src/procedure.ts`, and pass the same validation, including the
@@ -30,7 +31,9 @@ a robot policy could be conditioned on: "Add vinegar to cup A."
 **`placement`** says how Clio first finds the object:
 - `detect`: from the camera, using `tracking.query` (or the label). This is what the planner uses.
 - `register`: the learner pinches it.
-- `layout`: a fixed workspace position, for curated mats with taped spots.
+- `layout`: a fixed workspace position, for curated mats with taped spots. A camera detection
+  doesn't move a layout object until it has been carried. Its outline is still drawn where the
+  camera saw it.
 
 **`tracking`** (optional):
 - `query` is an open-vocabulary visual description. Be specific about color, shape and label text.
@@ -66,6 +69,37 @@ positions. It's also stored as a structured action label. Verbs (`ACTION_VERBS` 
 
 When an expert's recording of the step exists (`mode=record_demo`, then sliced into clips), it
 replaces the synthesized demo.
+
+## Show: what a step outlines
+
+```json
+"show": [
+  {
+    "object": "cap",
+    "phrase": "blue washer fluid cap",
+    "description": "Round blue plastic cap with a windshield-spray symbol, on a white tank at the front left of the engine bay, beside a yellow cap"
+  }
+]
+```
+
+When the step starts, Clio sends one camera frame and each item's words to the **object finder**
+and outlines what it finds in AR. The finder is Gemini, or jev or another model behind
+`CLIO_VISION_URL` (see [object-finder.md](object-finder.md)). The first item, the thing to act
+on, is outlined in cyan; the rest, where it goes, in amber. While the step runs, Clio looks again
+every few seconds, so the outlines follow objects that get moved. It skips objects in the
+learner's hand, because hand tracking already follows them.
+- `phrase`: 2 to 5 words naming the thing, like a label on a box. Detectors that take category
+  prompts (SAM 3, Grounding DINO) use it.
+- `description`: one sentence of 12 to 30 words that finds the object in a single frame with no
+  other context. Say what it is, and give its color, material, shape and size, any text or symbols
+  on it, and where it is relative to its surroundings. Describe its state at that point in the
+  task ("the cap is off", "the cup is now pink"). If something similar is nearby, say what tells
+  them apart.
+- At most 4 items, most important first. Every `object` must be declared.
+
+The planner writes `show` for every step. A step without it outlines nothing and only looks for
+targets it hasn't found yet. Each answer is recorded as an `object.detected` event, so every
+outline is also a training label.
 
 ## Checks
 
