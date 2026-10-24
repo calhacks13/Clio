@@ -27,6 +27,7 @@ export const ApiPaths = {
   episodeMedia: (id: string, name: string) => `/api/episodes/${seg(id)}/media/${seg(name)}`,
   episodeFrames: (id: string) => `/api/episodes/${seg(id)}/frames`,
   episodeEvents: (id: string) => `/api/episodes/${seg(id)}/events`,
+  episodeObjects: (id: string) => `/api/episodes/${seg(id)}/objects`,
   clipsFromEpisode: '/api/clips/from-episode',
   clip: (procedureId: string, stepId: string) => `/api/clips/${seg(procedureId)}/${seg(stepId)}`,
 } as const;
@@ -121,6 +122,11 @@ export const EpisodeBatchResponseSchema = z.object({
   duplicate: z.boolean(),
 });
 export const EpisodeFinishResponseSchema = z.object({ ok: z.literal(true) });
+export const MediaUploadResponseSchema = z.object({
+  ok: z.literal(true),
+  name: z.string(),
+  bytes: z.number().int().nonnegative(),
+});
 
 export const EpisodeSummarySchema = z.object({
   episodeId: z.string(),
@@ -176,6 +182,8 @@ export type Detection = z.infer<typeof DetectionSchema>;
 export type LocateResponse = z.infer<typeof LocateResponseSchema>;
 export type EpisodeCreateResponse = z.infer<typeof EpisodeCreateResponseSchema>;
 export type EpisodeBatchResponse = z.infer<typeof EpisodeBatchResponseSchema>;
+export type EpisodeFinishResponse = z.infer<typeof EpisodeFinishResponseSchema>;
+export type MediaUploadResponse = z.infer<typeof MediaUploadResponseSchema>;
 export type EpisodeSummary = z.infer<typeof EpisodeSummarySchema>;
 export type EpisodeListResponse = z.infer<typeof EpisodeListResponseSchema>;
 export type EpisodeDetailResponse = z.infer<typeof EpisodeDetailResponseSchema>;

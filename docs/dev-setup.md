@@ -38,7 +38,9 @@ stands in for the passthrough camera, which is handy for testing object groundin
    secure context, so no certificate is needed. The coach's WebSocket relay rides the same
    tunnel, so the headset needs no internet of its own.
 4. **Wi-Fi alternative:** run `CLIO_HTTPS=1 pnpm dev`, open `https://<laptop-ip>:5173`, and accept
-   the self-signed certificate once.
+   the self-signed certificate once. This exposes the dev server, and with it the Gemini relay
+   (your key's quota), to the LAN. Use your own hotspot, not open venue Wi-Fi. By default both the
+   dev server and the API server listen on loopback only.
 5. **Mirror for judges:** `scrcpy` (USB, works offline). Use `--crop` to show one eye.
 
 ### Camera permission workaround

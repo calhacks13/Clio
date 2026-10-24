@@ -3,10 +3,15 @@ import basicSsl from '@vitejs/plugin-basic-ssl';
 import { defineConfig } from 'vite';
 
 // The headset only talks to this origin: /api and the /gemini WebSocket relay are proxied to the
-// laptop server, so the page works over `adb reverse` (http://localhost is a secure context) and
-// over Wi-Fi with CLIO_HTTPS=1 (self-signed certificate; accept it once on the headset).
+// laptop server (which listens on loopback only), so the page works over `adb reverse`
+// (http://localhost is a secure context) and over Wi-Fi with CLIO_HTTPS=1 (self-signed certificate;
+// accept it once on the headset).
 
-const server = process.env.CLIO_SERVER_URL ?? 'http://localhost:8787';
+// 127.0.0.1, not localhost: on macOS "localhost" may resolve to ::1 and miss an IPv4-bound server.
+const server = process.env.CLIO_SERVER_URL ?? 'http://127.0.0.1:8787';
+// USB (adb reverse) only needs loopback. Wi-Fi mode (HTTPS) opens the dev server to the LAN, and
+// with it the Gemini relay: only use it on a network you trust.
+const lan = Boolean(process.env.CLIO_HTTPS || process.env.CLIO_LAN);
 const { version } = JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
 ) as {
@@ -19,7 +24,7 @@ export default defineConfig({
   // IWER's devui/sem pin an older three; two copies break its synthetic rooms.
   resolve: { dedupe: ['three'] },
   server: {
-    host: true,
+    host: lan ? true : '127.0.0.1',
     port: 5173,
     proxy: {
       '/api': { target: server, changeOrigin: true },
