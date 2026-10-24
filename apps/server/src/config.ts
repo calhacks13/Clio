@@ -49,8 +49,12 @@ const optionalHttpUrl = z.preprocess(
     .optional(),
 );
 
+const optionalPort = z.preprocess(blank, z.coerce.number().int().min(1).max(65535).optional());
+
 const EnvSchema = z.object({
-  CLIO_SERVER_PORT: z.preprocess(blank, z.coerce.number().int().min(1).max(65535).default(8787)),
+  CLIO_SERVER_PORT: optionalPort,
+  // Cloud hosts (Render, Fly, Cloud Run, …) pick the port and say so in PORT.
+  PORT: optionalPort,
   CLIO_HOST: text('127.0.0.1'),
   CLIO_DATA_DIR: optionalText,
   CLIO_PROCEDURES_DIR: optionalText,
@@ -77,7 +81,7 @@ export function loadConfig(
   const dir = (value: string | undefined, fallback: string) =>
     value === undefined ? resolve(repoRoot, fallback) : resolveFrom(repoRoot, value);
   return {
-    port: e.CLIO_SERVER_PORT,
+    port: e.CLIO_SERVER_PORT ?? e.PORT ?? 8787,
     host: e.CLIO_HOST,
     dataDir: dir(e.CLIO_DATA_DIR, 'data'),
     proceduresDir: dir(e.CLIO_PROCEDURES_DIR, 'procedures'),

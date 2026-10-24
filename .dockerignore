@@ -1,0 +1,18 @@
+# The image installs and builds everything itself (Dockerfile). Keep local state, host binaries and
+# secrets out of the build context.
+**/node_modules
+**/dist
+data
+.env
+.env.*
+pipeline/.venv
+pipeline/out
+.git
+**/.vite
+**/coverage
+**/*.tsbuildinfo
+**/*.log
+**/*.rrd
+**/__pycache__
+**/.DS_Store
+certs

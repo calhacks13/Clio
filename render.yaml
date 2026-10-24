@@ -1,0 +1,22 @@
+# Render Blueprint (docs/deploy.md, option B): one web service built from the Dockerfile on the
+# deploy branch. Render sets PORT, which the server uses when CLIO_SERVER_PORT is unset.
+services:
+  - type: web
+    name: clio
+    runtime: docker
+    # Free: it sleeps when idle, and its disk is wiped on every restart and deploy (episodes too).
+    plan: free
+    branch: deploy
+    # Redeploy on every push to the branch. (Render replaced autoDeploy: true with this field.)
+    autoDeployTrigger: commit
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: CLIO_HOST
+        value: 0.0.0.0
+      # Render asks for it once, when the Blueprint is created.
+      - key: GEMINI_API_KEY
+        sync: false
+      # Random, made once by Render. Read it under the service's Environment, then open /?key=<it>.
+      - key: CLIO_ACCESS_KEY
+        generateValue: true

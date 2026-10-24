@@ -111,6 +111,13 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ CLIO_SERVER_PORT: '70000' }, '/repo')).toThrow(/CLIO_SERVER_PORT/);
   });
 
+  it('uses PORT (set by cloud hosts such as Render) only when CLIO_SERVER_PORT is unset', () => {
+    expect(loadConfig({ PORT: '10000' }, '/repo').port).toBe(10000);
+    expect(loadConfig({ PORT: '10000', CLIO_SERVER_PORT: '9000' }, '/repo').port).toBe(9000);
+    expect(loadConfig({ PORT: '', CLIO_SERVER_PORT: '' }, '/repo').port).toBe(8787);
+    expect(() => loadConfig({ PORT: 'eighty' }, '/repo')).toThrow(/\bPORT\b/);
+  });
+
   it('reads an access key; blank means no gate', () => {
     expect(loadConfig({ CLIO_ACCESS_KEY: ' s3cret ' }, '/repo').accessKey).toBe('s3cret');
     expect(loadConfig({ CLIO_ACCESS_KEY: '  ' }, '/repo').accessKey).toBeNull();
