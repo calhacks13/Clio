@@ -28,7 +28,7 @@ import { KeyedMutex } from './keyed-mutex';
 export type BenchScenarioCreateBody = z.output<typeof BenchScenarioCreateSchema>;
 export type BenchScenarioUpdateBody = z.output<typeof BenchScenarioUpdateSchema>;
 
-const EXTENSIONS: Record<ImagePayload['mimeType'], string> = {
+export const IMAGE_EXTENSIONS: Record<ImagePayload['mimeType'], string> = {
   'image/jpeg': 'jpg',
   'image/png': 'png',
   'image/webp': 'webp',
@@ -95,7 +95,7 @@ export class BenchStore {
     const id = await this.#claimId(input.title);
     const views = await Promise.all(
       input.images.map(async (image, i) => {
-        const file = `view-${i + 1}.${EXTENSIONS[image.mimeType]}`;
+        const file = `view-${i + 1}.${IMAGE_EXTENSIONS[image.mimeType]}`;
         await writeFile(join(this.#scenariosDir, id, file), Buffer.from(image.data, 'base64'));
         return { file, mimeType: image.mimeType };
       }),

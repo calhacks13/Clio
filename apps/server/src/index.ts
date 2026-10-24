@@ -14,6 +14,7 @@ import { createGeminiPlanner } from './services/gemini-planner';
 import { createGeminiLocator } from './services/gemini-vision';
 import { createHttpLocator } from './services/http-vision';
 import { createGeminiTokenMinter } from './services/token-minter';
+import { BenchCheckStore } from './storage/bench-check-store';
 import { BenchStore } from './storage/bench-store';
 import { ClipStore } from './storage/clip-store';
 import { EpisodeStore } from './storage/episode-store';
@@ -53,6 +54,7 @@ function main(): void {
       : gemini && createGeminiLocator(gemini, config.visionModel),
     bench: {
       store: new BenchStore(benchDir, { logger }),
+      checks: new BenchCheckStore(benchDir, { logger }),
       plans: new ProcedureStore({
         curatedDir: config.proceduresDir,
         plansDir: join(benchDir, 'plans'),

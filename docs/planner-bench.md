@@ -24,8 +24,11 @@ gets closer to the headset's view than the laptop's own camera.
    model plans from the same frames at once, and each answer shows up as a chip.
 3. Read the plan: steps, done-when states, actions, success checks, outlines and mistakes. Failed
    runs show the server's error, and a draft that needed a retry shows why it failed validation.
+   When the planner says where it saw the plan's objects (`sightings`), **Show where the plan saw
+   its objects** under the frames draws a labeled box and point for each one on the frame shown.
 4. **Does it look done?** on a step asks the step watcher's question (`/api/plans/check`) about
-   fresh frames, so you can do the step and see whether the model notices.
+   fresh frames, with what the step's objects look like and its likely mix-ups, so you can do the
+   step and see whether the model notices.
 5. **Re-plan from here** on a step: change the scene (take the vinegar away, spill something),
    say what changed, and the planner revises the rest of the plan from a new capture, as
    `revise_plan` does in a lesson.
@@ -33,23 +36,65 @@ gets closer to the headset's view than the laptop's own camera.
 7. **Save scenario** keeps the frames, the request (a re-plan keeps its base plan too), the runs
    you made and what a correct plan must do, one expectation per line.
 
+## Plans in two stages
+
+**Plan in two stages** asks as the headset will, to start a lesson sooner: stage `first` writes
+step 1 in full and the other steps as an outline, and as soon as it is in, stage `rest` rewrites
+the outline in full from the same frames (a re-plan of the stage-1 plan from `outlineFrom`,
+"Refine the outline while the learner does step 1"). Each stage is a run of its own; their chips
+sit together with an arrow, the outline steps are drawn dashed, and the run says "Step 1 ready in
+X s, the rest refined Y s later". When the rest comes in, the page shows it instead of stage 1. If
+you are already watching stage 1 live, the refined steps replace the ones not done yet: the done
+steps, the focused step's clock and the looks so far are kept. A model that answers stage 1 with a
+whole plan (no `outlineFrom`) is told so, and nothing is refined. Saving a scenario keeps both
+stages, and a saved scenario runs in two stages too while the box is ticked.
+
 ## Watching live
 
 **Watch me do it live** on a plan follows it while you do the steps in front of the camera. It
-asks the step watcher's question (`/api/plans/check`) about the focused step every few seconds,
-from one fresh 1024 px frame, as the headset does every 6 s:
-- the panel shows the step, its done-when, the last answer with the frame it judged, a progress
-  bar, and the time on this step and in all;
-- with **Move on by itself** (on by default) the watcher completes a step after 1, 2 or 3 answers
-  of "done" in a row; turn it off to see the headset's behavior, where the watcher only suggests
+asks the step watcher's question (`/api/bench/check`, the headset's `/api/plans/check` with a model
+of your choice) about the focused step over and over, from one fresh 1024 px frame. Each look also
+sends:
+- `before`: a frame kept from the moment the step got focus, so the model can compare then and now;
+- `objects`: what the step's objects look like, from its outlines' descriptions and then the
+  declared objects it targets (their `tracking.query`, description or label);
+- `confusions`: the step's mistake messages, which are often mix-ups that look like success.
+
+The panel:
+- shows the step, its done-when, the last answer with the frame it judged (and the point that
+  decided it, when the answer has `evidence`), how far along the step looks (`progress`), and the
+  time on this step and in all;
+- shows an answer with `wrong` in red ("Wrong: picked up the milk, not the yogurt drink"), counts
+  the wrong answers in the header and the log, and never counts a wrong answer as done;
+- with **Move on by itself** (on by default) completes a step after 1, 2 or 3 answers of "done" in
+  a row (2 by default); turn it off to see the headset's behavior, where the watcher only suggests
   and the coach or **Mark done** decides;
+- **Look** sets the cadence: **as fast as it answers** (the default: the next look starts 0.5 s
+  after the last answer, about one look every 2 s on Robotics-ER 2) or every 2, 3, 6 (the
+  headset's) or 10 s. After a failed look it waits at least 3 s;
 - **Mark done**, **Skip**, **Back a step** and the numbers on the progress bar move the focus by
-  hand; **Look now** asks at once; the interval (2, 3, 6 or 10 s) and the judging model can change
-  while it runs;
+  hand; **Look now** asks at once; the cadence and the judging model can change while it runs;
 - **Every look** lists each answer with its frame and latency, and the end shows how long each
   step took and whether the watcher saw it done or you marked it.
 
-A plan from a re-plan starts with its kept steps done. Looks pause while the page is hidden.
+A plan from a re-plan starts with its kept steps done. Looks pause while the page is hidden. The
+new answer fields (`progress`, `wrong`, `evidence`) are optional: without them the panel works as
+before.
+
+## Watcher tests
+
+**Save as test** on any look in **Every look** keeps it as a watcher test: the frame from when the
+step started and the frame it judged, the goal, the step (id, instruction, done-when), the objects
+and mix-ups it was asked with, what the watcher answered, and the answer it should have given:
+- **done**: it must say done;
+- **not done**: it must not say done (unsure passes);
+- **wrong**: it must not say done, and must say what the learner did instead (`wrong`).
+
+This is how a failure seen live, like the milk taken for the yogurt drink and called done, becomes
+a regression test. **Watcher tests** under the scenarios lists them with their passes per model.
+Open one to see its frames and answers, change the answer it should get, or run it with the ticked
+models; **Run all tests** runs every test with every ticked model. Each answer is saved with the
+test.
 
 ## Scenarios and judging
 
@@ -73,11 +118,16 @@ pnpm bench --model gemini-3.5-flash-lite --model gemini-3.8-flash --slow
 pnpm bench --tag hazard --repeat 3             # how steady are the answers?
 pnpm bench ph-lesson-cup-a-already-pink --no-judge
 pnpm bench --list
+pnpm bench --checks                            # every watcher test, the planner model
+pnpm bench --checks --model gemini-robotics-er-2-preview --model gemini-3.8-flash --repeat 3
+pnpm bench --checks milk-taken-for-the-yogurt-drink
+pnpm bench --checks --list
 ```
 
-No server is needed; the CLI reads `.env` like the server. It saves runs with their scenarios, so
-the page shows them too, and it ends with a table per model: runs, plans written, judged passes
-and median time.
+No server is needed; the CLI reads `.env` like the server. It saves runs with their scenarios (or
+tests), so the page shows them too. For scenarios it ends with a table per model: runs, plans
+written, judged passes and median time. With `--checks` the table has looks, passes, the pass
+rate, passes by expected answer (done, not done, wrong) and the median time.
 
 ## Scenes worth trying
 
@@ -102,7 +152,11 @@ data/bench/scenarios/<id>/scenario.json   goal, context, re-plan base, expectati
 data/bench/scenarios/<id>/view-<n>.jpg    the frames, never changed after saving
 data/bench/scenarios/<id>/runs/<run>.json each answer: model, timing, plan or error, grades
 data/bench/plans/                         the plans the bench's runs wrote
-data/bench/deleted/                       deleted scenarios, moved aside
+data/bench/checks/<id>/check.json         a watcher test: step, hints, expected answer
+data/bench/checks/<id>/before-<n>.jpg     the frames from when the step started
+data/bench/checks/<id>/now-<n>.jpg        the frames it judged
+data/bench/checks/<id>/runs/<run>.json    each answer: model, timing, answer or error, passed
+data/bench/deleted/                       deleted scenarios and watcher tests, moved aside
 ```
 
 `data/` is gitignored, so scenes from your camera stay on this laptop.
@@ -112,6 +166,7 @@ data/bench/deleted/                       deleted scenarios, moved aside
 | contract       | `packages/protocol/src/bench.ts`                                         |
 | routes         | `apps/server/src/routes/bench.ts` (`/api/bench/*`)                       |
 | runs and judge | `apps/server/src/services/bench.ts`, `bench-judge.ts`, `gemini-judge.ts` |
-| storage        | `apps/server/src/storage/bench-store.ts`                                 |
+| watcher tests  | `apps/server/src/services/bench-checks.ts`                               |
+| storage        | `apps/server/src/storage/bench-store.ts`, `bench-check-store.ts`         |
 | CLI            | `apps/server/scripts/bench.ts`                                           |
 | page           | `apps/headset/bench.html`, `apps/headset/src/bench/`                     |

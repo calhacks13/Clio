@@ -3,6 +3,10 @@ import { join } from 'node:path';
 import {
   ApiErrorSchema,
   ApiPaths,
+  BenchCheckRunSchema,
+  BenchCheckTestDetailSchema,
+  BenchCheckTestListResponseSchema,
+  BenchCheckTestSchema,
   BenchModelsResponseSchema,
   BenchPaths,
   type BenchRun,
@@ -19,6 +23,7 @@ import type { BenchDeps } from '../src/deps';
 import type { BenchModels } from '../src/services/bench';
 import type { BenchJudge, JudgeRequest } from '../src/services/bench-judge';
 import type { Planner, PlannerRequest } from '../src/services/planner';
+import { BenchCheckStore } from '../src/storage/bench-check-store';
 import { BenchStore } from '../src/storage/bench-store';
 import { ProcedureStore } from '../src/storage/procedure-store';
 import { type Harness, harness, steppingClock, tempDir } from './harness';
@@ -41,7 +46,7 @@ interface FakeModels extends BenchModels {
 function fakeModels(
   options: {
     plans?: Array<string | Error>;
-    check?: string;
+    check?: string | Error;
     judge?: string | Error;
     list?: () => Promise<string[]>;
   } = {},
@@ -66,6 +71,7 @@ function fakeModels(
       },
       async checkStep(request) {
         checks.push({ ...request, model });
+        if (options.check instanceof Error) throw options.check;
         return options.check ?? '{"verdict":"done","observation":"the cap is off"}';
       },
     }),
@@ -89,6 +95,9 @@ async function benchHarness(
   const benchDir = join(root, 'bench');
   const bench: BenchDeps = {
     store: new BenchStore(benchDir, { now: steppingClock('2026-10-24T03:15:02.000Z', 1_000) }),
+    checks: new BenchCheckStore(benchDir, {
+      now: steppingClock('2026-10-24T03:15:02.000Z', 1_000),
+    }),
     plans: new ProcedureStore({
       curatedDir: join(root, 'none'),
       plansDir: join(benchDir, 'plans'),
@@ -562,5 +571,267 @@ describe('bench scenarios', () => {
       runs: [{ ...run, id: '../escape' }],
     });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('staged plans on the bench', () => {
+  it('records the stage a plan was asked at', async () => {
+    const h = await benchHarness();
+    const run = BenchRunSchema.parse(
+      await json(
+        h.request('POST', BenchPaths.plan, { goal: 'Refill the washer fluid', stage: 'first' }),
+      ),
+    );
+    expect(run.request.stage).toBe('first');
+    const full = BenchRunSchema.parse(
+      await json(h.request('POST', BenchPaths.plan, { goal: 'Refill the washer fluid' })),
+    );
+    expect(full.request.stage).toBeUndefined();
+  });
+
+  it('runs a scenario in two stages: the first, then the rest of its outline', async () => {
+    const models = fakeModels({
+      plans: [
+        PLAN,
+        JSON.stringify({ objects: [], steps: modelPlan().steps.slice(1), warnings: [] }),
+      ],
+    });
+    const h = await benchHarness(models);
+    const { scenario } = await createScenario(h);
+    const first = BenchRunSchema.parse(
+      await json(h.request('POST', BenchPaths.scenarioRuns(scenario.id), { stage: 'first' })),
+    );
+    expect(first.request.stage).toBe('first');
+    if (!first.result.ok) throw new Error('expected a plan');
+
+    const rest = await h.request('POST', BenchPaths.scenarioRuns(scenario.id), {
+      stage: 'rest',
+      revise: {
+        base: first.result.procedure,
+        fromStepIndex: 1,
+        reason: 'Refine the outline while the learner does step 1',
+      },
+    });
+    expect(rest.status).toBe(201);
+    const run = BenchRunSchema.parse(await rest.json());
+    expect(run.request).toMatchObject({
+      stage: 'rest',
+      revise: { fromStepIndex: 1, reason: 'Refine the outline while the learner does step 1' },
+      views: 2,
+    });
+    expect(models.plannerRequests[1]?.revision).toMatchObject({
+      fromStepIndex: 1,
+      base: { id: first.result.planId },
+    });
+    expect(models.plannerRequests[1]?.images).toEqual([IMAGE, IMAGE_2]);
+    const detail = BenchScenarioDetailSchema.parse(
+      await json(h.request('GET', BenchPaths.scenario(scenario.id))),
+    );
+    expect(detail.runs.map((r) => r.request.stage)).toEqual(['rest', 'first']);
+  });
+
+  it('needs the plan to refine for stage rest', async () => {
+    const h = await benchHarness();
+    const { scenario } = await createScenario(h);
+    const res = await h.request('POST', BenchPaths.scenarioRuns(scenario.id), { stage: 'rest' });
+    expect(res.status).toBe(400);
+    expect(ApiErrorSchema.parse(await res.json()).error.message).toMatch(/stage rest needs revise/);
+  });
+});
+
+describe('watcher tests', () => {
+  const MILK = Buffer.from('fake jpeg: holding the milk').toString('base64');
+  const FRIDGE = Buffer.from('fake jpeg: the fridge, closed').toString('base64');
+  const NOW = { mimeType: 'image/jpeg' as const, data: MILK };
+  const BEFORE = { mimeType: 'image/jpeg' as const, data: FRIDGE };
+  const STEP = {
+    id: 'take-yogurt',
+    instruction: 'Take the yogurt drink from the fridge door.',
+    doneWhen: 'The learner holds the small pink yogurt drink bottle.',
+  };
+  const OBJECTS = [
+    { id: 'yogurt', label: 'yogurt drink', look: 'Small pink plastic bottle with a foil top' },
+  ];
+  const CONFUSIONS = ['Picking up the milk carton, not the yogurt drink'];
+
+  async function createTest(h: Harness, body: Record<string, unknown> = {}) {
+    const res = await h.request('POST', BenchPaths.checkTests, {
+      title: 'Milk taken for the yogurt drink',
+      expect: 'wrong',
+      goal: 'Get a yogurt drink from the fridge',
+      step: STEP,
+      images: [NOW],
+      before: [BEFORE],
+      objects: OBJECTS,
+      confusions: CONFUSIONS,
+      seen: {
+        verdict: 'done',
+        observation: 'holding a white carton',
+        model: 'gemini-robotics-er-2-preview',
+        latencyMs: 1200,
+      },
+      ...body,
+    });
+    expect(res.status).toBe(201);
+    return BenchCheckTestDetailSchema.parse(await res.json());
+  }
+
+  it('saves the frames, the step and its hints, and lists the test', async () => {
+    const h = await benchHarness();
+    const { test, runs } = await createTest(h);
+    expect(runs).toEqual([]);
+    expect(test).toMatchObject({
+      id: 'milk-taken-for-the-yogurt-drink',
+      expect: 'wrong',
+      step: STEP,
+      objects: OBJECTS,
+      confusions: CONFUSIONS,
+      before: [{ file: 'before-1.jpg', mimeType: 'image/jpeg' }],
+      now: [{ file: 'now-1.jpg', mimeType: 'image/jpeg' }],
+      seen: { verdict: 'done', observation: 'holding a white carton' },
+    });
+    const dir = join(h.benchDir, 'checks', test.id);
+    expect((await readdir(dir)).sort()).toEqual(['before-1.jpg', 'check.json', 'now-1.jpg']);
+
+    const frame = await h.request('GET', BenchPaths.checkTestFrame(test.id, 'now-1.jpg'));
+    expect(frame.headers.get('content-type')).toBe('image/jpeg');
+    expect(Buffer.from(await frame.arrayBuffer()).toString('base64')).toBe(MILK);
+    const notAFrame = await h.request('GET', BenchPaths.checkTestFrame(test.id, 'check.json'));
+    expect(notAFrame.status).toBe(404);
+    expect((await h.request('GET', '/api/bench/checks/.hidden')).status).toBe(400);
+
+    const list = BenchCheckTestListResponseSchema.parse(
+      await json(h.request('GET', BenchPaths.checkTests)),
+    );
+    expect(list.tests).toEqual([
+      {
+        id: test.id,
+        title: 'Milk taken for the yogurt drink',
+        goal: 'Get a yogurt drink from the fridge',
+        instruction: STEP.instruction,
+        expect: 'wrong',
+        thumb: 'now-1.jpg',
+        hasBefore: true,
+        createdAt: test.createdAt,
+        runCount: 0,
+        models: [],
+        lastRun: null,
+      },
+    ]);
+  });
+
+  it('asks the saved look again with any model and grades the answer', async () => {
+    const models = fakeModels({
+      check: '{"verdict":"done","observation":"holding a white carton"}',
+    });
+    const h = await benchHarness(models);
+    const { test } = await createTest(h);
+    const res = await h.request('POST', BenchPaths.checkTestRuns(test.id), {
+      model: 'gemini-3.8-flash',
+    });
+    expect(res.status).toBe(201);
+    const run = BenchCheckRunSchema.parse(await res.json());
+    expect(run).toMatchObject({
+      model: 'gemini-3.8-flash',
+      expect: 'wrong',
+      result: { ok: true, answer: { verdict: 'done', observation: 'holding a white carton' } },
+      passed: false,
+    });
+    expect(models.checks[0]).toEqual({
+      goal: 'Get a yogurt drink from the fridge',
+      step: STEP,
+      images: [NOW],
+      before: [BEFORE],
+      objects: OBJECTS,
+      confusions: CONFUSIONS,
+      model: 'gemini-3.8-flash',
+    });
+    expect(h.logger.lines.some((l) => l.includes('said done, FAIL'))).toBe(true);
+
+    // The same look expected "not done" still fails: the watcher said done.
+    await h.request('PATCH', BenchPaths.checkTest(test.id), { expect: 'not_done' });
+    const again = BenchCheckRunSchema.parse(
+      await json(h.request('POST', BenchPaths.checkTestRuns(test.id))),
+    );
+    expect(again).toMatchObject({ model: 'planner-test', expect: 'not_done', passed: false });
+
+    const detail = BenchCheckTestDetailSchema.parse(
+      await json(h.request('GET', BenchPaths.checkTest(test.id))),
+    );
+    expect(detail.runs.map((r) => r.id)).toEqual([again.id, run.id]);
+    const [summary] = BenchCheckTestListResponseSchema.parse(
+      await json(h.request('GET', BenchPaths.checkTests)),
+    ).tests;
+    expect(summary).toMatchObject({
+      expect: 'not_done',
+      runCount: 2,
+      models: [
+        { model: 'gemini-3.8-flash', runs: 1, passed: 0 },
+        { model: 'planner-test', runs: 1, passed: 0 },
+      ],
+      lastRun: { model: 'planner-test', passed: false, verdict: 'done' },
+    });
+  });
+
+  it('passes a "not done" test on an answer of unsure', async () => {
+    const h = await benchHarness(
+      fakeModels({ check: '{"verdict":"unsure","observation":"the hand hides the bottle"}' }),
+    );
+    const { test } = await createTest(h, { expect: 'not_done', before: [] });
+    expect(test.before).toEqual([]);
+    const run = BenchCheckRunSchema.parse(
+      await json(h.request('POST', BenchPaths.checkTestRuns(test.id))),
+    );
+    expect(run.passed).toBe(true);
+  });
+
+  it('records a failed model call as a failed run', async () => {
+    const h = await benchHarness(fakeModels({ check: new Error('deadline exceeded') }));
+    const { test } = await createTest(h);
+    const res = await h.request('POST', BenchPaths.checkTestRuns(test.id), {});
+    expect(res.status).toBe(201);
+    expect(BenchCheckRunSchema.parse(await res.json())).toMatchObject({
+      result: {
+        ok: false,
+        code: 'upstream_failed',
+        message: 'Step check failed: deadline exceeded',
+      },
+      passed: false,
+    });
+  });
+
+  it('renames a test, clears its notes and moves a deleted one aside', async () => {
+    const h = await benchHarness();
+    const { test } = await createTest(h, { notes: 'From the fridge lesson' });
+    expect(test.notes).toBe('From the fridge lesson');
+    const updated = BenchCheckTestSchema.parse(
+      await json(
+        h.request('PATCH', BenchPaths.checkTest(test.id), {
+          title: 'Milk, not yogurt',
+          notes: null,
+        }),
+      ),
+    );
+    expect(updated).toMatchObject({ id: test.id, title: 'Milk, not yogurt' });
+    expect(updated.notes).toBeUndefined();
+    expect((await h.request('DELETE', BenchPaths.checkTest(test.id))).status).toBe(200);
+    expect((await h.request('GET', BenchPaths.checkTest(test.id))).status).toBe(404);
+    expect((await h.request('DELETE', BenchPaths.checkTest(test.id))).status).toBe(404);
+    const deleted = await readdir(join(h.benchDir, 'deleted'));
+    expect(deleted[0]).toMatch(/^check-milk-taken-for-the-yogurt-drink-2026-10-24T/);
+  });
+
+  it('rejects a test without a frame to judge, and runs need Gemini', async () => {
+    const h = await benchHarness(null);
+    const bad = await h.request('POST', BenchPaths.checkTests, {
+      title: 'No frames',
+      expect: 'done',
+      goal: 'Get a yogurt drink',
+      step: STEP,
+      images: [],
+    });
+    expect(bad.status).toBe(400);
+    const { test } = await createTest(h);
+    expect((await h.request('POST', BenchPaths.checkTestRuns(test.id))).status).toBe(503);
   });
 });

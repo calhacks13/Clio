@@ -1,11 +1,22 @@
 import {
   type BenchCheckRequest,
+  type BenchCheckRun,
+  BenchCheckRunSchema,
+  type BenchCheckTest,
+  type BenchCheckTestCreate,
+  type BenchCheckTestDetail,
+  BenchCheckTestDetailSchema,
+  type BenchCheckTestListResponse,
+  BenchCheckTestListResponseSchema,
+  BenchCheckTestSchema,
+  type BenchCheckTestUpdate,
   type BenchGrade,
   type BenchModelsResponse,
   BenchModelsResponseSchema,
   BenchPaths,
   type BenchPlanRequest,
   type BenchRun,
+  type BenchRunScenarioRequest,
   BenchRunSchema,
   type BenchScenario,
   type BenchScenarioCreate,
@@ -58,8 +69,18 @@ export class BenchClient extends ApiClient {
     await this.request('DELETE', BenchPaths.scenario(id), undefined, OkSchema);
   }
 
-  runScenario(id: string, model: string, budgetMs?: number): Promise<BenchRun> {
-    const body = budgetMs === undefined ? { model } : { model, budgetMs };
+  /** `staged` asks for one stage of a two-stage plan; "rest" needs the plan to refine. */
+  runScenario(
+    id: string,
+    model: string,
+    budgetMs?: number,
+    staged?: Pick<BenchRunScenarioRequest, 'stage' | 'revise'>,
+  ): Promise<BenchRun> {
+    const body: BenchRunScenarioRequest = {
+      model,
+      ...(budgetMs === undefined ? {} : { budgetMs }),
+      ...staged,
+    };
     return this.request('POST', BenchPaths.scenarioRuns(id), body, BenchRunSchema);
   }
 
@@ -77,5 +98,35 @@ export class BenchClient extends ApiClient {
 
   viewUrl(id: string, n: number): string {
     return this.base + BenchPaths.scenarioView(id, n);
+  }
+
+  // Watcher tests
+
+  checkTests(): Promise<BenchCheckTestListResponse> {
+    return this.request('GET', BenchPaths.checkTests, undefined, BenchCheckTestListResponseSchema);
+  }
+
+  checkTest(id: string): Promise<BenchCheckTestDetail> {
+    return this.request('GET', BenchPaths.checkTest(id), undefined, BenchCheckTestDetailSchema);
+  }
+
+  createCheckTest(body: BenchCheckTestCreate): Promise<BenchCheckTestDetail> {
+    return this.request('POST', BenchPaths.checkTests, body, BenchCheckTestDetailSchema);
+  }
+
+  updateCheckTest(id: string, patch: BenchCheckTestUpdate): Promise<BenchCheckTest> {
+    return this.request('PATCH', BenchPaths.checkTest(id), patch, BenchCheckTestSchema);
+  }
+
+  async deleteCheckTest(id: string): Promise<void> {
+    await this.request('DELETE', BenchPaths.checkTest(id), undefined, OkSchema);
+  }
+
+  runCheckTest(id: string, model: string): Promise<BenchCheckRun> {
+    return this.request('POST', BenchPaths.checkTestRuns(id), { model }, BenchCheckRunSchema);
+  }
+
+  checkFrameUrl(id: string, file: string): string {
+    return this.base + BenchPaths.checkTestFrame(id, file);
   }
 }

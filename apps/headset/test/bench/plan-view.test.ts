@@ -4,8 +4,11 @@ import {
   describeAction,
   describeCheck,
   lastRunBadge,
+  renderChipList,
   renderRun,
   renderRunChip,
+  renderSightings,
+  stepMark,
 } from '../../src/bench/plan-view';
 
 // The planner bench page's HTML: checks and actions in words, and model text always escaped.
@@ -123,5 +126,130 @@ describe('lastRunBadge', () => {
     expect(lastRunBadge(base)).toContain('ungraded');
     expect(lastRunBadge({ ...base, grade: 'fail' })).toContain('fail');
     expect(lastRunBadge({ ...base, judged: true, passed: true })).toContain('judge ✓');
+  });
+});
+
+describe('two-stage plans', () => {
+  const twoSteps = ProcedureSchema.parse({
+    ...procedure,
+    steps: [
+      procedure.steps[0],
+      { id: 'base', instruction: 'Pour soap into cup B.', success: { type: 'confirm' } },
+    ],
+  });
+  const first: BenchRun = {
+    ...run,
+    id: 'run-first',
+    createdAt: '2026-10-24T03:15:00.000Z',
+    latencyMs: 3000,
+    attempts: 1,
+    request: { goal: 'Test an acid', views: 2, stage: 'first' },
+    result: { ok: true, planId: 'ph', procedure: twoSteps, warnings: [], outlineFrom: 1 },
+  };
+  const rest: BenchRun = {
+    ...first,
+    id: 'run-rest',
+    createdAt: '2026-10-24T03:15:03.500Z',
+    latencyMs: 6000,
+    request: {
+      goal: 'Test an acid',
+      views: 2,
+      stage: 'rest',
+      revise: { fromStepIndex: 1, reason: 'Refine the outline' },
+    },
+    result: { ok: true, planId: 'ph-2', procedure: twoSteps, warnings: [] },
+  };
+  const options = {
+    saved: false,
+    judgeBlocked: null,
+    judgeModel: 'gemini-pro-latest',
+    judging: false,
+    checks: new Map(),
+    watching: false,
+    canWatch: true,
+  };
+
+  it('marks the outline steps of stage 1 and how the stages went', () => {
+    expect([0, 1].map((i) => stepMark(first, i))).toEqual([null, 'outline']);
+    expect([0, 1].map((i) => stepMark(rest, i))).toEqual(['stage1', 'refined']);
+    const refining = renderRun(first, { ...options, stage: { first, refining: true } });
+    expect(refining).toContain('Step 2 is only an outline');
+    expect(refining).toContain('<li class="step outline" data-step="1">');
+    expect(refining).toContain('Step 1 ready in 3.0 s; refining the rest…');
+    const done = renderRun(first, { ...options, stage: { first, rest, refining: false } });
+    expect(done).toContain('Step 1 ready in 3.0 s, the rest refined 6.5 s later.');
+    expect(done).toContain('data-action="select-run" data-run="run-rest"');
+    const refined = renderRun(rest, { ...options, stage: { first, rest, refining: false } });
+    expect(refined).toContain('this refined rest 6.5 s later');
+    expect(refined).toContain('as in stage 1');
+    expect(refined).not.toContain('Re-plan from step');
+  });
+
+  it('keeps the two stages together in the chips, with the rest in flight', () => {
+    const waiting = renderChipList(
+      [first],
+      [{ model: 'gemini-3.8-flash', elapsedMs: 1200, stage: 'rest', after: 'run-first' }],
+      { selected: 'run-first', goal: 'Test an acid' },
+    );
+    expect(waiting).toMatch(/class="chip-pair"[\s\S]*run-first[\s\S]*refining the rest… 1\.2 s/);
+    const both = renderChipList([rest, first], [], { selected: 'run-rest' });
+    expect(both.match(/chip-pair/g)).toHaveLength(1);
+    expect(both.indexOf('run-first')).toBeLessThan(both.indexOf('run-rest'));
+    expect(both).toContain('2 steps · stage 1');
+    expect(both).toContain('2 steps · the rest');
+  });
+
+  it('shows a step check that names a mistake and how far along it is', () => {
+    const html = renderRun(run, {
+      ...options,
+      checks: new Map([
+        [
+          0,
+          {
+            pending: false,
+            result: {
+              verdict: 'not_done' as const,
+              observation: 'holding a white carton',
+              model: 'gemini-robotics-er-2-preview',
+              latencyMs: 1300,
+              progress: 20,
+              wrong: 'picked up the <milk>',
+            },
+          },
+        ],
+      ]),
+    });
+    expect(html).toContain('<span class="verdict wrong">wrong</span> picked up the &#60;milk&#62;');
+    expect(html).toContain('20% along');
+  });
+});
+
+describe('renderSightings', () => {
+  const size = { width: 1000, height: 750 };
+
+  it('draws the sightings in one view at the frame size, labeled by object', () => {
+    const svg = renderSightings(
+      [
+        { objectId: 'cup_a', view: 0, point: [0.5, 0.4], box: [0.4, 0.3, 0.6, 0.5] },
+        { objectId: 'vinegar', view: 1, point: [0.1, 0.1], box: null },
+        { objectId: 'ghost<', view: 0, point: [0.9, 0.02], box: null },
+      ],
+      procedure.objects,
+      0,
+      size,
+    );
+    expect(svg).toContain('viewBox="0 0 1000 750"');
+    expect(svg).toContain('<rect x="400" y="225" width="200" height="150"/>');
+    expect(svg).toContain('<circle cx="500" cy="300"');
+    expect(svg).toContain('>cup A</text>');
+    expect(svg).not.toContain('vinegar');
+    expect(svg).toContain('ghost&#60;');
+    expect(svg.match(/<g class="sighting">/g)).toHaveLength(2);
+  });
+
+  it('draws nothing without sightings in that view or a frame size', () => {
+    const one = [{ objectId: 'cup_a', view: 0, point: [0.5, 0.5] as [number, number], box: null }];
+    expect(renderSightings(one, procedure.objects, 1, size)).toBe('');
+    expect(renderSightings(one, procedure.objects, 0, { width: 0, height: 0 })).toBe('');
   });
 });
