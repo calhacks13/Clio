@@ -13,7 +13,7 @@ import {
   CoachToolbox,
   type ToolHandlers,
 } from '../../src/domain/coach/toolbox';
-import type { AppEvents } from '../../src/domain/events';
+import { type AppEvents, isRecordable } from '../../src/domain/events';
 import { briefStep, type PlanView, recitePlan } from '../../src/domain/plan/recital';
 import type { TemplateSummary } from '../../src/domain/session/templates';
 import { FakeAgent } from '../support/fake-agent';
@@ -559,6 +559,8 @@ describe('CoachSession', () => {
     const clock = new ManualClock(0);
     const frames: string[] = [];
     let micHandler: ((pcm: Int16Array) => void) | null = null;
+    /** Whether the speaker still has audio to play. */
+    const speaker = { playing: false };
     const session = new CoachSession({
       agent,
       toolbox: new CoachToolbox({ ...handlers(), ...tools }, b, clock),
@@ -569,6 +571,7 @@ describe('CoachSession', () => {
         play: (pcm) => played.push(`pcm:${pcm.length}`),
         say: (text) => played.push(`say:${text}`),
         stop: () => played.push('stop'),
+        playing: () => speaker.playing,
       },
       mic: {
         start: async (onChunk) => {
@@ -581,7 +584,7 @@ describe('CoachSession', () => {
       ...(templates ? { templates } : {}),
     });
     await session.start();
-    return { agent, b, seen, played, session, clock, mic: () => micHandler };
+    return { agent, b, seen, played, session, clock, speaker, mic: () => micHandler };
   }
 
   const settle = () => new Promise((r) => setTimeout(r, 0));
@@ -601,6 +604,109 @@ describe('CoachSession', () => {
       .map((e) => e.payload);
   const stuck = (b: Bus, t: number, elapsedMs = 15_000) =>
     b.emit('step.stuck', { t, stepId: 'acid', elapsedMs });
+  /** Every coach.voice the session published, oldest first. */
+  const voices = (seen: Seen) =>
+    seen.filter((e) => e.type === 'coach.voice').map((e) => e.payload.voice);
+
+  describe('the conversation, for the status mark', () => {
+    it('is quiet once started, and never recorded', async () => {
+      const { seen } = await setup();
+      expect(voices(seen)).toEqual(['quiet']);
+      expect(isRecordable('coach.voice')).toBe(false);
+    });
+
+    it('speaks from the first audio until the speaker has played the turn out', async () => {
+      const { agent, seen, session, clock, speaker } = await setup();
+      speaker.playing = true;
+      speak(agent);
+      speak(agent);
+      // Generation runs ahead of playback: the turn is over, the audio isn't.
+      agent.events.emit('turnComplete', {});
+      session.tick(clock.advance(2000));
+      expect(voices(seen)).toEqual(['quiet', 'speaking']);
+      speaker.playing = false;
+      session.tick(clock.advance(16));
+      expect(voices(seen)).toEqual(['quiet', 'speaking', 'quiet']);
+    });
+
+    it('keeps speaking through a gap in the audio while the turn goes on', async () => {
+      const { agent, seen, session, clock } = await setup();
+      speak(agent);
+      session.tick(clock.advance(500));
+      expect(voices(seen)).toEqual(['quiet', 'speaking']);
+      agent.events.emit('turnComplete', {});
+      expect(voices(seen)).toEqual(['quiet', 'speaking', 'quiet']);
+    });
+
+    it('stops speaking at once on a barge-in or a dropped connection', async () => {
+      const { agent, seen, speaker } = await setup();
+      speaker.playing = true;
+      speak(agent);
+      agent.events.emit('interrupted', {});
+      expect(voices(seen)).toEqual(['quiet', 'speaking', 'quiet']);
+      speak(agent);
+      agent.events.emit('status', { state: 'reconnecting' });
+      agent.events.emit('status', { state: 'ready' });
+      expect(voices(seen)).toEqual(['quiet', 'speaking', 'quiet', 'speaking', 'quiet']);
+    });
+
+    it('hears the learner while their words arrive, until they have been quiet for 1.2 s', async () => {
+      const { agent, seen, session, clock } = await setup();
+      agent.events.emit('transcript', { role: 'user', text: 'Which', final: false });
+      session.tick(clock.advance(1000));
+      agent.events.emit('transcript', { role: 'user', text: 'Which cup', final: false });
+      agent.events.emit('transcript', { role: 'coach', text: 'Cup', final: false });
+      session.tick(clock.advance(1100));
+      expect(voices(seen)).toEqual(['quiet', 'hearing']);
+      session.tick(clock.advance(100));
+      expect(voices(seen)).toEqual(['quiet', 'hearing', 'quiet']);
+      agent.events.emit('transcript', { role: 'user', text: 'Which cup?', final: true });
+      expect(voices(seen)).toEqual(['quiet', 'hearing', 'quiet']);
+    });
+
+    it('says Clio is speaking over the learner until the model gives way', async () => {
+      const { agent, seen } = await setup();
+      speak(agent);
+      agent.events.emit('transcript', { role: 'user', text: 'Wait', final: false });
+      expect(voices(seen)).toEqual(['quiet', 'speaking']);
+      agent.events.emit('interrupted', {});
+      expect(voices(seen)).toEqual(['quiet', 'speaking', 'hearing']);
+    });
+
+    it('speaks a text-to-speech line for as long as the speaker says it', async () => {
+      const { agent, seen, session, clock, speaker } = await setup({ kind: 'scripted' });
+      speaker.playing = true;
+      agent.events.emit('say', { text: 'Hi' });
+      session.tick(clock.advance(800));
+      expect(voices(seen)).toEqual(['quiet', 'speaking']);
+      speaker.playing = false;
+      session.tick(clock.advance(16));
+      expect(voices(seen)).toEqual(['quiet', 'speaking', 'quiet']);
+    });
+
+    it('turns off when the session stops, and stays off without a microphone', async () => {
+      const { seen, session } = await setup();
+      await session.stop();
+      expect(voices(seen)).toEqual(['quiet', 'off']);
+
+      const { b, seen: scripted } = bus();
+      const clock = new ManualClock(0);
+      const deaf = new CoachSession({
+        agent: new ScriptedAgent(),
+        toolbox: new CoachToolbox(handlers(), b, clock),
+        bus: b,
+        clock,
+        view: lessonView(),
+        voice: { play: () => {}, say: () => {}, stop: () => {}, playing: () => true },
+      });
+      await deaf.start();
+      b.emit('plan.ready', { t: 0, planId: 'p', procedure, warnings: [], revision: false });
+      entered(b, 'acid', 'Add vinegar to cup A.');
+      deaf.tick(clock.advance(100));
+      await deaf.stop();
+      expect(voices(scripted)).toEqual([]);
+    });
+  });
 
   it('connects with every coach tool and an instruction that holds the plan', async () => {
     const templates = [{ id: 'ph-indicator', title: 'pH indicator', summary: 'Acids and bases.' }];

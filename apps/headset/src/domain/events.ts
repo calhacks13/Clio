@@ -32,6 +32,12 @@ export type LessonPhase =
 
 export type HighlightStyle = 'target' | 'attention' | 'warning';
 
+/**
+ * The conversation with a coach that listens: the learner talking (hearing), Clio talking
+ * (speaking), or neither (quiet). Off without one: no coach, or the scripted one, which can't hear.
+ */
+export type CoachVoice = 'off' | 'quiet' | 'hearing' | 'speaking';
+
 export interface InternalEvents {
   'lesson.phase': Timed<{ phase: LessonPhase; detail?: string }>;
   'plan.requested': Timed<{ goal: string; revision: boolean }>;
@@ -89,6 +95,8 @@ export interface InternalEvents {
     phrase: string;
   }>;
   'coach.caption': Timed<{ role: 'user' | 'coach'; text: string; final: boolean }>;
+  /** The conversation changed (CoachSession), for the panel's status mark. Not recorded. */
+  'coach.voice': Timed<{ voice: CoachVoice }>;
   'workspace.calibrated': Timed<{ method: CalibrationMethod; worldFromWorkspace: Pose }>;
   'recorder.status': Timed<{ recording: boolean; episodeId: string | null; queued: number }>;
 }

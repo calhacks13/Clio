@@ -407,6 +407,18 @@ mistakes. The scripted coach can't see, so it still hears about missing objects 
 **Scripted coach:** the same port with no network. It speaks briefings and corrections through
 text-to-speech, and learners confirm steps with the panel's touchable **Done** button.
 
+**Coach status mark:** the instruction panel's header row ends in a small light and a word, so the
+learner always knows what the voice coach is doing. `CoachSession` publishes `coach.voice` (a bus
+event that is never recorded) when the conversation changes: `speaking` from the model's first
+audio until the speaker has played the turn out (`VoiceOutput.playing()`; generation runs seconds
+ahead of playback), or at once on a barge-in or a dropped connection; `hearing` while the
+learner's partial transcripts arrive (until 1.2 s after the last); `quiet` otherwise; `off`
+without a microphone (the scripted coach) and once the session stops. `OverlayModel` keeps it in
+`OverlaySnapshot.voice`, and `coachStatus()` (`domain/overlay/coach-status.ts`) picks one state:
+Voice offline, Connecting, Speaking, Listening (livelier while the learner talks), Planning, else
+Listening, and nothing when no coach can hear. Beside the mark a long lesson title is shortened,
+never the step count.
+
 ### 5.8 Recording (`domain/recording`)
 
 Three channels on one rebased clock:

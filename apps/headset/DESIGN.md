@@ -56,3 +56,7 @@ Cost: the CPU builds only that field per new mask (about 0.9 ms on a Mac for a 6
 with no allocations; all softness is shaped in the fragment shader. Quad, material and texture are
 reused; XR frames only move, fade and animate the group. `glow-preview.html` renders the effect
 on the demo photo with saved masks, a live local tracker mask, jitter and an orbiting eye.
+
+The instruction panel's coach status mark borrows this cyan, and the 3.6 s breath while Clio
+listens. It is solid and opaque (white bars speaking, amber connecting, red offline) and keeps the
+header row's right end, so the light never moves when its word changes.
