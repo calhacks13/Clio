@@ -170,7 +170,29 @@ describe('detections as labels', () => {
       confidence: 0.9,
       position: [0.2, 0.1, -0.3],
       source: 'jev',
+      latencyMs: 850,
     });
     expect(e.type === 'object.detected' && e.position).toEqual([0.2, 0.1, -0.3]);
+  });
+
+  it('dates the camera frame by how long the answer took', () => {
+    const base = {
+      t: 1200,
+      type: 'object.detected',
+      objectId: 'cap',
+      stepId: null,
+      phrase: null,
+      description: 'cap',
+      found: false,
+      point: null,
+      box: null,
+      outline: null,
+      confidence: 0,
+      position: null,
+      source: 'gemini',
+    };
+    expect(EpisodeEventSchema.safeParse(base).success).toBe(false);
+    expect(EpisodeEventSchema.safeParse({ ...base, latencyMs: -1 }).success).toBe(false);
+    expect(EpisodeEventSchema.safeParse({ ...base, latencyMs: 0 }).success).toBe(true);
   });
 });

@@ -26,6 +26,10 @@ const procedure: Procedure = parseProcedure({
       id: 'acid',
       instruction: 'Add vinegar to cup A.',
       targets: ['vinegar', 'cup_a'],
+      show: [
+        { object: 'vinegar', phrase: 'white vinegar bottle', description: 'Clear bottle, red cap' },
+        { object: 'cup_a', phrase: 'cup labeled A', description: 'Clear cup with an A on it' },
+      ],
       success: { type: 'hand_near', object: 'cup_a' },
       coachNotes: 'Watch for cup B.',
     },
@@ -114,6 +118,18 @@ describe('Narrator', () => {
     expect(out[0]?.text).toContain('Add vinegar to cup A.');
     expect(out[0]?.text).toContain('vinegar bottle, cup A');
     expect(out[0]?.text).toContain('Watch for cup B.');
+  });
+
+  it('tells the coach what is outlined for the learner, so it can refer to it', () => {
+    const { b, out } = setup();
+    const enter = (index: number, stepId: string) =>
+      b.emit('step.entered', { t: 0, stepId, index, instruction: 'x', targets: [] });
+    enter(0, 'acid');
+    expect(out[0]?.text).toContain(
+      'Outlined in AR: white vinegar bottle, then cup labeled A (once the camera finds them).',
+    );
+    enter(1, 'look');
+    expect(out[1]?.text).not.toContain('Outlined');
   });
 
   it('folds a detected completion into the next step briefing', () => {
@@ -288,6 +304,7 @@ describe('system prompt', () => {
       expect(prompt).toContain(tool);
     }
     expect(prompt).toContain('[app]');
+    expect(prompt).toContain('outlines the real objects each step is about');
   });
 });
 

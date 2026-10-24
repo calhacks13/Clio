@@ -150,6 +150,10 @@ export const EpisodeEventSchema = z.discriminatedUnion('type', [
     confidence: z.number().min(0).max(1),
     position: Vec3Schema.nullable().describe('Lifted 3D position, workspace frame'),
     source: z.string().describe('Which object finder answered, e.g. "gemini" or "jev"'),
+    latencyMs: z
+      .number()
+      .nonnegative()
+      .describe('From camera frame capture to this answer: the frame was taken at t - latencyMs'),
   }),
   event('object.registered', {
     objectId: z.string(),

@@ -7,7 +7,8 @@ import {
   type Procedure,
 } from '@clio/protocol';
 import type { Emitter } from '../core/emitter';
-import type { Pose } from '../core/math';
+import type { Pose, Vec3 } from '../core/math';
+import type { ObjectOutline } from './world/outline';
 
 // The headset's event bus. Recordable events are exactly the protocol's episode events (payload
 // plus an absolute `t` on the performance.now() timeline); the recorder rebases `t` to the episode
@@ -43,6 +44,19 @@ export interface InternalEvents {
   'objects.updated': Timed<{ objects: ObjectState[] }>;
   'overlay.highlight': Timed<{ objectId: string; style: HighlightStyle; source: 'auto' | 'coach' }>;
   'overlay.demo': Timed<{ stepId: string; playing: boolean }>;
+  /** An outline for something the current step shows (replaces the object's previous one). */
+  'overlay.outline': Timed<{
+    objectId: string;
+    outline: ObjectOutline;
+    /**
+     * Where the camera saw the object relative to its estimate (workspace frame). Zero unless the
+     * registry kept a measured layout position over the detection.
+     */
+    offset: Vec3;
+    /** Its place in the step's show list: 0 is what to act on, then where it goes. */
+    rank: number;
+    phrase: string;
+  }>;
   'coach.caption': Timed<{ role: 'user' | 'coach'; text: string; final: boolean }>;
   'workspace.calibrated': Timed<{ method: CalibrationMethod; worldFromWorkspace: Pose }>;
   'recorder.status': Timed<{ recording: boolean; episodeId: string | null; queued: number }>;

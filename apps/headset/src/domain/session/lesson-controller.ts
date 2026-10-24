@@ -24,10 +24,12 @@ import type { EpisodeRecorder } from '../recording/recorder';
 import type { Grounder } from '../world/grounding';
 import type { ObjectRegistry } from '../world/object-registry';
 import type { Workspace } from '../world/workspace';
+import { Spotlight } from './spotlight';
 
 // The application service for a lesson: goal → plan (LLM, with camera snapshots) → locate the
-// plan's objects → run the procedure while recording → revise when reality differs. It also
-// implements the coach's tools, so everything the coach does flows through one place.
+// plan's objects → run the procedure while recording, outlining what each step shows → revise
+// when reality differs. It also implements the coach's tools, so everything the coach does flows
+// through one place.
 
 /** Port: the planner (the server's /api/plans). */
 export interface LessonPlanner {
@@ -49,6 +51,8 @@ export interface LessonOptions {
   autoDemo?: boolean;
   /** Camera snapshots sent with each planning request. */
   planImages?: number;
+  /** How often to look again at what the current step shows (ms); 0 only looks on step entry. */
+  showRefreshMs?: number;
 }
 
 export interface LessonDeps {
@@ -82,9 +86,20 @@ export class LessonController {
   private readonly pending = new Set<Promise<unknown>>();
   /** Missing objects already announced to the learner, so the coach isn't told twice. */
   private readonly announced = new Set<string>();
+  /** Every camera lookup goes through here, so each one is recorded and outlined consistently. */
+  private readonly spotlight: Spotlight;
 
   constructor(private readonly deps: LessonDeps) {
-    const { bus } = deps;
+    const { bus, clock, registry, grounder, options } = deps;
+    this.spotlight = new Spotlight({
+      bus,
+      clock,
+      registry,
+      grounder,
+      ...(options?.showRefreshMs === undefined
+        ? {}
+        : { options: { refreshMs: options.showRefreshMs } }),
+    });
     bus.on('object.registered', ({ objectId }) => {
       this.announced.delete(objectId);
     });
@@ -244,9 +259,11 @@ export class LessonController {
     this.tick(frame.t);
   }
 
-  /** Time-based upkeep (demo playback). */
+  /** Time-based upkeep: demo playback, and looking again at what the step shows. */
   tick(t: number): void {
     if (this.demo && this.player.finished(t)) this.endDemo(t);
+    const look = this.spotlight.tick(t);
+    if (look) this.track(look);
   }
 
   /** A pinch in free space while objects are missing registers the next missing one there. */
@@ -265,9 +282,8 @@ export class LessonController {
 
   /** Refine positions with the camera (e.g. after the learner puts an object down). Quiet. */
   relocate(ids: readonly string[]): void {
-    const grounder = this.deps.grounder;
-    if (!grounder || ids.length === 0) return;
-    this.track(grounder.ground(ids));
+    if (!this.deps.grounder || ids.length === 0) return;
+    this.track(this.spotlight.find(ids.map((id) => ({ id }))));
   }
 
   /** Learner-side confirmation (e.g. a "done" gesture or button). */
@@ -367,9 +383,8 @@ export class LessonController {
     if (!procedure || !step) return;
     // Demonstrations belong to their step.
     if (this.demo && this.demo.stepId !== step.id) this.endDemo(t);
-    const { registry } = this.deps;
-    const missingTargets = step.targets.filter((id) => !registry.get(id));
-    if (missingTargets.length > 0) this.track(this.locate(missingTargets));
+    // Outline what the step shows, and find the targets that are still missing.
+    this.track(this.spotlight.enterStep(step).then((missing) => this.announce(missing)));
     if (this.deps.options?.autoDemo && step.action) {
       this.track(
         this.demoFor(procedure, step).then((demo) => {
@@ -419,19 +434,22 @@ export class LessonController {
   /** Locate objects with the camera; returns the ids still missing, announcing new ones once. */
   private async locate(ids: string[]): Promise<string[]> {
     if (ids.length === 0) return [];
-    const { bus, clock, grounder } = this.deps;
-    let missing = ids;
-    if (grounder) {
-      const previous = this.currentPhase;
-      if (previous !== 'lesson') this.setPhase('locating');
-      const result = await grounder.ground(ids);
-      if (previous !== 'lesson') this.setPhase(previous);
-      if (result.ok) missing = result.missing;
-    }
+    const previous = this.currentPhase;
+    const showPhase = this.deps.grounder !== null && previous !== 'lesson';
+    if (showPhase) this.setPhase('locating');
+    const missing = await this.spotlight.find(ids.map((id) => ({ id })));
+    if (showPhase) this.setPhase(previous);
+    this.announce(missing);
+    return missing;
+  }
+
+  /** Tell the learner (through the coach) about missing objects, once each. */
+  private announce(missing: readonly string[]): void {
     const fresh = missing.filter((id) => !this.announced.has(id));
     for (const id of fresh) this.announced.add(id);
-    if (fresh.length > 0) bus.emit('object.missing', { t: clock.now(), objectIds: fresh });
-    return missing;
+    if (fresh.length > 0) {
+      this.deps.bus.emit('object.missing', { t: this.deps.clock.now(), objectIds: fresh });
+    }
   }
 
   /** Missing objects in the order the learner should register them: current targets first. */
@@ -451,6 +469,7 @@ export class LessonController {
   }
 
   private finish(outcome: 'completed' | 'aborted', t: number): void {
+    this.spotlight.stop();
     this.endDemo(t);
     this.setPhase('done');
     const stop = this.deps.recorder?.stop(

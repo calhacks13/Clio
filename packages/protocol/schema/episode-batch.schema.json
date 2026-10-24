@@ -566,6 +566,11 @@
               "source": {
                 "type": "string",
                 "description": "Which object finder answered, e.g. \"gemini\" or \"jev\""
+              },
+              "latencyMs": {
+                "type": "number",
+                "minimum": 0,
+                "description": "From camera frame capture to this answer: the frame was taken at t - latencyMs"
               }
             },
             "required": [
@@ -581,7 +586,8 @@
               "outline",
               "confidence",
               "position",
-              "source"
+              "source",
+              "latencyMs"
             ],
             "additionalProperties": false
           },

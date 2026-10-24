@@ -1,6 +1,8 @@
+import type { Vec3 } from '../../core/math';
 import type { AgentState } from '../coach/agent';
 import type { LessonView } from '../coach/ports';
 import type { AppBus, HighlightStyle, LessonPhase } from '../events';
+import type { ObjectOutline } from '../world/outline';
 
 // The presentation model: what the AR layer should show, reduced from bus events. Presenters read
 // a snapshot each frame and never reach into domain objects themselves.
@@ -11,6 +13,17 @@ export interface OverlayHighlight {
   source: 'auto' | 'coach';
   /** Expiry time, or null while the step lasts. */
   until: number | null;
+}
+
+/** Something the current step shows, outlined around the real object. */
+export interface OverlayOutline {
+  objectId: string;
+  outline: ObjectOutline;
+  /** Drawn at the object's estimate plus this (workspace frame). */
+  offset: Vec3;
+  /** 0 is what to act on, then where it goes. */
+  rank: number;
+  phrase: string;
 }
 
 export interface OverlaySnapshot {
@@ -24,6 +37,8 @@ export interface OverlaySnapshot {
     progress: number;
   } | null;
   highlights: OverlayHighlight[];
+  /** Most important first. */
+  outlines: OverlayOutline[];
   toast: { kind: 'mistake' | 'success' | 'info'; text: string } | null;
   demoStepId: string | null;
   caption: { role: 'user' | 'coach'; text: string } | null;
@@ -43,6 +58,7 @@ export class OverlayModel {
   private instruction: Omit<NonNullable<OverlaySnapshot['instruction']>, 'progress'> | null = null;
   private progress = 0;
   private highlights: OverlayHighlight[] = [];
+  private readonly outlines = new Map<string, OverlayOutline>();
   private toast: (NonNullable<OverlaySnapshot['toast']> & { until: number }) | null = null;
   private demoStepId: string | null = null;
   private caption: (NonNullable<OverlaySnapshot['caption']> & { until: number }) | null = null;
@@ -75,6 +91,7 @@ export class OverlayModel {
           ...(detail ? { detail } : {}),
         };
         this.progress = 0;
+        this.outlines.clear();
         this.highlights = targets.map((objectId) => ({
           objectId,
           style: 'target' as const,
@@ -103,6 +120,9 @@ export class OverlayModel {
           source,
           until: source === 'coach' ? t + COACH_HIGHLIGHT_MS : null,
         });
+      }),
+      b.on('overlay.outline', ({ objectId, outline, offset, rank, phrase }) => {
+        this.outlines.set(objectId, { objectId, outline, offset, rank, phrase });
       }),
       b.on('overlay.demo', ({ stepId, playing }) => {
         this.demoStepId = playing ? stepId : null;
@@ -141,6 +161,7 @@ export class OverlayModel {
       title: this.title ?? this.view.procedure()?.title ?? null,
       instruction: this.instruction && { ...this.instruction, progress: this.progress },
       highlights: [...this.highlights],
+      outlines: [...this.outlines.values()].sort((a, b) => a.rank - b.rank),
       toast: this.toast && { kind: this.toast.kind, text: this.toast.text },
       demoStepId: this.demoStepId,
       caption: this.caption && { role: this.caption.role, text: this.caption.text },
@@ -153,6 +174,7 @@ export class OverlayModel {
   private endLesson(): void {
     this.instruction = null;
     this.highlights = [];
+    this.outlines.clear();
     this.demoStepId = null;
   }
 }

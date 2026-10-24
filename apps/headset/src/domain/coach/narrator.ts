@@ -132,11 +132,14 @@ export class Narrator {
     const targets = step.targets.length
       ? ` Targets: ${step.targets.map((id) => this.view.label(id)).join(', ')}.`
       : '';
+    const shown = step.show.length
+      ? ` Outlined in AR: ${step.show.map((item) => item.phrase).join(', then ')} (once the camera finds them).`
+      : '';
     const notes = step.coachNotes ? ` Notes: ${step.coachNotes}` : '';
     const confirm = needsConfirmation(step.success)
       ? ' This step needs your judgment: call advance_step with the reason when you see it done.'
       : '';
-    return `Step ${index + 1}/${total}: "${step.instruction}"${targets}${notes}${confirm} Tell them what to do in under 15 words.`;
+    return `Step ${index + 1}/${total}: "${step.instruction}"${targets}${shown}${notes}${confirm} Tell them what to do in under 15 words.`;
   }
 
   private say(

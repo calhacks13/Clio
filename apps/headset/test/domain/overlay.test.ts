@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { Emitter } from '../../src/core/emitter';
 import type { AppEvents } from '../../src/domain/events';
 import { OverlayModel } from '../../src/domain/overlay/overlay-model';
+import type { ObjectOutline } from '../../src/domain/world/outline';
 
 const procedure = parseProcedure({
   schema: 'clio.procedure/1',
@@ -99,6 +100,37 @@ describe('OverlayModel', () => {
     bus.emit('object.missing', { t: 0, objectIds: ['cap', 'jug'] });
     bus.emit('object.registered', { t: 5, objectId: 'jug', position: [0, 0, 0], method: 'pinch' });
     expect(model.snapshot(10).missing).toEqual(['cap']);
+  });
+
+  it("keeps the outlines of what the step shows, most important first, for the step's length", () => {
+    const { bus, model } = setup();
+    const enter = (index: number, stepId: string) =>
+      bus.emit('step.entered', { t: 0, stepId, index, instruction: 'x', targets: [] });
+    enter(0, 'open');
+    const outline: ObjectOutline = {
+      points: [
+        [-0.04, 0.04],
+        [0.04, 0.04],
+        [0, -0.04],
+      ],
+      shape: 'contour',
+    };
+    const brackets: ObjectOutline = { ...outline, shape: 'box' };
+    const offset: [number, number, number] = [0, 0, 0];
+    const show = (t: number, objectId: string, o: ObjectOutline, rank: number, phrase: string) =>
+      bus.emit('overlay.outline', { t, objectId, outline: o, offset, rank, phrase });
+    show(5, 'jug', outline, 1, 'jug');
+    show(6, 'cap', outline, 0, 'blue cap');
+    show(7, 'cap', brackets, 0, 'blue cap');
+    expect(model.snapshot(10).outlines).toEqual([
+      { objectId: 'cap', outline: brackets, offset, rank: 0, phrase: 'blue cap' },
+      { objectId: 'jug', outline, offset, rank: 1, phrase: 'jug' },
+    ]);
+    enter(1, 'pour');
+    expect(model.snapshot(20).outlines).toEqual([]);
+    show(25, 'jug', outline, 0, 'jug');
+    bus.emit('procedure.completed', { t: 30, durationMs: 30 });
+    expect(model.snapshot(40).outlines).toEqual([]);
   });
 
   it('clears the lesson UI when the procedure completes', () => {

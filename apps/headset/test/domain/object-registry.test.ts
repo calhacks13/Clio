@@ -110,6 +110,19 @@ describe('ObjectRegistry', () => {
     expect(registry.get('jug')?.position).toEqual([0.5, 0.1, -0.3]);
   });
 
+  it('keeps a measured layout position over a camera guess, until the object is moved', () => {
+    const { registry } = setup();
+    const guess = { position: [0.13, 0.05, -0.24] as [number, number, number], confidence: 0.9 };
+    expect(registry.observe('cup', { ...guess, source: 'detector', t: 1 })).toBe(false);
+    expect(registry.get('cup')).toMatchObject({ position: [0.1, 0.07, -0.2], source: 'layout' });
+    // Picked up and put down somewhere else: the layout no longer says where it is.
+    registry.attach('cup', 'right', { p: [0.1, 0.07, -0.2], q: [0, 0, 0, 1] }, 2);
+    registry.updateHeld({ right: { p: [0.3, 0.07, -0.2], q: [0, 0, 0, 1] } }, 3);
+    registry.detach('cup', 4);
+    expect(registry.observe('cup', { ...guess, source: 'detector', t: 5 })).toBe(true);
+    expect(registry.get('cup')?.position).toEqual([0.13, 0.05, -0.24]);
+  });
+
   it('finds the nearest visible object within range', () => {
     const { registry } = setup();
     expect(registry.nearest([0.12, 0.07, -0.2], 0.1)).toEqual({

@@ -7,6 +7,7 @@ import type { AppEvents } from '../../src/domain/events';
 import { EpisodeRecorder } from '../../src/domain/recording/recorder';
 import { MemoryEpisodeSink } from '../../src/domain/recording/sink';
 import { LessonController, type LessonPlanner } from '../../src/domain/session/lesson-controller';
+import type { FindRequest, Grounder } from '../../src/domain/world/grounding';
 import { ObjectRegistry } from '../../src/domain/world/object-registry';
 import { Workspace } from '../../src/domain/world/workspace';
 
@@ -295,9 +296,10 @@ describe('LessonController re-locating released objects', () => {
       registry: new ObjectRegistry(bus),
       workspace: () => new Workspace({ p: [0, 0, 0], q: [0, 0, 0, 1] }),
       grounder: {
-        ground: async (ids) => {
-          asked.push([...ids]);
-          return { ok: true, located: [], missing: [...ids] };
+        ground: async (requests) => {
+          const ids = requests.map((r) => r.id);
+          asked.push(ids);
+          return { ok: true, located: [], missing: ids, sightings: [], source: 'test', frameT: 0 };
         },
       },
       images: null,
@@ -315,5 +317,128 @@ describe('LessonController re-locating released objects', () => {
     await lesson.settled();
     expect(asked.at(-1)).toEqual(['jug']);
     expect(missing).toEqual([]);
+  });
+});
+
+describe('LessonController and the camera', () => {
+  const shown = parseProcedure({
+    ...generated,
+    objects: [
+      { id: 'jug', label: 'fluid jug', placement: { method: 'detect' } },
+      { id: 'tank', label: 'reservoir', placement: { method: 'detect' } },
+    ],
+    steps: [
+      {
+        ...generated.steps[0],
+        show: [{ object: 'jug', phrase: 'fluid jug', description: 'Blue jug on the fender' }],
+      },
+      generated.steps[1],
+    ],
+  });
+
+  function withCamera(options: { showRefreshMs?: number } = {}) {
+    const bus = new Emitter<AppEvents>();
+    const clock = new ManualClock(1000);
+    const registry = new ObjectRegistry(bus);
+    const sink = new MemoryEpisodeSink();
+    const asked: FindRequest[][] = [];
+    const outlined: string[] = [];
+    bus.on('overlay.outline', (e) => outlined.push(`${e.objectId}#${e.rank}`));
+    const grounder: Grounder = {
+      ground: async (requests) => {
+        asked.push([...requests]);
+        const sightings = requests.map((r) => {
+          registry.observe(r.id, {
+            position: [0.2, 0.05, -0.3],
+            confidence: 0.9,
+            source: 'detector',
+            t: clock.now(),
+          });
+          return {
+            id: r.id,
+            description: r.description ?? r.id,
+            phrase: r.phrase ?? r.id,
+            detection: {
+              id: r.id,
+              found: true,
+              point: [0.5, 0.5] as [number, number],
+              box: null,
+              outline: null,
+              confidence: 0.9,
+            },
+            position: [0.2, 0.05, -0.3] as [number, number, number],
+            outline: {
+              points: [
+                [-0.04, 0.04],
+                [0.04, 0.04],
+                [0, -0.04],
+              ] as [number, number][],
+              shape: 'contour' as const,
+            },
+          };
+        });
+        const ids = requests.map((r) => r.id);
+        return {
+          ok: true,
+          located: ids,
+          missing: [],
+          sightings,
+          source: 'jev',
+          frameT: clock.now(),
+        };
+      },
+    };
+    const lesson = new LessonController({
+      bus,
+      clock,
+      planner: { plan: async () => ({ planId: 'p', procedure: shown, warnings: [] }) },
+      registry,
+      workspace: () => new Workspace({ p: [0, 0.8, -0.4], q: [0, 0, 0, 1] }, 'default_in_front'),
+      grounder,
+      images: null,
+      demos: new DemoLibrary(null),
+      recorder: new EpisodeRecorder({ bus, clock, sink, sleep: async () => {} }),
+      context: () => ({
+        operator: { role: 'learner' },
+        coach: { kind: 'scripted' },
+        device: { userAgent: 'test', emulated: true, xrFeatures: [] },
+        app: { version: 'test' },
+      }),
+      options,
+    });
+    return { lesson, clock, asked, outlined, sink };
+  }
+
+  it('outlines what each step shows, in its words, and records what the camera saw', async () => {
+    const { lesson, asked, outlined, sink } = withCamera();
+    await lesson.handlers().start_lesson({ goal: 'add wiper fluid' });
+    await lesson.settled();
+    expect(asked.at(-1)).toEqual([
+      { id: 'jug', description: 'Blue jug on the fender', phrase: 'fluid jug' },
+    ]);
+    expect(outlined).toEqual(['jug#0']);
+    await lesson.handlers().advance_step({ reason: 'holding it' });
+    await lesson.handlers().advance_step({ reason: 'poured' });
+    await lesson.settled();
+    const [episode] = sink.episodes.values();
+    const detected = episode?.batches
+      .flatMap((b) => b.events)
+      .filter((e) => e.type === 'object.detected');
+    expect(detected?.map((e) => e.type === 'object.detected' && [e.objectId, e.stepId])).toEqual([
+      ['jug', 'grab'],
+    ]);
+  });
+
+  it('keeps looking at what the step shows while it runs', async () => {
+    const { lesson, clock, asked } = withCamera({ showRefreshMs: 2000 });
+    await lesson.handlers().start_lesson({ goal: 'add wiper fluid' });
+    await lesson.settled();
+    const before = asked.length;
+    lesson.tick(clock.advance(1999));
+    await lesson.settled();
+    expect(asked).toHaveLength(before);
+    lesson.tick(clock.advance(1));
+    await lesson.settled();
+    expect(asked).toHaveLength(before + 1);
   });
 });

@@ -1,7 +1,7 @@
-import type { DemoClip, Detection, PlanRequest, PlanResponse } from '@clio/protocol';
+import type { DemoClip, PlanRequest, PlanResponse } from '@clio/protocol';
 import type { ClipSource } from '../../domain/demo/demo-library';
 import type { LessonPlanner } from '../../domain/session/lesson-controller';
-import type { CameraFrame, VisionLocator } from '../../domain/world/grounding';
+import type { CameraFrame, LocateObject, VisionLocator } from '../../domain/world/grounding';
 import type { ApiClient } from './api-client';
 
 // Domain ports implemented by the laptop server.
@@ -15,12 +15,12 @@ export class RemotePlanner implements LessonPlanner {
 
 export class RemoteLocator implements VisionLocator {
   constructor(private readonly api: ApiClient) {}
-  async locate(frame: CameraFrame, objects: { id: string; query: string }[]): Promise<Detection[]> {
-    const res = await this.api.locate({
+  async locate(frame: CameraFrame, objects: LocateObject[]) {
+    const { detections, model } = await this.api.locate({
       image: { mimeType: 'image/jpeg', data: frame.jpegBase64 },
       objects,
     });
-    return res.detections;
+    return { detections, model };
   }
 }
 

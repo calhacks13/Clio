@@ -97,9 +97,14 @@ export class ObjectRegistry {
     return [...this.specs.keys()].filter((id) => !this.estimates.has(id));
   }
 
-  /** Record an observation. Returns false when ignored (unknown object, or currently held). */
+  /**
+   * Record an observation. Returns false when ignored: an unknown object, one that is held, or a
+   * camera guess about an object still at its measured layout position (taped spots are more
+   * precise than a lifted detection; once the object has been carried, the layout is stale).
+   */
   observe(id: string, obs: Observation): boolean {
     if (!this.specs.has(id) || this.grips.has(id)) return false;
+    if (obs.source === 'detector' && this.estimates.get(id)?.source === 'layout') return false;
     this.set(id, obs);
     return true;
   }
