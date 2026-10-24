@@ -2,9 +2,11 @@ import { ACTION_VERB_NAMES } from '@clio/protocol';
 
 // The planner's structured-output schema, built by hand rather than from zod: Gemini supports
 // only a JSON Schema subset (no pattern/maxLength/default/additionalProperties), rejects recursion
-// in required fields, and can 400 on very large schemas. So checks are flattened to leaf checks
-// plus ONE level of all/any/sequence over leaves. Anything the subset cannot express (slug ids,
-// cross-references, verb arguments) is enforced afterwards by safeParseProcedure.
+// in required fields, and can 400 on very large schemas. It also answers 400 INVALID_ARGUMENT
+// when an array of $ref or anyOf items has minItems/maxItems, so those counts go in descriptions.
+// Checks are flattened to leaf checks plus ONE level of all/any/sequence over leaves. Anything
+// the subset cannot express (slug ids, cross-references, verb arguments, those counts) is
+// enforced afterwards by safeParseProcedure, or asked for in the prompt.
 
 export type JsonSchema = { [keyword: string]: unknown };
 export type PlanSchemaKind = 'plan' | 'revision';
@@ -104,7 +106,7 @@ const DEFS: Record<string, JsonSchema> = {
       obj(
         {
           type: oneOf(['all', 'any', 'sequence']),
-          of: arr(ref('leafCheck'), { min: 1, max: 4 }),
+          of: arr(ref('leafCheck'), { description: '1 to 4 leaf checks' }),
         },
         ['type', 'of'],
         'all: every child at once; any: one child; sequence: children in order',
@@ -195,8 +197,8 @@ export function buildPlanJsonSchema(kind: PlanSchemaKind): JsonSchema {
     return {
       ...obj(
         {
-          objects: arr(ref('object'), { max: 16, description: 'Only NEW objects; [] if none' }),
-          steps: arr(ref('step'), { min: 1, max: 10, description: 'The new remaining steps' }),
+          objects: arr(ref('object'), { description: 'Only NEW objects, at most 16; [] if none' }),
+          steps: arr(ref('step'), { description: 'The new remaining steps, 1 to 10' }),
           warnings,
         },
         ['objects', 'steps', 'warnings'],
@@ -217,8 +219,8 @@ export function buildPlanJsonSchema(kind: PlanSchemaKind): JsonSchema {
           },
           ['size'],
         ),
-        objects: arr(ref('object'), { min: 1, max: 16 }),
-        steps: arr(ref('step'), { min: 3, max: 10 }),
+        objects: arr(ref('object'), { description: '1 to 16 objects' }),
+        steps: arr(ref('step'), { description: '3 to 10 steps' }),
         coach: obj({ persona: str(), notes: str() }, []),
         warnings,
       },

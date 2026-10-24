@@ -58,6 +58,20 @@ describe.each(['plan', 'revision'] as const)('buildPlanJsonSchema(%s)', (kind) =
     expect([...unsupported]).toEqual([]);
   });
 
+  it('never bounds an array of $ref or anyOf items, which Gemini rejects with a 400', () => {
+    // Found against gemini-3.5-flash-lite: minItems/maxItems on such an array makes the whole
+    // request INVALID_ARGUMENT. Counts for those arrays live in descriptions and the prompt.
+    const bounded: string[] = [];
+    walk(schema, (key, node) => {
+      const items = node.items as JsonSchema | undefined;
+      if (key !== 'items' || !items || (items.$ref === undefined && items.anyOf === undefined))
+        return;
+      if (node.minItems !== undefined || node.maxItems !== undefined)
+        bounded.push(JSON.stringify(items).slice(0, 40));
+    });
+    expect(bounded).toEqual([]);
+  });
+
   it('has refs that resolve and never recurse', () => {
     const { $defs: all, ...top } = schema as { $defs: Record<string, JsonSchema> };
     for (const name of refsIn(top)) expect(Object.keys(all)).toContain(name);
@@ -127,7 +141,7 @@ describe.each(['plan', 'revision'] as const)('buildPlanJsonSchema(%s)', (kind) =
 });
 
 describe('plan vs revision', () => {
-  it('asks a new plan for 3–10 steps and every top-level field', () => {
+  it('asks a new plan for every top-level field, and 3 to 10 steps in words', () => {
     const schema = buildPlanJsonSchema('plan');
     expect(schema.required).toEqual([
       'title',
@@ -137,12 +151,16 @@ describe('plan vs revision', () => {
       'steps',
       'warnings',
     ]);
-    expect(props(schema).steps).toMatchObject({ minItems: 3, maxItems: 10 });
+    expect(props(schema).steps).toEqual({
+      type: 'array',
+      items: { $ref: '#/$defs/step' },
+      description: '3 to 10 steps',
+    });
   });
 
   it('asks a revision only for new objects, the remaining steps and warnings', () => {
     const schema = buildPlanJsonSchema('revision');
     expect(Object.keys(props(schema))).toEqual(['objects', 'steps', 'warnings']);
-    expect(props(schema).steps).toMatchObject({ minItems: 1, maxItems: 10 });
+    expect(props(schema).steps).toMatchObject({ description: 'The new remaining steps, 1 to 10' });
   });
 });
