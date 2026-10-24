@@ -43,6 +43,7 @@ export default defineConfig({
     sourcemap: true,
     // hello.html: bare WebXR smoke test. tracking.html: what the headset tracks (hands, surfaces,
     // room mesh). viewer.html: laptop page that replays or follows a recorded episode live.
+    // gallery.html: every UI in its states, rendered from the real code, to iterate on locally.
     rollupOptions: {
       input: {
         main: fileURLToPath(new URL('./index.html', import.meta.url)),
@@ -53,6 +54,7 @@ export default defineConfig({
         depth: fileURLToPath(new URL('./depth.html', import.meta.url)),
         calibrate: fileURLToPath(new URL('./calibrate.html', import.meta.url)),
         glowPreview: fileURLToPath(new URL('./glow-preview.html', import.meta.url)),
+        gallery: fileURLToPath(new URL('./gallery.html', import.meta.url)),
       },
     },
   },
