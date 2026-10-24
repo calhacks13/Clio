@@ -63,6 +63,7 @@ def test_jev_answer_turns_into_tracking_on_later_frames(setup):
     x1, _, x2, _ = found[-1]["box"]
     assert x1 == pytest.approx(112 / 960, abs=0.01) and x2 == pytest.approx(232 / 960, abs=0.01)
     assert len(found[-1]["outline"]) == 4 and found[-1]["confidence"] >= 0.5
+    assert found[-1]["contact"] == pytest.approx([172 / 960, 460 / 720], abs=0.01)
 
 
 def test_jev_looks_again_once_per_interval_not_per_frame(setup):
@@ -127,3 +128,44 @@ def test_objects_nobody_asks_about_are_forgotten(setup):
     other = Query("jug", "A white plastic jug", "jug")
     frame(Thing(at(100), A), queries=(other,), dt=11)
     assert set(session._objects) == {"jug"}
+
+
+def test_follow_answers_sightings_in_order_and_the_frame_size(setup, vision):
+    session, jev, executor, clock, frame = setup
+    jug = Query("jug", "A white plastic jug", "white jug")
+    jev.answers.append({"cup": (0.9, norm_box(at(100))), "jug": (0.9, norm_box(at(500)))})
+    frame(Thing(at(100), A), Thing(at(500), B), queries=(CUP, jug))
+    executor.run_all()
+    assert jev.calls == [[CUP, jug]]  # one call for both
+    clock.t += 1 / 15
+    vision.scenes.append([Thing(at(100), A), Thing(at(500), B)])
+    (cup, other), size, _ = session.follow(frame_image(), [CUP, jug])
+    assert size == (960, 720)
+    assert cup.found and cup.box[0] == pytest.approx(100, abs=1)
+    assert other.found and other.box[0] == pytest.approx(500, abs=1)
+
+
+def test_dropped_objects_go_at_once_and_jevs_late_answer_is_ignored(setup):
+    session, jev, executor, _, frame = setup
+    jev.answers.append({"cup": (0.9, norm_box(at(100)))})
+    frame(Thing(at(100), A))
+    session.drop(["cup"])
+    assert session._objects == {}
+    executor.run_all()  # answers about the dropped cup
+    (d,) = frame(Thing(at(100), A))
+    assert d["track"]["state"] == "unknown"  # the cup again, from scratch
+    assert len(executor.pending) == 1  # and asked about at once
+
+
+def test_new_query_words_keep_the_tracker_and_reach_jev(setup):
+    session, jev, executor, clock, frame = setup
+    jev.answers.extend([{"cup": (0.9, norm_box(at(100)))}] * 3)
+    frame(Thing(at(100), A))
+    executor.run_all()
+    (before,) = frame(Thing(at(100), A))
+    tracker = session._objects["cup"]
+    reworded = Query("cup", "The blue cup the learner fills first", "blue cup")
+    (after,) = frame(Thing(at(100), A), queries=(reworded,), dt=1.1)
+    executor.run_all()
+    assert session._objects["cup"] is tracker and after["track"] == before["track"]
+    assert jev.calls[-1] == [reworded]

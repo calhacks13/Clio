@@ -6,6 +6,9 @@ an object is sent along with the frame when its interval has passed (or straight
 tracker has nothing to follow, or doubts it is still on the same object). The frame's SAVPE
 maps are kept until jev answers, so its box becomes a prompt on the very frame jev looked at,
 then is matched to the track that was there, several frames ago.
+
+`POST /locate` with a session id shares one of these per id (Sessions); a /track connection in
+objects mode (TRACK.md) has one of its own and steps it on every frame it streams.
 """
 
 from __future__ import annotations
@@ -14,7 +17,7 @@ import logging
 import queue
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from concurrent.futures import Executor
 from dataclasses import dataclass, field
 
@@ -86,6 +89,15 @@ class TrackerSession:
         return len(self._frames)
 
     def locate(self, image: FrameImage, queries: list[Query]) -> tuple[list[dict], FrameTimings]:
+        sightings, size, timings = self.follow(image, queries)
+        detections = [_detection(q.id, s, size) for q, s in zip(queries, sightings, strict=True)]
+        return detections, timings
+
+    def follow(
+        self, image: FrameImage, queries: list[Query]
+    ) -> tuple[list[Sighting], tuple[int, int], FrameTimings]:
+        """One frame: a YOLOE pass, a step of each object's tracker, and jev asked about the
+        objects that are due. Answers each object's sighting, in order, and the frame's size."""
         with self._lock:
             started = self._clock()
             enc = self.vision.encode(image.rgb)
@@ -99,10 +111,19 @@ class TrackerSession:
             self._ask(image, enc, seq, encoded, queries, trackers)
             self._forget(encoded)
             done = self._clock()
-        detections = [_detection(q.id, s, enc) for q, s in zip(queries, sightings, strict=True)]
-        return detections, FrameTimings(
-            round((encoded - started) * 1000, 1), round((done - encoded) * 1000, 1)
+        size = (enc.letterbox.width, enc.letterbox.height)
+        return (
+            sightings,
+            size,
+            FrameTimings(round((encoded - started) * 1000, 1), round((done - encoded) * 1000, 1)),
         )
+
+    def drop(self, ids: Iterable[str]) -> None:
+        """Stops following these objects now (objects mode left them out of its set). A jev
+        answer about them that is still on the way is ignored, as for re-worded objects."""
+        with self._lock:
+            for oid in ids:
+                self._drop(oid)
 
     # --- objects ---------------------------------------------------------------------------
 
@@ -122,10 +143,13 @@ class TrackerSession:
 
     def _forget(self, now: float) -> None:
         for oid in [o for o, t in self._asked.items() if now - t > self.settings.forget_after_s]:
-            self._objects.pop(oid, None)
-            self._generations.pop(oid, None)
-            self._asked.pop(oid, None)
-            self._last_ask.pop(oid, None)
+            self._drop(oid)
+
+    def _drop(self, oid: str) -> None:
+        self._objects.pop(oid, None)
+        self._generations.pop(oid, None)
+        self._asked.pop(oid, None)
+        self._last_ask.pop(oid, None)
 
     # --- jev -------------------------------------------------------------------------------
 
@@ -208,15 +232,15 @@ class TrackerSession:
         )
 
 
-def _detection(object_id: str, s: Sighting, enc: Encoding) -> dict:
-    """A Sighting in Clio's finder contract (docs/object-finder.md), plus the track's state."""
+def _detection(object_id: str, s: Sighting, size: tuple[int, int]) -> dict:
+    """A Sighting in Clio's finder contract (docs/object-finder.md), plus what the contract has
+    no field for: the track's state and the contact point (TRACK.md)."""
     if not s.found or s.box is None:
         return {"id": object_id, "found": False, "track": {"state": s.state}}
-    lb = enc.letterbox
     detection: dict = {
         "id": object_id,
         "found": True,
-        "box": normalize_box(s.box, lb.width, lb.height),
+        "box": normalize_box(s.box, *size),
         "confidence": s.confidence,
         "track": {"state": s.state, "id": s.track_id},
     }
@@ -224,6 +248,8 @@ def _detection(object_id: str, s: Sighting, enc: Encoding) -> dict:
         detection["point"] = s.shape.point
         if s.shape.outline:
             detection["outline"] = s.shape.outline
+        if s.shape.contact:
+            detection["contact"] = s.shape.contact
     return detection
 
 
@@ -255,6 +281,10 @@ class Sessions:
             session = self._sessions[key][0] if key in self._sessions else self._factory()
             self._sessions[key] = (session, now)
             return session
+
+    def new(self) -> TrackerSession:
+        """A session of its own, kept outside the map: a /track connection's, in objects mode."""
+        return self._factory()
 
     def __len__(self) -> int:
         return len(self._sessions)

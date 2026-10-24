@@ -156,8 +156,8 @@ def _serve(settings: Settings, args: argparse.Namespace) -> int:
                 f"Clio tracker {__version__}: {finder.model}",
                 f"  http://{HOST}:{settings.port}/locate and ws://{HOST}:{settings.port}/track",
                 f"  Vision: {vision.model} on {vision.backend}",
-                f"  Names the target: {identifier.name}; with a session, every "
-                f"{settings.identify_interval_ms} ms per object",
+                f"  Names the target: {identifier.name}; with a session or in objects mode, "
+                f"every {settings.identify_interval_ms} ms per object",
             ]
         )
     )

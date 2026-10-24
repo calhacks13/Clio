@@ -1,14 +1,17 @@
-"""POST /locate in both modes, and the service's local-only rules."""
+"""POST /locate in both modes, /track's objects mode, and the service's local-only rules."""
 
 from __future__ import annotations
 
 import base64
+import json
+import struct
 import threading
 
 import cv2
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from clio_tracker.finder import Finder
 from clio_tracker.identify import JevIdentifier
@@ -161,6 +164,44 @@ def test_health_and_reset(setup):
     assert client.get("/health").json()["sessions"] == 1
     assert client.post("/reset").json() == {"ok": True}
     assert client.get("/health").json()["sessions"] == 0
+
+
+def frame(seq: int, scene: int = 3) -> bytes:
+    header = json.dumps(
+        {"type": "frame", "seq": seq, "t": 1000.0 + 66 * seq, "width": 960, "height": 720}
+    ).encode()
+    return struct.pack(">I", len(header)) + header + scene_jpeg(scene)
+
+
+def test_track_in_objects_mode_has_a_session_of_its_own(setup):
+    client, fake_jev = setup
+    cup = {"id": "cup", "phrase": "blue cup", "query": "A blue ceramic cup"}
+    with client.websocket_connect("/track") as ws:
+        assert ws.receive_json() == {"type": "ready", "model": "fake-yoloe"}
+        ws.send_text(json.dumps({"type": "objects", "objects": [cup]}))
+        ws.send_bytes(frame(0))
+        first = ws.receive_json()
+        assert first["type"] == "detections" and first["seq"] == 0
+        assert [(d["id"], d["state"]) for d in first["detections"]] == [("cup", "unknown")]
+        ws.send_bytes(frame(1))
+        (d,) = ws.receive_json()["detections"]
+        assert d["found"] and d["state"] == "tracking"
+        assert d["box"] == pytest.approx(list(norm_box(BOX)), abs=1e-3)
+        assert len(d["outline"]) == 4 and len(d["contact"]) == 2 and isinstance(d["track"], int)
+        ws.send_text(json.dumps({"type": "objects", "objects": []}))
+        ws.send_bytes(frame(2))
+        assert ws.receive_json()["detections"] == []
+    assert client.get("/health").json()["sessions"] == 0  # not one of the shared sessions
+    assert fake_jev.requests == []  # the session's identifier, not the primary route's jev
+
+
+def test_track_refuses_a_foreign_origin_or_host(setup):
+    client, _ = setup
+    for headers in ({"origin": "https://evil.example"}, {"host": "evil.example"}):
+        with pytest.raises(WebSocketDisconnect) as refused:
+            with client.websocket_connect("/track", headers=headers) as ws:
+                ws.send_text(json.dumps({"type": "objects", "objects": []}))
+        assert refused.value.code == 1008
 
 
 def test_scene_jpeg_reads_back_as_its_scene():
