@@ -14,6 +14,7 @@ import {
   ShaderMaterial,
 } from 'three';
 import type { ObjectOutline } from '../../domain/world/outline';
+import { frameGuard } from './frame-guard';
 import {
   DepthVariant,
   depthUniforms,
@@ -116,14 +117,22 @@ export class ObjectHighlight extends Group {
     this.glow.visible = false;
     this.edge.visible = false;
     // Once per eye per frame, no allocation: the breath and flare, and this eye's depth map.
+    // Inside three's render: a throw would end the frame (frame-guard.ts), so it is caught here
+    // and the light draws without its depth map.
     this.glow.onBeforeRender = (renderer, _scene, camera) => {
-      this.animate(performance.now());
       const { material } = this.glow;
-      const variant = this.occlusion?.bind(renderer, camera, this.glowUniforms) ?? 0;
-      // The shader changes only when a depth map of another kind appears, never per frame.
-      if (variant !== DepthVariant.None && material.defines.GLOW_DEPTH !== variant) {
-        material.defines.GLOW_DEPTH = variant;
-        material.needsUpdate = true;
+      const bound = frameGuard.run('glow', () => {
+        this.animate(performance.now());
+        const variant = this.occlusion?.bind(renderer, camera, this.glowUniforms) ?? 0;
+        // The shader changes only when a depth map of another kind appears, never per frame.
+        if (variant !== DepthVariant.None && material.defines.GLOW_DEPTH !== variant) {
+          material.defines.GLOW_DEPTH = variant;
+          material.needsUpdate = true;
+        }
+      });
+      if (!bound) {
+        this.glowUniforms.depthOn.value = 0;
+        this.glowUniforms.depthMap.value.sourceTexture = null;
       }
       // Both eyes draw with the same material: upload this eye's uniforms.
       material.uniformsNeedUpdate = true;

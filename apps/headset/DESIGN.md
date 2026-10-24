@@ -47,10 +47,29 @@ The depth map is coarse (320 texels across the view on Quest), so each fragment 
 of the 4 x 4 nearest texels with cubic B-spline weights and cuts the blend narrowly: a smooth
 contour that stays tight to the hand. Quest Browser hands out the same XRFrame object every frame,
 so per-frame caches key on the renderer's frame count, never on the frame object.
+
+Up close the depth map is not trusted. Meta gives the Quest 3 depth estimate a minimum effective
+range of about 20 cm and calls nearer reads unreliable, so a read nearer than 20 cm (or one that is
+not a number) is unknown: it never hides the light. And the test fades out as the light itself
+comes near: fully on beyond 40 cm, off within 28 cm (where a surface hiding it would have to be
+nearer than 20 cm, given the margin and falloff). A learner leaning over the table never loses the
+light to a phantom surface; hands still hide it, through their occluders. The views' near plane
+stays at 1 cm: three.js would move it to the depth map's 10 cm and clip what is that close
+(window.__nearPlane.set(m) tries another live).
+
+Everything else stays in view. Panels that trail the head (the instruction card, the HUDs) rise to
+stay within 20 degrees of the gaze when the learner looks down at the work, just above it, and
+they and the names over objects draw over the light and the hands' occluders (no depth test, after
+everything else), so a raised hand never takes the instructions away. A frame whose update or
+render throws is skipped, counted and logged once, and the next one draws as usual: three.js asks
+for the next frame only after the last returns, so one exception used to leave only passthrough
+(window.__frames counts them).
+
 window.__occlusion switches all of it live on the headset (setDepth, setHands, setFilter,
-setSoftness, setPlane, setMargin, setViz, probe, stats). The primary demo renders with no fixed
-foveation and at 1.25 times the browser's resolution, so the light's edges stay sharp across the
-view.
+setSoftness, setPlane, setMargin, setMinDepth, setNearRange, setViz, probe, stats; stats.render
+has the near plane in use, stats.frames the frames that threw, and setViz('diff') shows the
+too-near zone in yellow). The primary demo renders with no fixed foveation and at 1.25 times the
+browser's resolution, so the light's edges stay sharp across the view.
 
 Cost: the CPU builds only that field per new mask (about 0.9 ms on a Mac for a 64-point mask),
 with no allocations; all softness is shaped in the fragment shader. Quad, material and texture are

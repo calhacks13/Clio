@@ -8,6 +8,7 @@ import {
   type DepthView,
   decodeFarPlane,
   depthLayer,
+  depthUsageOf,
   disableXrDepthOcclusion,
   imageLookup,
   marchRay,
@@ -854,5 +855,29 @@ describe('preferDepthSensing', () => {
     expect(preferDepthSensing(null, only)).toBe(only);
     expect(preferDepthSensing(only, null)).toBe(only);
     expect(preferDepthSensing(null, null)).toBeNull();
+  });
+});
+
+describe('depthUsageOf', () => {
+  /** A session whose depthUsage throws, as the spec says it must without depth sensing. */
+  const refusing = (enabledFeatures?: string[]) =>
+    ({
+      enabledFeatures,
+      get depthUsage(): XRDepthUsage {
+        throw new DOMException('Depth sensing is not enabled', 'InvalidStateError');
+      },
+    }) as unknown as XRSession;
+
+  it('answers null, never throwing, for a session without depth sensing', () => {
+    expect(depthUsageOf(null)).toBeNull();
+    expect(depthUsageOf(refusing(['local-floor', 'hand-tracking']))).toBeNull();
+    expect(depthUsageOf(refusing())).toBeNull();
+  });
+
+  it('reads it where depth sensing is enabled, or where the runtime lists no features (IWER)', () => {
+    const usage = (enabledFeatures?: string[]) =>
+      ({ enabledFeatures, depthUsage: 'gpu-optimized' }) as unknown as XRSession;
+    expect(depthUsageOf(usage(['local-floor', 'depth-sensing']))).toBe('gpu-optimized');
+    expect(depthUsageOf(usage())).toBe('gpu-optimized');
   });
 });
