@@ -29,6 +29,9 @@ import {
   type StepCheckRequest,
   type StepCheckResponse,
   StepCheckResponseSchema,
+  type StepCriteriaRequest,
+  type StepCriteriaResponse,
+  StepCriteriaResponseSchema,
 } from '@clio/protocol';
 import type { z } from 'zod';
 
@@ -71,6 +74,10 @@ export class ApiClient {
 
   checkStep(request: StepCheckRequest): Promise<StepCheckResponse> {
     return this.request('POST', ApiPaths.planCheck, request, StepCheckResponseSchema);
+  }
+
+  stepCriteria(request: StepCriteriaRequest): Promise<StepCriteriaResponse> {
+    return this.request('POST', ApiPaths.planCriteria, request, StepCriteriaResponseSchema);
   }
 
   locate(request: LocateRequest): Promise<LocateResponse> {
