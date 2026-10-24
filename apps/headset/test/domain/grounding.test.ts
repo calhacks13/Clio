@@ -173,6 +173,15 @@ describe('ObjectGrounder', () => {
     expect(registry.get('cup')).toBeUndefined();
   });
 
+  it('places an answer about a frame captured earlier (a closer look) with its head pose', () => {
+    const { grounder, registry } = setup([]);
+    const frame: CameraFrame = { t: 100, width: 1280, height: 720, jpegBase64: 'AAAA' };
+    const objects = [{ id: 'cup', query: 'Which cup is empty?', phrase: 'cup' }];
+    const result = grounder.place(frame, objects, { detections: [cupSeen], model: 'er-2' });
+    expect(result).toMatchObject({ ok: true, located: ['cup'], source: 'er-2', frameT: 100 });
+    expect(registry.get('cup')?.position[2]).toBeCloseTo(-1);
+  });
+
   it('says so when there is no camera, instead of guessing', async () => {
     const { grounder } = setup([cupSeen], { capture: async () => null });
     expect(await grounder.ground([{ id: 'cup' }])).toEqual({

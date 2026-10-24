@@ -1,4 +1,4 @@
-import { COACH_TOOL_NAMES, type CoachToolName } from '@clio/protocol';
+import { COACH_TOOL_NAMES, type CoachToolName, isNonBlockingTool } from '@clio/protocol';
 import type { Clock } from '../../core/clock';
 import type { AppBus } from '../events';
 import { recitePlan } from '../plan/recital';
@@ -19,6 +19,10 @@ import type { CoachToolbox } from './toolbox';
 // message to Gemini interrupts what it is saying, so narrations wait while either side is talking
 // or the connection is down, and go out merged. Each narration is recorded when it reaches the
 // model.
+//
+// A non-blocking call (look_closer, which asks the smart model) answers a second or two later, as
+// the call's result; the model says it once nobody is talking. If its connection closed meanwhile,
+// the new connection never made that call, so the answer goes out as a narration instead.
 
 export interface CoachSessionDeps {
   agent: RealtimeAgent;
@@ -61,6 +65,8 @@ interface CallRecord {
   ok?: boolean;
   /** Cancelled while it ran: report it once it has succeeded. */
   cancelled?: boolean;
+  /** A non-blocking call whose connection closed while it ran. */
+  orphaned?: boolean;
 }
 
 export class CoachSession {
@@ -97,10 +103,7 @@ export class CoachSession {
         this.speaking = true;
         for (const call of calls) {
           this.remember(call);
-          void toolbox.handle(call).then((result) => {
-            agent.respond([result]);
-            this.onResult(result);
-          });
+          void toolbox.handle(call).then((result) => this.onResult(result));
         }
       }),
       events.on('cancelledTools', ({ ids }) => this.onCancelled(ids)),
@@ -201,6 +204,10 @@ export class CoachSession {
     if (state !== 'ready') {
       // A dropped connection ends the model's turn without a turnComplete.
       this.speaking = false;
+      // The next connection never made the calls still running.
+      for (const call of this.calls.values()) {
+        if (call.ok === undefined && isNonBlockingTool(call.name)) call.orphaned = true;
+      }
       // Nothing will carry these to the model any more.
       if (state === 'error' || state === 'closed') this.held = [];
       // The next connection starts from the stored instruction, so bring it up to date first.
@@ -222,13 +229,30 @@ export class CoachSession {
     if (oldest !== undefined) this.calls.delete(oldest);
   }
 
-  private onResult({ id, ok }: ToolResult): void {
+  private onResult(result: ToolResult): void {
+    const { id, ok } = result;
     const call = this.calls.get(id);
+    if (call && isNonBlockingTool(call.name) && (call.orphaned || call.cancelled)) {
+      this.calls.delete(id);
+      this.lateAnswer(result);
+      return;
+    }
+    this.deps.agent.respond([result]);
     if (!call) return;
     call.ok = ok;
     if (!call.cancelled) return;
     this.calls.delete(id);
     if (ok) this.applied([call.name]);
+  }
+
+  /** A non-blocking answer for a call the model no longer has: told as a narration. */
+  private lateAnswer({ name, ok, result }: ToolResult): void {
+    const body = JSON.stringify(result);
+    this.send({
+      kind: 'late_answer',
+      text: `[app] Your ${name} call ${ok ? 'answered' : 'failed'}: ${body}`,
+      reply: true,
+    });
   }
 
   /** The model dropped calls it had made (the learner barged in), but plan changes stick. */
@@ -237,6 +261,11 @@ export class CoachSession {
     const names: string[] = [];
     for (const callId of ids) {
       const call = this.calls.get(callId);
+      // A non-blocking answer still to come is told as a narration.
+      if (call && call.ok === undefined && isNonBlockingTool(call.name)) {
+        call.cancelled = true;
+        continue;
+      }
       if (!call || !PLAN_TOOLS.has(call.name)) continue;
       bus.emit('annotation', {
         t: clock.now(),

@@ -1,6 +1,7 @@
 import { consoleLogger, type Logger } from './log';
 import type { BenchModels } from './services/bench';
 import type { Planner } from './services/planner';
+import type { SceneAsker } from './services/scene';
 import type { TokenMinter } from './services/token-minter';
 import type { VisionLocator } from './services/vision';
 import type { BenchStore } from './storage/bench-store';
@@ -50,6 +51,8 @@ export interface AppDeps {
   tokenMinter?: TokenMinter | null;
   planner?: Planner | null;
   locator?: VisionLocator | null;
+  /** The voice coach's closer look (the smart model). */
+  scene?: SceneAsker | null;
   /** The planner bench; its routes answer 503 without it. */
   bench?: BenchDeps | null;
   now?: () => Date;
@@ -57,12 +60,13 @@ export interface AppDeps {
   limits?: Partial<BodyLimits>;
 }
 
-type OptionalServices = 'tokenMinter' | 'planner' | 'locator' | 'bench';
+type OptionalServices = 'tokenMinter' | 'planner' | 'locator' | 'scene' | 'bench';
 
 export interface ServerDeps extends Required<Omit<AppDeps, 'limits' | OptionalServices>> {
   tokenMinter: TokenMinter | null;
   planner: Planner | null;
   locator: VisionLocator | null;
+  scene: SceneAsker | null;
   bench: BenchDeps | null;
   limits: BodyLimits;
 }
@@ -73,6 +77,7 @@ export function resolveDeps(deps: AppDeps): ServerDeps {
     tokenMinter: deps.tokenMinter ?? null,
     planner: deps.planner ?? null,
     locator: deps.locator ?? null,
+    scene: deps.scene ?? null,
     bench: deps.bench ?? null,
     now: deps.now ?? (() => new Date()),
     logger: deps.logger ?? consoleLogger,

@@ -38,7 +38,8 @@ and setup is in [dev-setup.md](dev-setup.md).
 │   │ start_lesson / revise_plan ────────────────────────────►  │ plan ─► locate ─► run ─► record│
 │   │ add_step / update_step / complete_step / add_material ─►  │   ▲        │        │         ││
 │   │ highlight / show_demo / flag_mistake ──────────────────►  │   │        │        │         ││
-│   │◄── [app] narrations: plan, briefings, step watcher ◄───── │   │        ▼        ▼         ││
+│   │ look_closer (non-blocking) ─► smart model, /api/scene/ask │   │        │        │         ││
+│   │◄── [app] narrations, look_closer answers (in words) ◄─    │   │        ▼        ▼         ││
 │                                                               │ Planner  Grounder  ProcedureRunner
 │  Sensing ─► Workspace ─► Pinch/Grasp ─► ObjectRegistry ◄──────┴───────────────────────────────┘│
 │  (hands 90 Hz, head)       (held objects ride the wrist)   ▲ camera detections                 │
@@ -49,9 +50,11 @@ and setup is in [dev-setup.md](dev-setup.md).
 │    synthesized ghost hands, glyphs)                                                            │
 └──────────┬─────────────────────────────────────┬──────────────────────┬───────────────────────┘
            │ /gemini WS relay                    │ /api/plans,          │ /api/episodes
-           ▼                                     ▼ /api/vision/locate   ▼
+           │                                     │ /api/vision/locate   │
+           ▼                                     ▼ /api/scene/ask       ▼
 ┌──────────────────────────────────── Laptop: apps/server (Node · Hono) ────────────────────────┐
 │ relay → Google (injects key) · planner LLM (structured output) · object finder (Gemini / jev) │
+│ closer looks for the voice (the smart model, Robotics-ER 2)                                   │
 │ data/episodes/<id>/ · data/plans/<id>.json · data/clips/                                       │
 │ pipeline/ (Python · uv): validate · Rerun replay · LeRobot export                              │
 └────────────────────────────────────────────────────────────────────────────────────────────────┘
@@ -69,9 +72,10 @@ and setup is in [dev-setup.md](dev-setup.md).
 2. **Perception helps the learner, never a Gemini coach.** Hands come from WebXR hand tracking
    at 72–120 Hz, and object positions from the mat, markers, pinches and the camera. They drive
    outlines, ghost hands, checks and the dataset. The coach sees about one camera frame every 4 s
-   and hears the plan and lesson events as short `[app]` narrations. A Gemini coach never hears
-   positions, pinches or detections, and its checks ignore camera detections (§5.7). The scripted
-   coach can't see, so it is still told about missing and pinched objects.
+   and hears the plan and lesson events as short `[app]` narrations. When it needs a sharp look it
+   asks the smart model and hears the answer in words. A Gemini coach never hears positions,
+   pinches or detections, and its checks ignore camera detections (§5.7). The scripted coach can't
+   see, so it is still told about missing and pinched objects.
 3. **Hands are the measuring instrument.** Pinch two corners to calibrate the table. Pinch an
    object the camera couldn't find to register it. Grip an object and it rides with your wrist
    (§5.6).
@@ -105,7 +109,7 @@ Clio/
 │   │   ├── recording/        recorder, uploader (ordered, retrying), sinks
 │   │   ├── overlay/          presentation model
 │   │   └── session/          LessonController (plan → locate → run → record → revise),
-│   │                         step watcher, curated-lesson templates, Spotlight
+│   │                         step watcher, curated-lesson templates, Spotlight, closer look
 │   ├── src/adapters/         xr, render, audio, camera, gemini, scripted, net
 │   ├── src/app/              config, boot page, ClioApp (composition root + frame pipeline)
 │   └── scripts/              synth-episode.ts: synthetic episodes from the real domain
@@ -253,6 +257,43 @@ Camera facts that shaped this (October 2026):
 
 ### 5.7 Coach (`domain/coach`, `adapters/gemini`, `adapters/scripted`)
 
+**Two models.** The coach is two models working at the same time:
+- **The voice** is the realtime model (`gemini-3.8-live`, native audio in and out). It is the only
+  one that talks with the learner. It sees one small frame every 4 s, listens, speaks, and calls
+  the tools. It never waits on the smart model.
+- **The smart model** is Gemini Robotics-ER 2 (`gemini-robotics-er-2-preview`). It plans and
+  re-plans lessons (`/api/plans`), watches whether the step is done (`/api/plans/check`), finds
+  objects (`/api/vision/locate`) and takes a closer look when the voice asks (`/api/scene/ask`). It
+  never speaks to the learner.
+
+They talk only in words. The voice hands work to the smart model through tools that never hold it
+up: `start_lesson` and `revise_plan` answer at once and the plan arrives later as an `[app]`
+narration, and `look_closer` is non-blocking (below). The smart model's results reach the voice
+as narrations, through the narration gate, or as `look_closer`'s result, and the voice says them in
+its own words. Coordinates and detections go only to the AR side.
+
+**A closer look** (`domain/session/closer-look.ts`). The voice's frames are small and blurry, and
+in tests it called a table with a large knife on it "safe". So whenever the learner asks whether
+something is safe, which thing is which, where something is, what went wrong or how to hold
+something, the voice says "Let me take a closer look" and calls `look_closer(question)`:
+
+```
+ voice: "Let me take a closer look" + look_closer(question)  [NON_BLOCKING: it keeps listening]
+   ─► CloserLook: a fresh 1024 px frame + goal, step, materials ─► POST /api/scene/ask
+        └─ server: Robotics-ER 2, minimal thinking, structured output:
+           { hazard, answer (two short sentences), refs (points/boxes, lesson ids) }
+   ─► AR: refs on the lesson's objects are lifted with the frame's head pose (ObjectGrounder.place)
+          and highlighted; every ref is recorded
+   ─► voice: the call's result { hazard?, answer, highlighted? }, scheduled WHEN_IDLE
+        └─ it says the answer once neither it nor the learner is talking
+```
+
+`hazard` is its own field because the smart model named the knife 1 time in 4 when hazards were a
+line of its prompt, and 4 in 4 as a field it must fill. Measured on a real key (October 2026):
+the voice says its filler within about 0.1 s of the learner stopping, the smart model answers in
+about 1.5 to 2 s (median; outliers to 8 s, the server's timeout), and the voice speaks the answer
+about 1 s after it arrives, so 3 to 4 s after the question.
+
 `CoachSession` wires a `RealtimeAgent` to:
 - the mic (16 kHz PCM) and the speaker (24 kHz PCM, barge-in flush);
 - the `CoachToolbox`, which validates and records the nine tools;
@@ -276,10 +317,11 @@ Tools:
 | `highlight(object_id, style?)`                                     | emphasizes an object (locates it if unknown)             |
 | `show_demo(step_id?)`                                              | plays the step's demonstration                           |
 | `flag_mistake(kind, message)`                                      | a coach-noticed mistake, shown and labeled               |
+| `look_closer(question)`                                            | asks the smart model; non-blocking, answers in 1 to 3 s  |
 
-Arguments are flat, and every tool answers at once. Planning and re-planning report back later as
-`[app]` messages. Plan tools return `plan`, the recital, and, when the focus moved, `now`, the new
-step's briefing, so the coach never hears a step twice. Details are in
+Arguments are flat, and every tool but `look_closer` answers at once. Planning and re-planning
+report back later as `[app]` messages. Plan tools return `plan`, the recital, and, when the focus
+moved, `now`, the new step's briefing, so the coach never hears a step twice. Details are in
 [coach-plan.md](coach-plan.md).
 
 **The step watcher** (`domain/session/step-watcher.ts`) is the coach's second pair of eyes.
@@ -311,6 +353,12 @@ mistakes. The scripted coach can't see, so it still hears about missing objects 
   `[app] Reconnected.` with the plan when it's back.
 - **Barge-in:** when Gemini cancels a tool call that already changed the plan, the coach is told
   the call was applied.
+- **Non-blocking calls:** `look_closer` is declared `NON_BLOCKING` and its result is sent with
+  `scheduling: WHEN_IDLE`, which waits for the voice to finish its filler and for the learner to
+  stop talking. (`INTERRUPT` cut the filler off mid-word; `SILENT` never says it.) Learner speech
+  didn't cancel a pending non-blocking call in tests. An answer goes only to the connection that
+  made the call, since Live speaks an answer to an id it never issued twice; when the connection
+  changed meanwhile, the answer goes out as an `[app]` narration instead.
 
 **Scripted coach:** the same port with no network. It speaks briefings and corrections through
 text-to-speech, and learners confirm steps with the panel's touchable **Done** button.
@@ -339,6 +387,7 @@ A stale briefing dropped at that point is a `coach.narration_dropped` annotation
 | `POST /api/plans`, `GET /api/plans/:id`                               | the planner: goal + images (+ revision) → validated `Procedure`, stored in `data/plans/`   |
 | `POST /api/plans/check`                                               | the step watcher: frames + step + `doneWhen` → `done`, `not_done` or `unsure`              |
 | `POST /api/vision/locate`                                             | the object finder: Gemini, or any HTTP finder at `CLIO_VISION_URL` (docs/object-finder.md) |
+| `POST /api/scene/ask`                                                 | the voice's closer look: frames + question → hazard, answer in words, points (smart model) |
 | `GET /api/procedures[/:id]`                                           | curated (`procedures/`) + generated (`data/plans/`)                                        |
 | `POST /api/episodes` → `…/batches` → `…/finish`, `PUT …/media/:name`  | ingest (idempotent by `seq`)                                                               |
 | `GET /api/episodes[/:id[/frames\|events\|objects]]`                   | browse / replay                                                                            |
@@ -365,7 +414,7 @@ Vite proxies `/api` and `/gemini`, so the headset talks to a single origin (and 
 | Another realtime model | Implement `RealtimeAgent`                                                                                                                                                                                                                                                                                                                      |
 | A new action verb      | Add it to `ACTION_VERBS` (protocol) and a choreography in `domain/demo/synthesizer.ts`                                                                                                                                                                                                                                                         |
 | A new check type       | Add it to `@clio/protocol/checks.ts` and an evaluator in `domain/procedure/checks/`                                                                                                                                                                                                                                                            |
-| A new coach tool       | Add it to `@clio/protocol/coach-tools.ts` and a handler in `LessonController.handlers()`                                                                                                                                                                                                                                                       |
+| A new coach tool       | Add it to `@clio/protocol/coach-tools.ts` and a handler in `LessonController.handlers()` (or, for a tool the coach answers itself such as `look_closer`, in `CoachOwnToolHandlers`)                                                                                                                                                            |
 | A new recorded signal  | Add the event to `@clio/protocol/episode.ts`, emit it on the bus, then run `pnpm gen:schema`                                                                                                                                                                                                                                                   |
 
 ## 9. Frames, units, time
@@ -388,6 +437,7 @@ Vite proxies `/api` and `/gemini`, so the headset talks to a single origin (and 
 | Camera permission missing or broken | Grant over adb (dev-setup); otherwise pinch-to-register and layouts                    |
 | Detection misses an object          | Shown on the HUD; the learner looks at or pinches it; `highlight` re-locates           |
 | Step watcher down or not set up     | No suggestions; the coach and the Done button still complete steps                     |
+| Closer look slow or failing         | The voice is told it got no closer look (8 s timeout) and asks the learner to describe |
 | Object finder slow or rate-limited  | Outlines appear later; `?showRefresh=<ms>` looks less often (0: only at step start)    |
 | Server down mid-session             | The uploader retries with backoff; nothing is lost while the tab lives                 |
 | Tracking flicker (crossed hands)    | Dwell gates bridge dropouts; looser radii on those steps                               |

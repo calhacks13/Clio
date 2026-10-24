@@ -9,6 +9,11 @@ the learner see (outlines, ghost hands) and label the dataset. They never feed a
 which judges from the camera. The scripted coach can't see, so it is still told about missing and
 pinched objects.
 
+A Gemini coach is two models at once: the voice (`gemini-3.8-live`), which talks with the learner,
+and the smart model (Robotics-ER 2), which plans, watches the steps and takes a closer look when
+the voice asks. Only the voice speaks; the smart model's results reach it as text
+([The smart model](#the-smart-model)).
+
 This document is the design. [ARCHITECTURE.md](ARCHITECTURE.md) is the map, and
 [procedures.md](procedures.md) is the plan language.
 
@@ -74,10 +79,11 @@ After 12 s without a plan, the coach is told planning is slow, so it can keep th
 
 ## The coach's tools
 
-All arguments are flat, and every tool answers in milliseconds. Slow work (planning, re-planning)
-reports back as an `[app]` message. Plan tools return `plan`, the recital, and tools that move the
-focus also return `now`, the briefing for the new focused step, so the coach never hears a step
-twice.
+All arguments are flat, and every tool but `look_closer` answers in milliseconds. Slow work
+(planning, re-planning) reports back as an `[app]` message; `look_closer` is non-blocking, so the
+voice keeps going until its answer arrives. Plan tools return `plan`, the recital, and tools that
+move the focus also return `now`, the briefing for the new focused step, so the coach never hears a
+step twice.
 
 | Tool                                                               | What it does                                             |
 | ------------------------------------------------------------------ | -------------------------------------------------------- |
@@ -90,6 +96,7 @@ twice.
 | `highlight(object_id, style?)`                                     | emphasizes an object in AR                               |
 | `show_demo(step_id?)`                                              | plays the ghost-hand demonstration                       |
 | `flag_mistake(kind, message)`                                      | a correction, shown and labeled                          |
+| `look_closer(question)`                                            | asks the smart model about a fresh frame (non-blocking)  |
 
 `update_step` with `status`:
 - `skipped`: the step isn't needed or can't be done;
@@ -144,6 +151,39 @@ Errors list the valid ids so the coach can correct itself.
    changed the plan, the coach is told the call was applied, with the recital. A call that had
    failed is not reported.
 
+## The smart model
+
+The voice decides what to say; the smart model, Gemini Robotics-ER 2, does the slow looking and
+thinking. Each part runs on its own and never makes the voice wait:
+
+| Work                   | How the voice starts it       | How the result reaches the voice                    |
+| ---------------------- | ----------------------------- | --------------------------------------------------- |
+| a plan, a revised plan | `start_lesson`, `revise_plan` | an `[app]` narration ("Plan ready", "Plan revised") |
+| is the step done?      | nothing: the step watcher     | an `[app]` narration ("Step watcher: … looks done") |
+| a closer look          | `look_closer(question)`       | the call's result, which it says when it is idle    |
+
+Narrations go through the gate above, so they never cut the learner off. Nothing the smart model
+returns is spoken by anyone but the voice.
+
+**A closer look.** The voice's frames are small and blurry, and it is confident anyway: asked "is
+it safe to work here?" over a table with a large knife on it, it said yes. Its instructions open
+with the rule that safety, which-is-which, where, what-went-wrong and how-to-hold questions go to
+`look_closer`. It says "Let me take a closer look", calls the tool, and keeps listening. The
+headset takes a fresh 1024 px frame and sends it to `POST /api/scene/ask` with the question, the
+goal, the focused step and the materials. The smart model answers through structured output with
+minimal thinking:
+- `hazard`: a danger near the hands or the work, whatever the question was. As a field it must
+  fill, it named the knife 4 times in 4; as a line of the prompt, 1 in 4;
+- `answer`: at most two short sentences, as the learner sees things (left, right, in your hand);
+- `refs`: what the answer points out, as points and boxes, with the material id when it is one.
+
+The voice gets `{ hazard?, answer, highlighted? }` as the call's result, scheduled `WHEN_IDLE`: it
+finishes its filler, waits for the learner to stop, and then answers in its own words. The refs
+that are lesson objects are lifted into the scene with the head pose of the frame the smart model
+saw, and highlighted; `highlighted` names them, so the voice can say "the one I've highlighted".
+Thinking stays minimal, a median of about 1.9 s with the hazard field: low was no more accurate
+on which and where questions and took about 0.5 s longer.
+
 ## Completion
 
 A step is done when one of these says so:
@@ -187,7 +227,8 @@ trusted positions, and the coach hears only:
 - the plan, step briefings, and plan changes;
 - step completions, the Done button, and the stuck timer;
 - mistakes from rules, which saw only trusted positions;
-- the step watcher, which looks at raw frames only.
+- the step watcher, which looks at raw frames only;
+- a closer look's hazard and answer, in words, and the names of the objects it highlighted.
 
 It never hears positions, distances, pinches, detections, missing or registered objects, or whether
 an object has been found. It is told only what the learner can see: whether a highlight or a
@@ -211,6 +252,9 @@ changing it.
 - Every narration is a `coach.narration` event, recorded when it reaches the model, not when it's
   queued. A stale briefing dropped at delivery is an `annotation` with label
   `coach.narration_dropped`.
+- Every closer look is an `annotation` with label `coach.look_closer` and data
+  `{ callId, model, latencyMs, refs }`, refs with their points. Refs on lesson objects are also
+  `object.detected` events, with the question as the description.
 - Skips are `step.completed` with `by: 'skip'`, which the schema already allows.
 - Out-of-order completions are `step.completed` for that step. The pipeline keeps labeling frames
   with the focused step.
@@ -218,14 +262,16 @@ changing it.
 
 ## Failures
 
-| Failure                         | What happens                                                              |
-| ------------------------------- | ------------------------------------------------------------------------- |
-| Planner slow                    | after 12 s the coach is told, so it can keep the learner company          |
-| Planner fails or times out      | the coach writes the steps with `add_step`                                |
-| Step watcher down or not set up | no suggestions; the coach and the Done button still complete steps        |
-| Gemini reconnecting             | local authority until it's back; queued narrations and a recap on return  |
-| Gemini gives up reconnecting    | local authority for the rest of the lesson: checks and the Done button    |
-| No Gemini at all                | the scripted coach, curated lessons, checks and the Done button, as today |
+| Failure                         | What happens                                                               |
+| ------------------------------- | -------------------------------------------------------------------------- |
+| Planner slow                    | after 12 s the coach is told, so it can keep the learner company           |
+| Planner fails or times out      | the coach writes the steps with `add_step`                                 |
+| Step watcher down or not set up | no suggestions; the coach and the Done button still complete steps         |
+| Closer look slow or failing     | after 8 s the voice is told there was no closer look, and asks the learner |
+| Connection drops during a look  | the answer goes to the next connection as an `[app]` narration             |
+| Gemini reconnecting             | local authority until it's back; queued narrations and a recap on return   |
+| Gemini gives up reconnecting    | local authority for the rest of the lesson: checks and the Done button     |
+| No Gemini at all                | the scripted coach, curated lessons, checks and the Done button, as today  |
 
 ## Later
 

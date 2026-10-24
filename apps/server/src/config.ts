@@ -9,6 +9,8 @@ export const DEFAULT_LIVE_MODEL = 'gemini-3.8-live';
 export const ROBOTICS_ER_MODEL = 'gemini-robotics-er-2-preview';
 export const DEFAULT_PLANNER_MODEL = ROBOTICS_ER_MODEL;
 export const DEFAULT_VISION_MODEL = ROBOTICS_ER_MODEL;
+/** The smart model the voice coach asks for a closer look (look_closer, POST /api/scene/ask). */
+export const DEFAULT_SCENE_MODEL = ROBOTICS_ER_MODEL;
 /** The planner bench's judge: a stronger model than the planner it grades. */
 export const DEFAULT_JUDGE_MODEL = 'gemini-pro-latest';
 
@@ -24,6 +26,8 @@ export interface Config {
   liveModel: string;
   plannerModel: string;
   visionModel: string;
+  /** Answers the voice coach's closer looks. */
+  sceneModel: string;
   /** Grades planner bench runs against their expectations (docs/planner-bench.md). */
   judgeModel: string;
   /** An external object finder (e.g. jev). When set, it answers /api/vision/locate, not Gemini. */
@@ -56,6 +60,7 @@ const EnvSchema = z.object({
   GEMINI_LIVE_MODEL: text(DEFAULT_LIVE_MODEL),
   GEMINI_PLANNER_MODEL: text(DEFAULT_PLANNER_MODEL),
   GEMINI_VISION_MODEL: text(DEFAULT_VISION_MODEL),
+  GEMINI_SCENE_MODEL: text(DEFAULT_SCENE_MODEL),
   GEMINI_JUDGE_MODEL: text(DEFAULT_JUDGE_MODEL),
   CLIO_VISION_URL: optionalHttpUrl,
   CLIO_VISION_TOKEN: optionalText,
@@ -82,6 +87,7 @@ export function loadConfig(
     liveModel: e.GEMINI_LIVE_MODEL,
     plannerModel: e.GEMINI_PLANNER_MODEL,
     visionModel: e.GEMINI_VISION_MODEL,
+    sceneModel: e.GEMINI_SCENE_MODEL,
     judgeModel: e.GEMINI_JUDGE_MODEL,
     visionUrl: e.CLIO_VISION_URL ?? null,
     visionToken: e.CLIO_VISION_TOKEN ?? null,

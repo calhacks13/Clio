@@ -21,7 +21,8 @@ export interface CameraFrame {
 
 /** Port: the passthrough camera. */
 export interface CameraFrameSource {
-  capture(): Promise<CameraFrame | null>;
+  /** A fresh frame, at most `maxWidth` pixels wide (the camera picks a default). */
+  capture(maxWidth?: number): Promise<CameraFrame | null>;
   /** Calibration for the frames, or null when unknown. */
   model(): CameraModel | null;
 }
@@ -111,16 +112,11 @@ export class ObjectGrounder implements Grounder {
   constructor(private readonly deps: GrounderDeps) {}
 
   async ground(requests: readonly FindRequest[]): Promise<GroundingResult> {
-    const { camera, locator, registry, poses } = this.deps;
-    const workspace = this.deps.workspace();
-    const minConfidence = this.deps.minConfidence ?? 0.3;
-
+    const { camera, locator, poses } = this.deps;
     const frame = await camera.capture();
     if (!frame) return { ok: false, reason: 'no-camera-frame' };
-    const model = camera.model();
-    if (!model) return { ok: false, reason: 'no-camera-model' };
-    const head = poses.at(frame.t);
-    if (!head) return { ok: false, reason: 'no-head-pose' };
+    if (!camera.model()) return { ok: false, reason: 'no-camera-model' };
+    if (!poses.at(frame.t)) return { ok: false, reason: 'no-head-pose' };
 
     const objects = this.wording(requests);
     let answer: { detections: Detection[]; model: string };
@@ -129,6 +125,26 @@ export class ObjectGrounder implements Grounder {
     } catch (err) {
       return { ok: false, reason: 'locator-failed', detail: String(err) };
     }
+    return this.place(frame, objects, answer);
+  }
+
+  /**
+   * Lift a finder's answer about `frame` into the scene, with the head pose at capture time: what
+   * was found lands in the registry, with an outline for the AR layer. `ground` ends here, and so
+   * does the smart model's closer look, which answers about a frame it was sent earlier.
+   */
+  place(
+    frame: CameraFrame,
+    objects: readonly LocateObject[],
+    answer: { detections: readonly Detection[]; model: string },
+  ): GroundingResult {
+    const { camera, registry, poses } = this.deps;
+    const workspace = this.deps.workspace();
+    const minConfidence = this.deps.minConfidence ?? 0.3;
+    const model = camera.model();
+    if (!model) return { ok: false, reason: 'no-camera-model' };
+    const head = poses.at(frame.t);
+    if (!head) return { ok: false, reason: 'no-head-pose' };
 
     const located: string[] = [];
     const missing: string[] = [];

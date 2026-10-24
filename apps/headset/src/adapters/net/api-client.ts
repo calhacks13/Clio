@@ -23,6 +23,9 @@ import {
   type ProcedureListResponse,
   ProcedureListResponseSchema,
   ProcedureSchema,
+  type SceneAskRequest,
+  type SceneAskResponse,
+  SceneAskResponseSchema,
   type StepCheckRequest,
   type StepCheckResponse,
   StepCheckResponseSchema,
@@ -72,6 +75,10 @@ export class ApiClient {
 
   locate(request: LocateRequest): Promise<LocateResponse> {
     return this.request('POST', ApiPaths.visionLocate, request, LocateResponseSchema);
+  }
+
+  askScene(request: SceneAskRequest): Promise<SceneAskResponse> {
+    return this.request('POST', ApiPaths.sceneAsk, request, SceneAskResponseSchema);
   }
 
   coachToken(model?: string): Promise<CoachTokenResponse> {

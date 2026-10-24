@@ -8,7 +8,11 @@ import { Narrator, type NarratorOptions } from '../../src/domain/coach/narrator'
 import type { LessonView } from '../../src/domain/coach/ports';
 import { buildSystemInstruction } from '../../src/domain/coach/prompt';
 import { CoachSession } from '../../src/domain/coach/session';
-import { CoachToolbox, type ToolHandlers } from '../../src/domain/coach/toolbox';
+import {
+  type AvailableToolHandlers,
+  CoachToolbox,
+  type ToolHandlers,
+} from '../../src/domain/coach/toolbox';
 import type { AppEvents } from '../../src/domain/events';
 import { briefStep, type PlanView, recitePlan } from '../../src/domain/plan/recital';
 import type { TemplateSummary } from '../../src/domain/session/templates';
@@ -151,6 +155,22 @@ describe('CoachToolbox', () => {
     expect(result.ok).toBe(false);
     expect(JSON.stringify(result.result)).toMatch(/reason/);
     expect(seen.find((e) => e.type === 'coach.tool_result')?.payload).toMatchObject({ ok: false });
+  });
+
+  it('answers a tool this coach lacks (no closer look) with an error', async () => {
+    const { b } = bus();
+    const box = new CoachToolbox(handlers(), b, new ManualClock(10));
+    const result = await box.handle({
+      id: 'c3',
+      name: 'look_closer',
+      args: { question: 'Which?' },
+    });
+    expect(result).toEqual({
+      id: 'c3',
+      name: 'look_closer',
+      ok: false,
+      result: { error: 'look_closer is not available on this headset.' },
+    });
   });
 });
 
@@ -463,7 +483,7 @@ describe('CoachSession', () => {
     kind?: CoachKind;
     plan?: () => PlanView | null;
     templates?: readonly TemplateSummary[];
-    tools?: Partial<ToolHandlers>;
+    tools?: Partial<AvailableToolHandlers>;
   }
 
   async function setup({
@@ -535,6 +555,7 @@ describe('CoachSession', () => {
       'highlight',
       'show_demo',
       'flag_mistake',
+      'look_closer',
     ]);
     expect(agent.setup?.systemInstruction).toBe(
       buildSystemInstruction({
@@ -987,6 +1008,64 @@ describe('CoachSession', () => {
     expect(agent.narrations.map((n) => n.text)).toEqual([
       `[app] Your add_material call was already applied. ${recitePlan(planView())}`,
     ]);
+  });
+
+  describe('a non-blocking call (look_closer)', () => {
+    const answer = { answer: 'Cup C is the empty one.', highlighted: ['cup C'] };
+    async function looking() {
+      let finish: (outcome: { ok: true; result: unknown }) => void = () => {};
+      const ctx = await setup({
+        tools: { look_closer: () => new Promise((resolve) => (finish = resolve)) },
+      });
+      ctx.agent.events.emit('toolCalls', {
+        calls: [{ id: 'c1', name: 'look_closer', args: { question: 'Which cup is empty?' } }],
+      });
+      await settle();
+      return { ...ctx, finish: (result: unknown = answer) => finish({ ok: true, result }) };
+    }
+
+    it('lets the conversation go on and answers the call when the smart model has', async () => {
+      const { agent, b, clock, finish } = await looking();
+      // The voice says its filler and ends its turn; narrations flow while the look runs.
+      speak(agent);
+      agent.events.emit('turnComplete', {});
+      stuck(b, clock.now());
+      await settle();
+      expect(agent.narrations.map((n) => n.kind)).toEqual(['stuck']);
+      expect(agent.responses).toEqual([]);
+      finish();
+      await settle();
+      expect(agent.responses).toEqual([
+        { id: 'c1', name: 'look_closer', ok: true, result: answer },
+      ]);
+    });
+
+    it('tells a new connection the answer as a narration, since it never made the call', async () => {
+      const { agent, finish } = await looking();
+      agent.events.emit('status', { state: 'reconnecting' });
+      agent.events.emit('status', { state: 'ready' });
+      finish();
+      await settle();
+      expect(agent.responses).toEqual([]);
+      expect(agent.narrations.at(-1)).toEqual({
+        kind: 'late_answer',
+        text: `[app] Your look_closer call answered: ${JSON.stringify(answer)}`,
+        reply: true,
+      });
+    });
+
+    it('tells a cancelled look as a narration, not as an applied plan change', async () => {
+      const { agent, seen, finish } = await looking();
+      agent.events.emit('interrupted', {});
+      agent.events.emit('cancelledTools', { ids: ['c1'] });
+      finish({ error: 'x' });
+      await settle();
+      expect(seen.filter((e) => e.type === 'annotation')).toEqual([]);
+      expect(agent.responses).toEqual([]);
+      expect(agent.narrations.map((n) => n.text)).toEqual([
+        '[app] Your look_closer call answered: {"error":"x"}',
+      ]);
+    });
   });
 
   it('shows the coach the frame the step watcher judged by before its suggestion', async () => {

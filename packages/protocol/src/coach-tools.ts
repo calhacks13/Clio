@@ -3,6 +3,8 @@ import { prettifyError, z } from 'zod';
 // The coach's tools, defined once. Each call is both a visible action and a timestamped label in
 // the dataset. Descriptions are prompts: they tell the model when to use each tool. Arguments stay
 // flat (no unions), and every tool answers at once: slow work reports back as an [app] message.
+// The exception is marked `nonBlocking`: look_closer asks the smart model, which takes a second or
+// two, and the voice keeps talking until its answer arrives as the call's result.
 
 export const STEP_STATUS_CHANGES = ['current', 'skipped', 'todo'] as const;
 
@@ -135,11 +137,37 @@ export const COACH_TOOLS = {
         .describe('The correction, e.g. "Slide your left hand up to the dot"'),
     }),
   },
+  look_closer: {
+    description:
+      'Ask the sharper vision model to look at the camera view now. Your own frames are small and ' +
+      'blurry and miss small things, so always use it when they ask whether something is safe, ' +
+      'which of several similar things is which, where something is, what went wrong, or how to ' +
+      'hold or use something. It takes a second or two, so first say only "Let me take a closer ' +
+      'look", then call it. Keep listening meanwhile: the answer arrives by itself ' +
+      "as this call's result, and then you tell the learner in your own words. What it points out " +
+      'is highlighted for the learner.',
+    nonBlocking: true,
+    args: z.object({
+      question: z
+        .string()
+        .min(3)
+        .max(300)
+        .describe('One question about what the camera sees, e.g. "Which bottle is the vinegar?"'),
+    }),
+  },
 } as const;
 
 export type CoachToolName = keyof typeof COACH_TOOLS;
 export type CoachToolArgs<N extends CoachToolName> = z.output<(typeof COACH_TOOLS)[N]['args']>;
 export const COACH_TOOL_NAMES = Object.keys(COACH_TOOLS) as CoachToolName[];
+
+/**
+ * A tool the model keeps talking through (Gemini: NON_BLOCKING). It answers when its work is done,
+ * not at once, and the model speaks the answer once it is idle.
+ */
+export function isNonBlockingTool(name: string): boolean {
+  return isToolName(name) && 'nonBlocking' in COACH_TOOLS[name];
+}
 
 export type ParsedToolCall = {
   [N in CoachToolName]: { ok: true; name: N; args: CoachToolArgs<N> };

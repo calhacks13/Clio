@@ -16,6 +16,7 @@ describe('loadConfig', () => {
       liveModel: 'gemini-3.8-live',
       plannerModel: 'gemini-robotics-er-2-preview',
       visionModel: 'gemini-robotics-er-2-preview',
+      sceneModel: 'gemini-robotics-er-2-preview',
       judgeModel: 'gemini-pro-latest',
       visionUrl: null,
       visionToken: null,
@@ -31,6 +32,7 @@ describe('loadConfig', () => {
         GEMINI_LIVE_MODEL: '',
         GEMINI_PLANNER_MODEL: '',
         GEMINI_VISION_MODEL: '',
+        GEMINI_SCENE_MODEL: '',
         GEMINI_JUDGE_MODEL: '',
         CLIO_DATA_DIR: '',
       },
@@ -41,6 +43,7 @@ describe('loadConfig', () => {
     expect(config.liveModel).toBe('gemini-3.8-live');
     expect(config.plannerModel).toBe('gemini-robotics-er-2-preview');
     expect(config.visionModel).toBe('gemini-robotics-er-2-preview');
+    expect(config.sceneModel).toBe('gemini-robotics-er-2-preview');
     expect(config.judgeModel).toBe('gemini-pro-latest');
     expect(config.dataDir).toBe('/repo/data');
   });
@@ -64,6 +67,7 @@ describe('loadConfig', () => {
         GEMINI_LIVE_MODEL: 'live-x',
         GEMINI_PLANNER_MODEL: 'planner-x',
         GEMINI_VISION_MODEL: 'vision-x',
+        GEMINI_SCENE_MODEL: 'scene-x',
         GEMINI_JUDGE_MODEL: 'judge-x',
         CLIO_RELAY_LOG: '1',
       },
@@ -76,6 +80,7 @@ describe('loadConfig', () => {
       liveModel: 'live-x',
       plannerModel: 'planner-x',
       visionModel: 'vision-x',
+      sceneModel: 'scene-x',
       judgeModel: 'judge-x',
       relayLog: true,
     });

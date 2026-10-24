@@ -1,7 +1,6 @@
 import {
   type CalibrationMethod,
   type CoachToolArgs,
-  type CoachToolName,
   type PlanResponse,
   type Procedure,
   parseProcedure,
@@ -10,7 +9,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import { ManualClock } from '../../src/core/clock';
 import { Emitter } from '../../src/core/emitter';
-import type { ToolOutcome } from '../../src/domain/coach/toolbox';
+import type { LessonToolName, ToolOutcome } from '../../src/domain/coach/toolbox';
 import { DemoLibrary } from '../../src/domain/demo/demo-library';
 import type { AppEvents } from '../../src/domain/events';
 import { EpisodeRecorder } from '../../src/domain/recording/recorder';
@@ -116,7 +115,7 @@ function setup(o: SetupOptions = {}) {
     now: () => new Date('2026-10-24T05:00:00.000Z'),
     ...(o.options ? { options: o.options } : {}),
   });
-  const tool = <N extends CoachToolName>(name: N, args: CoachToolArgs<N>) => {
+  const tool = <N extends LessonToolName>(name: N, args: CoachToolArgs<N>) => {
     const handler = lesson.handlers()[name] as (
       a: CoachToolArgs<N>,
       c: { callId: string },
