@@ -79,9 +79,9 @@ recital and in the recorded snapshots, not in the `Procedure`.
      description of every outline that shows it; a mistake becomes a `hand_near` rule on its
      object (dropped when that object isn't declared or is one the step itself uses); the first
      step is confirmed by its done-when; and the other outline lines become steps confirmed by
-     their instruction, which outline nothing yet. The lesson starts on it, 3.4 s (median) after
-     the request on the bench. The server gives it 40 s, a retry included, and the headset gives
-     up at 45 s.
+     their instruction, which outline nothing yet. The lesson starts on it 5 to 7 s (median)
+     after the request on the bench. The server gives it 40 s, a retry included, and the headset
+     gives up at 45 s.
    - **Stage `rest`** is asked at once, with fresh frames, while the lesson starts: a revision
      of the first stage's plan from `outlineFrom` that writes steps 2 to n in full, with time to
      think (60 s on the server, as nobody waits for it). It also writes the card's objects again
@@ -107,18 +107,20 @@ recital and in the recorded snapshots, not in the `Procedure`.
    already pink and a knife on the table and a fridge with a yogurt drink beside the milk, 3 runs
    each per setting, judged by `gemini-pro-latest` against 9 expectations. Medians; directional:
 
-   | Robotics-ER 2                                  | Lesson starts | Plan complete | Met       |
-   | ---------------------------------------------- | ------------- | ------------- | --------- |
-   | before: one whole plan, default thinking       | 16.4 s        | 16.4 s        | 16/27     |
-   | whole plan, minimal                            | 5.8 s         | 5.8 s         | 18/27     |
-   | whole plan, low (`full`, also `revise_plan`)   | 11.1 s        | 11.1 s        | 43/54     |
-   | whole plan, medium                             | 19.6 s        | 19.6 s        | 20/27     |
-   | first low, rest medium (first step in full)    | 8.1 to 8.8 s  | 20 to 21.5 s  | 68/81     |
-   | first low, rest high                           | 8.8 to 9.0 s  | 24 s          | 49/54     |
-   | first medium, rest high                        | 16.1 s        | 32.5 s        | 23/27     |
-   | first high, rest high                          | 22.5 s        | 39.5 s        | no better |
-   | the card: first minimal, rest medium (default) | 3.4 s         | 15.0 s        | 22/27     |
-   | the card: first low, rest medium               | 6.2 s         | 21.0 s        | 24/27     |
+   | Robotics-ER 2                                | Lesson starts | Plan complete | Met       |
+   | -------------------------------------------- | ------------- | ------------- | --------- |
+   | before: one whole plan, default thinking     | 16.4 s        | 16.4 s        | 16/27     |
+   | whole plan, minimal                          | 5.8 s         | 5.8 s         | 18/27     |
+   | whole plan, low (`full`, also `revise_plan`) | 11.1 s        | 11.1 s        | 43/54     |
+   | whole plan, medium                           | 19.6 s        | 19.6 s        | 20/27     |
+   | first low, rest medium (first step in full)  | 8.1 to 8.8 s  | 20 to 21.5 s  | 68/81     |
+   | first low, rest high                         | 8.8 to 9.0 s  | 24 s          | 49/54     |
+   | first medium, rest high                      | 16.1 s        | 32.5 s        | 23/27     |
+   | first high, rest high                        | 22.5 s        | 39.5 s        | no better |
+   | the card's first version: first minimal      | 3.4 s         | 15.0 s        | 22/27     |
+   | the card's first version: first low          | 6.2 s         | 21.0 s        | 24/27     |
+   | the card now: first minimal, rest medium     | 3.8 s         | 20.1 s        | 23/27     |
+   | the card now: first low (default), pH only   | 6.5 s         | 24.4 s        | unjudged  |
 
    Most of the gain is the prompt; more thinking is not better on its own. The first stage at
    high takes over 20 s for no better plan. The rest at high was no better than medium here, but
@@ -127,17 +129,21 @@ recital and in the recorded snapshots, not in the `Procedure`.
 
    The card's rows were measured later on recreated scenes: generated headset-like photos of the
    same two setups (the original frames stayed on the laptop that captured them), with 9
-   expectations written again, so compare them with each other rather than with the rows above.
-   They are from the card's first version, before its prompt was reworded; directional.
-   Streamed (`scripts/stage1-timing.ts`, 3 runs a scene), the first step starts after 2.6 to
-   3.4 s at minimal (no thought tokens, 500 to 670 output tokens) and after 5.3 to 9.1 s at low
-   (490 to 1,020 thought tokens, 590 to 1,290 output tokens). At both levels the first step was
-   right in every card (6 fridge, 12 pH): it took the yogurt drink with a mistake for the milk,
-   left cup A alone, and the warnings named the knife first. The judged gap is one minimal run
-   whose outline added vinegar to cup A again, which stage rest kept (1 of 6 pH runs at minimal,
-   none at low), and one judge misreading of a correct milk mistake. So stage first thinks at
-   minimal: the lesson starts about 2.8 s sooner. Neither level kept cup C as the control: most
-   pH plans put vinegar in cup B and the base in cup C.
+   expectations written again, so compare them with each other rather than with the rows above;
+   directional. On the card's first version, the first step was right at minimal in every card
+   (streamed, it started after 2.6 to 3.4 s, against 5.3 to 9.1 s at low), so stage first
+   thought at minimal. The card now (a detector phrase per object, the reworded prompt, stage
+   rest writing the card's objects again) was measured again: at minimal its first step starts
+   after 2.7 to 3.9 s (no thought tokens, 505 to 897 output tokens) and is still right: the
+   yogurt drink with a mistake for the milk (3 of 3), cup A left alone and the knife first in the
+   warnings (10 of 10 pH cards). But 4 of those 10 pH outlines only test the acid and never use
+   the base, and stage rest keeps them that way; at low all 7 used it, as did all 12 on the
+   first version at either level. The judge doesn't see it, as no expectation asks for the
+   base. The two slowest stage rests (39 and 47 s, where none took over 19 s before) followed
+   such cards, so at minimal the pH plan completes no sooner (25 s median) than at low (24 s).
+   So stage first thinks at low again: the lesson starts 2 to 3 s later, still well before the
+   8.7 s median from before the card. Neither level keeps cup C as the control: most pH plans put
+   vinegar in cup B and the base in cup C.
 3. **The coach itself.** If the planner fails or times out, the coach is told to write the steps
    with `add_step`. The lesson starts on the first `add_step`, and until then the HUD keeps its
    planning text. New steps go at the end of the list unless the coach says otherwise.
