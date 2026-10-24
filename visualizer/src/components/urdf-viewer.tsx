@@ -7,6 +7,8 @@ import {
   LuLayers,
   LuChevronDown,
   LuInfo,
+  LuColumns2,
+  LuX,
 } from "react-icons/lu";
 import { useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
@@ -38,6 +40,9 @@ import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import type { EpisodeData } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import { loadEpisodeFlatChartData } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import UrdfPlaybackBar from "@/components/urdf-playback-bar";
+import { ReplayComparisonClock } from "@/components/replay-comparison-clock";
+import { ComparisonDivider } from "@/components/comparison-divider";
+import { replayFrameAtTime } from "@/lib/replay-comparison";
 import { CHART_CONFIG } from "@/utils/constants";
 import { getDatasetVersionAndInfo } from "@/utils/versionUtils";
 import type { DatasetMetadata } from "@/utils/parquetUtils";
@@ -53,6 +58,9 @@ import {
 
 const SERIES_DELIM = CHART_CONFIG.SERIES_NAME_DELIMITER;
 const DEG2RAD = Math.PI / 180;
+// use-measure also applies the default scroll debounce to ResizeObserver updates.
+// A splitter needs the camera and drawing buffer to follow every size change.
+const REPLAY_RESIZE = { debounce: 0 };
 
 // Module-level geometry cache — survives component remounts (tab switches,
 // episode navigations). Avoids re-fetching and re-parsing STL files.
@@ -393,7 +401,10 @@ function fitCameraToRobot(
   const sizeVec = bbox.getSize(new THREE.Vector3());
   const maxDim = Math.max(sizeVec.x, sizeVec.y, sizeVec.z);
   const fov = ((camera as THREE.PerspectiveCamera).fov ?? 45) * (Math.PI / 180);
-  const distance = (maxDim / 2 / Math.tan(fov / 2)) * 1.6;
+  // Fit the narrower field of view when the canvas is tall and narrow.
+  const aspect = (camera as THREE.PerspectiveCamera).aspect || 1;
+  const distance =
+    (maxDim / 2 / Math.tan(fov / 2)) * 1.6 * Math.max(1, 1 / aspect);
   const dir = new THREE.Vector3(1, 0.85, 1).normalize();
   camera.position.copy(center).addScaledVector(dir, distance);
   camera.lookAt(center);
@@ -922,9 +933,15 @@ export default function URDFViewer({
   episodeChangerRef,
   playToggleRef,
   toolbarTarget,
+  comparison = false,
+  onComparisonChange,
+  comparisonPanel,
 }: {
   data: EpisodeData;
   toolbarTarget: HTMLElement | null;
+  comparison?: boolean;
+  onComparisonChange?: (enabled: boolean) => void;
+  comparisonPanel?: React.ReactNode;
   org?: string;
   dataset?: string;
   episodeChangerRef?: React.RefObject<((ep: number) => void) | undefined>;
@@ -948,6 +965,7 @@ export default function URDFViewer({
   const [showScene, setShowScene] = useState(false);
   const searchParams = useSearchParams();
   const [debug, setDebug] = useState(() => searchParams.get("debug") === "1");
+  const debugVisible = debug && !comparison;
   const [fitRequest, setFitRequest] = useState(0);
   const [fitTarget, setFitTarget] = useState<"scene" | "hands">("scene");
   const isG1 = urdfUrl.includes("g1");
@@ -1086,6 +1104,14 @@ export default function URDFViewer({
   const [frame, setFrame] = useState(0);
   const [playing, setPlaying] = useState(false);
   const frameRef = useRef(0);
+  const handleComparisonSeek = useCallback(
+    (time: number) => {
+      const next = replayFrameAtTime(time, fps, totalFrames);
+      frameRef.current = next;
+      setFrame(next);
+    },
+    [fps, totalFrames],
+  );
 
   const handleFrameChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1228,40 +1254,72 @@ export default function URDFViewer({
           <span className="tool-label">Hands</span>
         </button>
       )}
-      <button
-        type="button"
-        aria-expanded={showScene}
-        aria-controls="scene-editor"
-        aria-label="Scene"
-        title="Edit scene objects"
-        onClick={() => setShowScene((v) => !v)}
-        className={`btn ${showScene ? "btn-active" : ""}`}
-      >
-        <LuLayers size={16} aria-hidden="true" />{" "}
-        <span className="tool-label">Scene</span>
-      </button>
-      <button
-        type="button"
-        aria-pressed={debug}
-        title="Show origin axes and joint diagnostics"
-        aria-label="Debug"
-        onClick={() => {
-          const next = !debug;
-          setDebug(next);
-          const params = new URLSearchParams(window.location.search);
-          if (next) params.set("debug", "1");
-          else params.delete("debug");
-          window.history.replaceState(
-            {},
-            "",
-            `${window.location.pathname}?${params}`,
-          );
-        }}
-        className={`btn ${debug ? "btn-active" : ""}`}
-      >
-        <LuBug size={16} aria-hidden="true" />{" "}
-        <span className="tool-label">Debug</span>
-      </button>
+      {!comparison && (
+        <>
+          <button
+            type="button"
+            aria-expanded={showScene}
+            aria-controls="scene-editor"
+            aria-label="Scene"
+            title="Edit scene objects"
+            onClick={() => setShowScene((v) => !v)}
+            className={`btn ${showScene ? "btn-active" : ""}`}
+          >
+            <LuLayers size={16} aria-hidden="true" />{" "}
+            <span className="tool-label">Scene</span>
+          </button>
+          <button
+            type="button"
+            aria-pressed={debug}
+            title="Show origin axes and joint diagnostics"
+            aria-label="Debug"
+            onClick={() => {
+              const next = !debug;
+              setDebug(next);
+              const params = new URLSearchParams(window.location.search);
+              if (next) params.set("debug", "1");
+              else params.delete("debug");
+              window.history.replaceState(
+                {},
+                "",
+                `${window.location.pathname}?${params}`,
+              );
+            }}
+            className={`btn ${debug ? "btn-active" : ""}`}
+          >
+            <LuBug size={16} aria-hidden="true" />{" "}
+            <span className="tool-label">Debug</span>
+          </button>
+        </>
+      )}
+      {(debug || comparison) && onComparisonChange && (
+        <button
+          type="button"
+          className={`btn ${comparison ? "btn-active" : ""}`}
+          aria-label={
+            comparison ? "Exit comparison" : "Compare replay and data"
+          }
+          title={
+            comparison
+              ? "Return to Debug"
+              : "Show replay and data together without diagnostics"
+          }
+          onClick={() => {
+            setPlaying(false);
+            setShowScene(false);
+            onComparisonChange(!comparison);
+          }}
+        >
+          {comparison ? (
+            <LuX size={16} aria-hidden="true" />
+          ) : (
+            <LuColumns2 size={16} aria-hidden="true" />
+          )}
+          <span className="tool-label">
+            {comparison ? "Exit comparison" : "Compare"}
+          </span>
+        </button>
+      )}
     </div>
   );
 
@@ -1277,9 +1335,25 @@ export default function URDFViewer({
     <div className="replay-workspace">
       <h1 className="sr-only">Episode {selectedEpisode} replay</h1>
       {toolbarTarget && createPortal(toolbar, toolbarTarget)}
-      <div className={`replay-stage ${showScene ? "has-editor" : ""}`}>
+      {comparison && (
+        <ReplayComparisonClock
+          frame={frame}
+          fps={fps}
+          totalFrames={totalFrames}
+          playing={playing}
+          onSeek={handleComparisonSeek}
+          onPlayingChange={setPlaying}
+        />
+      )}
+      <div
+        className={`replay-stage ${showScene && !comparison ? "has-editor" : ""} ${comparison ? "comparison-stage" : ""}`}
+      >
         {/* 3D Viewport */}
-        <div className="replay-viewport">
+        <div
+          className="replay-viewport"
+          id={comparison ? "comparison-replay" : undefined}
+        >
+          {comparison && <h2 className="comparison-replay-heading">Replay</h2>}
           {(episodeLoading || urdfLoading) && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-surface-2">
               <span className="text-fg-muted text-sm">
@@ -1292,6 +1366,7 @@ export default function URDFViewer({
           <Canvas
             shadows
             frameloop="demand"
+            resize={REPLAY_RESIZE}
             camera={cameraOptions}
             gl={{
               toneMapping: THREE.ACESFilmicToneMapping,
@@ -1350,7 +1425,7 @@ export default function URDFViewer({
             <SceneObjects
               doc={workspace.doc}
               displayScale={scale}
-              axes={debug}
+              axes={debugVisible}
             />
             <Grid
               args={[10 * scale, 10 * scale]}
@@ -1384,7 +1459,10 @@ export default function URDFViewer({
           </p>
         </div>
 
+        {comparison && <ComparisonDivider />}
+        {comparisonPanel}
         {showScene &&
+          !comparison &&
           (workspace.loaded ? (
             <SceneEditor
               key={sceneScope}
@@ -1403,7 +1481,7 @@ export default function URDFViewer({
             </div>
           ))}
       </div>
-      {debug &&
+      {debugVisible &&
         (workspace.doc.note ||
           (isG1 && displayJointNames.some((name) => !mapping[name]))) && (
           <details className="scene-details">
@@ -1429,7 +1507,7 @@ export default function URDFViewer({
           disabled={urdfLoading}
         />
 
-        {debug && (
+        {debugVisible && (
           <>
             <button
               onClick={() => setShowMapping((v) => !v)}

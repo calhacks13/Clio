@@ -9,6 +9,7 @@ import React, {
   useSyncExternalStore,
 } from "react";
 import { useTime, useTimeControls } from "../context/time-context";
+import { signalChartTitle, signalDisplayName } from "@/utils/signal-labels";
 import {
   LineChart,
   Line,
@@ -104,93 +105,21 @@ function PlaybackCursor({ start, end }: { start: number; end: number }) {
   );
 }
 
-function mergeGroups(data: ChartRow[][]): ChartRow[] {
-  if (data.length <= 1) return data[0] ?? [];
-  const maxLen = Math.max(...data.map((g) => g.length));
-  const merged: ChartRow[] = [];
-  for (let i = 0; i < maxLen; i++) {
-    const row: ChartRow = {};
-    for (const group of data) {
-      const src = group[i];
-      if (!src) continue;
-      for (const [k, v] of Object.entries(src)) {
-        if (k === "timestamp") {
-          row[k] = v;
-          continue;
-        }
-        row[k] = v;
-      }
-    }
-    merged.push(row);
-  }
-  return merged;
-}
-
 export const DataRecharts = React.memo(
   ({ data, onChartsReady }: DataGraphProps) => {
     const [hoverStore] = useState(createHoverStore);
-    const [expanded, setExpanded] = useState(false);
 
     useEffect(() => {
       if (typeof onChartsReady === "function") onChartsReady();
     }, [onChartsReady]);
 
-    const combinedData = useMemo(
-      () => (expanded ? mergeGroups(data) : []),
-      [data, expanded],
-    );
-
     if (!Array.isArray(data) || data.length === 0) return null;
 
     return (
-      <div>
-        {data.length > 1 && (
-          <div className="flex justify-end mb-2">
-            <button
-              onClick={() => setExpanded((v) => !v)}
-              className={`btn ${expanded ? "btn-active" : ""}`}
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                {expanded ? (
-                  <>
-                    <polyline points="4 14 10 14 10 20" />
-                    <polyline points="20 10 14 10 14 4" />
-                    <line x1="14" y1="10" x2="21" y2="3" />
-                    <line x1="3" y1="21" x2="10" y2="14" />
-                  </>
-                ) : (
-                  <>
-                    <polyline points="15 3 21 3 21 9" />
-                    <polyline points="9 21 3 21 3 15" />
-                    <line x1="21" y1="3" x2="14" y2="10" />
-                    <line x1="3" y1="21" x2="10" y2="14" />
-                  </>
-                )}
-              </svg>
-              {expanded ? "Split charts" : "Combine all"}
-            </button>
-          </div>
-        )}
-
-        {expanded ? (
-          <SingleDataGraph data={combinedData} hoverStore={hoverStore} tall />
-        ) : (
-          <div className="grid md:grid-cols-2 grid-cols-1 gap-4">
-            {data.map((group, idx) => (
-              <SingleDataGraph key={idx} data={group} hoverStore={hoverStore} />
-            ))}
-          </div>
-        )}
+      <div className="grid md:grid-cols-2 grid-cols-1 gap-4">
+        {data.map((group, idx) => (
+          <SingleDataGraph key={idx} data={group} hoverStore={hoverStore} />
+        ))}
       </div>
     );
   },
@@ -256,7 +185,10 @@ function ChartLegend({
         const color = groupColorMap[group];
         return (
           <div key={group}>
-            <label className="flex items-center gap-1.5 cursor-pointer select-none">
+            <label
+              className="flex items-center gap-1.5 cursor-pointer select-none"
+              title={group}
+            >
               <input
                 type="checkbox"
                 checked={isGroupChecked(group)}
@@ -267,7 +199,9 @@ function ChartLegend({
                 className="size-3"
                 style={{ accentColor: color }}
               />
-              <span className="text-xs font-semibold text-fg">{group}</span>
+              <span className="text-xs font-semibold text-fg">
+                {signalDisplayName(group)}
+              </span>
             </label>
             <div className="pl-5 flex flex-col gap-0.5 mt-0.5">
               {children.map((key) => {
@@ -319,8 +253,9 @@ function ChartLegend({
             />
             <span
               className={`text-xs ${visibleKeys.includes(key) ? "text-fg" : "text-fg-faint"}`}
+              title={key}
             >
-              {key}
+              {signalDisplayName(key)}
             </span>
             <span
               className={`text-xs font-mono tabular-nums ml-1 ${visibleKeys.includes(key) ? "text-accent-fg/80" : "text-fg-faint"}`}
@@ -337,15 +272,7 @@ function ChartLegend({
 }
 
 const SingleDataGraph = React.memo(
-  ({
-    data,
-    hoverStore,
-    tall,
-  }: {
-    data: ChartRow[];
-    hoverStore: HoverStore;
-    tall?: boolean;
-  }) => {
+  ({ data, hoverStore }: { data: ChartRow[]; hoverStore: HoverStore }) => {
     const { seek } = useTimeControls();
     const flattenRow = useCallback(
       (row: Record<string, number | Record<string, number>>, prefix = "") => {
@@ -382,7 +309,10 @@ const SingleDataGraph = React.memo(
     );
 
     // Flatten all rows for recharts
-    const chartData = useMemo(() => data.map((row) => flattenRow(row)), [data]);
+    const chartData = useMemo(
+      () => data.map((row) => flattenRow(row)),
+      [data, flattenRow],
+    );
 
     // dataKeys is purely derived from chartData — compute it during render,
     // not via a useState + useEffect that would force an extra render and
@@ -447,31 +377,24 @@ const SingleDataGraph = React.memo(
       }
     };
 
-    // Derive chart title from the grouped feature names
+    // Prefer the body part over a list of implementation-facing joint names.
     const chartTitle = useMemo(() => {
       const featureNames = Object.keys(groups);
-      if (featureNames.length > 0) {
-        const suffixes = featureNames.map((g) => {
-          const parts = g.split(SERIES_NAME_DELIMITER);
-          return parts[parts.length - 1];
-        });
-        return suffixes.join(", ");
-      }
-      return singles.join(", ");
+      return signalChartTitle(featureNames.length > 0 ? featureNames : singles);
     }, [groups, singles]);
 
     return (
-      <div className="w-full bg-[var(--surface-1)]/40 rounded-lg border border-line p-3">
+      <div className="signal-chart">
         {chartTitle && (
-          <p
-            className="text-xs font-medium text-fg-soft mb-1 px-1 truncate"
+          <h3
+            className="signal-chart-heading text-sm font-semibold text-fg mb-2 px-1"
             title={chartTitle}
           >
             {chartTitle}
-          </p>
+          </h3>
         )}
         <div
-          className={`relative w-full select-none ${tall ? "h-[500px]" : "h-72"}`}
+          className="relative w-full select-none h-72"
           onMouseLeave={handleMouseLeave}
         >
           <ResponsiveContainer width="100%" height="100%">
