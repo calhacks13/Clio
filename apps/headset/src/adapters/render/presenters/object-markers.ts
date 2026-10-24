@@ -6,7 +6,8 @@ import { makeText, setText } from '../text';
 
 // Where Clio thinks each object is (a faint dot, so learners can see what it sees) and highlight
 // rings for the objects the step or the coach points at. An object with an outline around it
-// (OutlinesPresenter) keeps its label but loses the ring.
+// (OutlinesPresenter) keeps its label but loses the ring; one whose live light is on
+// (LiveHighlightsPresenter, which names it) loses both.
 
 const STYLE_COLOR: Record<HighlightStyle, number> = {
   target: 0x4fe3ff,
@@ -30,6 +31,9 @@ export class ObjectMarkersPresenter implements Presenter {
   readonly object = new Group();
   private readonly markers = new Map<string, Marker>();
 
+  /** `lit`: whether an object's live light is on. */
+  constructor(private readonly lit: (objectId: string) => boolean = () => false) {}
+
   update(ctx: PresentContext): void {
     const seen = new Set<string>();
     const styles = new Map(ctx.snapshot.highlights.map((h) => [h.objectId, h.style]));
@@ -44,9 +48,11 @@ export class ObjectMarkersPresenter implements Presenter {
       setText(marker.label, est.spec.label);
 
       const style = styles.get(est.id);
+      const lit = this.lit(est.id);
       // Outlines hide while the object is in hand, so the ring comes back then.
-      marker.ring.visible = style !== undefined && (!outlined.has(est.id) || est.heldBy !== null);
-      marker.label.visible = style !== undefined || ctx.debug;
+      marker.ring.visible =
+        style !== undefined && !lit && (!outlined.has(est.id) || est.heldBy !== null);
+      marker.label.visible = (style !== undefined && !lit) || ctx.debug;
       if (style) {
         marker.ringMaterial.color.setHex(STYLE_COLOR[style]);
         const speed = style === 'attention' ? 8 : 3;

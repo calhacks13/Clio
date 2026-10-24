@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { length, sub, type Vec3 } from '../../src/core/math';
-import type { Point2 } from '../../src/domain/world/outline';
 import {
   alignCyclic,
   capSpeed,
@@ -13,8 +12,9 @@ import {
   oneEuroAlpha,
   predictionGain,
   resampleClosed,
-} from '../../src/primary/motion-smoothing';
-import type { Placement } from '../../src/primary/placement';
+} from '../../src/domain/world/motion-smoothing';
+import type { Point2 } from '../../src/domain/world/outline';
+import type { Placement } from '../../src/domain/world/placement';
 
 // The camera sits at the origin looking down -z; objects are 0.6 m ahead. The outline's plane
 // then has x along world +x and y along world +y, so a placement's 2D points read as world x/y.

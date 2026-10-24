@@ -55,10 +55,12 @@ import { PoseHistory } from '../domain/world/pose-history';
 import { chooseTablePlane, fitTable, type TablePlane } from '../domain/world/table-snap';
 import { Workspace, workspaceInFrontOf } from '../domain/world/workspace';
 import type { AppConfig } from './config';
+import { LiveTracker } from './live-tracker';
 
 // The composition root: the only place that knows every adapter. It wires the domain to the
 // headset, then runs the per-frame pipeline from docs/ARCHITECTURE.md §5.2:
-// sample → localize → perceive → decide → record → present.
+// sample → localize → perceive → decide → record → present. With a camera, what each step shows
+// is followed live by the tracker when it answers (live-tracker.ts, ?live=0 turns it off).
 
 const log = createLogger('app');
 const PINCH_NEAREST_M = 0.15;
@@ -104,6 +106,8 @@ export class ClioApp {
     log.warn(`plane detection failed (${String(err)}); planes are not recorded`),
   );
   private readonly environment: EnvironmentRecorder;
+  /** Null without a camera, or with ?live=0. */
+  private readonly live: LiveTracker | null;
   private readonly anchor = new WorkspaceAnchor();
   private readonly workspacePresenters: Presenter[];
   private readonly worldPresenters: Presenter[];
@@ -144,6 +148,23 @@ export class ClioApp {
           surface: this.surfaces,
         })
       : null;
+    this.live =
+      o.camera && o.config.live
+        ? new LiveTracker({
+            bus,
+            clock,
+            registry: this.registry,
+            poses: this.poses,
+            camera: o.camera,
+            surfaces: this.surfaces,
+            workspace: () => this.currentWorkspace(),
+            procedure: () => this.lesson.procedure,
+            trackerPort: o.config.trackerPort,
+            frameWidth: o.config.frameWidth,
+            hideHeld: !o.config.liveHeld,
+            emulated: o.emulated,
+          })
+        : null;
     this.lesson = new LessonController({
       bus,
       clock,
@@ -157,6 +178,7 @@ export class ClioApp {
       context: () => this.episodeContext(),
       checker: new RemoteStepChecker(o.api),
       templates: new RemoteTemplates(o.api),
+      live: () => this.live?.live ?? false,
       options: {
         mode: o.config.mode,
         autoDemo: o.config.autoDemo,
@@ -176,9 +198,10 @@ export class ClioApp {
     this.overlay = new OverlayModel(bus, this.lesson.view());
     this.overlay.attach();
 
+    const lit = (id: string) => this.live?.lit(id) ?? false;
     this.workspacePresenters = [
-      new ObjectMarkersPresenter(),
-      new OutlinesPresenter(),
+      new ObjectMarkersPresenter(lit),
+      new OutlinesPresenter(lit),
       new GhostHandsPresenter(),
       new GlyphsPresenter(),
       new WorkspacePresenter(),
@@ -187,15 +210,31 @@ export class ClioApp {
       new InstructionPanelPresenter(() => this.lesson.confirmByUser('Done button')),
       new HudPresenter(),
       new CalibrationMarkerPresenter(),
+      ...(this.live ? [this.live.presenter] : []),
     ];
     for (const p of this.workspacePresenters) this.scene.workspaceRoot.add(p.object);
     for (const p of this.worldPresenters) this.scene.worldRoot.add(p.object);
+    if (this.live) this.scene.worldRoot.add(this.live.occluders.object);
 
-    if (o.config.debug) this.bus.onAny((type) => log.debug(String(type)));
+    // Live observations come many times a second; they would drown the log.
+    if (o.config.debug) {
+      this.bus.onAny((type) => {
+        if (type !== 'objects.observed') log.debug(String(type));
+      });
+    }
   }
 
   async enterXr(): Promise<void> {
-    this.runtime = await startArSession(this.scene.renderer);
+    // Depth sensing measures what the tracker follows; it costs, so only with a tracker there.
+    const depthSensing = (await this.live?.connect()) ?? false;
+    try {
+      this.runtime = await startArSession(this.scene.renderer, { depthSensing });
+    } catch (err) {
+      // The boot page builds a new app for the next try.
+      this.live?.stop();
+      throw err;
+    }
+    this.live?.start(this.runtime, this.scene.renderer);
     log.info(`XR session: ${this.runtime.features.join(', ') || 'no optional features'}`);
     this.runtime.session.addEventListener('end', () => void this.shutdown('session ended'));
     if (!this.o.config.calibrate && (await this.anchor.restore(this.runtime.session))) {
@@ -208,6 +247,7 @@ export class ClioApp {
 
   async shutdown(reason: string): Promise<void> {
     await this.lesson.stop(reason);
+    this.live?.stop();
     await this.coach?.stop();
     this.scene.stop();
   }
@@ -238,6 +278,7 @@ export class ClioApp {
     }
     const released = this.grasp.update(local);
     if (released.length > 0) setTimeout(() => this.lesson.relocate(released), RELOCATE_DELAY_MS);
+    this.live?.perceive(frame, t);
     const changes = this.registry.drainChanges();
     if (changes.length > 0) this.bus.emit('objects.updated', { t, objects: changes });
 
@@ -262,6 +303,7 @@ export class ClioApp {
     }
 
     // 6. Present.
+    this.live?.prepare(frame, runtime.space);
     const ctx: PresentContext = {
       t,
       dt,
@@ -457,7 +499,10 @@ export class ClioApp {
       app: { version: this.o.version },
       // The model the camera's answers are lifted with, so they can be lifted again offline.
       ...(this.o.camera ? { camera: passthroughCameraRecord(this.o.camera) } : {}),
-      ...(this.planeDetection ? { features: [EPISODE_FEATURE.environmentPlanes] } : {}),
+      features: [
+        ...(this.planeDetection ? [EPISODE_FEATURE.environmentPlanes] : []),
+        ...(this.live ? [EPISODE_FEATURE.objectObservations] : []),
+      ],
     };
   }
 }

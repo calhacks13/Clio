@@ -5,6 +5,7 @@ import type { PlanImageSource } from '../../domain/session/lesson-controller';
 import type { CameraModel } from '../../domain/world/camera-model';
 import type { CameraFrame, CameraFrameSource } from '../../domain/world/grounding';
 import { cameraModelFromSettings, defaultQuestCameraModel } from './calibration';
+import type { FrameImage } from './frame-stream';
 import { applyStoredCalibration, loadStoredCalibration } from './stored-calibration';
 
 // Quest Browser exposes the headset's front RGB cameras through getUserMedia (Browser 40.1+). We
@@ -18,7 +19,8 @@ import { applyStoredCalibration, loadStoredCalibration } from './stored-calibrat
 //
 // open({ storedCalibration: true }) puts calibrate.html's saved camera pose on the model when it
 // was made for the same model (the default guess, or the same lens metadata; stored-calibration.ts).
-// calibrate.html itself opens the camera without it.
+// calibrate.html itself opens the camera without it. frame() hands out the video itself, unencoded,
+// for the tracker's stream (frame-stream.ts), which shrinks and encodes it after the XR frame.
 
 const log = createLogger('camera');
 const isQuest = () => /OculusBrowser|Quest/.test(navigator.userAgent);
@@ -99,6 +101,13 @@ export class PassthroughCamera implements CameraFrameSource, CoachFrameSource, P
           jpegBase64: jpeg,
         }
       : null;
+  }
+
+  /** The newest video frame, stamped with its capture time; null until the video has one. */
+  frame(): FrameImage | null {
+    const { videoWidth: width, videoHeight: height } = this.video;
+    if (this.video.readyState < 2 || !width || !height) return null;
+    return { source: this.video, width, height, t: this.lastFrameT || performance.now() };
   }
 
   async snapshot(): Promise<string | null> {

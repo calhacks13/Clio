@@ -6,7 +6,7 @@ import {
   OCCLUDER_BONES,
   OCCLUDER_RENDER_ORDER,
   occluderRadius,
-} from '../../src/tracking/hand-occluders';
+} from '../../src/adapters/render/hand-occluders';
 
 const N = HAND_JOINTS.length;
 

@@ -114,14 +114,36 @@ Only `id` is required. Clio fills in the rest:
 ## When Clio asks
 
 When a step starts, Clio sends one request for the step's `show` items and any targets it has not
-found yet. While the step runs, it asks again for the `show` items every few seconds, so outlines
-stay on objects that were moved. It skips objects in the learner's hand, because hand tracking
-moves those, and it never sends a second request while one is in flight. Expect a request every
-2 to 4 seconds during a lesson. Latency adds directly to how long an outline takes to appear.
+found yet. It also asks once to place what is still missing when a lesson starts, after the
+learner puts an object down, and when the coach highlights an object that has no position yet.
+It never sends a second request while one is in flight.
 
-A finder that answers with `refreshMs` sets a faster pace: the headset sends its next frame that
-many milliseconds after each answer (never later than `?showRefresh`, and never with
-`?showRefresh=0`). `refreshMs` is passed through to the headset in Clio's own answer.
+While the step runs, the show items are followed one of two ways:
+- **Live, with the tracker** (the default whenever the tracker answers on `/track`). The headset
+  streams its camera frames (480 px, as fast as the Mac answers) to the tracker's WebSocket
+  ([tracker/TRACK.md](../tracker/TRACK.md), objects mode) and tells it what to follow, in words:
+  the focused step's show items in rank order, plus, for 5 s, whatever the coach highlights (a
+  closer look's highlights included). Each object keeps one `phrase` for the whole lesson (its
+  first show item's, else its label), because the tracker starts a track over when the phrase
+  changes; the step's description goes in `query`. The tracker asks jev about the objects about
+  once a second and follows them on every frame. The headset places each outline at the object's
+  measured distance (depth sensing, then hit-test), smooths it and draws it with a depth-correct
+  glow. While this runs, the show items are not asked about again over HTTP. `?live=0` turns it
+  off, `?tracker=<port>` picks another tracker (adb reverse the port), and `?frame=640` streams
+  wider frames for small parts.
+- **Over HTTP**, when the tracker is not running or its connection drops (the headset keeps
+  retrying, with backoff). Clio asks again for the `show` items every few seconds, so outlines
+  stay on objects that were moved, skipping objects in the learner's hand, because hand tracking
+  moves those. Expect a request every 2 to 4 seconds during a lesson. Latency adds directly to
+  how long an outline takes to appear. A finder that answers with `refreshMs` sets a faster pace:
+  the headset sends its next frame that many milliseconds after each answer (never later than
+  `?showRefresh`, and never with `?showRefresh=0`). `refreshMs` is passed through to the headset
+  in Clio's own answer.
+
+What the tracker reports is the camera's: positions go to the object registry as `detector`
+estimates, never trusted by a Gemini coach's checks, and each frame's answer is recorded in the
+episode's `observations.ndjson`. Nothing it sees reaches the coach
+([coach-plan.md](coach-plan.md#the-perception-boundary)).
 
 ## A tracking finder
 

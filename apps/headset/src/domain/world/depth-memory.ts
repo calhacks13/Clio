@@ -1,5 +1,5 @@
-import { dot, madd, sub } from '../core/math';
-import type { Ray } from '../domain/world/camera-model';
+import { dot, madd, sub } from '../../core/math';
+import type { Ray } from './camera-model';
 import type { DepthKind, ObjectDepth, ObjectMask } from './placement';
 
 // The tracker's masks come 20 to 30 times a second, and measuring an object's distance with

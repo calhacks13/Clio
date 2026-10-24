@@ -9,6 +9,19 @@ import {
   type StoredCalibration,
   saveStoredCalibration,
 } from '../adapters/camera/stored-calibration';
+import {
+  createDepthProbe,
+  type DepthHit,
+  type DepthSource,
+  type XrDepthProbe,
+} from '../adapters/xr/depth';
+import {
+  createDepthSampler,
+  type DepthSampler,
+  depthSensingInit,
+  disableXrDepthOcclusion,
+  preferDepthSensing,
+} from '../adapters/xr/depth-sensing';
 import { poseFromMatrix } from '../adapters/xr/frame-sampler';
 import { createLogger } from '../core/log';
 import {
@@ -30,19 +43,6 @@ import {
   type Vec3,
 } from '../core/math';
 import type { CameraModel } from '../domain/world/camera-model';
-import {
-  createDepthProbe,
-  type DepthHit,
-  type DepthSource,
-  type XrDepthProbe,
-} from '../primary/depth';
-import {
-  createDepthSampler,
-  type DepthSampler,
-  depthSensingInit,
-  disableXrDepthOcclusion,
-  preferDepthSensing,
-} from '../primary/depth-sensing';
 import { PinchLatch } from '../tracking/pinch-latch';
 import { type EmulatedHands, installCalibrationEmulator, SimulatedCamera } from './emulator';
 import { CalibrationFlow, type CaptureResult, type FlowProgress } from './flow';

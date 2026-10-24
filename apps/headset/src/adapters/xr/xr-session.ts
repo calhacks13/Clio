@@ -1,10 +1,15 @@
 import type { WebGLRenderer } from 'three';
+import { depthSensingInit, disableXrDepthOcclusion } from './depth-sensing';
 
 // Starts an immersive-ar (passthrough) session and hands it to three.js. Every feature beyond
 // local-floor is optional, so the app degrades instead of refusing to start.
 
 export interface XrSessionOptions {
-  /** GPU depth for occlusion; off by default (cost, and ghost hands should stay visible). */
+  /**
+   * The headset's depth map, to measure how far tracked objects are (depth-sensing.ts); off by
+   * default, as it costs. three.js's own depth occlusion stays off, so the map never hides ghost
+   * hands, panels or outlines (the live glow fades behind real surfaces by itself).
+   */
   depthSensing?: boolean;
 }
 
@@ -36,13 +41,15 @@ export async function startArSession(
     'mesh-detection',
     'layers',
   ];
-  if (depthSensing) optionalFeatures.push('depth-sensing');
+  const depth = depthSensing ? depthSensingInit() : null;
+  if (depth) {
+    optionalFeatures.push(...depth.optionalFeatures);
+    disableXrDepthOcclusion(renderer);
+  }
   const session = await xr.requestSession('immersive-ar', {
     requiredFeatures: ['local-floor'],
     optionalFeatures,
-    ...(depthSensing
-      ? { depthSensing: { usagePreference: ['gpu-optimized'], dataFormatPreference: [] } }
-      : {}),
+    ...(depth ? { depthSensing: depth.depthSensing } : {}),
   } as XRSessionInit);
   renderer.xr.setReferenceSpaceType('local-floor');
   await renderer.xr.setSession(session);

@@ -6,7 +6,7 @@ import {
   type TrackerMask,
   type TrackerSocket,
   trackerUrl,
-} from '../../src/primary/tracker-client';
+} from '../../src/adapters/net/tracker-client';
 
 class FakeSocket implements TrackerSocket {
   readyState = 0;
@@ -204,5 +204,135 @@ describe('TrackerClient', () => {
     expect(connections).toEqual([true, false]);
     expect(timers).toEqual([]);
     expect(client.connected).toBe(false);
+  });
+});
+
+const detections = {
+  type: 'detections',
+  seq: 41,
+  t: 123456.7,
+  model: 'yoloe-26l-seg',
+  ms: { decode: 2, track: 30, total: 37 },
+  detections: [
+    {
+      id: 'cup_a',
+      found: true,
+      state: 'tracking',
+      box: [0.31, 0.42, 0.58, 0.77],
+      outline: [
+        [0.41, 0.52],
+        [0.47, 0.5],
+        [0.49, 0.58],
+      ],
+      point: [0.45, 0.6],
+      contact: [0.44, 0.76],
+      score: 0.91,
+      track: 3,
+    },
+    {
+      id: 'cup_b',
+      found: false,
+      state: 'unknown',
+      box: null,
+      outline: null,
+      point: null,
+      contact: null,
+      score: null,
+      track: null,
+    },
+  ],
+};
+
+describe('objects mode', () => {
+  it('reads a frame of detections, one per object in the set', () => {
+    const parsed = parseTrackerMessage(JSON.stringify(detections));
+    expect(parsed).toMatchObject({ type: 'detections', seq: 41, t: 123456.7, ms: { total: 37 } });
+    expect(parsed?.type === 'detections' && parsed.detections).toEqual(detections.detections);
+    expect(parseTrackerMessage(JSON.stringify({ ...detections, detections: [] }))).toMatchObject({
+      detections: [],
+    });
+  });
+
+  it("keeps the other objects when one's geometry is odd", () => {
+    const odd = {
+      ...detections,
+      detections: [
+        {
+          id: 'cup_a',
+          found: true,
+          box: [-0.01, 0.42, 1.02, 0.77],
+          outline: [
+            [0.4, 0.5],
+            [0.5, 0.5],
+          ],
+          point: [0.45, 0.6],
+        },
+      ],
+    };
+    const parsed = parseTrackerMessage(JSON.stringify(odd));
+    expect(parsed?.type === 'detections' && parsed.detections[0]).toMatchObject({
+      box: [0, 0.42, 1, 0.77],
+      outline: null,
+      contact: null,
+      state: null,
+      score: null,
+      track: null,
+    });
+  });
+
+  it("reads a mask's track id, null when left out", () => {
+    expect(parseTrackerMessage(JSON.stringify({ ...mask, track: 7 }))).toMatchObject({ track: 7 });
+    expect(parseTrackerMessage(JSON.stringify(mask))).toMatchObject({ track: null });
+  });
+
+  it('sends the object set and passes detections on, not masks', () => {
+    const sockets: FakeSocket[] = [];
+    const frames: unknown[] = [];
+    const masks: unknown[] = [];
+    const client = new TrackerClient({
+      url: 'ws://localhost:5173/track',
+      detections: (m) => frames.push(m),
+      mask: (m) => masks.push(m),
+      socket: (url) => {
+        const socket = new FakeSocket(url);
+        sockets.push(socket);
+        return socket;
+      },
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+    });
+    const objects = [{ id: 'cup_a', phrase: 'clear plastic cup', query: 'The cup on the left' }];
+    client.open();
+    expect(client.send({ type: 'objects', objects })).toBe(false);
+    sockets[0]?.accept();
+    expect(client.send({ type: 'objects', objects })).toBe(true);
+    expect(JSON.parse(String(sockets[0]?.sent[0]))).toEqual({ type: 'objects', objects });
+    sockets[0]?.receive(detections);
+    expect(frames).toHaveLength(1);
+    expect(masks).toHaveLength(0);
+  });
+});
+
+describe('TrackerClient.waitConnected', () => {
+  it('resolves true once the tracker is ready', async () => {
+    const { client, sockets } = setup();
+    client.open();
+    const waiting = client.waitConnected(800);
+    sockets[0]?.accept();
+    await expect(waiting).resolves.toBe(true);
+    await expect(client.waitConnected(800)).resolves.toBe(true);
+  });
+
+  it('resolves false when the attempt fails, the wait runs out, or nothing was opened', async () => {
+    const { client, sockets, timers } = setup();
+    await expect(client.waitConnected(800)).resolves.toBe(false);
+    client.open();
+    const refused = client.waitConnected(800);
+    sockets[0]?.drop();
+    await expect(refused).resolves.toBe(false);
+    const slow = client.waitConnected(800);
+    expect(timers.at(-1)?.ms).toBe(800);
+    timers.at(-1)?.fn();
+    await expect(slow).resolves.toBe(false);
   });
 });

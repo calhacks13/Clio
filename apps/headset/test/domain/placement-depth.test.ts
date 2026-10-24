@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { DepthHit, DepthSource } from '../../src/adapters/xr/depth';
 import {
   add,
   composePose,
@@ -13,7 +14,6 @@ import {
 } from '../../src/core/math';
 import { type CameraModel, intersectPlaneY, type Ray } from '../../src/domain/world/camera-model';
 import { billboard, outlinePoint } from '../../src/domain/world/outline';
-import type { DepthHit, DepthSource } from '../../src/primary/depth';
 import {
   maskRays,
   measureDepth,
@@ -21,7 +21,7 @@ import {
   placeDetection,
   placeOutline,
   surfaceOrTable,
-} from '../../src/primary/placement';
+} from '../../src/domain/world/placement';
 
 // A Quest 3-like rig: the passthrough camera sits in front of the right eye (3.2 cm right, 2 cm
 // down, 6 cm forward of the head) and looks 15° down; the eyes are 6.3 cm apart at the head. An

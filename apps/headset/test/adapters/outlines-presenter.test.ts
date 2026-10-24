@@ -173,6 +173,28 @@ describe('OutlinesPresenter', () => {
     expect(drawn(presenter)).toEqual([]);
   });
 
+  it("leaves an object to its live light while that is on, and stands in when it isn't", () => {
+    let lit = true;
+    const presenter = new OutlinesPresenter((id) => lit && id === 'cap');
+    const outlines = [cap(CONTOUR), { ...cap(CONTOUR, 1), objectId: 'jug' }];
+    const objects = [estimate('cap', [0, 0, -1]), estimate('jug', [0.3, 0, -1])];
+    const shown = () => drawn(presenter).map((g) => [g.position.x, g.visible]);
+    presenter.update(context(outlines, objects, [0, 0, 0]));
+    expect(shown()).toEqual([[0.3, true]]);
+    lit = false;
+    presenter.update(context(outlines, objects, [0, 0, 0]));
+    expect(shown()).toEqual([
+      [0.3, true],
+      [0, true],
+    ]);
+    lit = true;
+    presenter.update(context(outlines, objects, [0, 0, 0]));
+    expect(shown()).toEqual([
+      [0.3, true],
+      [0, false],
+    ]);
+  });
+
   it('rebuilds the shape only when a new outline arrives', () => {
     const presenter = new OutlinesPresenter();
     const objects = [estimate('cap', [0, 0, -1])];

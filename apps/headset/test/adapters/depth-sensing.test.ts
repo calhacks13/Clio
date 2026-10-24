@@ -1,16 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  dot,
-  madd,
-  normalize,
-  type Pose,
-  quatFromAxisAngle,
-  sub,
-  transformPoint,
-  type Vec3,
-} from '../../src/core/math';
-import type { Ray } from '../../src/domain/world/camera-model';
-import type { DepthHit, DepthSource } from '../../src/primary/depth';
+import type { DepthHit, DepthSource } from '../../src/adapters/xr/depth';
 import {
   applyNormTransform,
   createDepthSampler,
@@ -29,7 +18,18 @@ import {
   unpackMillimeters,
   unprojectFromView,
   windowDepthToMeters,
-} from '../../src/primary/depth-sensing';
+} from '../../src/adapters/xr/depth-sensing';
+import {
+  dot,
+  madd,
+  normalize,
+  type Pose,
+  quatFromAxisAngle,
+  sub,
+  transformPoint,
+  type Vec3,
+} from '../../src/core/math';
+import type { Ray } from '../../src/domain/world/camera-model';
 
 // The ray/view math behind depth sensing, against analytic scenes: a depth map is what the view
 // would see of a few planes and boxes, and a ray from the passthrough camera (a few cm from the

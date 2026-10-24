@@ -4,11 +4,16 @@ import {
   NormalizedPolygonSchema,
 } from '@clio/protocol';
 import { z } from 'zod';
-import { createLogger } from '../core/log';
+import { createLogger } from '../../core/log';
 
-// The live tracking stream (tracker/TRACK.md): camera frames go to the tracker on the
-// Mac, which segments the current target on every one and answers each with a mask; Gemini and
-// jev's answer, about once a second, tell it what the target is. The socket goes through the
+// The live tracking stream (tracker/TRACK.md): camera frames go to the tracker on the Mac, which
+// answers every one. A connection has two modes:
+//   target   (the primary page) one target, boxed by Gemini and jev's answer about once a second;
+//            each frame is answered with a mask.
+//   objects  (the lesson) a set of objects in words; the tracker asks jev about them itself,
+//            together, about once a second, YOLOE-26 and ByteTrack follow each one on every frame,
+//            and each frame is answered with one detection per object, in the set's order.
+// A connection is in target mode until it sends an `objects` message. The socket goes through the
 // page's own origin (Vite proxies /track to the tracker), and reconnects with backoff while open.
 
 const log = createLogger('tracker');
@@ -36,11 +41,55 @@ const MaskSchema = z.object({
   state: z.string().nullable().default(null),
   ms: z.object({ segment: z.number(), total: z.number() }).partial().nullable().default(null),
   model: z.string().nullable().default(null),
+  /** ByteTrack's id for the track; null from a tracker that omits it. */
+  track: z.number().int().nullable().default(null),
 });
 
-const TrackerMessageSchema = z.discriminatedUnion('type', [ReadySchema, MaskSchema]);
+// One frame answers for every object at once, so one object's odd geometry must not drop the
+// others': coordinates are clamped into the image, and an outline of fewer than 3 points is none.
+const unit = z.number().transform((v) => Math.min(1, Math.max(0, v)));
+const UnitPoint = z.tuple([unit, unit]);
+const UnitBox = z.tuple([unit, unit, unit, unit]);
+const UnitOutline = z
+  .array(UnitPoint)
+  .transform((points) => (points.length >= 3 ? points : null))
+  .nullable();
+
+/** One object of the set in one frame (objects mode). */
+const DetectionSchema = z.object({
+  /** The lesson's object id, as sent. */
+  id: z.string(),
+  found: z.boolean(),
+  /** tracking, coasting, lost or unknown (jev has not placed it yet). */
+  state: z.string().nullable().default(null),
+  box: UnitBox.nullable().default(null),
+  outline: UnitOutline.default(null),
+  point: UnitPoint.nullable().default(null),
+  contact: UnitPoint.nullable().default(null),
+  score: z.number().nullable().default(null),
+  track: z.number().int().nullable().default(null),
+});
+
+const DetectionsSchema = z.object({
+  type: z.literal('detections'),
+  seq: z.number().int(),
+  /** The frame's capture time, echoed back (performance.now() clock). */
+  t: z.number(),
+  model: z.string().nullable().default(null),
+  ms: z.record(z.string(), z.number()).nullable().default(null),
+  /** One per object in the set, in its order; empty while the set is. */
+  detections: z.array(DetectionSchema),
+});
+
+const TrackerMessageSchema = z.discriminatedUnion('type', [
+  ReadySchema,
+  MaskSchema,
+  DetectionsSchema,
+]);
 
 export type TrackerMask = z.output<typeof MaskSchema>;
+export type TrackerDetection = z.output<typeof DetectionSchema>;
+export type TrackerDetections = z.output<typeof DetectionsSchema>;
 export type TrackerMessage = z.output<typeof TrackerMessageSchema>;
 
 /** The header of a binary frame message; the JPEG bytes follow it. */
@@ -62,6 +111,22 @@ export type TargetMessage = {
   part?: boolean;
 };
 export type ClearMessage = { type: 'clear' };
+
+/** An object to follow, in words. */
+export interface TrackedQuery {
+  /** The lesson's object id: detections come back under it. */
+  id: string;
+  /** A short category noun phrase, jev's subject. A changed phrase starts the object's track over. */
+  phrase: string;
+  /** What tells it apart (context for jev); changing it does not restart the track. */
+  query: string;
+}
+
+/**
+ * Replaces the whole set (objects mode; the tracker follows at most 8). An empty set stops
+ * tracking and every jev call.
+ */
+export type ObjectsMessage = { type: 'objects'; objects: readonly TrackedQuery[] };
 
 /** A message from the tracker, or null for anything this page doesn't understand. */
 export function parseTrackerMessage(data: unknown): TrackerMessage | null {
@@ -108,8 +173,10 @@ export interface TrackerSocket {
 
 export interface TrackerClientDeps {
   url: string;
-  /** Each mask, as it arrives. */
-  mask(mask: TrackerMask): void;
+  /** Each mask, as it arrives (target mode). */
+  mask?(mask: TrackerMask): void;
+  /** Each frame's detections, as they arrive (objects mode). */
+  detections?(message: TrackerDetections): void;
   /** The connection opened (the tracker starts without a target) or closed. */
   connection?(open: boolean): void;
   socket?(url: string): TrackerSocket;
@@ -125,6 +192,8 @@ export class TrackerClient {
   private retryMs = FIRST_RETRY_MS;
   private retry: unknown = null;
   private readyModel: string | null = null;
+  /** waitConnected() calls still waiting. */
+  private readonly waiting = new Set<(connected: boolean) => void>();
 
   constructor(private deps: TrackerClientDeps) {}
 
@@ -157,6 +226,7 @@ export class TrackerClient {
 
   close(): void {
     this.wanted = false;
+    this.settleWaiting(false);
     if (this.retry !== null) (this.deps.clearTimeout ?? clearTimeout)(this.retry as number);
     this.retry = null;
     const ws = this.ws;
@@ -175,8 +245,26 @@ export class TrackerClient {
     return true;
   }
 
-  /** Send a target or clear; false when not connected. */
-  send(message: TargetMessage | ClearMessage): boolean {
+  /**
+   * Resolves true once connected, false when the connection attempt under way fails first or `ms`
+   * milliseconds pass. Call after open().
+   */
+  waitConnected(ms: number): Promise<boolean> {
+    if (this.connected) return Promise.resolve(true);
+    if (!this.wanted) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      const done = (connected: boolean) => {
+        this.waiting.delete(done);
+        (this.deps.clearTimeout ?? clearTimeout)(timer as number);
+        resolve(connected);
+      };
+      this.waiting.add(done);
+      const timer = (this.deps.setTimeout ?? setTimeout)(() => done(false), ms);
+    });
+  }
+
+  /** Send a target, a clear or an object set; false when not connected. */
+  send(message: TargetMessage | ClearMessage | ObjectsMessage): boolean {
     if (!this.connected || !this.ws) return false;
     this.ws.send(JSON.stringify(message));
     return true;
@@ -199,6 +287,7 @@ export class TrackerClient {
       if (this.ws !== ws) return;
       this.ws = null;
       this.dropped();
+      this.settleWaiting(false);
       this.scheduleRetry();
     };
   }
@@ -213,10 +302,17 @@ export class TrackerClient {
       if (first) {
         log.info(`connected (${message.model})`);
         this.deps.connection?.(true);
+        this.settleWaiting(true);
       }
       return;
     }
-    if (this.connected) this.deps.mask(message);
+    if (!this.connected) return;
+    if (message.type === 'mask') this.deps.mask?.(message);
+    else this.deps.detections?.(message);
+  }
+
+  private settleWaiting(connected: boolean): void {
+    for (const done of [...this.waiting]) done(connected);
   }
 
   private dropped(): void {

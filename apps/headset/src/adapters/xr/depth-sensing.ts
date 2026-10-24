@@ -1,4 +1,4 @@
-import { createLogger } from '../core/log';
+import { createLogger } from '../../core/log';
 import {
   cross,
   dot,
@@ -10,9 +10,9 @@ import {
   sub,
   transformPoint,
   type Vec3,
-} from '../core/math';
-import type { Ray } from '../domain/world/camera-model';
-import type { DepthHit, DepthSource } from './depth';
+} from '../../core/math';
+import type { Ray } from '../../domain/world/camera-model';
+import type { DepthHit, DepthSource } from '../../domain/world/depth-source';
 
 // How far along a world-space ray the real world is, from the WebXR Depth Sensing API: the
 // headset's own depth map of whatever is in front of it, hands and hand-held objects included,

@@ -1,7 +1,5 @@
 import * as THREE from 'three';
-import type { Vec3 } from '../core/math';
-import type { Ray } from '../domain/world/camera-model';
-import { createDepthProbe, type DepthHit, type XrDepthProbe } from '../primary/depth';
+import { createDepthProbe, type DepthHit, type XrDepthProbe } from '../adapters/xr/depth';
 import {
   createDepthSampler,
   type DepthSampler,
@@ -9,7 +7,9 @@ import {
   depthSensingInit,
   disableXrDepthOcclusion,
   type WindowFar,
-} from '../primary/depth-sensing';
+} from '../adapters/xr/depth-sensing';
+import type { Vec3 } from '../core/math';
+import type { Ray } from '../domain/world/camera-model';
 import { Readout } from './panel';
 
 // /depth.html: does Quest Browser serve WebXR depth sensing, and how good is it? In passthrough AR

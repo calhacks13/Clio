@@ -25,11 +25,12 @@ import { glowFragmentShader, glowVertexShader } from './glow/shader';
 import { HighlightMask } from './highlight-mask';
 import { cornerBrackets, mergeStrokes, type Stroke, strokePolyline } from './stroke';
 
-// The light around a tracked real object, shared by the primary-object demo (primary/outline-view)
-// and the lesson's targets (presenters/outlines). A segmenter's contour becomes a glowing volume
-// (glow/shader.ts): a soft rim of light just inside the silhouette, faint light within, and a
-// bloom outside it, all shaped on the GPU from an exact distance to the smoothed silhouette (one
-// half-float channel, highlight-mask.ts), so a mask that is a few pixels off disappears into the
+// The light around a tracked real object, shared by the tracked outlines (outline-view.ts: the
+// primary-object demo and the lesson's live tracking) and the lesson's other outlines
+// (presenters/outlines). A segmenter's contour becomes a glowing volume (glow/shader.ts): a soft
+// rim of light just inside the silhouette, faint light within, and a bloom outside it, all shaped
+// on the GPU from an exact distance to the smoothed silhouette (one half-float channel,
+// highlight-mask.ts), so a mask that is a few pixels off disappears into the
 // glow. A new mask only rebuilds that field; the quad, material and texture are reused. The light
 // breathes slowly and flares briefly when an object is found. A box alone does not identify a
 // surface: it gets honest corner brackets instead.

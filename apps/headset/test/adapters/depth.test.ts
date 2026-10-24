@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDepthProbe, XrDepthProbe } from '../../src/adapters/xr/depth';
 import { quatFromAxisAngle, type Vec3 } from '../../src/core/math';
 import type { Ray } from '../../src/domain/world/camera-model';
-import { createDepthProbe, XrDepthProbe } from '../../src/primary/depth';
 
 // XrDepthProbe against a fake session: each hit-test source is fixed in the reference space, its
 // results come on later frames, and it is cancelled once answered.

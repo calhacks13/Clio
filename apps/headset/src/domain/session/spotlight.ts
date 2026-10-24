@@ -24,6 +24,11 @@ export interface SpotlightDeps {
   registry: ObjectRegistry;
   /** Null without a camera: nothing is looked for and every unplaced object stays missing. */
   grounder: Grounder | null;
+  /**
+   * True while the tracker follows the step's show items live (live-tracking.ts): they are not
+   * looked for again then. One-shot looks (a step's start, a release, a highlight) still go out.
+   */
+  live?: () => boolean;
   options?: SpotlightOptions;
 }
 
@@ -86,7 +91,7 @@ export class Spotlight {
   /** Per frame: look again at what the step shows, refreshMs after the last answer. */
   tick(t: number): Promise<string[]> | null {
     const step = this.step;
-    if (!step || !this.deps.grounder || this.refreshMs <= 0) return null;
+    if (!step || !this.deps.grounder || this.refreshMs <= 0 || this.deps.live?.()) return null;
     if (this.looking > 0 || t < this.nextLookT) return null;
     // A held object rides with the hand; the camera would only see the hand around it.
     const requests = step.show

@@ -12,7 +12,7 @@ import {
   MAX_FPS,
   RecentSamples,
   type StreamedFrame,
-} from '../../src/primary/frame-stream';
+} from '../../src/adapters/camera/frame-stream';
 
 /** An encoding the test finishes (or fails) by hand. */
 interface Encoding {

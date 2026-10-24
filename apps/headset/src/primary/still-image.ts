@@ -1,7 +1,7 @@
 import { defaultQuestCameraModel } from '../adapters/camera/calibration';
+import type { FrameImage } from '../adapters/camera/frame-stream';
 import type { CameraModel } from '../domain/world/camera-model';
 import type { CameraFrame, CameraFrameSource } from '../domain/world/grounding';
-import type { FrameImage } from './frame-stream';
 
 // A photo in place of the passthrough camera (?image=/demo/<file>.jpg), so the whole loop runs in
 // a desktop browser. Every capture is the same JPEG, and every streamed frame the same picture,
