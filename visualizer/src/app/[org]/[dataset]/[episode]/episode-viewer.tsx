@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { postParentMessageWithParams } from "@/utils/postParentMessage";
-import { SimpleVideosPlayer } from "@/components/simple-videos-player";
 import PlaybackBar from "@/components/playback-bar";
 import { TimeProvider, useTime, useTimeControls } from "@/context/time-context";
 import { FlaggedEpisodesProvider } from "@/context/flagged-episodes-context";
@@ -13,7 +12,7 @@ import {
   useAnnotations,
 } from "@/context/annotations-context";
 import Loading from "@/components/loading-component";
-import { ThemeToggle } from "@/components/ui";
+import { InlineLoading, ThemeToggle } from "@/components/ui";
 import Link from "next/link";
 import {
   LuBox,
@@ -22,6 +21,9 @@ import {
   LuChevronDown,
 } from "react-icons/lu";
 import { ClioBrand } from "@/components/clio-brand";
+import { ReplayComparisonData } from "@/components/replay-comparison-data";
+import { EpisodeDataPanel } from "@/components/episode-data-panel";
+import { InspectionSection } from "@/components/inspection-section";
 import { hasURDFSupport, isG1Robot } from "@/lib/so101-robot";
 import { getEpisodeDataSafe, type EpisodeData } from "./fetch-data";
 import { getDatasetVersionAndInfo } from "@/utils/versionUtils";
@@ -38,6 +40,7 @@ function isKeyboardFocusInsideTextEntry(target: EventTarget | null): boolean {
   if (target.isContentEditable || target.closest('[contenteditable="true"]')) {
     return true;
   }
+  if (target.closest('[role="separator"]')) return true;
   const tag = target.tagName;
   return (
     tag === "TEXTAREA" ||
@@ -285,6 +288,7 @@ function EpisodeViewerInner({
   const [videosReady, setVideosReady] = useState(!videosInfo.length);
   const [chartsReady, setChartsReady] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [comparison, setComparison] = useState(false);
   const [replayToolbarTarget, setReplayToolbarTarget] =
     useState<HTMLDivElement | null>(null);
 
@@ -500,7 +504,9 @@ function EpisodeViewerInner({
   );
 
   return (
-    <div className="visualizer-shell">
+    <div
+      className={`visualizer-shell ${activeTab === "urdf" ? "is-replay" : ""} ${comparison ? "is-comparing" : ""}`}
+    >
       <UrlTimeSync />
       <header className="workspace-header workspace-header-compact">
         <Link href="/" className="brand-link" aria-label="Clio visualizer home">
@@ -524,10 +530,12 @@ function EpisodeViewerInner({
           </span>
           <LuChevronDown size={14} aria-hidden="true" />
         </button>
-        <nav aria-label="Visualizer views" className="view-tabs">
-          {urdfSupported && renderTab("urdf", "Replay")}
-          {renderTab("episodes", "Data", "Recorded cameras and signal data")}
-        </nav>
+        {!comparison && (
+          <nav aria-label="Visualizer views" className="view-tabs">
+            {urdfSupported && renderTab("urdf", "Replay")}
+            {renderTab("episodes", "Data", "Recorded cameras and signal data")}
+          </nav>
+        )}
         <div ref={setReplayToolbarTarget} className="replay-toolbar-slot" />
         <div className="header-actions">
           <ThemeToggle />
@@ -581,37 +589,30 @@ function EpisodeViewerInner({
             <>
               <h1 className="sr-only">Episode {episodeId} data</h1>
 
-              {/* Videos */}
-              {videosInfo.length > 0 && (
-                <SimpleVideosPlayer
-                  videosInfo={videosInfo}
-                  onVideosReady={() => setVideosReady(true)}
-                />
-              )}
-
-              {/* Instruction */}
-              {task && (
-                <div className="mb-6 panel p-4">
-                  <p className="text-xs text-fg-muted">Instruction</p>
-                  <div className="mt-1.5 space-y-0.5 text-sm text-fg">
-                    {task
-                      .split("\n")
-                      .map((instruction: string, index: number) => (
-                        <p key={index}>{instruction}</p>
-                      ))}
-                  </div>
-                </div>
-              )}
+              <EpisodeDataPanel
+                key={episodeId}
+                task={task}
+                videosInfo={videosInfo}
+                onVideosReady={() => setVideosReady(true)}
+              />
 
               {/* Graph */}
-              <div className="mb-4">
-                <Suspense fallback={null}>
+              <InspectionSection
+                title="Signals"
+                className="episode-signals mb-4"
+              >
+                <Suspense fallback={<InlineLoading label="Loading signals…" />}>
                   <DataRecharts
                     data={chartDataGroups}
                     onChartsReady={() => setChartsReady(true)}
                   />
                 </Suspense>
-              </div>
+                {chartDataGroups.length === 0 && (
+                  <p className="text-xs text-fg-muted">
+                    No recorded signals in this episode.
+                  </p>
+                )}
+              </InspectionSection>
 
               <PlaybackBar />
             </>
@@ -621,6 +622,22 @@ function EpisodeViewerInner({
             <Suspense fallback={<Loading />}>
               <URDFViewer
                 toolbarTarget={replayToolbarTarget}
+                comparison={comparison}
+                onComparisonChange={(enabled) => {
+                  setIsPlaying(false);
+                  if (enabled) setSidebarOpen(false);
+                  setComparison(enabled);
+                }}
+                comparisonPanel={
+                  comparison ? (
+                    <ReplayComparisonData
+                      org={org}
+                      dataset={dataset}
+                      episodeId={urdfEpisode}
+                      initialData={data}
+                    />
+                  ) : undefined
+                }
                 data={data}
                 org={org}
                 dataset={dataset}

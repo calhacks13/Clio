@@ -19,6 +19,7 @@ import React, {
 type TimeUpdateSource = "external" | "video";
 
 type TimeControls = {
+  getCurrentTime: () => number;
   seek: (t: number, source?: TimeUpdateSource) => void;
   subscribe: (cb: (t: number) => void) => () => void;
   setIsPlaying: React.Dispatch<React.SetStateAction<boolean>>;
@@ -72,6 +73,7 @@ export const TimeProvider: React.FC<{
   // always see the latest value without waiting for a React render cycle.
   const timeRef = useRef(0);
   const rafId = useRef<number | null>(null);
+  const getCurrentTime = useCallback(() => timeRef.current, []);
 
   const updateTime = useCallback(
     (t: number, source: TimeUpdateSource = "external") => {
@@ -119,8 +121,14 @@ export const TimeProvider: React.FC<{
   }, []);
 
   const controls = useMemo(
-    () => ({ seek: updateTime, subscribe, setIsPlaying, setDuration }),
-    [updateTime, subscribe],
+    () => ({
+      getCurrentTime,
+      seek: updateTime,
+      subscribe,
+      setIsPlaying,
+      setDuration,
+    }),
+    [updateTime, subscribe, getCurrentTime],
   );
   const value = useMemo(
     () => ({

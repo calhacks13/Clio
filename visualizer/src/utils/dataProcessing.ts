@@ -5,6 +5,7 @@
 
 import { CHART_CONFIG, THRESHOLDS } from "./constants";
 import type { GroupStats } from "@/types";
+import { jointSignalCategory } from "./signal-labels";
 
 /**
  * Groups row keys by suffix using delimiter
@@ -214,9 +215,32 @@ export function processChartDataGroups(
   // 2. Compute statistics
   const groupStats = computeGroupStats(chartData, suffixGroups);
 
-  // 3. Group by scale
-  const scaleGroups = groupByScale(suffixGroups, groupStats);
+  // Named joints belong together anatomically, regardless of their numeric range.
+  const categories = new Map<string, string[]>();
+  const otherGroups: string[][] = [];
+  for (const group of suffixGroups) {
+    const category = jointSignalCategory(group[0]);
+    if (!category) {
+      otherGroups.push(group);
+      continue;
+    }
+    const { min, max } = groupStats[group[0]];
+    if (!Number.isFinite(min) || !Number.isFinite(max)) continue;
+    const keys = categories.get(category) ?? [];
+    keys.push(...group);
+    categories.set(category, keys);
+  }
+  const jointGroups = [...categories.values()].flatMap((keys) => {
+    const groups: string[][] = [];
+    for (let i = 0; i < keys.length; i += CHART_CONFIG.MAX_SERIES_PER_GROUP) {
+      groups.push(keys.slice(i, i + CHART_CONFIG.MAX_SERIES_PER_GROUP));
+    }
+    return groups;
+  });
+
+  // Unnamed channels retain the existing scale-based grouping.
+  const scaleGroups = groupByScale(otherGroups, groupStats);
 
   // 4. Flatten into chart groups
-  return flattenScaleGroups(scaleGroups);
+  return [...jointGroups, ...flattenScaleGroups(scaleGroups)];
 }

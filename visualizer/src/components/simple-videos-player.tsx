@@ -7,6 +7,7 @@ import type { VideoInfo } from "@/types";
 import { proxyHfUrl } from "@/utils/auth";
 import { VideoOverlayCanvas } from "./video-overlay-canvas";
 import { ColormappedVideo } from "./colormapped-video";
+import { videoTimeAtReplayTime } from "@/lib/replay-comparison";
 
 const THRESHOLDS = {
   VIDEO_SYNC_TOLERANCE: 0.2,
@@ -32,6 +33,7 @@ const SUPPORTS_RVFC =
 type VideoPlayerProps = {
   videosInfo: VideoInfo[];
   onVideosReady?: () => void;
+  externalClock?: boolean;
 };
 
 const videoEventCleanup = new WeakMap<HTMLVideoElement, () => void>();
@@ -39,9 +41,17 @@ const videoEventCleanup = new WeakMap<HTMLVideoElement, () => void>();
 export const SimpleVideosPlayer = ({
   videosInfo,
   onVideosReady,
+  externalClock = false,
 }: VideoPlayerProps) => {
-  const { currentTime, seek, externalSeekVersion, isPlaying, setIsPlaying } =
-    useTime();
+  const {
+    currentTime,
+    getCurrentTime,
+    seek,
+    subscribe,
+    externalSeekVersion,
+    isPlaying,
+    setIsPlaying,
+  } = useTime();
   const videoRefs = useRef<(HTMLVideoElement | null)[]>([]);
   // Mirror videoRefs into state so the absolutely-positioned VQA overlay can
   // re-render with the actual <video> element once it mounts. Using a ref
@@ -167,7 +177,7 @@ export const SimpleVideosPlayer = ({
       resolved = true;
       setVideosReady(true);
       onVideosReadyRef.current?.();
-      setIsPlaying(true);
+      if (!externalClock) setIsPlaying(true);
     };
 
     const checkReady = () => {
@@ -213,6 +223,7 @@ export const SimpleVideosPlayer = ({
       // (a) loop-reset on segmented videos at segment-end
       // (b) reporting the primary video's currentTime back to the context
       const handleTimeUpdate = () => {
+        if (externalClock) return;
         if (info.isSegmented) {
           const segmentEnd = info.segmentEnd ?? video.duration;
           const segmentStart = info.segmentStart ?? 0;
@@ -258,16 +269,22 @@ export const SimpleVideosPlayer = ({
           }
         : null;
 
-      const handleLoadedData = info.isSegmented
-        ? () => {
-            video.currentTime = info.segmentStart ?? 0;
-            checkReady();
-          }
-        : null;
+      const handleLoadedData =
+        info.isSegmented || externalClock
+          ? () => {
+              const target = externalClock
+                ? videoTimeAtReplayTime(info, getCurrentTime(), video.duration)
+                : (info.segmentStart ?? 0);
+              if (Math.abs(video.currentTime - target) > 0.001)
+                video.currentTime = target;
+              checkReady();
+            }
+          : null;
 
       const handleEnded = info.isSegmented
         ? null
         : () => {
+            if (externalClock) return;
             // Same coordinated loop strategy for non-segmented videos at
             // their natural end — primary drives, others wait for primary
             // to align them.
@@ -292,9 +309,17 @@ export const SimpleVideosPlayer = ({
             "loadeddata",
             () => {
               reloads = 0;
-              seek(
-                resumeAt - (info.isSegmented ? (info.segmentStart ?? 0) : 0),
-              );
+              if (externalClock) {
+                video.currentTime = videoTimeAtReplayTime(
+                  info,
+                  getCurrentTime(),
+                  video.duration,
+                );
+              } else {
+                seek(
+                  resumeAt - (info.isSegmented ? (info.segmentStart ?? 0) : 0),
+                );
+              }
               if (isPlayingRef.current) video.play().catch(() => {});
             },
             { once: true },
@@ -313,7 +338,7 @@ export const SimpleVideosPlayer = ({
       // readyState synchronously and mark ready in a microtask. Without this,
       // checkReady wouldn't be called and only the 10s fallback timeout would
       // eventually unfreeze the UI.
-      if (info.isSegmented && handleLoadedData) {
+      if (handleLoadedData) {
         if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
           queueMicrotask(handleLoadedData);
         } else {
@@ -343,6 +368,7 @@ export const SimpleVideosPlayer = ({
       clearTimeout(timeout);
       attachedVideos.forEach((video) => {
         if (!video) return;
+        if (externalClock) video.pause();
         const cleanup = videoEventCleanup.get(video);
         if (cleanup) {
           cleanup();
@@ -355,7 +381,7 @@ export const SimpleVideosPlayer = ({
     // firstVisibleIdxRef above).
     // onVideosReady intentionally omitted — read via onVideosReadyRef so
     // an inline parent prop doesn't tear this effect down on every render.
-  }, [videosInfo, setIsPlaying, seek]);
+  }, [videosInfo, setIsPlaying, seek, externalClock, getCurrentTime]);
 
   // Report the primary camera's time on every painted frame, from the frame's
   // own mediaTime, so the playback bar, chart cursors and legends advance a
@@ -363,7 +389,7 @@ export const SimpleVideosPlayer = ({
   // sync stay on timeupdate, which keeps firing in background tabs where no
   // frames are painted.
   useEffect(() => {
-    if (!videosReady || !SUPPORTS_RVFC) return;
+    if (externalClock || !videosReady || !SUPPORTS_RVFC) return;
     const video = videoRefs.current[firstVisibleIdx];
     const info = videosInfo[firstVisibleIdx];
     if (!video || !info) return;
@@ -386,7 +412,44 @@ export const SimpleVideosPlayer = ({
     };
     handle = video.requestVideoFrameCallback(onFrame);
     return () => video.cancelVideoFrameCallback(handle);
-  }, [videosReady, firstVisibleIdx, videosInfo, seek]);
+  }, [videosReady, firstVisibleIdx, videosInfo, seek, externalClock]);
+
+  // In comparison the robot ticker owns time; camera events never write back.
+  useEffect(() => {
+    if (!externalClock || !videosReady) return;
+    const align = (time: number) => {
+      videoRefs.current.forEach((video, index) => {
+        const info = videosInfo[index];
+        if (
+          !video ||
+          !info ||
+          hiddenSet.has(info.filename) ||
+          video.readyState < 2
+        )
+          return;
+        const target = videoTimeAtReplayTime(info, time, video.duration);
+        const tolerance = isPlayingRef.current ? 0.12 : 1 / 120;
+        if (
+          Math.abs(video.currentTime - target) > tolerance &&
+          (!video.seeking || !isPlayingRef.current)
+        ) {
+          video.currentTime = target;
+        }
+        if (isPlayingRef.current && video.paused && !video.seeking)
+          video.play().catch(() => {});
+      });
+    };
+    align(getCurrentTime());
+    return subscribe(align);
+  }, [
+    externalClock,
+    videosReady,
+    videosInfo,
+    hiddenSet,
+    subscribe,
+    isPlaying,
+    getCurrentTime,
+  ]);
 
   // Handle play/pause — skip hidden videos
   useEffect(() => {
@@ -412,7 +475,7 @@ export const SimpleVideosPlayer = ({
   // and incorrectly classified it as a user seek — causing every camera to
   // re-seek, which itself stalled them in a feedback spiral.
   useEffect(() => {
-    if (!videosReady) return;
+    if (externalClock || !videosReady) return;
     if (externalSeekVersion === lastSeekVersionRef.current) return;
     lastSeekVersionRef.current = externalSeekVersion;
 
@@ -433,7 +496,14 @@ export const SimpleVideosPlayer = ({
         video.currentTime = targetTime;
       }
     });
-  }, [externalSeekVersion, currentTime, videosInfo, videosReady, hiddenSet]);
+  }, [
+    externalSeekVersion,
+    currentTime,
+    videosInfo,
+    videosReady,
+    hiddenSet,
+    externalClock,
+  ]);
 
   return (
     <>
@@ -501,14 +571,15 @@ export const SimpleVideosPlayer = ({
             >
               {/* Shrink-wraps the enlarged video so the title bar matches its width. */}
               <div
-                className={`${isEnlarged ? "w-fit" : "w-full"} overflow-hidden rounded-2xl bg-surface-1`}
+                className={`camera-frame ${isEnlarged ? "w-fit" : "w-full"} overflow-hidden rounded-2xl bg-surface-1`}
               >
-                <p className="w-full bg-surface-1 px-4 py-2 text-xs text-fg-muted flex items-center justify-between gap-2">
+                <p className="camera-title w-full bg-surface-1 px-4 py-2 text-xs text-fg-muted flex items-center justify-between gap-2">
                   <span className="truncate" title={info.filename}>
                     {info.filename
                       .replace(/^observation\.images\./, "")
                       .replace(/^cam_/, "")
-                      .replace(/_/g, " ")}
+                      .replace(/_/g, " ")
+                      .replace(/^./, (letter) => letter.toUpperCase())}
                   </span>
                   <span className="flex gap-0.5 shrink-0">
                     <button
@@ -547,7 +618,7 @@ export const SimpleVideosPlayer = ({
                     </button>
                   </span>
                 </p>
-                <div className="relative w-full">
+                <div className="camera-media relative w-full">
                   <video
                     ref={videoRefCallbacksRef.current[idx]}
                     className={`object-contain ${

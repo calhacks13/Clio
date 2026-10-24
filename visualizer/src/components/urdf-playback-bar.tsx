@@ -51,10 +51,12 @@ export default function UrdfPlaybackBar({
         onClick={onTrailToggle}
         disabled={disabled}
         aria-pressed={trailEnabled}
+        aria-label="Trails"
         className={`btn ${trailEnabled ? "btn-active" : ""}`}
         title="Show hand motion trails"
       >
-        <LuSpline size={15} aria-hidden="true" /> Trails
+        <LuSpline size={15} aria-hidden="true" />{" "}
+        <span className="trail-label">Trails</span>
       </button>
       <input
         type="range"
