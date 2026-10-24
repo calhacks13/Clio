@@ -10,6 +10,7 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 import { ManualClock } from '../../src/core/clock';
 import { Emitter } from '../../src/core/emitter';
+import { Narrator } from '../../src/domain/coach/narrator';
 import type { LessonToolName, ToolOutcome } from '../../src/domain/coach/toolbox';
 import { DemoLibrary } from '../../src/domain/demo/demo-library';
 import type { AppEvents } from '../../src/domain/events';
@@ -20,6 +21,7 @@ import {
   LessonController,
   type LessonOptions,
   type LessonPlanner,
+  type PlanImageSource,
 } from '../../src/domain/session/lesson-controller';
 import type { StepChecker } from '../../src/domain/session/step-watcher';
 import type { TemplateSource } from '../../src/domain/session/templates';
@@ -81,6 +83,7 @@ interface SetupOptions {
   checker?: StepChecker;
   templates?: TemplateSource;
   grounder?: Grounder;
+  images?: PlanImageSource;
   options?: LessonOptions;
 }
 
@@ -102,7 +105,7 @@ function setup(o: SetupOptions = {}) {
     registry,
     workspace: () => new Workspace({ p: [0, 0.8, -0.4], q: [0, 0, 0, 1] }, o.calibration),
     grounder: o.grounder ?? null,
-    images: { snapshots: async () => [{ mimeType: 'image/jpeg', data: 'AAAA' }] },
+    images: o.images ?? { snapshots: async () => [{ mimeType: 'image/jpeg', data: 'AAAA' }] },
     demos: new DemoLibrary(null),
     recorder: new EpisodeRecorder({ bus, clock, sink, sleep: async () => {} }),
     context: () => ({
@@ -839,38 +842,56 @@ describe('the step watcher', () => {
 });
 
 describe('review regressions', () => {
-  it('keeps a lesson that is still being located from being joined by another', async () => {
-    // The first look (locating the plan's objects) waits; later looks answer at once.
-    const nothing: GroundingResult = {
-      ok: true,
-      located: [],
-      missing: ['cap'],
-      sightings: [],
-      source: 't',
-      frameT: 0,
-    };
-    let found: (r: GroundingResult) => void = () => {};
-    let looks = 0;
+  it('starts the lesson and briefs step 1 while its objects are still being located', async () => {
+    // The first look (the step's, for the cap) waits; later looks answer at once. Each places
+    // what it was asked about.
+    const asked: string[][] = [];
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => (release = r));
     const grounder: Grounder = {
-      ground: () => (looks++ === 0 ? new Promise((r) => (found = r)) : Promise.resolve(nothing)),
+      ground: async (requests) => {
+        const ids = requests.map((r) => r.id);
+        if (asked.push(ids) === 1) await held;
+        for (const id of ids) {
+          lab.registry.observe(id, {
+            position: [0.2, 0.05, -0.3],
+            confidence: 0.9,
+            source: 'detector',
+            t: lab.clock.now(),
+          });
+        }
+        return { ok: true, located: ids, missing: [], sightings: [], source: 't', frameT: 0 };
+      },
     };
-    const { lesson, tool, result, sink } = setup({ grounder });
+    const lab = setup({ grounder });
+    const { bus, lesson, tool, result, sink, registry } = lab;
+    const briefed: string[] = [];
+    new Narrator(bus, lesson.view(), (n) => briefed.push(n.kind)).attach();
+    const missing: string[][] = [];
+    bus.on('object.missing', (e) => missing.push(e.objectIds));
     await tool('start_lesson', { goal: 'add wiper fluid' });
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-    expect(lesson.phase).toBe('locating');
-    expect(result(await tool('start_lesson', { goal: 'fold a shirt' })).error).toMatch(
-      /Already planning/,
-    );
-    expect(
-      result(await tool('add_step', { text: 'Wipe up.', done_when: 'dry fender' })).error,
-    ).toMatch(/being written/);
-    found(nothing);
-    await lesson.settled();
+    for (let i = 0; i < 20; i++) await Promise.resolve();
     expect(lesson.phase).toBe('lesson');
-    expect(sink.episodes.size).toBe(1);
-    expect(result(await tool('start_lesson', { goal: 'fold a shirt' }))).toMatchObject({
-      status: 'planning',
+    expect(lesson.currentStep()?.id).toBe('open');
+    expect(briefed).toEqual(['plan', 'step']);
+    // The lesson's own look joined the step's: the finder was asked about the cap once.
+    expect(asked).toEqual([['cap']]);
+    // The tools work meanwhile. A highlight joins the look already out instead of a second one,
+    // and nothing is called missing before that look answers.
+    expect(result(await tool('highlight', { object_id: 'cap', style: 'target' }))).toMatchObject({
+      shown: false,
     });
+    expect(
+      result(await tool('add_step', { text: 'Wipe up.', done_when: 'dry fender' })),
+    ).toMatchObject({ step_id: 'wipe-up' });
+    expect(asked).toEqual([['cap']]);
+    expect(missing).toEqual([]);
+    release();
+    await lesson.settled();
+    expect(registry.get('cap')).toMatchObject({ source: 'detector' });
+    expect(asked).toEqual([['cap']]);
+    expect(missing).toEqual([]);
+    expect(sink.episodes.size).toBe(1);
   });
 
   it('announces a new plan with that plan, not the lesson before it', async () => {
@@ -1111,5 +1132,210 @@ describe('review regressions', () => {
     });
     await begin('fix my wiper');
     expect(lesson.phase).toBe('planning');
+  });
+});
+
+describe('starting quickly', () => {
+  /** Lets the plan arrive and the lesson start, without waiting for looks that are held. */
+  const arrive = async () => {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+  };
+
+  /** A finder that answers once `held` resolves, placing everything it was asked about. */
+  function placing(lab: () => ReturnType<typeof setup>, held: Promise<void>): Grounder {
+    return {
+      ground: async (requests) => {
+        await held;
+        const ids = requests.map((r) => r.id);
+        for (const id of ids) {
+          lab().registry.observe(id, {
+            position: [0.2, 0.05, -0.3],
+            confidence: 0.9,
+            source: 'detector',
+            t: lab().clock.now(),
+          });
+        }
+        return { ok: true, located: ids, missing: [], sightings: [], source: 't', frameT: 0 };
+      },
+    };
+  }
+
+  const twist = parseProcedure({
+    ...plan,
+    steps: [{ ...plan.steps[0], action: { verb: 'twist', object: 'cap' } }, ...plan.steps.slice(1)],
+  });
+
+  it('records how long start_lesson took to reach step 1, and when its objects were found', async () => {
+    const nothing = (ids: string[]): GroundingResult => ({
+      ok: true,
+      located: [],
+      missing: ids,
+      sightings: [],
+      source: 't',
+      frameT: 0,
+    });
+    const lab = setup({
+      planner: {
+        plan: async () => {
+          lab.clock.advance(3000);
+          return { planId: 'refill-fluid', procedure: plan, warnings: [] };
+        },
+      },
+      grounder: {
+        ground: async (requests) => {
+          await Promise.resolve();
+          lab.clock.advance(1500);
+          return nothing(requests.map((r) => r.id));
+        },
+      },
+    });
+    const { lesson, annotations, sink, begin } = lab;
+    await begin();
+    const data = (label: string) => annotations.filter((a) => a.label === label).map((a) => a.data);
+    expect(data('lesson.first_step')).toEqual([
+      {
+        stepId: 'open',
+        source: 'planner',
+        frames: 'fresh',
+        captureMs: 0,
+        planMs: 3000,
+        totalMs: 3000,
+        locate: 'background',
+      },
+    ]);
+    expect(data('lesson.first_locate')).toEqual([
+      { locateMs: 1500, sinceStartMs: 4500, located: [], missing: ['cap'] },
+    ]);
+    await lesson.stop('done');
+    const [episode] = sink.episodes.values();
+    const labels = episode?.batches
+      .flatMap((b) => b.events)
+      .flatMap((e) => (e.type === 'annotation' ? [e.label] : []));
+    expect(labels).toEqual(expect.arrayContaining(['lesson.first_step', 'lesson.first_locate']));
+  });
+
+  it('plans from the frames it kept since the learner spoke, and keeps none during a lesson', async () => {
+    const shots: number[] = [];
+    const images: PlanImageSource = {
+      snapshots: async (max) => {
+        shots.push(max);
+        return Array.from({ length: max }, (_, i) => ({
+          mimeType: 'image/jpeg' as const,
+          data: `F${shots.length}${i}`,
+        }));
+      },
+    };
+    const requests: PlanRequest[] = [];
+    const lab = setup({
+      images,
+      options: { planFrameMs: 450 },
+      planner: {
+        plan: async (req) => {
+          requests.push(req);
+          return { planId: 'refill-fluid', procedure: plan, warnings: [] };
+        },
+      },
+    });
+    const { bus, clock, lesson, annotations, begin } = lab;
+    lesson.tick(clock.now());
+    expect(shots).toEqual([]);
+    bus.emit('coach.caption', { t: clock.now(), role: 'user', text: 'I want to', final: false });
+    lesson.tick(clock.now());
+    await lesson.settled();
+    lesson.tick(clock.advance(449));
+    lesson.tick(clock.advance(1));
+    await lesson.settled();
+    expect(shots).toEqual([1, 1]);
+    await begin();
+    expect(requests[0]?.images?.map((i) => i.data)).toEqual(['F10', 'F20']);
+    expect(shots).toEqual([1, 1]);
+    expect(annotations.find((a) => a.label === 'lesson.first_step')?.data).toMatchObject({
+      frames: 'buffered',
+      captureMs: 0,
+    });
+    bus.emit('coach.caption', { t: clock.now(), role: 'user', text: 'what now', final: false });
+    lesson.tick(clock.advance(1000));
+    await lesson.settled();
+    expect(shots).toEqual([1, 1]);
+  });
+
+  it("plays step 1's demonstration once the step's look has placed its object", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    const lab: ReturnType<typeof setup> = setup({
+      options: { autoDemo: true },
+      planner: { plan: async () => ({ planId: 'p', procedure: twist, warnings: [] }) },
+      grounder: placing(() => lab, held),
+    });
+    const { bus, clock, lesson, tool } = lab;
+    const demos: unknown[] = [];
+    bus.on('demo.playback', ({ t, stepId, phase }) => demos.push({ t, stepId, phase }));
+    await tool('start_lesson', { goal: 'add wiper fluid' });
+    await arrive();
+    expect(lesson.currentStep()?.id).toBe('open');
+    expect(lesson.activeDemo).toBeNull();
+    clock.advance(800);
+    release();
+    await lesson.settled();
+    expect(lesson.activeDemo).toMatchObject({ stepId: 'open', source: 'synthesized' });
+    expect(demos).toEqual([{ t: 1800, stepId: 'open', phase: 'start' }]);
+  });
+
+  it('plays no late demonstration once the step is over', async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    const lab: ReturnType<typeof setup> = setup({
+      options: { autoDemo: true },
+      planner: { plan: async () => ({ planId: 'p', procedure: twist, warnings: [] }) },
+      grounder: placing(() => lab, held),
+    });
+    const { lesson, tool } = lab;
+    await tool('start_lesson', { goal: 'add wiper fluid' });
+    await arrive();
+    await tool('complete_step', { step_id: 'open', reason: 'off', evidence: 'seen' });
+    release();
+    await lesson.settled();
+    expect(lesson.currentStep()?.id).toBe('pour');
+    expect(lesson.activeDemo).toBeNull();
+  });
+
+  it("never announces an old lesson's late look in the next lesson", async () => {
+    const tea = parseProcedure({
+      ...plan,
+      id: 'tea',
+      title: 'Make tea',
+      objects: plan.objects.filter((o) => o.id !== 'cap'),
+      steps: [plan.steps[1]],
+    });
+    let next: Procedure = plan;
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    let looks = 0;
+    const lab = setup({
+      planner: { plan: async () => ({ planId: next.id, procedure: next, warnings: [] }) },
+      grounder: {
+        // The first lesson's look waits, then finds nothing.
+        ground: async (requests) => {
+          if (looks++ === 0) await held;
+          const ids = requests.map((r) => r.id);
+          return { ok: true, located: [], missing: ids, sightings: [], source: 't', frameT: 0 };
+        },
+      },
+    });
+    const { bus, lesson, tool, annotations } = lab;
+    const missing: string[][] = [];
+    bus.on('object.missing', (e) => missing.push(e.objectIds));
+    await tool('start_lesson', { goal: 'add wiper fluid' });
+    await arrive();
+    expect(lesson.currentStep()?.id).toBe('open');
+    next = tea;
+    await tool('start_lesson', { goal: 'make tea' });
+    await arrive();
+    expect(lesson.procedure?.id).toBe('tea');
+    release();
+    await lesson.settled();
+    expect(looks).toBe(1);
+    expect(missing).toEqual([]);
+    expect(annotations.filter((a) => a.label === 'lesson.first_locate')).toHaveLength(1);
   });
 });

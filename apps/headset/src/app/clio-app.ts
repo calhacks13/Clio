@@ -63,6 +63,8 @@ import type { AppConfig } from './config';
 const log = createLogger('app');
 const PINCH_NEAREST_M = 0.15;
 const RELOCATE_DELAY_MS = 600;
+/** A planning frame is kept this often while a lesson may be about to start (lesson-controller). */
+const PLAN_FRAME_MS = 450;
 /** How long after the session starts the workspace waits for a detected table. */
 const TABLE_WAIT_MS = 2000;
 
@@ -160,6 +162,7 @@ export class ClioApp {
         autoDemo: o.config.autoDemo,
         coachCanForce: true,
         showRefreshMs: o.config.showRefreshMs,
+        planFrameMs: PLAN_FRAME_MS,
       },
     });
     this.closerLook = new CloserLook({

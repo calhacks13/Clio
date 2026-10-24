@@ -351,6 +351,20 @@ changing it.
 - Every narration is a `coach.narration` event, recorded when it reaches the model, not when it's
   queued. A stale briefing dropped at delivery is an `annotation` with label
   `coach.narration_dropped`.
+- How fast `start_lesson` got to step 1 is an `annotation` with label `lesson.first_step`, recorded
+  as the step starts, with data `{ stepId, source, frames, captureMs, planMs, totalMs, locate }`.
+  `source` is `planner` or `template`. `frames` says where the planner's frames came from:
+  `buffered` (at most a second old, kept every 450 ms for 8 s after the learner speaks while no
+  lesson runs, topped up at once if short), `fresh` (taken then, 0.4 s apart) or `none`.
+  `captureMs` is the time to get them, `planMs` the planner's answer (or loading the curated
+  lesson), and `totalMs` the time from `start_lesson` to the step-1 briefing being queued; its
+  `coach.narration` says when it reached the model. `locate` is `background`: the lesson starts on
+  the plan, and its objects are found while the coach briefs step 1.
+- When that first look has answered, and the same lesson is still on, an `annotation` with label
+  `lesson.first_locate` records `{ locateMs, sinceStartMs, located, missing }` (ids; at once and
+  empty when every object had a position). A lesson that ends sooner has only `lesson.first_step`.
+  Because the look comes after the recording starts, its `object.detected` events are in the
+  episode, and the objects it places are not in `meta.objects` but arrive as `object.registered`.
 - Every closer look is an `annotation` with label `coach.look_closer` and data
   `{ callId, model, latencyMs, refs }`, refs with their points. Refs on lesson objects are also
   `object.detected` events, with the question as the description.
