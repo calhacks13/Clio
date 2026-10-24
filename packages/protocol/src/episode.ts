@@ -166,6 +166,11 @@ export const EpisodeEventSchema = z.discriminatedUnion('type', [
   event('annotation', { label: z.string(), data: z.unknown().optional() }),
 ]);
 
+/** Every recordable event type, derived from the union so it can't drift. */
+export const EPISODE_EVENT_TYPES = EpisodeEventSchema.options.map(
+  (option) => option.shape.type.value,
+) as EpisodeEvent['type'][];
+
 export const EpisodeBatchSchema = z.object({
   seq: z.number().int().nonnegative().describe('Monotonic per episode; duplicates are ignored'),
   frames: z.array(FrameRecordSchema),

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  EPISODE_EVENT_TYPES,
   EpisodeBatchSchema,
   EpisodeEventSchema,
   EpisodeMetaSchema,
@@ -141,5 +142,14 @@ describe('episode meta', () => {
 
   it('still accepts episodes recorded without a plan snapshot', () => {
     expect(EpisodeMetaSchema.safeParse(meta).success).toBe(true);
+  });
+});
+
+describe('event type list', () => {
+  it('is derived from the schema, so the recorder knows every recordable event', () => {
+    expect(EPISODE_EVENT_TYPES).toHaveLength(16);
+    expect(EPISODE_EVENT_TYPES).toEqual(
+      expect.arrayContaining(['step.entered', 'coach.tool_call', 'transcript', 'annotation']),
+    );
   });
 });
