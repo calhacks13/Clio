@@ -1,4 +1,4 @@
-import { parseProcedure } from '@clio/protocol';
+import { EpisodeCreateSchema, parseProcedure } from '@clio/protocol';
 import { describe, expect, it } from 'vitest';
 import { ManualClock } from '../../src/core/clock';
 import { Emitter } from '../../src/core/emitter';
@@ -21,7 +21,7 @@ const procedure = parseProcedure({
   steps: [{ id: 's', instruction: 'Wait.', success: { type: 'confirm' } }],
 });
 
-async function recordedFeatures(features?: string[]) {
+async function recordedMeta(extra: Partial<EpisodeContext> = {}) {
   const bus = new Emitter<AppEvents>();
   const clock = new ManualClock(1000);
   const sink = new MemoryEpisodeSink();
@@ -30,7 +30,7 @@ async function recordedFeatures(features?: string[]) {
     coach: { kind: 'scripted' },
     device: { userAgent: 'test', emulated: true, xrFeatures: [] },
     app: { version: 'test' },
-    ...(features ? { features } : {}),
+    ...extra,
   };
   const lesson = new LessonController({
     bus,
@@ -46,8 +46,11 @@ async function recordedFeatures(features?: string[]) {
   });
   await lesson.run(procedure);
   await lesson.stop('done');
-  return sink.only().meta.features;
+  return sink.only().meta;
 }
+
+const recordedFeatures = async (features?: string[]) =>
+  (await recordedMeta(features ? { features } : {})).features;
 
 describe('LessonController episode features', () => {
   it('lists the features the lesson records itself', async () => {
@@ -60,5 +63,19 @@ describe('LessonController episode features', () => {
       'object.grasp',
       'environment.planes',
     ]);
+  });
+
+  it('records the camera model the app lifts answers with, and none without a camera', async () => {
+    const camera = {
+      intrinsics: { width: 1280, height: 960, fx: 800, fy: 800, cx: 640, cy: 480 },
+      headFromCamera: [0.032, 0.02, -0.025, -0.13, 0, 0, 0.99] as const,
+      source: 'calibrated' as const,
+    };
+    const meta = await recordedMeta({
+      camera: { ...camera, headFromCamera: [...camera.headFromCamera] },
+    });
+    expect(meta.camera).toEqual({ ...camera, headFromCamera: [...camera.headFromCamera] });
+    expect(EpisodeCreateSchema.safeParse(meta).success).toBe(true);
+    expect(await recordedMeta()).not.toHaveProperty('camera');
   });
 });
