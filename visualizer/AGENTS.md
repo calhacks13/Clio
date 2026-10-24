@@ -4,6 +4,14 @@ Read `GOALS.md` and `INTEGRATION.md` before working here. Clio's `../packages/pr
 
 Use Bun within `visualizer/` and pnpm for the parent Clio workspace. Do not run the parent formatter over this inherited project. The imported project guidance below still applies locally.
 
+The Clio episode viewer (`/clio`, `/clio/live`, `/clio/<id>`) lives in `src/app/clio/`, `src/components/clio/` and `src/lib/clio/`, and reads the local Clio server through the GET-only proxy `src/app/api/clio/[...path]/route.ts`. INTEGRATION.md, section "Clio episode viewer", describes it. When working on it:
+
+- Run the root `pnpm install` once: `@clio/protocol` needs zod from the parent workspace.
+- Import shared code only through `@clio/protocol` and the allowed `@clio-viewer/*` modules (`capture/model`, `capture/from-clio`, `capture/clio-events`, `capture/from-package`, `api`, `event-log`, `detection-outline`). The lint rule in `eslint.config.mjs` and `src/lib/clio/__tests__/import-graph.test.ts` enforce the list; change both together.
+- Webpack only, never `--turbopack`. `next.config.ts` pins every `three` import to this folder's copy.
+- A second dev server or build uses `NEXT_DIST_DIR=.next-e2e`. Never run `next build` with the default `.next` while someone's dev server is running.
+- Test against a scratch Clio server and data directory (`CLIO_SERVER_PORT`, `CLIO_DATA_DIR`, and `CLIO_SERVER_URL` for this app), never the real `../data`.
+
 ---
 
 # AGENTS.md — LeRobot Dataset Visualizer
@@ -113,7 +121,7 @@ Series keys use `" | "` as delimiter (e.g. `observation.state | 0`).
 
 - Test files live in `**/__tests__/` directories alongside source
 - Uses `bun:test` (built-in, no extra install)
-- BigInt literals (`42n`) require `tsconfig.test.json` (target ES2020) — test files are excluded from `tsconfig.json`
+- BigInt literals (`42n`) require `tsconfig.test.json` (target ES2020) — test files are excluded from `tsconfig.json`. `tsconfig.test.json` sets its own `exclude`, so `bun run type-check` type-checks every test file
 - `@types/bun` is installed as a devDependency for `bun:test` type resolution
 - Mocking fetch: `globalThis.fetch = mock(() => Promise.resolve(new Response(...))) as unknown as typeof fetch`
 - CI: `.github/workflows/test.yml` runs `bun test` on push/PR to main
@@ -145,6 +153,8 @@ Reserved/bookkeeping columns from lerobot — see `EXCLUDED_COLUMNS` in `src/uti
 - Scene setup: `<Canvas shadows>` with `ACESFilmicToneMapping` (exposure 0.9), 3-point directional + ambient lights, `<Environment preset="studio" background={false} />`, `<color attach="background" args={["#1a2433"]} />`. `<OrbitControls makeDefault />` is required so `useThree().controls` exposes the controls for auto-fit.
 
 ## Design system
+
+In this fork, `DESIGN.md` and the tokens in `src/app/globals.css` are the current visual authority. Where the upstream notes below differ (accent colour, fonts, the removed analysis tabs, and rose also meaning a recording problem on Clio pages), follow `DESIGN.md`.
 
 Colours, surfaces and fonts follow the Hub (moon-landing). Tokens live in `src/app/globals.css`: light values on `:root`, dark under `:root.dark`, exposed as Tailwind colours. **Never hard-code** `text-slate-*`, `border-white/*`, `bg-white/*` or hex colours for UI chrome; use the tokens so both themes work:
 

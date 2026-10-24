@@ -19,7 +19,7 @@ Date: 2026-10-24. Facts come from the four reader reports and were re-checked in
   - When joining a live episode whose frames file is large, start about 2 MB before its end.
   - Keep hand samples for the last 5 minutes behind the live edge.
   - The clock plays 1.5 s behind the newest received episode time. Laptop arrival time only paces the playhead and is never written into a sample time (`GOALS.md:53`, `TRANSFER.md:54`).
-  - Estimated screen delay behind the headset: about 2.3 s on average. This is not measured; check C measures it.
+  - Screen delay behind the headset: estimated about 2.3 s on average; measured 1.83 s on average (1.4 to 2.9 s) in the S1 simulation. Check C measures it on the Quest.
 - **Objects as time series:** the viewer holds a model with the Capture v1 shape (`apps/headset/src/viewer/capture/model.ts`). Each object has a pose series, held spans and detector answers. One `tUs` drives:
   - in 3D: the pose, a trail, a held ring and an unknown-orientation state;
   - on per-object lanes: updates by source, held spans, detector answers with latency, and misses.
@@ -85,7 +85,7 @@ Date: 2026-10-24. Facts come from the four reader reports and were re-checked in
 - **Detections:** outlines labeled "approximate" (assumed camera model, `detection-outline.ts:12`).
 
 **Dev lag readout** (needed for checks S and C):
-- `newest received t − displayed t`.
+- `clock edge − displayed t` ("Behind edge"). It holds at the 1.5 s play delay while following. `newest received t − displayed t` is not used: the edge advances on laptop time between reads, so that figure saws between about 0.5 s and 1.5 s with each 1 s batch.
 - `laptop now − (meta.clock.startEpochMs + newest t)`, labeled approximate because the headset and laptop clocks can differ.
 - The builder's `duplicates` and `rejected` counts.
 
@@ -134,7 +134,7 @@ Date: 2026-10-24. Facts come from the four reader reports and were re-checked in
 | Upload         | about 20 to 80 ms (not measured)   |
 | Poll wait      | 0 to 500 ms, about 250 ms average  |
 
-Newest data reaches the laptop about 0.8 s after capture on average. With the 1.5 s play delay, the screen is about 2.3 s behind the headset. The only recorded episode came from the emulator, so check C must measure this.
+Newest data reaches the laptop about 0.8 s after capture on average. With the 1.5 s play delay, the screen is about 2.3 s behind the headset. Measured in the S1 simulation: newest data is 0.27 s old on arrival (0 to 0.5 s) and the screen is 1.83 s behind capture on average (1.4 to 2.9 s). Check C must still measure this on the Quest.
 
 ## 3. Object time-series model
 
@@ -438,14 +438,15 @@ Setup for A, B and S: run a server with a scratch `CLIO_DATA_DIR`, Vite, and `pn
   - Scrub both ways: no later poses leak; hands vanish when untracked; the hidden region is not drawn; hands sit on the table plane and are not mirrored.
   - ph-syringe: a trail, a held ring, an inferred held span, and a detector answer with latency.
 - **B. Recorded episode** `data/episodes/ep-20261024-065830-ht6h`: plays all 574 frames with a head trail; status is stopped (no `finish.json`); the batch count comes from V.
-- **S1, live simulation:** open `/clio/live`, then run L1 with ph-syringe through `:5173`. The episode appears within 2 s of creation, the lag readout shows 1.5 ± 0.3 s, and the held ring follows the carry. After finish it shows finished and complete.
+- **S1, live simulation:** open `/clio/live`, then run L1 with ph-syringe through `:5173`. The episode appears within 2 s of creation, the lag readout's Behind edge shows 1.5 ± 0.3 s, and the held ring follows the carry. After finish it shows finished and complete.
 - **S2, server restart:** restart the server mid-stream. The page shows reconnecting and resumes; `duplicates` stays at 0. After finish, the headset sample count equals the `frames.ndjson` line count.
 - **S3, stall:** with `--stall-after-s 20 --no-finish`, the episode shows stopped 15 s after growth stops.
 - **S4, long session:** a 10-minute run at 90 Hz (`pnpm synth -- --hz 90 --out <scratch>`, then L1 `--repeat-minutes 10`). Targets, measured in Chrome:
   - no long task over 200 ms after the first load;
   - `performance.memory.usedJSHeapSize` under 400 MB at the end;
+  - after following several recordings, one Capture alive after a forced GC. Measure this on a production build (`NEXT_DIST_DIR=.next-e2e`): in a dev build React Refresh keeps the unmounted drei `<Html>` roots, and through their labels the earlier captures;
   - 30 fps or more while following.
-- **S5, joining late:** open `/clio/live` 8 minutes into S4. At most about 3 MB of frames download before the live edge shows, and earlier time is shaded "not loaded".
+- **S5, joining late:** open `/clio/live` 8 minutes into S4. At most about 3 MB of frames download before the live edge shows, and earlier time is shaded "not loaded". Events and objects are still read from byte 0, since the event list and object lanes cover the whole episode: measured 4.5 MB of objects and 0.3 MB of events at 8 minutes. Tail-joining them is left for later.
 - **S6, pinning:** pin in one tab and start a second L1 run. The pinned tab stays put while a `/clio/live` tab switches.
 - **C. Live Quest:**
   - Setup: accept USB debugging, run `pnpm quest:reverse`, confirm with `adb reverse --list`, open `/clio/live`, then run a pH lesson of about 10 minutes.
