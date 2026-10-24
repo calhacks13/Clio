@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clio Primary</title>
+    <style>
+      :root {
+        --bg: #0b1016;
+        --accent: #4fe3ff;
+        --on-accent: #04121a;
+        --disabled: #3a4651;
+        --on-disabled: #9aa7b2;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        overflow: hidden;
+      }
+      #enter {
+        position: fixed;
+        left: 50%;
+        bottom: 48px;
+        transform: translateX(-50%);
+        padding: 18px 40px;
+        border: 0;
+        border-radius: 12px;
+        background: var(--accent);
+        color: var(--on-accent);
+        font: 600 20px system-ui, sans-serif;
+      }
+      #enter:disabled {
+        background: var(--disabled);
+        color: var(--on-disabled);
+      }
+    </style>
+  </head>
+  <body>
+    <button id="enter" type="button" disabled>Enter AR</button>
+    <script type="module" src="/src/primary/main.ts"></script>
+  </body>
+</html>
