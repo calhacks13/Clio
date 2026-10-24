@@ -98,6 +98,18 @@
       "id": "draw-indicator",
       "instruction": "Fill the syringe with purple indicator from the indicator bottle.",
       "targets": ["indicator", "syringe"],
+      "show": [
+        {
+          "object": "syringe",
+          "phrase": "oral syringe",
+          "description": "Clear plastic 10 mL oral syringe with a small paper flag on its barrel, lying at the front right of the tray"
+        },
+        {
+          "object": "indicator",
+          "phrase": "indicator squeeze bottle",
+          "description": "Squeeze bottle of purple red-cabbage juice labeled INDICATOR, at the back left of the tray"
+        }
+      ],
       "success": {
         "type": "any",
         "of": [
@@ -117,6 +129,23 @@
       "id": "dispense-indicator",
       "instruction": "Squirt a little indicator into cups A, B, and C.",
       "targets": ["cup_a", "cup_b", "cup_c"],
+      "show": [
+        {
+          "object": "cup_a",
+          "phrase": "paper cup A",
+          "description": "White paper cup with a large letter A on it, on the left of the tray, in the front row"
+        },
+        {
+          "object": "cup_b",
+          "phrase": "paper cup B",
+          "description": "White paper cup with a large letter B on it, in the middle of the tray, in the front row"
+        },
+        {
+          "object": "cup_c",
+          "phrase": "paper cup C",
+          "description": "White paper cup with a large letter C on it, on the right of the tray, in the front row"
+        }
+      ],
       "success": {
         "type": "sequence",
         "of": [
@@ -149,6 +178,18 @@
       "id": "acid-to-a",
       "instruction": "Now add vinegar to cup A.",
       "targets": ["vinegar", "cup_a"],
+      "show": [
+        {
+          "object": "vinegar",
+          "phrase": "vinegar squeeze bottle",
+          "description": "Squeeze bottle labeled VINEGAR, in the middle of the back row of the tray"
+        },
+        {
+          "object": "cup_a",
+          "phrase": "paper cup A",
+          "description": "White paper cup with a large letter A on it, on the left of the tray, in the front row, with a little purple liquid in it"
+        }
+      ],
       "success": {
         "type": "sequence",
         "of": [
@@ -188,6 +229,18 @@
       "id": "base-to-b",
       "instruction": "Add baking-soda water to cup B.",
       "targets": ["base", "cup_b"],
+      "show": [
+        {
+          "object": "base",
+          "phrase": "baking soda squeeze bottle",
+          "description": "Squeeze bottle labeled BASE, at the back right of the tray"
+        },
+        {
+          "object": "cup_b",
+          "phrase": "paper cup B",
+          "description": "White paper cup with a large letter B on it, in the middle of the tray, in the front row, with a little purple liquid in it"
+        }
+      ],
       "success": {
         "type": "sequence",
         "of": [
@@ -237,6 +290,23 @@
       "id": "compare",
       "instruction": "Leave cup C purple and compare all three colors.",
       "targets": ["cup_a", "cup_b", "cup_c"],
+      "show": [
+        {
+          "object": "cup_a",
+          "phrase": "paper cup A",
+          "description": "White paper cup with a large letter A on it, on the left of the tray, in the front row, now holding pink liquid"
+        },
+        {
+          "object": "cup_b",
+          "phrase": "paper cup B",
+          "description": "White paper cup with a large letter B on it, in the middle of the tray, in the front row, now holding green liquid"
+        },
+        {
+          "object": "cup_c",
+          "phrase": "paper cup C",
+          "description": "White paper cup with a large letter C on it, on the right of the tray, in the front row, still holding purple liquid"
+        }
+      ],
       "success": {
         "type": "confirm",
         "by": "either",

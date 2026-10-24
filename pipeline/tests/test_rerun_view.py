@@ -147,3 +147,40 @@ def test_current_step_reverts_to_the_title_when_the_procedure_is_aborted(new_epi
         (100, "Step 0: Do A."),
         (300, "Fold a T-shirt in two seconds"),
     ]
+
+
+def _detected(t, object_id, phrase, found, position=None, confidence=0.0):
+    return {
+        "objectId": object_id,
+        "stepId": "open-cap",
+        "phrase": phrase,
+        "description": f"the {phrase}",
+        "found": found,
+        "point": [0.5, 0.4] if found else None,
+        "box": [0.45, 0.35, 0.55, 0.45] if found else None,
+        "outline": None,
+        "confidence": confidence,
+        "position": position,
+        "source": "jev",
+        "latencyMs": 850.0,
+    }
+
+
+def test_detections_are_points_where_the_finder_saw_them(new_episode, tmp_path):
+    b = new_episode()
+    b.frame(0.0)
+    b.event(
+        400.0, "object.detected", **_detected(400, "cap", "blue cap", True, [0.2, 0.1, -0.3], 0.87)
+    )
+    b.event(400.0, "object.detected", **_detected(400, "jug", "fluid jug", False))
+    recording = _read(save_rrd(load_episode(b.write()), tmp_path / "detections.rrd"))
+
+    [cap] = [r for r in recording["/world/detections/cap"] if "Points3D:positions" in r]
+    assert round(cap["time"]) == 400
+    assert cap["Points3D:positions"][0] == pytest.approx([0.2, 0.1, -0.3])
+    assert cap["Points3D:labels"] == ["blue cap"]
+    assert "/world/detections/jug" not in recording
+    assert _texts(recording["/events/detections"]) == [
+        (400, "cap 'blue cap': found (0.87) by jev in 850 ms"),
+        (400, "jug 'fluid jug': not found by jev in 850 ms"),
+    ]

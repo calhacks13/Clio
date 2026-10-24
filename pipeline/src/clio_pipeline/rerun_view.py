@@ -21,6 +21,7 @@ from .segments import step_segments
 TIMELINE = "time"
 HAND_COLORS = {"left": (80, 160, 255), "right": (255, 140, 60)}
 OBJECT_COLOR = (90, 220, 120)
+DETECTION_COLOR = (79, 227, 255)  # the AR outline color
 DEFAULT_OBJECT_RADIUS = 0.03  # the procedure default
 # Quest 3 field of view is roughly 110 x 96 degrees.
 HEAD_FOV_Y = np.radians(96.0)
@@ -242,6 +243,8 @@ def _log_events(rec: rr.RecordingStream, episode: Episode) -> None:
             _text(rec, "events/coach/status", f"{e['state']}{detail}", level)
         elif kind == "hand.pinch":
             _log_pinch(rec, e)
+        elif kind == "object.detected":
+            _log_detection(rec, e)
         elif kind.startswith("procedure."):
             payload = {k: v for k, v in e.items() if k not in ("t", "type")}
             _text(rec, "events/procedure", f"{kind} {json.dumps(payload)}", "INFO")
@@ -259,6 +262,19 @@ def _log_pinch(rec: rr.RecordingStream, e: dict[str, Any]) -> None:
         rec.log(path, rr.Points3D([e["point"]], radii=[0.008], colors=[HAND_COLORS[e["hand"]]]))
     else:
         rec.log(path, rr.Clear(recursive=False))
+
+
+def _log_detection(rec: rr.RecordingStream, e: dict[str, Any]) -> None:
+    """What the object finder answered, and where Clio lifted it (the last place it was seen)."""
+    name = e["phrase"] or e["objectId"]
+    answer = f"found ({e['confidence']:.2f})" if e["found"] else "not found"
+    text = f"{e['objectId']} '{name}': {answer} by {e['source']} in {e['latencyMs']:.0f} ms"
+    _text(rec, "events/detections", text, "INFO" if e["found"] else "WARN")
+    if e["found"] and e["position"]:
+        rec.log(
+            f"world/detections/{rr.escape_entity_path_part(e['objectId'])}",
+            rr.Points3D([e["position"]], radii=[0.012], colors=[DETECTION_COLOR], labels=[name]),
+        )
 
 
 def _text(rec: rr.RecordingStream, path: str, text: str, level: str) -> None:
