@@ -353,9 +353,12 @@ describe('createGeminiPlanner', () => {
         "Attached: 2 current camera views from the learner's headset, numbered 1 to 2 in order.",
         'The lesson starts as soon as you answer, so answer briefly. Its later steps are ' +
           'written in full afterwards, while the learner works on the first one. So:',
+        '- First read the scene: `done`, each part of the goal the views show already done, ' +
+          'and what shows it (e.g. "the acid test: cup A is already pink"); `todo`, each part ' +
+          'still to do, in the order the goal names them.',
         '- `outline`: every step of the lesson in order, 3 to 10, as an id and an instruction. ' +
-          'It reaches the end of the goal: every part the goal names, not only the part the ' +
-          'first step starts, and it leaves any control untouched. outline[0] is the first step.',
+          'It does every part in `todo`, not only the part the first step starts, and none in ' +
+          '`done`, and it leaves any control untouched. outline[0] is the first step.',
         '- `objects`: only the objects the first step uses (its targets, what it shows and the ' +
           'look-alike it guards against). The later steps declare theirs when they are ' +
           "written. An object's `look` is its tracking.query and the description its outline " +

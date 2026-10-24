@@ -204,7 +204,17 @@ describe('plan, first stage and revision', () => {
 
   it('asks a first stage for the whole lesson in outline, then its first step as a card', () => {
     const schema = buildPlanJsonSchema('first');
-    const fields = ['title', 'summary', 'outline', 'objects', 'sightings', 'warnings', 'firstStep'];
+    const fields = [
+      'done',
+      'todo',
+      'title',
+      'summary',
+      'outline',
+      'objects',
+      'sightings',
+      'warnings',
+      'firstStep',
+    ];
     // Gemini writes properties in schema order: the first step comes last, fitted to the rest.
     expect(Object.keys(props(schema))).toEqual(fields);
     expect(schema.required).toEqual(fields);

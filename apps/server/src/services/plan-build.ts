@@ -226,7 +226,14 @@ function laterLines(outline: readonly unknown[], first: unknown): unknown[] {
  * validation paths readable.
  */
 export function buildFirstStageCandidate(output: unknown, ctx: PlanContext): Candidate {
-  const { outline, firstStep, objects, ...o } = isRecord(output) ? output : {};
+  const {
+    outline,
+    firstStep,
+    objects,
+    done: _done,
+    todo: _todo,
+    ...o
+  } = isRecord(output) ? output : {};
   const cards = Array.isArray(objects) ? objects : [];
   const later = Array.isArray(outline) ? laterLines(outline, firstStep).map(outlineStep) : [];
   const built = buildPlanCandidate(

@@ -363,6 +363,18 @@ describe('buildFirstStageCandidate', () => {
     ]);
   });
 
+  it('keeps the reading of the scene out of the plan: it only shapes the outline', () => {
+    const answer = {
+      done: ['the cap is off'],
+      todo: ['fill it', 'close it'],
+      ...modelFirstStage(),
+    };
+    const { candidate } = buildFirstStageCandidate(answer, ctx);
+    expect(candidate).not.toHaveProperty('done');
+    expect(candidate).not.toHaveProperty('todo');
+    expect(parsed(candidate).steps).toHaveLength(3);
+  });
+
   it('has no outline when the lesson is only its first step', () => {
     const answer = modelFirstStage();
     for (const outline of [[opening], [], undefined]) {

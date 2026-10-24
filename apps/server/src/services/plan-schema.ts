@@ -407,6 +407,13 @@ export function buildPlanJsonSchema(kind: PlanSchemaKind): JsonSchema {
     return {
       ...obj(
         {
+          done: arr(str(), {
+            description:
+              'Each part of the goal the views show already done, and what shows it; [] if none',
+          }),
+          todo: arr(str(), {
+            description: 'Each part of the goal still to do, in the order the goal names them',
+          }),
           title: PLAN_HEAD.title as JsonSchema,
           summary: PLAN_HEAD.summary as JsonSchema,
           outline: arr(outlineLine, {
@@ -423,7 +430,17 @@ export function buildPlanJsonSchema(kind: PlanSchemaKind): JsonSchema {
           warnings,
           firstStep: cardStep,
         },
-        ['title', 'summary', 'outline', 'objects', 'sightings', 'warnings', 'firstStep'],
+        [
+          'done',
+          'todo',
+          'title',
+          'summary',
+          'outline',
+          'objects',
+          'sightings',
+          'warnings',
+          'firstStep',
+        ],
       ),
       $defs: { action: DEFS.action as JsonSchema },
     };
