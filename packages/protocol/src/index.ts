@@ -3,6 +3,7 @@ export * from './api';
 export * from './checks';
 export * from './clip';
 export * from './coach-tools';
+export * from './derived';
 export * from './episode';
 export * from './geometry';
 export * from './hand';

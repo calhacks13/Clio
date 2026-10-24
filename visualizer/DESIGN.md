@@ -62,7 +62,8 @@ Objects get identity colors in the order they first appear in the capture, cycli
 - **Position lost** (episodes with location flags): the object stays at its last valid position in the muted color, and its trail ends at the loss. Without flags, nothing is drawn as lost.
 - **Hands**: only the 25 recorded joints and their bones. An untracked hand, or one outside the kept range, disappears; there is no ghost at the last pose.
 - **Detections**: a line loop in the detection color, with no fill and a small "Approximate" label, because the outline assumes a camera model. The reason ("Assumed camera model") goes in the inspector or a tooltip, not on the canvas.
-- **Context**: the workspace box and the floor plane from calibration stay as subdued as the grid. Their labels follow the axes rule and appear in Debug: "table corner" at the origin and "floor from calibration" on the floor.
+- **Context**: the workspace box and the floor plane from calibration stay as subdued as the grid. Their labels follow the axes rule and appear in Debug: "table corner" at the origin and "floor from calibration" on the floor. Compiled planes (floor, walls, a detected table) are context too: outlines in the grid color, labelled only in Debug ("detected wall", "table from calibration").
+- **Retargeted robot**: an inferred mark. Each arm is a dashed joint chain in the muted color with small joint markers and a dashed gripper, drawn at the compiled frame in force and hidden where it has no solution. One "Retargeted" label plus the robot's name sits at its base; the tooltip says it is solved from the hands, not measured. A solid Robot toggle in the header shows or hides it.
 
 ### Lanes
 
@@ -93,6 +94,7 @@ Source labels in the lanes, legend and inspector:
 ### Status and live
 
 - Status pills are 20px tall with 8px side padding, in Inter 12px/500 and sentence case. **Live** is a citrus fill with #0F1117 text in both themes. **Stopped** and **Reconnecting** use a `--fg-muted` fill with `--surface-0` text (#FFFFFF / #14171D). **Finished** uses a `--fill-strong` fill with `--fg-soft` text.
+- Once an episode is no longer live, a compile state that needs attention follows the status pill as plain text: Compiling, Not compiled, Compile stale, or Compile failed in the problem color with the error or the failed stages as tooltip. A healthy compile adds no text. An episode whose quality verdict is not usable adds "Not usable" in the problem color, with the first reason as tooltip.
 - Batch integrity appears only when something is missing: "3 batches missing" in the problem color beside the pill, in the list and the header. A complete episode adds no text; the Finished pill's tooltip says "All 12 batches received".
 - While following, the transport shows the Live pill. After a seek away from the edge, a filled slate "Go live" pill takes its place.
 - The live indicator never pulses or blinks; the advancing edge shows growth.

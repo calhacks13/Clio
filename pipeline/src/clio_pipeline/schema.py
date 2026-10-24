@@ -31,7 +31,16 @@ EPISODE_FILES: dict[str, tuple[str, bool, bool]] = {
     "frames.ndjson": ("frame-record.schema.json", True, True),
     "events.ndjson": ("episode-event.schema.json", True, True),
     "objects.ndjson": ("object-track.schema.json", True, False),
+    "observations.ndjson": ("object-observation.schema.json", True, False),
     "finish.json": ("episode-finish.schema.json", False, False),
+}
+
+# Compiled document (clio.derived/1, packages/protocol/src/derived.ts) -> schema file
+DERIVED_SCHEMAS: dict[str, str] = {
+    "manifest": "derived-manifest.schema.json",
+    "tracks": "derived-tracks.schema.json",
+    "environment": "derived-environment.schema.json",
+    "retarget": "derived-retarget.schema.json",
 }
 
 
@@ -215,6 +224,48 @@ def _numbered_lines(path: Path) -> Iterator[tuple[int, bytes]]:
         for lineno, raw in enumerate(f, start=1):
             if raw.strip():
                 yield lineno, raw
+
+
+def derived_problems(
+    doc: Any, kind: str, *, schemas: SchemaSet | None = None
+) -> list[tuple[str, str]]:
+    """(JSON path, message) for each way a compiled document breaks its schema. `kind` is
+    `manifest`, `tracks`, `environment` or `retarget`."""
+    if kind not in DERIVED_SCHEMAS:
+        raise KeyError(f"unknown compiled document kind {kind!r}")
+    schemas = schemas if schemas is not None else default_schemas()
+    return schemas.check(DERIVED_SCHEMAS[kind], doc)
+
+
+def validate_derived(
+    derived_dir: Path | str, *, schemas: SchemaSet | None = None
+) -> list[ValidationIssue]:
+    """Check a compiled episode directory: manifest.json and every artifact it lists."""
+    derived_dir = Path(derived_dir)
+    schemas = schemas if schemas is not None else default_schemas()
+    try:
+        manifest = parse_json((derived_dir / "manifest.json").read_text(encoding="utf-8"))
+    except OSError:
+        return [ValidationIssue("manifest.json", None, None, "file is missing")]
+    except (ValueError, UnicodeDecodeError) as e:
+        return [ValidationIssue("manifest.json", None, None, _json_error(e))]
+    problems = derived_problems(manifest, "manifest", schemas=schemas)
+    issues = [ValidationIssue("manifest.json", None, p, m) for p, m in problems]
+    if problems:
+        return issues
+    for artifact in manifest["artifacts"]:
+        name = artifact["name"]
+        try:
+            doc = parse_json((derived_dir / name).read_text(encoding="utf-8"))
+        except OSError:
+            issues.append(ValidationIssue(name, None, None, "file is missing"))
+            continue
+        except (ValueError, UnicodeDecodeError) as e:
+            issues.append(ValidationIssue(name, None, None, _json_error(e)))
+            continue
+        problems = derived_problems(doc, artifact["kind"], schemas=schemas)
+        issues += [ValidationIssue(name, None, p, m) for p, m in problems]
+    return issues
 
 
 def hand_layout_problems(meta: dict) -> list[tuple[str, str]]:

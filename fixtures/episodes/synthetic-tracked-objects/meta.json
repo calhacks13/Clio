@@ -1,0 +1,145 @@
+{
+  "schema": "clio.episode/1",
+  "mode": "free",
+  "procedure": null,
+  "operator": {
+    "role": "collector"
+  },
+  "space": {
+    "frame": "workspace",
+    "units": "m",
+    "upAxis": "+y",
+    "worldFromWorkspace": [
+      -0.42,
+      0.74,
+      -0.46,
+      0,
+      -0.05,
+      0,
+      0.9988
+    ],
+    "calibration": "pinch_two_corners",
+    "anchored": false
+  },
+  "hands": {
+    "joints": [
+      "wrist",
+      "thumb-metacarpal",
+      "thumb-phalanx-proximal",
+      "thumb-phalanx-distal",
+      "thumb-tip",
+      "index-finger-metacarpal",
+      "index-finger-phalanx-proximal",
+      "index-finger-phalanx-intermediate",
+      "index-finger-phalanx-distal",
+      "index-finger-tip",
+      "middle-finger-metacarpal",
+      "middle-finger-phalanx-proximal",
+      "middle-finger-phalanx-intermediate",
+      "middle-finger-phalanx-distal",
+      "middle-finger-tip",
+      "ring-finger-metacarpal",
+      "ring-finger-phalanx-proximal",
+      "ring-finger-phalanx-intermediate",
+      "ring-finger-phalanx-distal",
+      "ring-finger-tip",
+      "pinky-finger-metacarpal",
+      "pinky-finger-phalanx-proximal",
+      "pinky-finger-phalanx-intermediate",
+      "pinky-finger-phalanx-distal",
+      "pinky-finger-tip"
+    ],
+    "jointFields": [
+      "px",
+      "py",
+      "pz",
+      "qx",
+      "qy",
+      "qz",
+      "qw",
+      "radius"
+    ]
+  },
+  "objects": [
+    {
+      "id": "mug",
+      "label": "mug",
+      "position": [
+        0.22,
+        0.05,
+        -0.2
+      ],
+      "radius": 0.045,
+      "method": "detector"
+    },
+    {
+      "id": "bottle",
+      "label": "water bottle",
+      "position": [
+        0.1,
+        0.11,
+        -0.32
+      ],
+      "radius": 0.035,
+      "method": "detector"
+    },
+    {
+      "id": "tape",
+      "label": "tape measure",
+      "position": [
+        0.62,
+        0.025,
+        -0.27
+      ],
+      "radius": 0.035,
+      "method": "marker"
+    }
+  ],
+  "coach": {
+    "kind": "none"
+  },
+  "device": {
+    "userAgent": "clio-synth",
+    "emulated": true,
+    "xrFeatures": [
+      "local-floor",
+      "hand-tracking",
+      "plane-detection"
+    ]
+  },
+  "app": {
+    "version": "synthetic"
+  },
+  "features": [
+    "object.flags",
+    "object.grasp",
+    "object.observations",
+    "environment.planes"
+  ],
+  "camera": {
+    "intrinsics": {
+      "width": 1280,
+      "height": 960,
+      "fx": 800,
+      "fy": 800,
+      "cx": 640,
+      "cy": 480
+    },
+    "headFromCamera": [
+      0.032,
+      0.02,
+      -0.025,
+      -0.1305,
+      0,
+      0,
+      0.9914
+    ],
+    "source": "default"
+  },
+  "clock": {
+    "timeline": "performance.now",
+    "startEpochMs": 1792821600000
+  },
+  "episodeId": "ep-synthetic-tracked-objects",
+  "createdAt": "2026-10-24T06:00:00.000Z"
+}

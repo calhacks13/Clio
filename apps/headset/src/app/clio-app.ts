@@ -1,4 +1,4 @@
-import type { HealthResponse, Procedure } from '@clio/protocol';
+import { EPISODE_FEATURE, type HealthResponse, type Procedure } from '@clio/protocol';
 import { MicCapture } from '../adapters/audio/mic-capture';
 import type { SpeakerOutput } from '../adapters/audio/voice-output';
 import type { PassthroughCamera } from '../adapters/camera/passthrough-camera';
@@ -20,6 +20,7 @@ import {
 import { SceneRuntime } from '../adapters/render/scene-runtime';
 import { ScriptedAgent } from '../adapters/scripted/scripted-agent';
 import { WorkspaceAnchor } from '../adapters/xr/anchors';
+import { XrPlaneReader } from '../adapters/xr/environment';
 import { FrameSampler, poseFromMatrix } from '../adapters/xr/frame-sampler';
 import { XrPlaneSurfaces } from '../adapters/xr/planes';
 import { startArSession, type XrRuntime } from '../adapters/xr/xr-session';
@@ -38,6 +39,7 @@ import { OverlayModel } from '../domain/overlay/overlay-model';
 import { EpisodeRecorder } from '../domain/recording/recorder';
 import { LessonController } from '../domain/session/lesson-controller';
 import { CalibrationFlow } from '../domain/world/calibration';
+import { EnvironmentRecorder } from '../domain/world/environment';
 import { ObjectGrounder } from '../domain/world/grounding';
 import { GraspTracker } from '../domain/world/holding';
 import { ObjectRegistry } from '../domain/world/object-registry';
@@ -86,6 +88,10 @@ export class ClioApp {
   private readonly overlay: OverlayModel;
   private readonly sampler = new FrameSampler();
   private readonly surfaces = new XrPlaneSurfaces();
+  private readonly planes = new XrPlaneReader((err) =>
+    log.warn(`plane detection failed (${String(err)}); planes are not recorded`),
+  );
+  private readonly environment: EnvironmentRecorder;
   private readonly anchor = new WorkspaceAnchor();
   private readonly workspacePresenters: Presenter[];
   private readonly worldPresenters: Presenter[];
@@ -111,6 +117,10 @@ export class ClioApp {
       clock,
       sink: new HttpEpisodeSink(o.api),
       onDrop: (why) => log.warn(`recording: dropped ${why}`),
+    });
+    this.environment = new EnvironmentRecorder({ bus });
+    bus.on('recorder.status', ({ recording }) => {
+      if (recording) this.environment.reset();
     });
     const grounder = o.camera
       ? new ObjectGrounder({
@@ -224,6 +234,9 @@ export class ClioApp {
 
     // 5. Record.
     this.recorder.recordFrame(local);
+    if (this.recorder.recording && this.planeDetection) {
+      this.environment.update(t, this.planes.read(frame, runtime.space), workspace);
+    }
 
     // 6. Present.
     const ctx: PresentContext = {
@@ -386,6 +399,11 @@ export class ClioApp {
     }
   }
 
+  /** Planes are detected (and recorded) only when the session enabled the feature. */
+  private get planeDetection(): boolean {
+    return this.runtime?.features.includes('plane-detection') ?? false;
+  }
+
   private currentWorkspace(): Workspace {
     return this.workspace ?? new Workspace({ p: [0, 0.75, -0.5], q: [0, 0, 0, 1] }, 'none');
   }
@@ -407,6 +425,7 @@ export class ClioApp {
         xrFeatures: this.runtime?.features ?? [],
       },
       app: { version: this.o.version },
+      ...(this.planeDetection ? { features: [EPISODE_FEATURE.environmentPlanes] } : {}),
     };
   }
 }

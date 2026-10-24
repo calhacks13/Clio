@@ -863,6 +863,123 @@
         },
         "type": {
           "type": "string",
+          "const": "environment.planes"
+        },
+        "planes": {
+          "maxItems": 128,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Stable within the episode; the headset numbers planes as it first sees them"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "table",
+                  "floor",
+                  "wall",
+                  "ceiling",
+                  "couch",
+                  "other"
+                ]
+              },
+              "label": {
+                "description": "The WebXR semanticLabel as reported, if any",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "orientation": {
+                "type": "string",
+                "enum": [
+                  "horizontal",
+                  "vertical"
+                ]
+              },
+              "pose": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "items": false,
+                "minItems": 7,
+                "maxItems": 7,
+                "description": "Plane pose, workspace frame: the polygon lies in its local x/z plane and +y is the normal"
+              },
+              "polygon": {
+                "minItems": 3,
+                "maxItems": 256,
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 2,
+                  "maxItems": 2
+                },
+                "description": "Outline in plane-local [x, z] meters"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "label",
+              "orientation",
+              "pose",
+              "polygon"
+            ],
+            "additionalProperties": false
+          },
+          "description": "Every plane detected now: a full snapshot, not a list of changes"
+        }
+      },
+      "required": [
+        "t",
+        "type",
+        "planes"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "t": {
+          "type": "number",
+          "minimum": 0
+        },
+        "type": {
+          "type": "string",
           "const": "annotation"
         },
         "label": {

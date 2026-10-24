@@ -12,11 +12,12 @@ import React, {
   useState,
   useSyncExternalStore,
 } from "react";
-import { LuBug, LuFolderOpen, LuPin } from "react-icons/lu";
+import { LuBot, LuBug, LuFolderOpen, LuPin } from "react-icons/lu";
 import { ClioBrand } from "@/components/clio-brand";
 import { ThemeToggle } from "@/components/ui";
 import { TimeProvider } from "@/context/time-context";
 import { captureKey } from "@/lib/clio/capture-key";
+import { compileStatus, type DerivedState } from "@/lib/clio/derived";
 import { buildLanes, recordsLocationFlags } from "@/lib/clio/lanes";
 import type { Clock } from "@/lib/clio/live-clock";
 import { ClioSource } from "@/lib/clio/source";
@@ -31,6 +32,7 @@ import EventList from "./event-list";
 import ObjectInspector from "./object-inspector";
 import ObjectLanes from "./object-lanes";
 import StepBanner from "./step-banner";
+import { useClioDerived } from "./use-clio-derived";
 
 // The Clio episode viewer behind /clio/live and /clio/<id>
 // (docs/plans/visualizer.md 2.1, 2.2): one ClioSource polls the Clio server
@@ -39,6 +41,9 @@ import StepBanner from "./step-banner";
 // follows the newest episode and keeps the address; Pin stays on the episode
 // shown and moves to its /clio/<id> page. Laid out like the G1 replay: an
 // unframed canvas between two rounded toolbar surfaces, with docked panels.
+// The compiled documents (planes, retargeted robots, the compile state) come
+// from their own loader beside the source (use-clio-derived), so raw
+// following never waits on them.
 
 /** The lanes' axis grows in these steps while live, so they rebuild at most ten times a second. */
 const AXIS_STEP_US = 100_000;
@@ -116,6 +121,8 @@ export default function ClioReplayViewer({
     source.getSnapshot,
     source.getSnapshot,
   );
+  const derived = useClioDerived(snapshot.episodeId);
+  const [showRobot, setShowRobot] = useState(true);
 
   // A pinned episode the server does not have: back to the list.
   const gone =
@@ -195,6 +202,19 @@ export default function ClioReplayViewer({
                 <span className="tool-label">Pin</span>
               </button>
             )}
+            {derived.retarget.length > 0 && (
+              <button
+                type="button"
+                aria-pressed={showRobot}
+                title="Show the retargeted robot"
+                aria-label="Robot"
+                onClick={() => setShowRobot((on) => !on)}
+                className={`btn ${showRobot ? "btn-active" : ""}`}
+              >
+                <LuBot size={16} aria-hidden="true" />{" "}
+                <span className="tool-label">Robot</span>
+              </button>
+            )}
             <button
               type="button"
               aria-pressed={debug}
@@ -232,6 +252,8 @@ export default function ClioReplayViewer({
           initialClock={clockRef.current ?? initialClock}
           clockRef={clockRef}
           debug={debug}
+          derived={derived}
+          showRobot={showRobot}
           onRetry={() => {
             source.stop();
             source.start();
@@ -247,12 +269,16 @@ function ClioWorkspace({
   initialClock,
   clockRef,
   debug,
+  derived,
+  showRobot,
   onRetry,
 }: {
   snapshot: EpisodeSourceState;
   initialClock: Clock | null;
   clockRef: React.RefObject<Clock | null>;
   debug: boolean;
+  derived: DerivedState;
+  showRobot: boolean;
   onRetry: () => void;
 }) {
   const { clock, seek, togglePlaying, goLive } = useClioClock(
@@ -333,6 +359,10 @@ function ClioWorkspace({
     ? "reconnecting"
     : snapshot.status;
 
+  // On the raw episode's own status, not the Reconnecting overlay: a live
+  // episode that briefly fails to read is still not compiled.
+  const compile = compileStatus(derived, snapshot.status);
+
   const newest = snapshot.newest;
   const lag: ClioLag | null =
     debug && newest
@@ -372,6 +402,9 @@ function ClioWorkspace({
                     debug={debug}
                     selectedId={selectedId}
                     onSelect={select}
+                    environment={derived.environment}
+                    retarget={derived.retarget}
+                    showRobot={showRobot}
                     className="absolute inset-0"
                   />
                   <StepBanner
@@ -447,6 +480,7 @@ function ClioWorkspace({
           onGoLive={goLive}
           batches={snapshot.batches}
           lag={lag}
+          compile={compile}
           disabled={!capture}
         />
       </div>

@@ -28,6 +28,7 @@ pnpm dev                 # server :8787 + headset app :5173
 | [docs/object-finder.md](docs/object-finder.md) | plugging in jev or another object finder          |
 | [tracker/README.md](tracker/README.md)         | real-time tracking: YOLOE-26 + ByteTrack + jev    |
 | [docs/data-format.md](docs/data-format.md)     | episodes on disk                                  |
+| [docs/data-pipeline.md](docs/data-pipeline.md) | when episodes are recorded, compiled and exported |
 | [docs/dev-setup.md](docs/dev-setup.md)         | laptop, emulator, Quest, data, demo day           |
 
 ```

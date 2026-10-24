@@ -36,6 +36,8 @@ import {
   EpisodeFinishSchema,
   type FrameRecord,
   FrameRecordSchema,
+  type ObjectObservation,
+  ObjectObservationSchema,
   type ObjectTrackRecord,
   ObjectTrackRecordSchema,
 } from '@clio/protocol';
@@ -51,6 +53,8 @@ export interface Recording {
   frames: FrameRecord[];
   events: EpisodeEvent[];
   objects: ObjectTrackRecord[];
+  /** 2D object observations; empty or absent in episodes without them. */
+  observations?: ObjectObservation[];
   /** null when the recording never finished. */
   finish: EpisodeFinish | null;
 }
@@ -135,13 +139,19 @@ export async function readRecording(dir: string): Promise<Recording> {
     frames: await readNdjson(join(dir, 'frames.ndjson'), FrameRecordSchema),
     events: await readNdjson(join(dir, 'events.ndjson'), EpisodeEventSchema),
     objects: await readNdjson(join(dir, 'objects.ndjson'), ObjectTrackRecordSchema),
+    observations: await readNdjson(join(dir, 'observations.ndjson'), ObjectObservationSchema),
     finish: finish === null ? null : parseJson(EpisodeFinishSchema, finish, finishPath),
   };
 }
 
 /** Recording time between the starts of two repeats: the recording's span plus one frame. */
 export function repeatPeriod(recording: Recording): number {
-  const end = Math.max(lastT(recording.frames), lastT(recording.events), lastT(recording.objects));
+  const end = Math.max(
+    lastT(recording.frames),
+    lastT(recording.events),
+    lastT(recording.objects),
+    lastT(recording.observations ?? []),
+  );
   return qTime(end + frameStep(recording.frames));
 }
 
@@ -153,8 +163,8 @@ export function repeatCount(recording: Recording, minutes: number | null): numbe
 
 /**
  * Cuts the recording into batches as EpisodeRecorder did: a batch closes on the frame that makes it
- * `rule.frames` long or `rule.ms` past the previous cut, and carries the events and object updates
- * recorded up to that frame, in file order. What is left forms one last batch, like
+ * `rule.frames` long or `rule.ms` past the previous cut, and carries the events, object updates and
+ * observations recorded up to that frame, in file order. What is left forms one last batch, like
  * EpisodeRecorder.stop. Each repeat plays `repeatPeriod` later than the one before it, and seq
  * keeps counting up from 0 across repeats.
  */
@@ -166,6 +176,9 @@ export function* planBatches(
   const period = repeatPeriod(recording);
   const eventsUpTo = takeUpTo(repeated(recording.events, repeats, period, later));
   const objectsUpTo = takeUpTo(repeated(recording.objects, repeats, period, laterTrack));
+  const observationsUpTo = takeUpTo(
+    repeated(recording.observations ?? [], repeats, period, laterObservation),
+  );
   let seq = 0;
   let frames: FrameRecord[] = [];
   let lastCut = 0;
@@ -177,6 +190,7 @@ export function* planBatches(
       frames,
       events: eventsUpTo(frame.t),
       objects: objectsUpTo(frame.t),
+      observations: observationsUpTo(frame.t),
     };
     yield { t: frame.t, batch };
     frames = [];
@@ -184,9 +198,16 @@ export function* planBatches(
   }
   const events = eventsUpTo(Number.POSITIVE_INFINITY);
   const objects = objectsUpTo(Number.POSITIVE_INFINITY);
-  if (frames.length === 0 && events.length === 0 && objects.length === 0) return;
-  const t = Math.max(lastCut, lastT(frames), lastT(events), lastT(objects));
-  yield { t, batch: { seq, frames, events, objects } };
+  const observations = observationsUpTo(Number.POSITIVE_INFINITY);
+  if (
+    frames.length === 0 &&
+    events.length === 0 &&
+    objects.length === 0 &&
+    observations.length === 0
+  )
+    return;
+  const t = Math.max(lastCut, lastT(frames), lastT(events), lastT(objects), lastT(observations));
+  yield { t, batch: { seq, frames, events, objects, observations } };
 }
 
 /**
@@ -221,7 +242,8 @@ async function main(): Promise<void> {
   const stallAfterMs = options.stallAfterS === null ? null : options.stallAfterS * 1000;
   console.log(
     `Replaying ${dir} (${recording.frames.length} frames, ${recording.events.length} events, ` +
-      `${recording.objects.length} object updates, ${(period / 1000).toFixed(1)} s) ` +
+      `${recording.objects.length} object updates, ` +
+      `${recording.observations?.length ?? 0} observations, ${(period / 1000).toFixed(1)} s) ` +
       `${repeats} time(s) at ${options.speed}x to ${options.base}`,
   );
 
@@ -311,6 +333,12 @@ const later = <T extends { t: number }>(record: T, offset: number): T => ({
   t: qTime(record.t + offset),
 });
 
+const laterObservation = (o: ObjectObservation, offset: number): ObjectObservation => ({
+  ...o,
+  t: qTime(o.t + offset),
+  observedT: qTime(o.observedT + offset),
+});
+
 const laterTrack = (record: ObjectTrackRecord, offset: number): ObjectTrackRecord => ({
   t: qTime(record.t + offset),
   objects: record.objects.map((o) =>
@@ -367,7 +395,7 @@ function parseJson<T>(schema: z.ZodType<T>, text: string, where: string): T {
   return parsed.data;
 }
 
-/** A missing file reads as empty: older episodes have no objects.ndjson. */
+/** A missing file reads as empty: older episodes have no objects.ndjson or observations.ndjson. */
 async function readNdjson<T>(path: string, schema: z.ZodType<T>): Promise<T[]> {
   const lines = ((await readText(path)) ?? '').split('\n');
   return lines.flatMap((line, i) =>

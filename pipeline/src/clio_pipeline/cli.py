@@ -1,11 +1,15 @@
-"""`clio`: validate, inspect, replay and export Clio episodes."""
+"""`clio`: validate, inspect, compile, replay and export Clio episodes."""
 
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import signal
 import sys
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -50,6 +54,28 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("episodes", nargs="+", help=episodes_help)
     p.set_defaults(run=_info)
 
+    p = sub.add_parser(
+        "compile", help="compile episodes into derived/<id>/: tracks, environment, robot, quality"
+    )
+    p.add_argument("episodes", nargs="+", help=episodes_help)
+    p.add_argument(
+        "--out", metavar="DIR", help="derived root (default: derived/ beside an episodes/ dir)"
+    )
+    p.add_argument("--fps", type=int, default=30, help="grid rate (30)")
+    p.add_argument(
+        "--retarget",
+        action="append",
+        default=[],
+        metavar="PROFILE",
+        help="robot profile file to retarget to; repeat for several",
+    )
+    p.add_argument(
+        "--if-stale", action="store_true", help="skip episodes whose compile is up to date"
+    )
+    p.add_argument("--finished-only", action="store_true", help="skip episodes without finish.json")
+    p.add_argument("--json", action="store_true", help="print one JSON line per episode")
+    p.set_defaults(run=_compile)
+
     p = sub.add_parser("view", help="replay an episode in Rerun (needs the viz extra)")
     p.add_argument("episode", help="an episode directory")
     p.add_argument(
@@ -66,6 +92,11 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--fps", type=int, default=30, help="resampling rate (30)")
     p.add_argument("--overwrite", action="store_true", help="replace --out if it exists")
     p.add_argument("--no-validate", action="store_true", help="skip schema validation")
+    p.add_argument(
+        "--robot-profile",
+        metavar="PROFILE",
+        help="export the joint trajectory retargeted to this robot instead of the hands",
+    )
     p.set_defaults(run=_export)
     return parser
 
@@ -93,7 +124,7 @@ def _load(path: Path, *, validate: bool = False) -> Episode:
         return load_episode(path, validate=validate)
     except EpisodeValidationError as e:
         raise CliError(str(e)) from e
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, KeyError, TypeError) as e:
         raise CliError(f"cannot read {path}: {e}") from e
 
 
@@ -238,6 +269,106 @@ def _plan_lines(ep: Episode) -> list[str]:
     return lines
 
 
+# --- compile --------------------------------------------------------------------------------------
+
+
+def default_derived_root(episode_dir: Path) -> Path | None:
+    """<data>/derived for an episode in <data>/episodes/, else None."""
+    parent = Path(os.path.normpath(episode_dir.absolute())).parent
+    return parent.parent / "derived" if parent.name == "episodes" else None
+
+
+def _compile(args: argparse.Namespace) -> int:
+    from .compile import compile_episode
+
+    if args.fps <= 0:
+        raise CliError(f"--fps must be positive, got {args.fps}")
+    dirs = episode_dirs(args.episodes)
+    roots: dict[Path, Path] = {}
+    for path in dirs:
+        root = Path(args.out) if args.out else default_derived_root(path)
+        if root is None:
+            raise CliError(
+                f"{path} is not in an episodes/ directory: give a derived root of its own "
+                "with --out (not the directory holding the episode)"
+            )
+        roots[path] = root
+
+    failed = 0
+    with _sigterm_exits():
+        for path in dirs:
+            if args.finished_only and not (path / "finish.json").is_file():
+                unfinished = _no_compile(path.name, skipped=True, reason="not finished")
+                print(json.dumps(unfinished) if args.json else f"skip  {path}  not finished")
+                continue
+            try:
+                result = compile_episode(
+                    path,
+                    roots[path],
+                    fps=args.fps,
+                    retarget_profiles=args.retarget,
+                    if_stale=args.if_stale,
+                )
+            except Exception as e:  # anything that stops a compile before its manifest is written
+                failed += 1
+                print(f"clio: cannot compile {path}: {e}", file=sys.stderr)
+                if args.json:
+                    print(json.dumps(_no_compile(path.name, skipped=False, error=str(e))))
+                continue
+            print(json.dumps(compile_summary(result)) if args.json else _describe_compile(result))
+    return 1 if failed else 0
+
+
+@contextmanager
+def _sigterm_exits() -> Iterator[None]:
+    """Turn SIGTERM (the server's compile timeout and shutdown) into SystemExit(143), so a
+    compile cleans up its hidden work directory and puts back the compile it was replacing."""
+    try:
+        previous = signal.signal(signal.SIGTERM, _exit_on_signal)
+    except ValueError:  # not the main thread: leave signals alone
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous if previous is not None else signal.SIG_DFL)
+
+
+def _exit_on_signal(signum: int, frame) -> None:
+    sys.exit(128 + signum)
+
+
+def compile_summary(result) -> dict:
+    """The --json line for a compiled (or up-to-date) episode."""
+    return {
+        "episodeId": result.episode_id,
+        "skipped": result.skipped,
+        "outDir": str(result.out_dir),
+        "usable": result.usable,
+        "stages": result.manifest["stages"],
+    }
+
+
+def _no_compile(episode_id: str, *, skipped: bool, **extra: str) -> dict:
+    """The --json line for an episode without a compile to show: not finished, or failed."""
+    line = {"episodeId": episode_id, "skipped": skipped, "outDir": None, "usable": None}
+    return {**line, "stages": [], **extra}
+
+
+def _describe_compile(result) -> str:
+    if result.skipped:
+        return f"skip  {result.episode_id}  up to date"
+    quality = result.manifest["quality"]
+    verdict = "usable" if quality["usable"] else "not usable: " + "; ".join(quality["reasons"])
+    lines = [f"ok    {result.episode_id}  {result.out_dir}", f"      {verdict}"]
+    lines += [
+        f"      failed  {stage['name']}: {stage.get('detail', '')}"
+        for stage in result.manifest["stages"]
+        if stage["status"] == "failed"
+    ]
+    return "\n".join(lines)
+
+
 # --- view -----------------------------------------------------------------------------------------
 
 
@@ -267,6 +398,7 @@ def _export(args: argparse.Namespace) -> int:
     except ImportError:
         pass
     dirs = episode_dirs(args.episodes)
+    robot = {"robot_profile": _robot_profile(args.robot_profile)} if args.robot_profile else {}
     try:
         result = export_lerobot(
             dirs,
@@ -275,6 +407,7 @@ def _export(args: argparse.Namespace) -> int:
             fps=args.fps,
             validate=not args.no_validate,
             overwrite=args.overwrite,
+            **robot,
         )
     except (EpisodeValidationError, FileExistsError, ImportError, ValueError) as e:
         raise CliError(str(e)) from e
@@ -292,6 +425,17 @@ def _export(args: argparse.Namespace) -> int:
     for path, reason in result.skipped:
         print(f"  skipped {path}: {reason}")
     return 0
+
+
+def _robot_profile(path: str):
+    try:
+        from .retarget import load_profile
+    except ImportError as e:
+        raise CliError(f"--robot-profile needs clio_pipeline.retarget ({e})") from e
+    try:
+        return load_profile(path)
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        raise CliError(f"cannot load robot profile {path}: {e}") from e
 
 
 if __name__ == "__main__":

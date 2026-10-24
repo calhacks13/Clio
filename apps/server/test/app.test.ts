@@ -3,6 +3,7 @@ import { ApiErrorSchema, ApiPaths, HealthResponseSchema } from '@clio/protocol';
 import { describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app';
 import { ClipStore } from '../src/storage/clip-store';
+import { DerivedStore } from '../src/storage/derived-store';
 import { EpisodeStore } from '../src/storage/episode-store';
 import { ProcedureStore } from '../src/storage/procedure-store';
 import { episodeCreate } from './fixtures';
@@ -159,6 +160,7 @@ describe('CORS on /api', () => {
       version: '9.9.9-test',
       liveModel: 'live-test',
       episodes: new EpisodeStore(join(dir, 'episodes')),
+      derived: new DerivedStore(join(dir, 'derived')),
       procedures: new ProcedureStore({
         curatedDir: join(dir, 'procedures'),
         plansDir: join(dir, 'plans'),

@@ -1,4 +1,11 @@
-import type { FrameRecord, HandSample, ObjectState, Pose7 } from '@clio/protocol';
+import type {
+  FrameRecord,
+  HandSample,
+  NormalizedPoint,
+  ObjectObservation,
+  ObjectState,
+  Pose7,
+} from '@clio/protocol';
 import type { Pose } from '../../core/math';
 import type { TrackedFrame } from '../hands/types';
 
@@ -65,5 +72,29 @@ export function quantizeObject(o: ObjectState, startT: number, t: number): Objec
     ...(o.observedT === undefined || Math.abs(o.observedT - t) < 1
       ? {}
       : { observedT: qTime(o.observedT - startT) }),
+  };
+}
+
+const point = (p: NormalizedPoint | null): NormalizedPoint | null => p && [q4(p[0]), q4(p[1])];
+
+/**
+ * One observation for observations.ndjson. Its `t` and `observedT` arrive in performance.now ms and
+ * are rebased onto `startT`; normalized image coordinates and the score keep 1e-4.
+ */
+export function quantizeObservation(o: ObjectObservation, startT: number): ObjectObservation {
+  return {
+    t: qTime(o.t - startT),
+    observedT: qTime(o.observedT - startT),
+    objectId: o.objectId,
+    status: o.status,
+    role: o.role,
+    source: o.source,
+    box: o.box && [q4(o.box[0]), q4(o.box[1]), q4(o.box[2]), q4(o.box[3])],
+    outline: o.outline === null ? null : o.outline.map(([x, y]) => [q4(x), q4(y)]),
+    point: point(o.point),
+    contact: point(o.contact),
+    score: o.score === null ? null : q4(o.score),
+    frame: o.frame && { seq: o.frame.seq, width: o.frame.width, height: o.frame.height },
+    trackId: o.trackId,
   };
 }

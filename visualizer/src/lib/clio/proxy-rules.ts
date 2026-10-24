@@ -1,3 +1,5 @@
+import { DERIVED_FILE_NAME } from "@clio/protocol";
+
 // Rules for the read-only Clio proxy at /api/clio/[...path].
 //
 // The browser reads the local Clio server (127.0.0.1:8787) through this
@@ -6,9 +8,10 @@
 //
 // - GET and HEAD only. Writes (episode create, batches, finish, media) never
 //   pass through.
-// - Only the episode list, one episode's detail and its frames, events and
-//   objects files. /gemini, /api/coach/token, /api/plans, /api/vision and
-//   /api/clips are never reachable.
+// - Only the episode list, one episode's detail, its frames, events and
+//   objects files, and its compiled files (derived/<name>, a DERIVED_FILE_NAME
+//   from @clio/protocol). /gemini, /api/coach/token, /api/plans, /api/vision,
+//   /api/clips and the compile trigger are never reachable.
 // - The upstream must be a loopback http(s) origin, and so must the Host the
 //   request arrived on (a DNS-rebound page can't read local recordings).
 // - Request headers are built from scratch, so the hf_access_token cookie and
@@ -21,6 +24,9 @@ export const DEFAULT_CLIO_SERVER_URL = "http://127.0.0.1:8787";
 export const CLIO_PROXY_METHODS: readonly string[] = ["GET", "HEAD"];
 
 export const CLIO_CHANNELS = ["frames", "events", "objects"] as const;
+
+/** The segment before a compiled file's name: episodes/<id>/derived/<name>. */
+const DERIVED = "derived";
 
 // Same rule as the server's ids (apps/server/src/ids.ts). It also rules out
 // "." and "..", and anything an encoded slash or percent decodes into.
@@ -89,11 +95,17 @@ export function clioUpstreamOrigin(serverUrl: string | undefined): URL | null {
 // The server path for the catch-all segments, or null when it isn't one of
 // the readable episode routes.
 export function clioUpstreamPath(path: readonly string[]): string | null {
-  const [root, id, channel, ...rest] = path;
+  const [root, id, channel, name, ...rest] = path;
   if (root !== "episodes" || rest.length > 0) return null;
   if (id === undefined) return "/api/episodes";
   if (!EPISODE_ID.test(id)) return null;
   if (channel === undefined) return `/api/episodes/${id}`;
+  if (channel === DERIVED) {
+    // The name pattern also excludes dot segments, slashes and percent signs.
+    if (name === undefined || !DERIVED_FILE_NAME.test(name)) return null;
+    return `/api/episodes/${id}/${DERIVED}/${name}`;
+  }
+  if (name !== undefined) return null;
   if (!(CLIO_CHANNELS as readonly string[]).includes(channel)) return null;
   return `/api/episodes/${id}/${channel}`;
 }

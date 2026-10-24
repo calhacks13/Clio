@@ -79,6 +79,31 @@ describe("planClioProxy: allowed reads", () => {
     );
   });
 
+  test("one episode's compiled files", () => {
+    for (const name of [
+      "manifest.json",
+      "tracks.json",
+      "environment.json",
+      "retarget-clio-arm-6dof.json",
+      "retarget-arm_v2.1.json",
+      "0.json",
+      `${"a".repeat(91)}.json`,
+    ]) {
+      expect(url({ path: ["episodes", ID, "derived", name] })).toBe(
+        `http://127.0.0.1:8787/api/episodes/${ID}/derived/${name}`,
+      );
+    }
+  });
+
+  test("from is not forwarded to compiled files", () => {
+    expect(
+      url({
+        path: ["episodes", ID, "derived", "manifest.json"],
+        searchParams: new URLSearchParams({ from: "10" }),
+      }),
+    ).toBe(`http://127.0.0.1:8787/api/episodes/${ID}/derived/manifest.json`);
+  });
+
   test("CLIO_SERVER_URL picks another loopback server", () => {
     expect(url({ serverUrl: "http://localhost:8788" })).toBe(
       "http://localhost:8788/api/episodes",
@@ -114,6 +139,67 @@ describe("planClioProxy: rejected", () => {
       [],
     ]) {
       expect(status({ path })).toBe(404);
+    }
+  });
+
+  test("compiled file names outside the derived name rule", () => {
+    for (const name of [
+      "..",
+      ".",
+      "%2e%2e",
+      "..%2fmanifest.json",
+      "../manifest.json",
+      "../../meta.json",
+      "%2e%2e%2fmanifest.json",
+      "..\\manifest.json",
+      "a/../manifest.json",
+      ".manifest.json",
+      "-manifest.json",
+      "Manifest.json",
+      "TRACKS.JSON",
+      "tracks.JSON",
+      "frames.ndjson",
+      "objects.ndjson",
+      "manifest",
+      "manifest.json.bak",
+      "manifest.json?x=1",
+      "manifest.json#x",
+      "mani fest.json",
+      "manifest%20.json",
+      ".json",
+      `${"a".repeat(97)}.json`,
+    ]) {
+      expect(status({ path: ["episodes", ID, "derived", name] })).toBe(404);
+    }
+  });
+
+  test("compiled files at any other depth", () => {
+    for (const path of [
+      ["episodes", ID, "derived"],
+      ["episodes", ID, "derived", "manifest.json", "extra"],
+      ["episodes", ID, "derived", "retarget", "arm.json"],
+      ["episodes", "derived", "manifest.json"],
+      ["episodes", ID, "frames", "manifest.json"],
+      ["episodes", ID, "compile"],
+      ["derived", "manifest.json"],
+    ]) {
+      expect(status({ path })).toBe(404);
+    }
+  });
+
+  test("compiled files under a bad episode id", () => {
+    for (const id of ["..", "%2e%2e", ".hidden", "ep id", ""]) {
+      expect(
+        status({ path: ["episodes", id, "derived", "manifest.json"] }),
+      ).toBe(404);
+    }
+  });
+
+  test("writes to compiled files", () => {
+    for (const method of ["POST", "PUT", "DELETE"]) {
+      expect(
+        status({ method, path: ["episodes", ID, "derived", "manifest.json"] }),
+      ).toBe(405);
     }
   });
 

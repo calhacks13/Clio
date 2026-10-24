@@ -1,6 +1,11 @@
 import json
 
-from clio_pipeline.schema import transfer_warnings, validate_episode
+from clio_pipeline.schema import (
+    derived_problems,
+    transfer_warnings,
+    validate_derived,
+    validate_episode,
+)
 
 
 def _lines(path):
@@ -138,6 +143,20 @@ def test_optional_files_may_be_missing(episode_dir):
     assert validate_episode(episode_dir) == []
 
 
+def test_episode_with_every_optional_feature_is_valid(featured_episode_dir):
+    assert validate_episode(featured_episode_dir) == []
+
+
+def test_invalid_observation_line_is_reported(featured_episode_dir):
+    _edit_json_line(
+        featured_episode_dir / "observations.ndjson", 2, lambda r: r.update(status="seen")
+    )
+
+    [issue] = validate_episode(featured_episode_dir)
+
+    assert (issue.file, issue.line, issue.path) == ("observations.ndjson", 2, "$.status")
+
+
 def test_required_file_missing_is_reported(episode_dir):
     (episode_dir / "frames.ndjson").unlink()
 
@@ -207,3 +226,28 @@ def test_lost_batches_are_warned_about(episode_dir):
         "batches.json: batch seq 1 never arrived",
         "batches.json: finish.json says 3 batches were sent, the server received 2",
     ]
+
+
+# --- compiled documents ---------------------------------------------------------------------------
+
+
+def test_compiled_document_problems_name_the_path():
+    doc = {
+        "schema": "clio.derived/1",
+        "episodeId": "ep",
+        "frame": "workspace",
+        "kind": "environment",
+        "table": {"pose": [0, 0, 0, 0, 0, 0, 1], "size": [0.8, -0.6], "source": "plan"},
+        "floor": None,
+        "planes": [],
+    }
+
+    [(path, message)] = derived_problems(doc, "environment")
+
+    assert path == "$.table.size[1]"
+
+
+def test_compiled_directory_without_a_manifest_is_reported(tmp_path):
+    [issue] = validate_derived(tmp_path)
+
+    assert (issue.file, issue.message) == ("manifest.json", "file is missing")

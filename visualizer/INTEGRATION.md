@@ -25,11 +25,12 @@ A Clio server still running the old protocol drops the new fields and answers 40
 The Clio server defaults to `127.0.0.1:8787`. The headset Vite server uses port 5173 and proxies API requests. Existing routes include:
 
 - `POST /api/episodes` to create an episode.
-- `POST /api/episodes/:id/batches` with `{seq, frames, events, objects}`; duplicates are acknowledged without appending twice.
+- `POST /api/episodes/:id/batches` with `{seq, frames, events, objects, observations}`; duplicates are acknowledged without appending twice.
 - `POST /api/episodes/:id/finish` with duration, outcome, step counts and batch count.
 - `PUT /api/episodes/:id/media/:name` for optional media.
 - `GET /api/episodes` for discovery. `GET /api/episodes/:id` for detail, which also reports batch integrity as `batches: {received, gaps, lastSeq}`, read from the episode's `batches.json`. The field is left out when that file is missing or unreadable; treat that as unknown, not as 0 received. An episode is complete when `finish.batches === batches.received` and `gaps` is empty.
-- `GET /api/episodes/:id/{frames|events|objects}?from=<byte offset>` streams the file from that offset and returns `x-next-from`. That offset is always at the end of a whole line, so a trailing partial line (a crash mid-append) is never sent until it is complete. `?from=9007199254740991` answers nothing but the file's end, which the viewer uses to join a long live episode near its tail. If the file shrank below `from`, the body is empty and `x-next-from` is smaller than `from`.
+- `GET /api/episodes/:id/derived/<name>` serves a compiled file from `../data/derived/<id>/` (`manifest.json`, `tracks.json`, `environment.json`, `retarget-<profile>.json`; names match `DERIVED_FILE_NAME` in `@clio/protocol`). The server compiles each episode in the background when it finishes (`clio compile`, see `../docs/data-pipeline.md`), and the detail response reports `derived: {state, manifest, error}` with state `none`, `queued`, `running`, `ok`, `stale` or `failed`. `POST /api/episodes/:id/compile` compiles again by hand; the viewer never calls it.
+- `GET /api/episodes/:id/{frames|events|objects|observations}?from=<byte offset>` streams the file from that offset and returns `x-next-from`. That offset is always at the end of a whole line, so a trailing partial line (a crash mid-append) is never sent until it is complete. `?from=9007199254740991` answers nothing but the file's end, which the viewer uses to join a long live episode near its tail. If the file shrank below `from`, the body is empty and `x-next-from` is smaller than `from`.
 
 The server only sends CORS headers to the browser origins in `CLIO_CORS_ORIGINS`, a comma-separated list of exact origins. The default is `http://127.0.0.1:3001,http://localhost:3001` (this viewer), and `x-next-from` is exposed to them. Requests from any other website get no CORS headers, and those a browser marks cross-site or same-site get 403, so a page open on the laptop cannot read recordings or mint coach tokens. Requests without an `Origin` (curl, the pipeline, the replay script) and the headset's same-origin requests through Vite are unchanged. The setting is parsed in `../apps/server/src/config.ts`, but `../apps/server/src/index.ts` does not pass `config.corsOrigins` to `createApp` yet, so the default list applies until it does. The viewer itself does not need CORS: it reads through the proxy below.
 
@@ -57,7 +58,7 @@ The home page links to `/clio`. The HF/G1 dataset routes (`/[org]/[dataset]/[epi
 `src/app/api/clio/[...path]/route.ts` forwards to the Clio server; its rules are in `src/lib/clio/proxy-rules.ts` and tested in `src/lib/clio/__tests__/proxy-rules.test.ts`.
 
 - GET and HEAD only; any other method gets 405.
-- Paths: `episodes`, `episodes/<id>` and `episodes/<id>/(frames|events|objects)`, mapped to the same `/api/...` paths. The id must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`. Everything else is 404, so coach, plans, vision, clips, Gemini and every write are never reachable.
+- Paths: `episodes`, `episodes/<id>`, `episodes/<id>/(frames|events|objects)` and `episodes/<id>/derived/<name>` (name matching `DERIVED_FILE_NAME`), mapped to the same `/api/...` paths. The id must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`. Everything else is 404, so coach, plans, vision, clips, Gemini and every write are never reachable.
 - Only a digits-only `from` is forwarded, to the channel paths; another or repeated `from` gets 400. Other query parameters are dropped.
 - The upstream is `CLIO_SERVER_URL` (default `http://127.0.0.1:8787`), read per request. It must be a bare loopback http(s) origin, otherwise 500. A `Host` that is not loopback gets 403, which blocks DNS rebinding.
 - Upstream request headers are built from scratch, so the `hf_access_token` cookie, authorization, origin and referer are never forwarded. Redirects are refused, and the fetch aborts with the browser request.
@@ -94,17 +95,27 @@ The viewer imports framework-free modules from the headset viewer instead of cop
 
 The headset's `../apps/headset/viewer.html` (`src/viewer/{main,scene,panel}.ts`) still runs on `pnpm dev` alone and is frozen as a fallback; the pure modules stay shared either way.
 
+### Compiled episodes
+
+`src/lib/clio/derived.ts` (`ClioDerivedSource`, through `use-clio-derived.ts`) runs beside the raw source and never touches it. It reads the detail's `derived` field on its own slow cadence and, when the state is `ok` or `stale`, fetches the manifest's environment and retarget artifacts once per `compiledAt` and parses them with the `@clio/protocol` schemas. A 404 or a document that fails its schema means "not compiled" for that file, never "episode gone".
+
+- Compiled documents are in W like the raw episode; `src/lib/clio/derived-display.ts` places them and converts with `rosFromW` exactly once.
+- The environment layer draws compiled planes (floor, walls, a detected table) as context geometry, and the compiled table and floor when they exist; otherwise the calibrated floor and workspace box as before. Plane labels show only in Debug.
+- `layers/robot.tsx` draws each retargeted arm as a dashed joint chain in the inferred look, at the grid frame at or before the clock time, hidden where its joints are null, labelled "Retargeted" with the profile's robot name. The Robot toggle in the header shows or hides it. It is never drawn as measured.
+- Once the episode is no longer live, the playback bar shows a compile state that needs attention (Compiling, Not compiled, Compile stale, Compile failed, including a failed stage or a failed recompile) and "Not usable" with the quality verdict's first reason as a tooltip. A healthy compile adds no text.
+- `tracks.json` is not fetched yet: no layer draws it, and the scene's objects come from the raw estimates.
+
 ### Where things live
 
-- `src/lib/clio/`: `types.ts`, `proxy-rules.ts`, `source.ts`, `live-clock.ts`, `capture-key.ts`, `object-display.ts` (per-object state at `tUs`), `detection-geometry.ts` (detector outlines in ROS) and `lanes.ts` (the per-object lane model), with tests in `__tests__/` and a deterministic generated episode in `__fixtures__/synthetic-episode.ts`.
-- `src/components/clio/`: `clio-replay-viewer.tsx` (the shell for all three pages), `clio-clock.tsx`, `clio-scene.tsx` with `layers/{environment,hands,head,objects,detections}.tsx`, and the panels `object-lanes.tsx`, `object-inspector.tsx`, `event-list.tsx`, `step-banner.tsx` and `clio-playback-bar.tsx`.
+- `src/lib/clio/`: `types.ts`, `proxy-rules.ts`, `source.ts`, `live-clock.ts`, `capture-key.ts`, `object-display.ts` (per-object state at `tUs`), `detection-geometry.ts` (detector outlines in ROS), `lanes.ts` (the per-object lane model), `derived.ts` (compiled files) and `derived-display.ts` (planes and arms in ROS), with tests in `__tests__/` and deterministic generated data in `__fixtures__/synthetic-episode.ts` and `__fixtures__/synthetic-derived.ts`.
+- `src/components/clio/`: `clio-replay-viewer.tsx` (the shell for all three pages), `clio-clock.tsx`, `use-clio-derived.ts`, `clio-scene.tsx` with `layers/{environment,hands,head,objects,detections,robot}.tsx`, and the panels `object-lanes.tsx`, `object-inspector.tsx`, `event-list.tsx`, `step-banner.tsx` and `clio-playback-bar.tsx`.
 - `src/app/clio/`: the pages above.
 - `src/components/scene-workspace.tsx` has a `variant: "robot" | "clio"` for `SceneEditor` and `SceneObjects` (no robot placement, table-corner wording). The Clio viewer does not mount the scene editor yet.
 - `DESIGN.md`, section "Clio episode viewer", sets the visual rules for these pages.
 
 ## Existing lesson completion
 
-`lesson-controller.ts` calls `recorder.start(...)` when a lesson starts, and `recorder.stop(...)` with outcome/totals when it ends. `EpisodeRecorder` flushes pending frames/events/object changes and the uploader sends the finish record after queued batches. This lifecycle already exists. The viewer observes an episode's completion state (`finish.json`) and batch integrity (`batches`) rather than adding another lesson-end serialization format.
+`lesson-controller.ts` calls `recorder.start(...)` when a lesson starts, and `recorder.stop(...)` with outcome/totals when it ends. `EpisodeRecorder` flushes pending frames/events/object changes and the uploader sends the finish record after queued batches. This lifecycle already exists. The viewer observes an episode's completion state (`finish.json`) and batch integrity (`batches`) rather than adding another lesson-end serialization format. Finishing also triggers the server's background compile into `../data/derived/<id>/`, which the viewer reads as described above.
 
 An episode can be inspected while recording, but finishing a lesson and exporting a training dataset are distinct operations. A retained file snapshot or durable browser recorder needs additional work; the retrying upload queue alone is not crash recovery.
 
@@ -130,7 +141,9 @@ Positions match, but rotations do not. The viewer converts a rotation with `B·R
 
 `../pipeline/src/clio_pipeline/lerobot_export.py` creates a normal dataset through `LeRobotDataset.create` and finalizes it. Its current profile is `human_hands`: two wrists (position + quaternion + pinch), float32[16] state; next-frame state as float32[16] action; float32[2] hand tracking mask; step instruction task labels; optional positions for all object IDs; extra Clio provenance. Hands use hold-last-known filling and never-seen fallbacks with a separate mask. These are human imitation targets, not robot proprioception/commands.
 
-The proposed observation-only/full-skeleton and strict-gap profiles in `docs/capture-v1/FORMAT.md` are different export designs. Add named profiles and compatibility tests rather than silently replacing the working Clio default. Video support, robot-specific retargeting and publication are separate planned work. The writer's regular FPS timestamps do not erase the need to preserve original capture times.
+`clio export-lerobot --robot-profile <profile.json>` adds a second, explicit profile: the state and action are the joint values the IK retargeting solves for that robot profile (the same solver `clio compile` runs) (URDF joint names, plus one gripper value per arm), with `observation.retarget.valid` and `.residual_pos` per arm (unreachable frames hold the last reachable joints with valid 0, and the residual is the error of the joints actually exported). It is derived from the human hands, not robot proprioception, and the dataset's provenance sidecar names the profile and URDF hash.
+
+The proposed observation-only/full-skeleton and strict-gap profiles in `docs/capture-v1/FORMAT.md` are different export designs. Add named profiles and compatibility tests rather than silently replacing the working Clio default. Video support and publication are separate planned work. The writer's regular FPS timestamps do not erase the need to preserve original capture times.
 
 ## Running and checks
 

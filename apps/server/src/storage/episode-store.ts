@@ -31,11 +31,13 @@ import {
 } from './files';
 import { KeyedMutex } from './keyed-mutex';
 
-// <root>/<episodeId>/ meta.json, frames.ndjson, events.ndjson, objects.ndjson, batches.json,
-// finish.json, media/<name>. See docs/data-format.md. Every write to one episode runs under that
-// episode's mutex, so concurrent batches append whole and the seq bookkeeping never loses an update.
+// <root>/<episodeId>/ meta.json, frames.ndjson, events.ndjson, objects.ndjson, observations.ndjson,
+// batches.json, finish.json, media/<name>. See docs/data-format.md. Every write to one episode runs
+// under that episode's mutex, so concurrent batches append whole and the seq bookkeeping never loses
+// an update. Episodes recorded before observations.ndjson existed have no such file; it reads as
+// empty.
 
-export const NDJSON_FILES = ['frames', 'events', 'objects'] as const;
+export const NDJSON_FILES = ['frames', 'events', 'objects', 'observations'] as const;
 export type NdjsonFile = (typeof NDJSON_FILES)[number];
 
 export type BatchResult = 'appended' | 'duplicate' | 'not_found' | 'finished';
@@ -139,6 +141,9 @@ export class EpisodeStore {
       if (batch.objects.length) {
         await appendFile(this.#path(id, 'objects.ndjson'), toNdjson(batch.objects));
       }
+      if (batch.observations.length) {
+        await appendFile(this.#path(id, 'observations.ndjson'), toNdjson(batch.observations));
+      }
       const max = book.received.at(-1) ?? -1;
       if (batch.seq - max - 1 > MAX_RECORDED_GAP) {
         this.#logger?.warn(
@@ -155,6 +160,27 @@ export class EpisodeStore {
       if (!(await this.exists(id))) return 'not_found';
       await writeJsonAtomic(this.#path(id, 'finish.json'), finish);
       return 'ok';
+    });
+  }
+
+  /**
+   * Byte sizes of the named files of an episode, leaving out those that do not exist. Taken under
+   * the episode lock, so a size never counts half of an append.
+   */
+  fileSizes(id: string, names: readonly string[]): Promise<Map<string, number>> {
+    if (!isSafeId(id) || !names.every(isSafeId)) {
+      throw new Error(`Unsafe episode path: ${id}/{${names.join(',')}}`);
+    }
+    return this.#mutex.run(id, async () => {
+      const sizes = new Map<string, number>();
+      for (const name of names) {
+        try {
+          sizes.set(name, (await stat(this.#path(id, name))).size);
+        } catch (error) {
+          if (!isMissing(error)) throw error;
+        }
+      }
+      return sizes;
     });
   }
 
@@ -259,7 +285,8 @@ export class EpisodeStore {
    * unknown episode. `end` is the settled size cut back to its last newline, so it is always a line
    * boundary: passing it back as `from` reads only what was appended since, which is how a viewer
    * follows a live episode. A partial last line (a crash mid-append) is served only once it is
-   * whole. If the file shrank below `from`, `end` comes back smaller than `from`.
+   * whole. If the file shrank below `from`, `end` comes back smaller than `from`. A file the
+   * episode does not have (observations.ndjson in an older episode) reads as empty, with `end` 0.
    */
   async openNdjson(
     id: string,

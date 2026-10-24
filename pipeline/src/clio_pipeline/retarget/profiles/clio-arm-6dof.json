@@ -1,0 +1,36 @@
+{
+  "id": "clio-arm-6dof",
+  "version": 1,
+  "name": "Clio example arm",
+  "robotType": "clio_arm_6dof",
+  "example": true,
+  "urdf": {
+    "path": "../robots/clio-arm-6dof.urdf",
+    "sha256": "88f065e4e905b22e34d5f1dae936e27b6d7ddd60ddc3850d59b8158d48e5a6f9"
+  },
+  "arms": [
+    {
+      "hand": "left",
+      "baseLink": "left_base_link",
+      "tipLink": "left_tcp",
+      "base": { "pose": [-0.2, -0.3, 0.0, 0.0, 0.0, 0.0, 1.0] },
+      "restPose": [0.0, 0.6, 1.3, 0.0, 1.0, 0.0]
+    },
+    {
+      "hand": "right",
+      "baseLink": "right_base_link",
+      "tipLink": "right_tcp",
+      "base": { "pose": [-0.2, -0.5, 0.0, 0.0, 0.0, 0.0, 1.0] },
+      "restPose": [0.0, 0.6, 1.3, 0.0, 1.0, 0.0]
+    }
+  ],
+  "tcp": {
+    "target": "pinch_point",
+    "wristToTcp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+    "toolAlign": [1.0, 0.0, 0.0, 0.0]
+  },
+  "workspace": { "scale": 1.0, "pivot": [0.4, 0.0, -0.1] },
+  "orientation": { "mode": "approach_axis", "weight": 0.15, "approachAxis": [0.0, 0.0, 1.0] },
+  "gripper": { "pinchOpenM": 0.08, "pinchClosedM": 0.02 },
+  "solver": { "damping": 0.02, "maxIterations": 100, "tolPosM": 0.005, "tolRotRad": 0.09 }
+}

@@ -22,6 +22,10 @@ describe('loadConfig', () => {
       relayLog: false,
       // Only the visualizer viewer on this laptop may call /api cross-origin.
       corsOrigins: ['http://127.0.0.1:3001', 'http://localhost:3001'],
+      // Finished episodes compile with the repo's pipeline, retargeted onto the example arm.
+      compile: 'auto',
+      pipelineDir: '/repo/pipeline',
+      retargetProfiles: ['/repo/pipeline/src/clio_pipeline/retarget/profiles/clio-arm-6dof.json'],
     });
   });
 
@@ -123,6 +127,35 @@ describe('loadConfig', () => {
     ]) {
       expect(() => loadConfig({ CLIO_CORS_ORIGINS: value }, '/repo')).toThrow(/CLIO_CORS_ORIGINS/);
     }
+  });
+
+  it('turns compiling off only with CLIO_COMPILE=off', () => {
+    expect(loadConfig({ CLIO_COMPILE: 'off' }, '/repo').compile).toBe('off');
+    expect(loadConfig({ CLIO_COMPILE: ' auto ' }, '/repo').compile).toBe('auto');
+    expect(loadConfig({ CLIO_COMPILE: '' }, '/repo').compile).toBe('auto');
+    expect(() => loadConfig({ CLIO_COMPILE: 'sometimes' }, '/repo')).toThrow(/CLIO_COMPILE/);
+  });
+
+  it('resolves the pipeline directory and retarget profiles against the repo root', () => {
+    const config = loadConfig(
+      {
+        CLIO_PIPELINE_DIR: 'tools/pipeline',
+        CLIO_RETARGET_PROFILES: ' robots/arm-a.json , /srv/robots/arm-b.json,',
+      },
+      '/repo',
+    );
+    expect(config.pipelineDir).toBe('/repo/tools/pipeline');
+    expect(config.retargetProfiles).toEqual(['/repo/robots/arm-a.json', '/srv/robots/arm-b.json']);
+  });
+
+  it('retargets onto no robot when CLIO_RETARGET_PROFILES is none', () => {
+    expect(loadConfig({ CLIO_RETARGET_PROFILES: 'none' }, '/repo').retargetProfiles).toEqual([]);
+    expect(loadConfig({ CLIO_RETARGET_PROFILES: ' ' }, '/repo').retargetProfiles).toEqual([
+      '/repo/pipeline/src/clio_pipeline/retarget/profiles/clio-arm-6dof.json',
+    ]);
+    expect(() => loadConfig({ CLIO_RETARGET_PROFILES: ',' }, '/repo')).toThrow(
+      /CLIO_RETARGET_PROFILES/,
+    );
   });
 
   it('rejects an invalid port with a message naming the variable', () => {

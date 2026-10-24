@@ -1,8 +1,10 @@
 # Clio agent context
 
 Clio's headset app records lesson episodes; the local server stores them; the Python pipeline
-validates, replays and exports them. Start with `README.md`, `docs/ARCHITECTURE.md` and
-`docs/data-format.md`. Shared production contracts live in `packages/protocol/src/`; generated
+validates, compiles, replays and exports them. Start with `README.md`, `docs/ARCHITECTURE.md`,
+`docs/data-format.md` and `docs/data-pipeline.md` (what is recorded live, what `clio compile`
+derives after an episode finishes into `data/derived/<id>/`, and where the object tracker and
+robot retargeting plug in). Shared production contracts live in `packages/protocol/src/`; generated
 JSON Schemas are not edited by hand.
 
 ## Visualizer handoff

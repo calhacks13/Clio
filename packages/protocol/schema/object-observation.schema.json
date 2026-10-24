@@ -1,0 +1,228 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "t": {
+      "type": "number",
+      "minimum": 0,
+      "description": "ms since episode start when the answer arrived"
+    },
+    "observedT": {
+      "type": "number",
+      "description": "ms since episode start when the camera frame was captured; negative if before the start"
+    },
+    "objectId": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "measured",
+        "predicted",
+        "lost",
+        "absent",
+        "unknown"
+      ]
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "tracker",
+        "identifier",
+        "detector"
+      ]
+    },
+    "source": {
+      "type": "string",
+      "description": "The model as reported, e.g. \"yoloe-26l-seg\""
+    },
+    "box": {
+      "anyOf": [
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          ],
+          "items": false,
+          "minItems": 4,
+          "maxItems": 4,
+          "description": "[x0, y0, x1, y1] in 0..1 of the image"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "outline": {
+      "anyOf": [
+        {
+          "minItems": 3,
+          "maxItems": 512,
+          "type": "array",
+          "items": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            ],
+            "items": false,
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "[x, y] in 0..1 of the image; x right, y down"
+          },
+          "description": "Closed outline in 0..1 image coordinates"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "point": {
+      "anyOf": [
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[x, y] in 0..1 of the image; x right, y down"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "contact": {
+      "anyOf": [
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[x, y] in 0..1 of the image; x right, y down"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Middle of the mask's lowest edge, where the object meets the surface"
+    },
+    "score": {
+      "description": "Score as reported; not a calibrated probability",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "frame": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "seq": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "width": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "height": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "seq",
+            "width",
+            "height"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The camera frame, when the transport identifies it"
+    },
+    "trackId": {
+      "description": "The tracker's own id: provenance only, it can change while following one object",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "t",
+    "observedT",
+    "objectId",
+    "status",
+    "role",
+    "source",
+    "box",
+    "outline",
+    "point",
+    "contact",
+    "score",
+    "frame",
+    "trackId"
+  ],
+  "additionalProperties": false,
+  "description": "One 2D object observation (observations.ndjson line), in normalized image coordinates",
+  "$id": "https://clio.dev/schema/object-observation.schema.json",
+  "title": "Clio observations.ndjson line"
+}

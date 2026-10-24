@@ -3,7 +3,7 @@ import json
 import numpy as np
 import pytest
 
-from clio_pipeline.episode import load_episode
+from clio_pipeline.episode import ObjectTrack, load_episode
 from clio_pipeline.schema import EpisodeValidationError
 
 Q_Y90 = [0.0, 0.7071, 0.0, 0.7071]
@@ -194,3 +194,144 @@ def test_unreadable_frame_without_validation_names_the_line(episode_dir):
 def test_directory_without_meta_is_rejected(tmp_path):
     with pytest.raises(FileNotFoundError, match="meta.json"):
         load_episode(tmp_path)
+
+
+def test_older_episodes_get_location_flags_from_each_estimates_source(episode_dir):
+    ep = load_episode(episode_dir)
+
+    # layout and pinch: position valid; marker with an orientation: everything valid and tracked
+    assert ep.objects["shoulder"].flags.tolist() == [2, 2, 2]
+    assert ep.objects["middle"].flags.tolist() == [2, 15]
+    assert ep.objects["shoulder"].flags.dtype == np.uint8
+
+
+def test_detector_and_markers_without_orientation_are_position_tracked_only(new_episode):
+    b = new_episode(objects=[])
+    b.frame(0.0)
+    b.track(100.0, b.object_state("a", [0, 0, 0], source="detector"))
+    b.track(200.0, b.object_state("a", [0, 0, 0], source="marker"))
+    b.track(300.0, b.object_state("a", [0, 0, 0], orientation=[0, 0, 0, 1], source="detector"))
+    ep = load_episode(b.write())
+
+    assert ep.objects["a"].flags.tolist() == [10, 10, 11]
+
+
+def test_recorded_flags_held_by_and_observed_t_are_kept(featured_episode_dir):
+    ep = load_episode(featured_episode_dir)
+
+    syringe = ep.objects["syringe"]
+    assert syringe.flags[:2].tolist() == [10, 15]
+    assert syringe.flags[-1] == 0
+    assert syringe.held_by[:2] == [None, None]
+    assert set(syringe.held_by[2:-2]) == {"right"}
+    assert syringe.held_by[-2:] == [None, None]
+    assert syringe.observed_t[0] == 150.0
+    assert np.isnan(syringe.observed_t[1:]).all()
+
+
+def test_sample_time_is_when_the_estimate_was_measured(featured_episode_dir):
+    ep = load_episode(featured_episode_dir)
+
+    syringe = ep.objects["syringe"]
+    assert syringe.t[0] == 200.0  # the line
+    assert syringe.sample_t[0] == 150.0  # its camera frame
+    np.testing.assert_array_equal(syringe.sample_t[1:], syringe.t[1:])
+
+
+@pytest.mark.parametrize("method", ["layout", "pinch", "marker", "detector", "manual"])
+def test_meta_placements_are_position_valid_but_never_tracked(new_episode, method):
+    # When a placement was measured is not recorded, so it is never "measured just now".
+    placed = {"id": "cup", "label": "cup", "position": [0, 0, 0], "radius": 0.04, "method": method}
+    b = new_episode(objects=[placed])
+    b.frame(0.0)
+    ep = load_episode(b.write())
+
+    assert ep.objects["cup"].flags.tolist() == [2]
+    assert ep.objects["cup"].source == [method]
+    assert ep.objects["cup"].held_by == [None]
+    assert ep.objects["cup"].held_by_known.tolist() == [False]
+    assert ep.objects["cup"].sample_t.tolist() == [0.0]
+
+
+def test_a_missing_held_by_is_told_apart_from_held_by_null(new_episode):
+    b = new_episode(objects=[])
+    b.frame(0.0)
+    b.track(100.0, b.object_state("cup", [0, 0, 0], source="detector", flags=10))
+    b.track(200.0, b.object_state("cup", [0, 0, 0], source="detector", flags=10, held_by=None))
+    b.track(300.0, b.object_state("cup", [0, 0, 0], source="pinch", flags=2, held_by="left"))
+    cup = load_episode(b.write()).objects["cup"]
+
+    assert cup.held_by == [None, None, "left"]
+    assert cup.held_by_known.tolist() == [False, True, True]
+
+
+def test_a_state_without_a_valid_position_is_placed_at_its_line(new_episode):
+    # observedT dates a measurement; a lost state says what is true when it was written.
+    b = new_episode(objects=[])
+    b.frame(0.0)
+    state = b.object_state
+    b.track(200.0, state("cup", [0, 0, 0], source="detector", flags=10, observed_t=150.0))
+    b.track(400.0, state("cup", [0, 0, 0], source="detector", flags=0, observed_t=300.0))
+    cup = load_episode(b.write()).objects["cup"]
+
+    assert cup.sample_t.tolist() == [150.0, 400.0]
+    assert cup.observed_t.tolist() == [150.0, 300.0]
+
+
+def test_a_malformed_object_state_raises_naming_the_file_and_line(episode_dir):
+    with (episode_dir / "objects.ndjson").open("a") as f:
+        f.write('{"t": 2900, "objects": [{"id": "cup", "position": [0, 0]}]}\n')
+
+    with pytest.raises(ValueError, match=r"objects\.ndjson:3: cannot read object state"):
+        load_episode(episode_dir)
+
+
+@pytest.mark.parametrize("line", ['{"objects": []}', "[1, 2]", '{"t": "late", "objects": []}'])
+def test_an_object_line_without_a_time_raises_naming_it(episode_dir, line):
+    with (episode_dir / "objects.ndjson").open("a") as f:
+        f.write(line + "\n")
+
+    with pytest.raises(ValueError, match=r"objects\.ndjson:3: not a record with a numeric t"):
+        load_episode(episode_dir)
+
+
+def test_observations_that_cannot_be_read_are_skipped(featured_episode_dir):
+    with (featured_episode_dir / "observations.ndjson").open("a") as f:
+        f.write('{"objectId": "cup"}\n[1, 2]\nnot json\n{"t": true}\n{"t": 100, "objectId": "x"}\n')
+
+    ep = load_episode(featured_episode_dir)
+
+    assert [o["t"] for o in ep.observations] == [100, 200.0, 400.0, 2500.0]
+
+
+def test_observations_are_loaded_in_time_order(featured_episode_dir):
+    ep = load_episode(featured_episode_dir)
+
+    assert [(o["t"], o["status"]) for o in ep.observations] == [
+        (200.0, "measured"),
+        (400.0, "measured"),
+        (2500.0, "lost"),
+    ]
+    assert ep.observations[0]["observedT"] == 150.0
+
+
+def test_episodes_without_observations_have_none(episode_dir):
+    assert load_episode(episode_dir).observations == []
+
+
+def test_an_object_track_built_without_the_new_fields_derives_them():
+    track = ObjectTrack(
+        id="cup",
+        label="cup",
+        radius=None,
+        t=np.array([0.0, 100.0]),
+        position=np.zeros((2, 3)),
+        orientation=np.array([[np.nan] * 4, [0.0, 0.0, 0.0, 1.0]]),
+        confidence=np.array([np.nan, 0.9]),
+        source=["layout", "marker"],
+    )
+
+    assert track.flags.tolist() == [2, 15]
+    assert track.held_by == [None, None]
+    assert np.isnan(track.observed_t).all()
+    np.testing.assert_array_equal(track.sample_t, track.t)

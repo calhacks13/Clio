@@ -1,8 +1,10 @@
 import importlib.util
 import json
 import re
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -151,3 +153,183 @@ def test_info_reports_batches_received(episode_dir, capsys):
 
     assert main(["info", str(episode_dir)]) == 0
     assert re.search(r"batches\s+2 of 3 received; missing seq 1", capsys.readouterr().out)
+
+
+# --- compile --------------------------------------------------------------------------------------
+
+
+def _in_episodes_dir(tmp_path, make_default_episode, name="ep-a"):
+    """An episode in <tmp>/data/episodes/, the server's layout."""
+    path = make_default_episode(name)
+    root = tmp_path / "data" / "episodes"
+    root.mkdir(parents=True, exist_ok=True)
+    return path.rename(root / name)
+
+
+def test_compile_writes_beside_the_episodes_directory_by_default(
+    tmp_path, make_default_episode, capsys
+):
+    path = _in_episodes_dir(tmp_path, make_default_episode)
+
+    assert main(["compile", str(path)]) == 0
+
+    out = capsys.readouterr().out
+    assert (tmp_path / "data" / "derived" / "ep-a" / "manifest.json").is_file()
+    assert re.search(r"ok\s+ep-a", out)
+    assert "not usable: outcome interrupted; no batch record" in out
+
+
+def test_compile_needs_out_for_an_episode_outside_an_episodes_directory(episode_dir, capsys):
+    assert main(["compile", str(episode_dir)]) == 1
+    assert "--out" in capsys.readouterr().err
+
+
+def test_compile_prints_one_json_line_per_episode(make_default_episode, tmp_path, capsys):
+    a = make_default_episode("ep-a")
+    make_default_episode("ep-b")
+
+    assert main(["compile", str(a.parent), "--out", str(tmp_path / "derived"), "--json"]) == 0
+
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert len(lines) == 2
+    first = lines[0]
+    assert set(first) == {"episodeId", "skipped", "outDir", "usable", "stages"}
+    assert (first["episodeId"], first["skipped"], first["usable"]) == ("ep-a", False, False)
+    assert [s["name"] for s in first["stages"]] == ["tracks", "environment", "retarget", "quality"]
+    assert Path(first["outDir"]) == tmp_path / "derived" / "ep-a"
+
+
+def test_compile_if_stale_skips_an_up_to_date_episode(episode_dir, tmp_path, capsys):
+    out = ["--out", str(tmp_path / "derived")]
+    assert main(["compile", str(episode_dir), *out]) == 0
+    capsys.readouterr()
+
+    assert main(["compile", str(episode_dir), *out, "--if-stale"]) == 0
+    assert re.search(r"skip\s+ep-20261024-031502-test\s+up to date", capsys.readouterr().out)
+
+    assert main(["compile", str(episode_dir), *out, "--if-stale", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["skipped"] is True
+
+
+def test_compile_finished_only_skips_episodes_still_recording(default_episode, tmp_path, capsys):
+    default_episode.finish = None
+    path = default_episode.write()
+
+    code = main(["compile", str(path), "--out", str(tmp_path / "derived"), "--finished-only"])
+
+    assert code == 0
+    assert "not finished" in capsys.readouterr().out
+    assert not (tmp_path / "derived").exists()
+
+
+def test_compile_fails_only_for_an_episode_it_cannot_read(make_default_episode, tmp_path, capsys):
+    good = make_default_episode("ep-a")
+    bad = make_default_episode("ep-b")
+    (bad / "frames.ndjson").write_text('{"t": 0, "head": [1]}\n')
+
+    code = main(["compile", str(good.parent), "--out", str(tmp_path / "derived"), "--json"])
+
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "cannot compile" in captured.err and "ep-b" in captured.err
+    lines = [json.loads(line) for line in captured.out.splitlines()]
+    assert [line["skipped"] for line in lines] == [False, False]
+    assert lines[0]["usable"] is False and lines[1]["usable"] is None
+    assert lines[1]["error"]
+
+
+def test_export_lerobot_reports_a_robot_profile_it_cannot_use(episode_dir, tmp_path, capsys):
+    code = main(
+        [
+            "export-lerobot",
+            str(episode_dir),
+            "--out",
+            str(tmp_path / "d"),
+            "--repo-id",
+            "clio/t",
+            "--robot-profile",
+            str(tmp_path / "no-such-profile.json"),
+        ]
+    )
+
+    assert code == 1
+    assert "robot" in capsys.readouterr().err
+    assert not (tmp_path / "d").exists()
+
+
+def _files(path):
+    return {p.relative_to(path): p.read_bytes() for p in sorted(path.rglob("*")) if p.is_file()}
+
+
+def test_compile_refuses_to_write_into_the_episodes_directory(
+    tmp_path, make_default_episode, capsys
+):
+    # `--out <episodes dir>` once replaced the raw episode with its compile.
+    path = _in_episodes_dir(tmp_path, make_default_episode)
+    before = _files(path)
+
+    assert main(["compile", str(path), "--out", str(path.parent)]) == 1
+    assert main(["compile", str(path.parent), "--out", str(path.parent)]) == 1
+    assert main(["compile", str(path), "--out", str(path)]) == 1
+
+    assert "will not compile" in capsys.readouterr().err
+    assert _files(path) == before
+    assert [p.name for p in path.parent.iterdir()] == ["ep-a"]
+    assert not (tmp_path / "data" / "derived").exists()
+
+
+_SLOW_COMPILE = """
+import sys, time
+from clio_pipeline import compile as compile_module
+from clio_pipeline.cli import main
+
+def slow(episode):
+    time.sleep(60)
+
+compile_module.environment_doc = slow
+sys.exit(main(["compile", sys.argv[1], "--out", sys.argv[2]]))
+"""
+
+
+def test_a_compile_stopped_by_sigterm_leaves_nothing_behind(episode_dir, tmp_path):
+    # The server sends SIGTERM on its compile timeout and on shutdown.
+    out = tmp_path / "derived"
+    first = main(["compile", str(episode_dir), "--out", str(out)])
+    manifest = (out / "ep-20261024-031502-test" / "manifest.json").read_bytes()
+    child = subprocess.Popen(
+        [sys.executable, "-c", _SLOW_COMPILE, str(episode_dir), str(out)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 30.0
+        while not list(out.glob(".ep-*/tracks.json")):  # in the slow environment stage now
+            assert child.poll() is None and time.monotonic() < deadline
+            time.sleep(0.05)
+        child.send_signal(signal.SIGTERM)
+        code = child.wait(timeout=30.0)
+    finally:
+        if child.poll() is None:
+            child.kill()
+
+    assert (first, code) == (0, 143)
+    assert sorted(p.name for p in out.iterdir()) == [
+        ".ep-20261024-031502-test.lock",
+        "ep-20261024-031502-test",
+    ]
+    assert (out / "ep-20261024-031502-test" / "manifest.json").read_bytes() == manifest
+
+
+def test_info_skips_observations_it_cannot_read(featured_episode_dir, capsys):
+    with (featured_episode_dir / "observations.ndjson").open("a") as f:
+        f.write('{"objectId": "cup"}\nnot json\n')
+
+    assert main(["info", str(featured_episode_dir)]) == 0
+
+
+def test_info_names_an_object_state_it_cannot_read(episode_dir, capsys):
+    with (episode_dir / "objects.ndjson").open("a") as f:
+        f.write('{"t": 2900, "objects": [{"id": "cup"}]}\n')
+
+    assert main(["info", str(episode_dir)]) == 1
+    assert re.search(r"cannot read .*objects\.ndjson:3", capsys.readouterr().err)

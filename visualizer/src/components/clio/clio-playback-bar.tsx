@@ -2,13 +2,17 @@
 
 import React from "react";
 import { LuPause, LuPlay } from "react-icons/lu";
+import type { CompileStatusView } from "@/lib/clio/derived";
 import { formatSeconds, formatTime, missingBatches } from "@/lib/clio/lanes";
 import type { BatchIntegrity, EpisodeStatus } from "@/lib/clio/types";
 
 // The Clio transport: play, seek, sub-second time and the episode's state
 // (DESIGN.md, "Status and live"). While live and following, a Live pill; after
 // a seek away from the edge, a Go live pill. Missing batches show only when
-// some are missing. Lag figures are for Debug and show only when passed.
+// some are missing. The compile state follows only when it needs attention
+// (compileStatus decides), and "Not usable" when the compile's quality verdict
+// says so, with its first reason as the tooltip. Lag figures are for Debug and
+// show only when passed.
 
 /** Reconnecting: the source is retrying after a failed read. */
 export type PlaybackStatus = EpisodeStatus | "reconnecting";
@@ -37,6 +41,8 @@ export interface ClioPlaybackBarProps {
   batches?: BatchIntegrity | null;
   /** Pass only in Debug. */
   lag?: ClioLag | null;
+  /** The compile state (derived.ts compileStatus); null shows nothing. */
+  compile?: CompileStatusView | null;
   disabled?: boolean;
 }
 
@@ -100,6 +106,7 @@ export default function ClioPlaybackBar({
   onGoLive,
   batches = null,
   lag = null,
+  compile = null,
   disabled = false,
 }: ClioPlaybackBarProps) {
   const end = Math.max(0, endUs);
@@ -148,6 +155,24 @@ export default function ClioPlaybackBar({
         {missing > 0 && (
           <span className="shrink-0 text-xs font-medium text-flag-fg tabular">
             {missing === 1 ? "1 batch missing" : `${missing} batches missing`}
+          </span>
+        )}
+        {compile?.label && (
+          <span
+            className={`shrink-0 text-xs font-medium ${
+              compile.problem ? "text-flag-fg" : "text-fg-muted"
+            }`}
+            title={compile.detail ?? undefined}
+          >
+            {compile.label}
+          </span>
+        )}
+        {compile?.notUsable && (
+          <span
+            className="shrink-0 text-xs font-medium text-flag-fg"
+            title={compile.notUsable.reason ?? undefined}
+          >
+            Not usable
           </span>
         )}
       </div>

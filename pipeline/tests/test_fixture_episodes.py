@@ -10,10 +10,11 @@ import numpy as np
 import pytest
 
 from clio_pipeline.cli import describe_episode
+from clio_pipeline.compile import compile_episode
 from clio_pipeline.episode import load_episode
 from clio_pipeline.lerobot_export import episode_arrays
 from clio_pipeline.resample import resample_episode
-from clio_pipeline.schema import validate_episode
+from clio_pipeline.schema import validate_derived, validate_episode
 from clio_pipeline.segments import frame_labels, step_segments
 
 ROOT = Path(
@@ -52,3 +53,14 @@ def test_fixture_episode_goes_through_every_stage(path, tmp_path):
 
         result = export_lerobot([path], tmp_path / "dataset", repo_id="clio/fixture")
         assert result.episodes[0].frames == len(arrays)
+
+
+@pytest.mark.parametrize("path", EPISODES, ids=lambda p: p.name)
+def test_fixture_episode_compiles_into_valid_derived_files(path, tmp_path):
+    before = {p.name: p.read_bytes() for p in path.iterdir() if p.is_file()}
+
+    result = compile_episode(path, tmp_path / "derived")
+
+    assert [s for s in result.manifest["stages"] if s["status"] == "failed"] == []
+    assert [str(issue) for issue in validate_derived(result.out_dir)] == []
+    assert {p.name: p.read_bytes() for p in path.iterdir() if p.is_file()} == before

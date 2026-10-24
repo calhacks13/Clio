@@ -9,6 +9,9 @@ export const DEFAULT_PLANNER_MODEL = 'gemini-3.5-flash-lite';
 export const DEFAULT_VISION_MODEL = 'gemini-3.5-flash-lite';
 /** The finder that outlines the main object for /api/vision/primary: tracker/ (jev + YOLOE-26). */
 export const DEFAULT_PRIMARY_FINDER_URL = 'http://127.0.0.1:8790/locate';
+/** The bundled example arm, so compiles retarget before a real robot is chosen. Repo-relative. */
+export const DEFAULT_RETARGET_PROFILE =
+  'pipeline/src/clio_pipeline/retarget/profiles/clio-arm-6dof.json';
 /** The visualizer viewer (`pnpm visualizer:dev`) open in a browser on this laptop. */
 export const DEFAULT_CORS_ORIGINS: readonly string[] = [
   'http://127.0.0.1:3001',
@@ -37,6 +40,12 @@ export interface Config {
   relayLog: boolean;
   /** Browser origins that may call /api cross-origin. Other websites' requests are refused. */
   corsOrigins: string[];
+  /** auto: compile each finished episode with the pipeline when uv is installed. off: never. */
+  compile: 'auto' | 'off';
+  /** Absolute. The pipeline project that provides `clio compile` (`uv run --project`). */
+  pipelineDir: string;
+  /** Absolute robot profile files, each compiled into retarget-<profile>.json. Empty: none. */
+  retargetProfiles: string[];
 }
 
 // `.env.example` ships `KEY=` lines, so a blank value means "use the default".
@@ -70,6 +79,21 @@ const originList = (fallback: readonly string[]) =>
       .pipe(z.array(httpOrigin).min(1, { error: 'List at least one origin, or leave it blank' })),
   );
 
+const commaList = (v: string) =>
+  v
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item) => item !== '');
+// `none` turns retargeting off; unset means the bundled example arm.
+const profileList = z.preprocess(
+  blank,
+  z
+    .string()
+    .transform(commaList)
+    .pipe(z.array(z.string()).min(1, { error: 'List at least one profile file, or none' }))
+    .optional(),
+);
+
 const EnvSchema = z.object({
   CLIO_SERVER_PORT: z.preprocess(blank, z.coerce.number().int().min(1).max(65535).default(8787)),
   CLIO_HOST: text('127.0.0.1'),
@@ -84,6 +108,16 @@ const EnvSchema = z.object({
   CLIO_PRIMARY_FINDER_URL: optionalHttpUrl,
   CLIO_RELAY_LOG: optionalText,
   CLIO_CORS_ORIGINS: originList(DEFAULT_CORS_ORIGINS),
+  CLIO_COMPILE: z.preprocess(
+    blank,
+    z
+      .string()
+      .trim()
+      .pipe(z.enum(['auto', 'off']))
+      .default('auto'),
+  ),
+  CLIO_PIPELINE_DIR: optionalText,
+  CLIO_RETARGET_PROFILES: profileList,
 });
 
 export function loadConfig(
@@ -97,6 +131,7 @@ export function loadConfig(
   const e = parsed.data;
   const dir = (value: string | undefined, fallback: string) =>
     value === undefined ? resolve(repoRoot, fallback) : resolveFrom(repoRoot, value);
+  const profiles = e.CLIO_RETARGET_PROFILES ?? [DEFAULT_RETARGET_PROFILE];
   return {
     port: e.CLIO_SERVER_PORT,
     host: e.CLIO_HOST,
@@ -111,6 +146,12 @@ export function loadConfig(
     primaryFinderUrl: e.CLIO_PRIMARY_FINDER_URL ?? DEFAULT_PRIMARY_FINDER_URL,
     relayLog: e.CLIO_RELAY_LOG === '1' || e.CLIO_RELAY_LOG === 'true',
     corsOrigins: e.CLIO_CORS_ORIGINS,
+    compile: e.CLIO_COMPILE,
+    pipelineDir: dir(e.CLIO_PIPELINE_DIR, 'pipeline'),
+    retargetProfiles:
+      profiles.length === 1 && profiles[0] === 'none'
+        ? []
+        : profiles.map((profile) => resolveFrom(repoRoot, profile)),
   };
 }
 

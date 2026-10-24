@@ -2,6 +2,7 @@
 
 import { Grid, OrbitControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
+import type { EnvironmentDoc, RetargetDoc } from "@clio/protocol";
 import type { Capture } from "@clio-viewer/capture/model";
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { NoToneMapping } from "three";
@@ -13,12 +14,15 @@ import { EnvironmentLayer, workspaceBounds } from "./layers/environment";
 import { HandsLayer } from "./layers/hands";
 import { HeadLayer } from "./layers/head";
 import { ObjectsLayer } from "./layers/objects";
+import { RobotLayer } from "./layers/robot";
 
 // The Clio episode in 3D at one recording time. Every layer draws the Capture's ROS frame (z up,
 // meters) inside the single group below, which turns ROS into the renderer's y-up frame at scale 1;
 // no layer converts coordinates again. The canvas renders on demand: a new time from the clock, new
 // records (a revision), a theme or selection change, or the camera moving. A scene draws one
 // capture for its whole life: the viewer mounts a new one for a new capture (capture-key.ts).
+// Compiled documents (derived.ts), when there are any, add the detected planes and retargeted
+// robot arms; they are in W like the raw episode and reach ROS once, in derived-display.ts.
 
 /** Where the scene reads the viewed time: integer microseconds of recording time. */
 export interface SceneClock {
@@ -54,7 +58,15 @@ export interface ClioSceneProps {
   onSelect?: (entityId: string) => void;
   /** Sizes and places the canvas's box; it fills its parent by default. Labels need it positioned. */
   className?: string;
+  /** The compiled environment: planes, table and floor. Without it, the calibrated context. */
+  environment?: EnvironmentDoc | null;
+  /** Retargeted robots, one document per profile. */
+  retarget?: readonly RetargetDoc[];
+  /** Draws the retargeted robots (default true). */
+  showRobot?: boolean;
 }
+
+const NO_RETARGET: readonly RetargetDoc[] = [];
 
 /**
  * A SceneClock showing `tUs`. It is the same object for the component's life, so passing it does
@@ -117,6 +129,9 @@ export default function ClioScene({
   selectedId = null,
   onSelect,
   className,
+  environment = null,
+  retarget = NO_RETARGET,
+  showRobot = true,
 }: ClioSceneProps) {
   const theme = useTheme();
   // Frame the table from behind and above the learner, who stands at ROS x < 0 facing +x.
@@ -162,6 +177,9 @@ export default function ClioScene({
             selectedId,
             handsKeptFromUs,
             framesLoadedToUs,
+            environment,
+            retarget,
+            showRobot,
           ]}
         />
         <CameraRig position={view.position} target={view.target} />
@@ -183,6 +201,9 @@ export default function ClioScene({
           framesLoadedToUs={framesLoadedToUs}
           selectedId={selectedId}
           onSelect={onSelect}
+          environment={environment}
+          retarget={retarget}
+          showRobot={showRobot}
         />
         <OrbitControls makeDefault target={view.target} />
       </Canvas>
@@ -195,6 +216,9 @@ export interface SceneLayersProps extends LayerProps {
   framesLoadedToUs: number | null;
   selectedId: string | null;
   onSelect?: (entityId: string) => void;
+  environment?: EnvironmentDoc | null;
+  retarget?: readonly RetargetDoc[];
+  showRobot?: boolean;
 }
 
 /** Every layer of one capture, inside the group that turns ROS into the renderer's frame. */
@@ -203,11 +227,14 @@ export function SceneLayers({
   framesLoadedToUs,
   selectedId,
   onSelect,
+  environment = null,
+  retarget = NO_RETARGET,
+  showRobot = true,
   ...layer
 }: SceneLayersProps) {
   return (
     <group quaternion={ROS_TO_RENDER}>
-      <EnvironmentLayer {...layer} />
+      <EnvironmentLayer {...layer} environment={environment} />
       <HeadLayer {...layer} framesLoadedToUs={framesLoadedToUs} />
       <HandsLayer
         {...layer}
@@ -216,6 +243,9 @@ export function SceneLayers({
       />
       <ObjectsLayer {...layer} selectedId={selectedId} onSelect={onSelect} />
       <DetectionsLayer {...layer} />
+      {showRobot && retarget.length > 0 && (
+        <RobotLayer {...layer} retarget={retarget} />
+      )}
     </group>
   );
 }

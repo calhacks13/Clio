@@ -5,12 +5,15 @@ import { onTestFinished } from 'vitest';
 import { createApp } from '../src/app';
 import type { AppDeps } from '../src/deps';
 import type { Logger } from '../src/log';
+import type { EpisodeCompiler } from '../src/services/episode-compiler';
 import { ClipStore } from '../src/storage/clip-store';
+import { DerivedStore } from '../src/storage/derived-store';
 import { EpisodeStore } from '../src/storage/episode-store';
 import { ProcedureStore } from '../src/storage/procedure-store';
 
 // Builds the real app on real stores rooted in a fresh temp dir. Only Gemini-backed services are
-// fakes, and tests pass those in explicitly.
+// fakes, and tests pass those in explicitly. A compiler can be built on the harness's own dirs, so a
+// test can run the real ProcessEpisodeCompiler against a fake `clio`.
 
 export async function tempDir(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'clio-server-'));
@@ -47,18 +50,29 @@ export function sequence(...values: number[]): () => number {
   return () => values[i++ % values.length] ?? 0;
 }
 
+export interface CompilerDirs {
+  episodesDir: string;
+  derivedDir: string;
+  logger: CapturedLogger;
+}
+
 export interface HarnessOptions
-  extends Partial<Omit<AppDeps, 'episodes' | 'procedures' | 'clips'>> {
+  extends Partial<Omit<AppDeps, 'episodes' | 'derived' | 'procedures' | 'clips' | 'compiler'>> {
   rand?: () => number;
+  compiler?: EpisodeCompiler | null | ((dirs: CompilerDirs) => EpisodeCompiler);
 }
 
 export interface Harness {
   dataDir: string;
+  episodesDir: string;
+  derivedDir: string;
   proceduresDir: string;
   logger: CapturedLogger;
   episodes: EpisodeStore;
+  derived: DerivedStore;
   procedures: ProcedureStore;
   clips: ClipStore;
+  compiler: EpisodeCompiler | null;
   request(
     method: string,
     path: string,
@@ -73,10 +87,17 @@ export async function harness(options: HarnessOptions = {}): Promise<Harness> {
   const dataDir = join(root, 'data');
   const proceduresDir = join(root, 'procedures');
   await mkdir(proceduresDir, { recursive: true });
+  const episodesDir = join(dataDir, 'episodes');
+  const derivedDir = join(dataDir, 'derived');
   const logger = captureLogger();
-  const { rand, ...deps } = options;
+  const { rand, compiler: compilerOption, ...deps } = options;
   const now = deps.now ?? (() => new Date());
-  const episodes = new EpisodeStore(join(dataDir, 'episodes'), { now, rand, logger });
+  const episodes = new EpisodeStore(episodesDir, { now, rand, logger });
+  const derived = new DerivedStore(derivedDir, { logger });
+  const compiler =
+    typeof compilerOption === 'function'
+      ? compilerOption({ episodesDir, derivedDir, logger })
+      : (compilerOption ?? null);
   const procedures = new ProcedureStore({
     curatedDir: proceduresDir,
     plansDir: join(dataDir, 'plans'),
@@ -90,16 +111,22 @@ export async function harness(options: HarnessOptions = {}): Promise<Harness> {
     ...deps,
     now,
     episodes,
+    derived,
     procedures,
     clips,
+    compiler,
   });
   return {
     dataDir,
+    episodesDir,
+    derivedDir,
     proceduresDir,
     logger,
     episodes,
+    derived,
     procedures,
     clips,
+    compiler,
     request(method, path, body, headers = {}) {
       const init: RequestInit = { method, headers };
       if (body instanceof Uint8Array || typeof body === 'string') {

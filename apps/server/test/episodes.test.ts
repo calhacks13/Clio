@@ -20,7 +20,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_LIMITS } from '../src/deps';
 import { recordSeq } from '../src/storage/episode-store';
 import { countLines, lastLineEnd } from '../src/storage/files';
-import { entered, episodeCreate, finishBody, frame, framesEvery, objectTrack } from './fixtures';
+import {
+  entered,
+  episodeCreate,
+  finishBody,
+  frame,
+  framesEvery,
+  objectTrack,
+  observation,
+} from './fixtures';
 import { type Harness, harness, ndjsonLines, sequence, steppingClock, tempDir } from './harness';
 
 // Passes through, so a test can see which byte ranges the store counts.
@@ -86,6 +94,7 @@ describe('POST /api/episodes', () => {
     expect(await h.readData('episodes', ID, 'frames.ndjson')).toBe('');
     expect(await h.readData('episodes', ID, 'events.ndjson')).toBe('');
     expect(await h.readData('episodes', ID, 'objects.ndjson')).toBe('');
+    expect(await h.readData('episodes', ID, 'observations.ndjson')).toBe('');
     expect(JSON.parse(await h.readData('episodes', ID, 'batches.json'))).toEqual({
       received: [],
       gaps: [],
@@ -756,5 +765,87 @@ describe('GET /api/episodes/:id/{frames,events,objects}', () => {
       expect(res.status).toBe(400);
       expect((await errorOf(res)).code).toBe('invalid_offset');
     }
+  });
+});
+
+describe('the observations channel', () => {
+  it('appends batch observations to observations.ndjson, in order', async () => {
+    const h = await fixedHarness();
+    const id = await create(h);
+    const post = (seq: number, observations: unknown[]) =>
+      h.request('POST', ApiPaths.episodeBatches(id), { seq, frames: [], events: [], observations });
+    expect((await post(0, [observation(100), observation(133, 'predicted')])).status).toBe(200);
+    expect((await post(1, [observation(166, 'lost')])).status).toBe(200);
+    expect(ndjsonLines(await h.readData('episodes', id, 'observations.ndjson'))).toEqual([
+      observation(100),
+      observation(133, 'predicted'),
+      observation(166, 'lost'),
+    ]);
+  });
+
+  it('defaults observations to an empty list and rejects invalid ones', async () => {
+    const h = await fixedHarness();
+    const id = await create(h);
+    await h.request('POST', ApiPaths.episodeBatches(id), { seq: 0, frames: [], events: [] });
+    expect(await h.readData('episodes', id, 'observations.ndjson')).toBe('');
+
+    const res = await h.request('POST', ApiPaths.episodeBatches(id), {
+      seq: 1,
+      frames: [],
+      events: [],
+      observations: [{ ...observation(10), status: 'guessed' }],
+    });
+    expect(res.status).toBe(400);
+    expect((await errorOf(res)).message).toMatch(/observations\.0\.status/);
+    expect(await h.readData('episodes', id, 'observations.ndjson')).toBe('');
+  });
+
+  it('reads only the observations after ?from and says where to read next', async () => {
+    const h = await fixedHarness();
+    const id = await create(h);
+    const post = (seq: number, t: number) =>
+      h.request('POST', ApiPaths.episodeBatches(id), {
+        seq,
+        frames: [],
+        events: [],
+        observations: [observation(t)],
+      });
+    await post(0, 100);
+    const first = await readFrom(h, ApiPaths.episodeObservations(id));
+    expect(first).toEqual({ lines: [observation(100)], next: lineOf(observation(100)).length });
+
+    await post(1, 133);
+    expect(await readFrom(h, ApiPaths.episodeObservations(id), first.next)).toEqual({
+      lines: [observation(133)],
+      next: first.next + lineOf(observation(133)).length,
+    });
+    const res = await h.request('GET', ApiPaths.episodeObservations(id));
+    expect(res.headers.get('content-type')).toBe('application/x-ndjson');
+  });
+
+  it('reads an episode recorded before observations existed as empty, from any offset', async () => {
+    const h = await fixedHarness();
+    const id = 'ep-synthetic-shirt-fold';
+    await cp(SHIRT_FOLD, join(h.dataDir, 'episodes', id), { recursive: true });
+    expect(await readdir(join(h.dataDir, 'episodes', id))).not.toContain('observations.ndjson');
+
+    for (const from of [undefined, 0, 4096]) {
+      const res = await h.request(
+        'GET',
+        from === undefined
+          ? ApiPaths.episodeObservations(id)
+          : `${ApiPaths.episodeObservations(id)}?from=${from}`,
+      );
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('');
+      expect(res.headers.get('x-next-from')).toBe('0');
+    }
+    expect((await listed(h)).map((e) => e.episodeId)).toEqual([id]);
+    expect((await detail(h, id)).summary).toMatchObject({ episodeId: id, finished: true });
+  });
+
+  it('answers 404 for the observations of an unknown episode', async () => {
+    const h = await fixedHarness();
+    expect((await h.request('GET', ApiPaths.episodeObservations('ep-nope'))).status).toBe(404);
   });
 });

@@ -2,7 +2,7 @@
 // ProcedureRunner, pinch and grasp perception, the scripted coach, EpisodeRecorder) with hand
 // motion built from the same kinematic hand shapes the ghost hands use. Output uses the server's
 // on-disk layout, so the Python pipeline and the viewers can be built and tested before anyone
-// records on a headset. Two scenarios:
+// records on a headset. Three scenarios:
 //
 //   shirt-fold  An expert folds a shirt: static dots only, with a planted mistake (pinching too
 //               low) and its correction.
@@ -11,20 +11,33 @@
 //               and picked up again when the hand returns), squirts over cups A, B and C, lays it
 //               down, then the camera re-locates it. The real ObjectGrounder lifts the answers of a
 //               stand-in object finder that takes 1.1 to 1.5 s and misses what a hand covers.
+//   tracked-objects  A free capture with the object tracker and no lesson: a stand-in
+//               TrackedObjectSource follows a mug the right hand carries, a bottle the left hand
+//               hides for a while (coasting, lost, found again) and a marker-tracked tape measure,
+//               at 20 Hz with 60 to 120 ms of lag, while jev names them about once a second. The real
+//               ObjectTrackRecorder and EnvironmentRecorder record the 2D observations, the 3D
+//               states and the room's planes (the table plane grows halfway through); the mug's
+//               grasp and release are recorded as events.
 //
-//   pnpm synth                             → fixtures/episodes/synthetic-shirt-fold
-//   pnpm synth -- --scenario ph-syringe    → fixtures/episodes/synthetic-ph-syringe
+//   pnpm synth                                  → fixtures/episodes/synthetic-shirt-fold
+//   pnpm synth -- --scenario ph-syringe         → fixtures/episodes/synthetic-ph-syringe
+//   pnpm synth -- --scenario tracked-objects    → fixtures/episodes/synthetic-tracked-objects
 //   pnpm synth -- --out /tmp/ep --hz 72
 
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import {
   type Detection,
+  EPISODE_FEATURE,
+  EPISODE_SCHEMA_ID,
   type EpisodeBatchInput,
   type EpisodeCreate,
   type EpisodeFinish,
   type EpisodeMode,
+  HAND_LAYOUT,
   type Handedness,
+  type NormalizedPoint,
+  type PlacedObject,
   parseProcedure,
 } from '@clio/protocol';
 import { defaultQuestCameraModel } from '../src/adapters/camera/calibration';
@@ -32,10 +45,13 @@ import { ScriptedAgent } from '../src/adapters/scripted/scripted-agent';
 import { ManualClock } from '../src/core/clock';
 import { Emitter } from '../src/core/emitter';
 import {
+  add,
   composePose,
   invertPose,
   lerp,
   type Pose,
+  type Pose7,
+  poseToTuple,
   type Quat,
   quatFromAxisAngle,
   quatMultiply,
@@ -53,9 +69,12 @@ import type { AppEvents } from '../src/domain/events';
 import { palmPoint, pinchPoint } from '../src/domain/hands/features';
 import { PinchDetector } from '../src/domain/hands/pinch-detector';
 import { HANDS, type TrackedFrame } from '../src/domain/hands/types';
+import { ObjectTrackRecorder } from '../src/domain/recording/object-track-recorder';
+import { q4 } from '../src/domain/recording/quantize';
 import { EpisodeRecorder } from '../src/domain/recording/recorder';
 import type { EpisodeSink } from '../src/domain/recording/sink';
 import { LessonController } from '../src/domain/session/lesson-controller';
+import { type DetectedPlane, EnvironmentRecorder } from '../src/domain/world/environment';
 import {
   type CameraFrameSource,
   type Grounder,
@@ -65,6 +84,7 @@ import {
 import { GraspTracker } from '../src/domain/world/holding';
 import { ObjectRegistry } from '../src/domain/world/object-registry';
 import { PoseHistory } from '../src/domain/world/pose-history';
+import type { TrackedObjectSample, TrackedObjectSource } from '../src/domain/world/tracked-object';
 import { Workspace } from '../src/domain/world/workspace';
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..');
@@ -77,8 +97,12 @@ const SCENARIO = arg('scenario', 'shirt-fold');
 const OUT = resolve(arg('out', join(ROOT, 'fixtures', 'episodes', `synthetic-${SCENARIO}`)));
 const HZ = Number(arg('hz', '30'));
 
-/** Writes episodes exactly like the server does (docs/data-format.md). */
+/**
+ * Writes episodes exactly like the server does (docs/data-format.md). observations.ndjson is
+ * written only for episodes that list the "object.observations" feature.
+ */
 class DirectorySink implements EpisodeSink {
+  private observations = false;
   constructor(
     private readonly dir: string,
     private readonly episodeId: string,
@@ -90,7 +114,9 @@ class DirectorySink implements EpisodeSink {
     await mkdir(this.dir, { recursive: true });
     const full = { ...meta, episodeId, createdAt };
     await writeFile(join(this.dir, 'meta.json'), `${JSON.stringify(full, null, 2)}\n`);
-    for (const f of ['frames.ndjson', 'events.ndjson', 'objects.ndjson'])
+    this.observations = meta.features?.includes(EPISODE_FEATURE.objectObservations) ?? false;
+    const files = ['frames.ndjson', 'events.ndjson', 'objects.ndjson'];
+    for (const f of this.observations ? [...files, 'observations.ndjson'] : files)
       await writeFile(join(this.dir, f), '');
     await writeFile(join(this.dir, 'batches.json'), JSON.stringify({ received: [], gaps: [] }));
     return episodeId;
@@ -104,6 +130,7 @@ class DirectorySink implements EpisodeSink {
     await add('frames.ndjson', batch.frames);
     await add('events.ndjson', batch.events);
     await add('objects.ndjson', batch.objects ?? []);
+    if (this.observations) await add('observations.ndjson', batch.observations ?? []);
     const bookkeeping = JSON.parse(await readFile(join(this.dir, 'batches.json'), 'utf8'));
     bookkeeping.received.push(batch.seq);
     await writeFile(join(this.dir, 'batches.json'), JSON.stringify(bookkeeping));
@@ -541,14 +568,511 @@ async function phSyringe(): Promise<void> {
   if (lesson.runnerState?.stepIndex !== 2 || syringe?.source !== 'detector') process.exitCode = 1;
 }
 
+// ---- tracked-objects ---------------------------------------------------------------------------
+
+// A desk in a room: the workspace origin, its near-left corner, is 74 cm above the floor and turned
+// 6° from the collector's forward. The props are upright cylinders whose reference point is their
+// center, as in the plan layouts.
+const DESK: Pose = { p: [-0.42, 0.74, -0.46], q: quatFromAxisAngle([0, 1, 0], -0.1) };
+const TRACKED_END_T = 8000;
+/** The tracker's camera frames: 20 Hz, each answered 60 to 120 ms after it was taken. */
+const TRACK_PERIOD_MS = 50;
+const trackLag = (k: number) => 90 + 30 * Math.sin(k / 6);
+/** jev names the objects about once a second and answers 700 to 900 ms later. */
+const JEV_PERIOD_MS = 1000;
+const jevLag = (k: number) => 800 + 100 * Math.sin(k * 1.7);
+/** The table plane grows here: Quest refines its outline as more of the desk is seen. */
+const TABLE_GROWS_T = 4100;
+
+interface Prop {
+  id: string;
+  label: string;
+  radius: number;
+  height: number;
+}
+const MUG: Prop = { id: 'mug', label: 'mug', radius: 0.045, height: 0.1 };
+const BOTTLE: Prop = { id: 'bottle', label: 'water bottle', radius: 0.035, height: 0.22 };
+const TAPE: Prop = { id: 'tape', label: 'tape measure', radius: 0.035, height: 0.05 };
+const MUG_START: Vec3 = [0.22, 0.05, -0.2];
+const MUG_END: Vec3 = [0.48, 0.05, -0.13];
+const BOTTLE_AT: Vec3 = [0.1, 0.11, -0.32];
+const TAPE_AT: Vec3 = [0.62, 0.025, -0.27];
+const TAPE_YAW = quatFromAxisAngle([0, 1, 0], 0.35);
+/** Where the right hand pinches the mug: the rim nearest the collector. */
+const atRim = (center: Vec3): Vec3 => add(center, [0, MUG.height / 2, MUG.radius]);
+
+/** The right hand holds the mug from the pinch to the put-down, recorded as a grasp and a release. */
+const MUG_GRASP = { from: 2300, to: 4800 };
+/** The right hand closes over the mug: the tracker coasts on its last box. */
+const MUG_COAST = { from: 2150, to: 2450 };
+/** The left hand hides the bottle: the tracker coasts, loses it, and finds it again by look. */
+const BOTTLE_COAST = { from: 3900, to: 4250 };
+const BOTTLE_LOST = { from: 4250, to: 5300 };
+const within = (t: number, span: { from: number; to: number }) => t >= span.from && t < span.to;
+
+/** A turn of the wrist about the forearm (the wrist frame's z axis). */
+const roll = (angle: number): Quat => quatFromAxisAngle([0, 0, 1], angle);
+/** A keyframe whose pinch grip point is at `at`, the wrist turned by `turn` from the pinch pose. */
+function turned(
+  t: number,
+  hand: Handedness,
+  at: Vec3,
+  shape: HandShapeId,
+  turn: Quat = [0, 0, 0, 1],
+): Keyframe {
+  const q = quatMultiply(Q_PINCH, turn);
+  return { t, wrist: { p: sub(at, rotateVec(q, gripPoint('pinch', hand))), q }, shape };
+}
+
+// Right: reach for the mug and pinch its rim (≈2.3 s), lift it with the wrist rolled, carry it to
+// the right turning the wrist the other way, put it down (≈4.8 s), let go and move away.
+const TRACKED_RIGHT: Keyframe[] = [
+  turned(0, 'right', [0.64, 0.2, 0.08], 'relaxed'),
+  turned(1200, 'right', up(atRim(MUG_START), 0.08), 'open'),
+  turned(1900, 'right', atRim(MUG_START), 'open'),
+  turned(MUG_GRASP.from, 'right', atRim(MUG_START), 'pinch'),
+  turned(3000, 'right', up(atRim(MUG_START), 0.15), 'pinch', roll(0.45)),
+  turned(
+    4100,
+    'right',
+    up(atRim(MUG_END), 0.12),
+    'pinch',
+    quatMultiply(roll(-0.35), quatFromAxisAngle([0, 1, 0], 0.3)),
+  ),
+  turned(MUG_GRASP.to, 'right', atRim(MUG_END), 'pinch', roll(-0.1)),
+  turned(5300, 'right', atRim(MUG_END), 'open', roll(-0.1)),
+  turned(6000, 'right', up(atRim(MUG_END), 0.14), 'open'),
+  turned(7200, 'right', [0.64, 0.2, 0.08], 'relaxed'),
+];
+// Left: rests on the near edge, then reaches across in front of the bottle, turning the palm up,
+// and comes back.
+const TRACKED_LEFT: Keyframe[] = [
+  turned(0, 'left', [0.04, 0.18, 0.1], 'relaxed'),
+  turned(3300, 'left', [0.06, 0.2, 0.06], 'relaxed', roll(0.2)),
+  turned(4000, 'left', [0.13, 0.2, -0.16], 'open', roll(-0.6)),
+  turned(4900, 'left', [0.12, 0.22, -0.17], 'open', roll(-0.9)),
+  turned(5500, 'left', [0.05, 0.19, 0.08], 'relaxed', roll(0.1)),
+  turned(TRACKED_END_T, 'left', [0.04, 0.18, 0.1], 'relaxed'),
+];
+
+/** The collector looks at the middle of the desk, swaying a little. */
+function trackedHead(t: number): Pose {
+  const p: Vec3 = [0.36 + 0.012 * Math.sin(t / 1300), 0.5 + 0.006 * Math.sin(t / 800), 0.36];
+  return { p, q: lookAt(p, [0.36, 0.2, -0.25]) };
+}
+
+/** The mug's center (W): it rides with the pinch while held. */
+function mugAt(t: number): Vec3 {
+  if (t <= MUG_GRASP.from) return MUG_START;
+  const grip = (at: number) => {
+    const hand = sampleTrack(TRACKED_RIGHT, at, 'right');
+    return hand ? pinchPoint(hand) : atRim(MUG_START);
+  };
+  return add(MUG_START, sub(grip(Math.min(t, MUG_GRASP.to)), grip(MUG_GRASP.from)));
+}
+
+/** A small, repeatable lifting error (m) for measured positions. */
+const wobble = (k: number, seed: number): Vec3 => [
+  0.002 * Math.sin(k * 0.7 + seed),
+  0.0015 * Math.sin(k * 1.1 + 2 * seed),
+  0.002 * Math.sin(k * 0.9 + 3 * seed),
+];
+
+type ImageGeometry = NonNullable<TrackedObjectSample['image']>;
+const unit = (v: number) => Math.min(1, Math.max(0, v));
+const clampPoint = ([u, v]: readonly [number, number]): NormalizedPoint => [unit(u), unit(v)];
+
+/** Convex hull of image points (monotone chain). */
+function hull(points: readonly NormalizedPoint[]): NormalizedPoint[] {
+  const sorted = [...points].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const turn = (o: NormalizedPoint, a: NormalizedPoint, b: NormalizedPoint) =>
+    (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const half = (pts: readonly NormalizedPoint[]) => {
+    const out: NormalizedPoint[] = [];
+    for (const p of pts) {
+      while (out.length >= 2 && turn(out.at(-2) ?? p, out.at(-1) ?? p, p) <= 0) out.pop();
+      out.push(p);
+    }
+    out.pop();
+    return out;
+  };
+  return [...half(sorted), ...half([...sorted].reverse())];
+}
+
+function boxOf(points: readonly NormalizedPoint[]): ImageGeometry['box'] {
+  const us = points.map((p) => p[0]);
+  const vs = points.map((p) => p[1]);
+  return [Math.min(...us), Math.min(...vs), Math.max(...us), Math.max(...vs)];
+}
+
+/** Projects W points into the camera image of the world head pose; throws if one is behind it. */
+function imageOf(head: Pose, workspace: Workspace, points: readonly Vec3[]): NormalizedPoint[] {
+  return points.map((p) => {
+    const at = project(head, workspace.toWorldPoint(p));
+    if (!at) throw new Error(`synthetic scene: ${p.join(', ')} is behind the camera`);
+    return clampPoint(at.uv);
+  });
+}
+
+/** A prop's mask as YOLOE-26 would draw it: the outline of the cylinder, its box, center, contact. */
+function propImage(
+  head: Pose,
+  workspace: Workspace,
+  prop: Prop,
+  center: Vec3,
+  frame: ImageGeometry['frame'],
+): ImageGeometry {
+  const rim = Array.from({ length: 16 }, (_, i) => (i / 16) * 2 * Math.PI);
+  const edge = [-prop.height / 2, prop.height / 2].flatMap((dy) =>
+    rim.map((a): Vec3 => add(center, [prop.radius * Math.cos(a), dy, prop.radius * Math.sin(a)])),
+  );
+  const outline = hull(imageOf(head, workspace, edge));
+  const [point, contact] = imageOf(head, workspace, [
+    center,
+    add(center, [0, -prop.height / 2, prop.radius]),
+  ]);
+  return { box: boxOf(outline), outline, point: point ?? null, contact: contact ?? null, frame };
+}
+
+/** The tape's marker as the marker tracker sees it: the 3 cm square on its top. */
+function markerImage(
+  head: Pose,
+  workspace: Workspace,
+  frame: ImageGeometry['frame'],
+): ImageGeometry {
+  const top = add(TAPE_AT, [0, TAPE.height / 2, 0]);
+  const corners = [
+    [-1, -1],
+    [1, -1],
+    [1, 1],
+    [-1, 1],
+  ].map(([x = 0, z = 0]) => add(top, rotateVec(TAPE_YAW, [0.015 * x, 0, 0.015 * z])));
+  const outline = imageOf(head, workspace, corners);
+  const [point] = imageOf(head, workspace, [top]);
+  return { box: boxOf(outline), outline, point: point ?? null, contact: null, frame };
+}
+
+interface Answer {
+  /** When the answer reaches the headset (scene ms). */
+  at: number;
+  sample: TrackedObjectSample;
+}
+
+/** What the tracker answers for one camera frame: the mug, the bottle and the tape. */
+function trackerAnswers(k: number, workspace: Workspace): Answer[] {
+  const observedT = 20 + k * TRACK_PERIOD_MS;
+  const at = observedT + trackLag(k);
+  const head = workspace.toWorldPose(trackedHead(observedT));
+  const frame = { seq: k, width: CAMERA.intrinsics.width, height: CAMERA.intrinsics.height };
+  const yoloe = { observedT, role: 'tracker', source: 'yoloe-26l-seg', orientation: null } as const;
+  const world = (p: Vec3, seed: number) => workspace.toWorldPoint(add(p, wobble(k, seed)));
+
+  const mugCoasting = within(observedT, MUG_COAST);
+  const mugCenter = mugAt(mugCoasting ? MUG_COAST.from : observedT);
+  const mug: TrackedObjectSample = {
+    ...yoloe,
+    objectId: MUG.id,
+    status: mugCoasting ? 'predicted' : 'measured',
+    score: mugCoasting
+      ? 0.62 - (0.6 * (observedT - MUG_COAST.from)) / 1000
+      : 0.86 + 0.04 * Math.sin(k / 3),
+    trackId: '3',
+    image: propImage(head, workspace, MUG, mugCenter, frame),
+    // Coasting, the predicted box is lifted like a measured one.
+    position: world(mugCenter, 1),
+  };
+
+  const lost = within(observedT, BOTTLE_LOST);
+  const coasting = within(observedT, BOTTLE_COAST);
+  const found = observedT >= BOTTLE_LOST.to;
+  const bottle: TrackedObjectSample = {
+    ...yoloe,
+    objectId: BOTTLE.id,
+    status: lost ? 'lost' : coasting ? 'predicted' : 'measured',
+    score: lost
+      ? null
+      : coasting
+        ? 0.6 - (0.6 * (observedT - BOTTLE_COAST.from)) / 1000
+        : found
+          ? Math.min(0.82, 0.35 + (0.47 * (observedT - BOTTLE_LOST.to)) / 1000)
+          : 0.82 + 0.03 * Math.sin(k / 4),
+    // Found again by appearance, the bottle is a new track.
+    trackId: lost ? null : found ? '9' : '5',
+    // Lost, the mask has no geometry but still names its frame.
+    image: lost
+      ? { box: null, outline: null, point: null, contact: null, frame }
+      : propImage(head, workspace, BOTTLE, BOTTLE_AT, frame),
+    // Coasting behind the hand, there is a predicted box but nothing to lift it with.
+    position: lost || coasting ? null : world(BOTTLE_AT, 2),
+  };
+
+  const tape: TrackedObjectSample = {
+    objectId: TAPE.id,
+    observedT,
+    status: 'measured',
+    role: 'tracker',
+    source: 'aruco_4x4_50',
+    score: 0.95,
+    trackId: '4',
+    image: markerImage(head, workspace, frame),
+    position: world(TAPE_AT, 3),
+    orientation: workspace.toWorldPose({
+      p: TAPE_AT,
+      q: quatMultiply(TAPE_YAW, quatFromAxisAngle([0, 1, 0], 0.01 * Math.sin(k / 2))),
+    }).q,
+  };
+  return [mug, bottle, tape].map((sample) => ({ at, sample }));
+}
+
+/** What jev answers about the mug and the bottle for one look: their box, or that it is not there. */
+function jevAnswers(j: number, workspace: Workspace): Answer[] {
+  const observedT = 500 + j * JEV_PERIOD_MS;
+  const at = observedT + jevLag(j);
+  const head = workspace.toWorldPose(trackedHead(observedT));
+  const look = (prop: Prop, center: Vec3, hidden: boolean): TrackedObjectSample => {
+    const seen = hidden ? null : propImage(head, workspace, prop, center, null);
+    return {
+      objectId: prop.id,
+      observedT,
+      status: hidden ? 'absent' : 'measured',
+      role: 'identifier',
+      source: 'jev',
+      score: hidden ? null : 0.8,
+      trackId: null,
+      image: seen && {
+        box: seen.box,
+        outline: null,
+        point: seen.point,
+        contact: null,
+        frame: null,
+      },
+      position: null,
+      orientation: null,
+    };
+  };
+  const bottleHidden = observedT >= BOTTLE_COAST.from && observedT < BOTTLE_LOST.to;
+  return [look(MUG, mugAt(observedT), false), look(BOTTLE, BOTTLE_AT, bottleHidden)].map(
+    (sample) => ({ at, sample }),
+  );
+}
+
+/**
+ * The tracker and jev behind one TrackedObjectSource. Every answer is computed from the synthetic
+ * scene up front and delivered at its arrival time on the scene clock.
+ */
+function standInTracker(
+  workspace: Workspace,
+  clock: ManualClock,
+  timers: Timers,
+): TrackedObjectSource {
+  const answers: Answer[] = [];
+  const last = TRACKED_END_T - 50;
+  for (let k = 0; 20 + k * TRACK_PERIOD_MS + trackLag(k) <= last; k++)
+    answers.push(...trackerAnswers(k, workspace));
+  for (let j = 0; 500 + j * JEV_PERIOD_MS + jevLag(j) <= last; j++)
+    answers.push(...jevAnswers(j, workspace));
+  return {
+    start(onSample) {
+      let running = true;
+      for (const { at, sample } of answers) {
+        timers.at(at, () => {
+          if (!running) return;
+          clock.set(at);
+          onSample(sample);
+        });
+      }
+      return () => {
+        running = false;
+      };
+    },
+  };
+}
+
+const rect = (hx: number, hz: number): [number, number][] => [
+  [-hx, -hz],
+  [hx, -hz],
+  [hx, hz],
+  [-hx, hz],
+];
+
+/** The room's planes as Quest reports them (world space): floor, desk, and two walls. */
+function trackedPlanes(t: number, workspace: Workspace): DetectedPlane[] {
+  const grown = t >= TABLE_GROWS_T;
+  return [
+    {
+      key: 'plane-1',
+      orientation: 'horizontal',
+      label: 'floor',
+      pose: { p: [0, 0, 0], q: [0, 0, 0, 1] },
+      polygon: rect(2.5, 2.5),
+      changedAt: 0,
+    },
+    {
+      key: 'plane-2',
+      orientation: 'horizontal',
+      label: 'table',
+      pose: workspace.toWorldPose({ p: [0.5, 0, -0.32], q: [0, 0, 0, 1] }),
+      polygon: grown ? rect(0.62, 0.4) : rect(0.42, 0.3),
+      changedAt: grown ? TABLE_GROWS_T : 0,
+    },
+    {
+      // Facing the collector: the plane's +y (its normal) points along world +z.
+      key: 'plane-3',
+      orientation: 'vertical',
+      label: 'wall',
+      pose: { p: [0, 1.3, -1.9], q: quatFromAxisAngle([1, 0, 0], Math.PI / 2) },
+      polygon: rect(2.5, 1.3),
+      changedAt: 0,
+    },
+    {
+      // On the left: the normal points along world +x.
+      key: 'plane-4',
+      orientation: 'vertical',
+      label: 'wall',
+      pose: { p: [-2.3, 1.3, -0.2], q: quatFromAxisAngle([0, 0, 1], -Math.PI / 2) },
+      polygon: rect(1.3, 2.5),
+      changedAt: 0,
+    },
+  ];
+}
+
+async function trackedObjects(): Promise<void> {
+  const clock = new ManualClock(0, Date.UTC(2026, 9, 24, 6, 0, 0));
+  const workspace = new Workspace(DESK, 'pinch_two_corners');
+  const timers = new Timers();
+  const bus = new Emitter<AppEvents>((err, type) => console.error(`handler ${String(type)}:`, err));
+  const recorder = new EpisodeRecorder({
+    bus,
+    clock,
+    sink: new DirectorySink(OUT, 'ep-synthetic-tracked-objects', '2026-10-24T06:00:00.000Z'),
+    sleep: async () => {},
+    onDrop: (why) => {
+      console.error(`dropped ${why}`);
+      process.exitCode = 1;
+    },
+  });
+  // No holder: the tracker cannot tell who carries what, so its states leave heldBy out and the
+  // grasp events below are the record of the carry.
+  const tracks = new ObjectTrackRecorder({
+    bus,
+    clock,
+    workspace: () => workspace,
+    states: 'record',
+  });
+  const environment = new EnvironmentRecorder({ bus });
+
+  const counts = { observations: 0, snapshots: 0, grasps: 0, flags: new Map<number, number>() };
+  bus.on('objects.observed', () => counts.observations++);
+  bus.on('environment.planes', () => counts.snapshots++);
+  bus.on('object.grasped', () => counts.grasps++);
+  bus.on('object.released', () => counts.grasps++);
+  bus.on('objects.updated', ({ objects }) => {
+    for (const o of objects) {
+      const flags = o.locationFlags ?? -1;
+      counts.flags.set(flags, (counts.flags.get(flags) ?? 0) + 1);
+    }
+  });
+
+  const placed = (prop: Prop, position: Vec3, method: PlacedObject['method']): PlacedObject => ({
+    id: prop.id,
+    label: prop.label,
+    position,
+    radius: prop.radius,
+    method,
+  });
+  recorder.start(
+    {
+      schema: EPISODE_SCHEMA_ID,
+      mode: 'free',
+      procedure: null,
+      operator: { role: 'collector' },
+      space: {
+        frame: 'workspace',
+        units: 'm',
+        upAxis: '+y',
+        worldFromWorkspace: poseToTuple(DESK).map(q4) as Pose7,
+        calibration: workspace.method,
+        anchored: false,
+      },
+      hands: HAND_LAYOUT,
+      objects: [
+        placed(MUG, MUG_START, 'detector'),
+        placed(BOTTLE, BOTTLE_AT, 'detector'),
+        placed(TAPE, TAPE_AT, 'marker'),
+      ],
+      coach: { kind: 'none' },
+      device: {
+        userAgent: 'clio-synth',
+        emulated: true,
+        xrFeatures: ['local-floor', 'hand-tracking', 'plane-detection'],
+      },
+      app: { version: 'synthetic' },
+      features: [
+        EPISODE_FEATURE.objectFlags,
+        EPISODE_FEATURE.objectGrasp,
+        EPISODE_FEATURE.objectObservations,
+        EPISODE_FEATURE.environmentPlanes,
+      ],
+      camera: {
+        intrinsics: CAMERA.intrinsics,
+        headFromCamera: poseToTuple(CAMERA.headFromCamera).map(q4) as Pose7,
+        source: 'default',
+      },
+    },
+    0,
+  );
+  tracks.reset();
+  environment.reset();
+  const stopTracking = standInTracker(workspace, clock, timers).start((s) => tracks.record(s));
+  // The right hand pinches the mug's rim and puts the mug down where it lets go.
+  const mug = { objectId: MUG.id, hand: 'right' } as const;
+  timers.at(MUG_GRASP.from, () => {
+    const t = MUG_GRASP.from;
+    clock.set(t);
+    bus.emit('object.grasped', { t, ...mug, grip: 'pinch', position: mugAt(t) });
+  });
+  timers.at(MUG_GRASP.to, () => {
+    const t = MUG_GRASP.to;
+    clock.set(t);
+    bus.emit('object.released', { t, ...mug, reason: 'opened', position: mugAt(t) });
+  });
+
+  const dt = 1000 / HZ;
+  for (let t = 0; t <= TRACKED_END_T; t += dt) {
+    // Answers that arrived since the last frame first, each at its own time.
+    await timers.run(t);
+    clock.set(t);
+    recorder.recordFrame({
+      t,
+      head: trackedHead(t),
+      left: sampleTrack(TRACKED_LEFT, t, 'left'),
+      right: sampleTrack(TRACKED_RIGHT, t, 'right'),
+    });
+    environment.update(t, trackedPlanes(t, workspace), workspace);
+  }
+  stopTracking();
+  await recorder.stop('completed', { stepsCompleted: 0, stepsTotal: 0 }, TRACKED_END_T);
+  const flags = [...counts.flags].sort(([a], [b]) => a - b).map(([f, n]) => `${f}: ${n}`);
+  console.log(
+    `wrote ${OUT} (observations: ${counts.observations}, plane snapshots: ${counts.snapshots}, ` +
+      `grasp events: ${counts.grasps}, states by flags: ${flags.join(', ')})`,
+  );
+  // One loss (the bottle), coasting with and without a 3D estimate, the marker's full pose, and
+  // the mug's grasp and release.
+  const expected = [0, 2, 10, 15].every((f) => counts.flags.has(f));
+  if (!expected || counts.flags.get(0) !== 1 || counts.snapshots !== 2 || counts.grasps !== 2)
+    process.exitCode = 1;
+}
+
 // ---- run ---------------------------------------------------------------------------------------
 
 const SCENARIOS: Record<string, () => Promise<void>> = {
   'shirt-fold': shirtFold,
   'ph-syringe': phSyringe,
+  'tracked-objects': trackedObjects,
 };
 const scenario = SCENARIOS[SCENARIO];
 if (!scenario) {
-  throw new Error(`Unknown --scenario ${SCENARIO}; use ${Object.keys(SCENARIOS).join(' or ')}`);
+  throw new Error(`Unknown --scenario ${SCENARIO}; use ${Object.keys(SCENARIOS).join(', ')}`);
 }
 await scenario();

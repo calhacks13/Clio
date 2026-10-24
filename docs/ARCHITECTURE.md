@@ -50,8 +50,8 @@ boundary. The exact data formats are in [data-format.md](data-format.md), the pl
            ▼                                     ▼ /api/vision/locate   ▼
 ┌──────────────────────────────────── Laptop: apps/server (Node · Hono) ────────────────────────┐
 │ relay → Google (injects key) · planner LLM (structured output) · object finder (Gemini / jev) │
-│ data/episodes/<id>/ · data/plans/<id>.json · data/clips/                                       │
-│ pipeline/ (Python · uv): validate · Rerun replay · LeRobot export                              │
+│ data/episodes/<id>/ · data/derived/<id>/ · data/plans/<id>.json · data/clips/                  │
+│ pipeline/ (Python · uv): validate · compile (on finish) · Rerun replay · LeRobot export        │
 └────────────────────────────────────────────────────────────────────────────────────────────────┘
  packages/protocol (TypeScript · zod): every contract above, exported as JSON Schema for Python.
 ```
@@ -259,41 +259,49 @@ exponential-backoff retries, dropping only batches the server rejects as invalid
 
 ## 6. Server (`apps/server`)
 
-| Route                                                                 | Purpose                                                                                    |
-| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `GET /api/health`                                                     | liveness; whether a Gemini key is set; live model                                          |
-| `WS /gemini/*`                                                        | Gemini Live relay (allowlisted path, injects `GEMINI_API_KEY`)                             |
-| `POST /api/coach/token`                                               | ephemeral Live token (direct transport)                                                    |
-| `POST /api/plans`, `GET /api/plans/:id`                               | the planner: goal + images (+ revision) → validated `Procedure`, stored in `data/plans/`   |
-| `POST /api/vision/locate`                                             | the object finder: Gemini, or any HTTP finder at `CLIO_VISION_URL` (docs/object-finder.md) |
-| `GET /api/procedures[/:id]`                                           | curated (`procedures/`) + generated (`data/plans/`)                                        |
-| `POST /api/episodes` → `…/batches` → `…/finish`, `PUT …/media/:name`  | ingest (idempotent by `seq`)                                                               |
-| `GET /api/episodes[/:id[/frames\|events\|objects]]`                   | browse / replay                                                                            |
-| `POST /api/clips/from-episode`, `GET /api/clips/:procedureId/:stepId` | expert demos → ghost-hand clips                                                            |
+| Route                                                                 | Purpose                                                                                      |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `GET /api/health`                                                     | liveness; whether a Gemini key is set; live model                                            |
+| `WS /gemini/*`                                                        | Gemini Live relay (allowlisted path, injects `GEMINI_API_KEY`)                               |
+| `POST /api/coach/token`                                               | ephemeral Live token (direct transport)                                                      |
+| `POST /api/plans`, `GET /api/plans/:id`                               | the planner: goal + images (+ revision) → validated `Procedure`, stored in `data/plans/`     |
+| `POST /api/vision/locate`                                             | the object finder: Gemini, or any HTTP finder at `CLIO_VISION_URL` (docs/object-finder.md)   |
+| `GET /api/procedures[/:id]`                                           | curated (`procedures/`) + generated (`data/plans/`)                                          |
+| `POST /api/episodes` → `…/batches` → `…/finish`, `PUT …/media/:name`  | ingest (idempotent by `seq`)                                                                 |
+| `GET /api/episodes[/:id[/frames\|events\|objects\|observations]]`     | browse / replay; detail includes the compile state (`derived`)                               |
+| `POST /api/episodes/:id/compile`, `GET …/derived/:name`               | compile again by hand; read compiled files from `data/derived/<id>/` (docs/data-pipeline.md) |
+| `POST /api/clips/from-episode`, `GET /api/clips/:procedureId/:stepId` | expert demos → ghost-hand clips                                                              |
 
 Vite proxies `/api` and `/gemini`, so the headset talks to a single origin (and to `localhost` over
 `adb reverse`).
 
 ## 7. Data pipeline (`pipeline/`)
 
-`clio validate | info | view | export-lerobot` (uv, Python 3.12):
+`clio validate | info | view | compile | export-lerobot` (uv, Python 3.12):
 - **Validation:** against `packages/protocol/schema`.
+- **Compile** (run by the server when an episode finishes; [data-pipeline.md](data-pipeline.md)):
+  head, wrists and every object on one fixed-rate grid with validity masks and held spans, the
+  environment (table, floor, detected planes), a quality verdict, and robot joint trajectories
+  from each retargeting profile (damped least squares IK on a URDF, numpy only). Written to
+  `data/derived/<id>/`; raw files are never changed.
 - **Rerun replay:** skeletons, head, objects, object-finder detections, aperture, steps, mistakes,
   tools, transcripts.
 - **LeRobot v3 export:** 16-d wrist pose + aperture state, next-frame action, hand mask, object
-  environment state, the per-frame language `task`, and the `step.action_verb`.
+  environment state, the per-frame language `task`, and the `step.action_verb`. With
+  `--robot-profile`, the state and action are the retargeted joint values instead.
 - **Coordinates:** the export converts y-up to robotics z-up.
 
 ## 8. Extension points
 
-| Want to...             | Do this                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Better object tracking | Built: [tracker/](../tracker/README.md) (YOLOE-26 + ByteTrack, jev about once a second) serves the HTTP contract in docs/object-finder.md behind `CLIO_VISION_URL` and paces the headset with `refreshMs`. Alternatives: serve that contract yourself, or implement `VisionLocator` (on-device ArUco via js-aruco2, YOLO via ONNX Runtime Web/WebGPU, or a laptop detector) or a `Grounder` with depth/hit-test lifting; self-calibrate the camera from a marker (see Google XR Blocks' ArUco add-on) |
-| Another realtime model | Implement `RealtimeAgent`                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| A new action verb      | Add it to `ACTION_VERBS` (protocol) and a choreography in `domain/demo/synthesizer.ts`                                                                                                                                                                                                                                                                                                                                                                                                                |
-| A new check type       | Add it to `@clio/protocol/checks.ts` and an evaluator in `domain/procedure/checks/`                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| A new coach tool       | Add it to `@clio/protocol/coach-tools.ts` and a handler in `LessonController.handlers()`                                                                                                                                                                                                                                                                                                                                                                                                              |
-| A new recorded signal  | Add the event to `@clio/protocol/episode.ts`, emit it on the bus, then run `pnpm gen:schema`                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Want to...             | Do this                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Better object tracking | Built: [tracker/](../tracker/README.md) (YOLOE-26 + ByteTrack, jev about once a second) serves the HTTP contract in docs/object-finder.md behind `CLIO_VISION_URL` and paces the headset with `refreshMs`. Alternatives: serve that contract yourself, or implement `VisionLocator` (on-device ArUco via js-aruco2, YOLO via ONNX Runtime Web/WebGPU, or a laptop detector) or a `Grounder` with depth/hit-test lifting; self-calibrate the camera from a marker (see Google XR Blocks' ArUco add-on). To record a tracker's per-frame answers, convert them into `TrackedObjectSample` (`domain/world/tracked-object.ts`) and pass them to `ObjectTrackRecorder` (docs/data-pipeline.md) |
+| A robot to retarget to | Add a profile (URDF, joints, base placement, tool offset, gripper mapping) to `pipeline/src/clio_pipeline/retarget/profiles/` and list it in `CLIO_RETARGET_PROFILES`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Another realtime model | Implement `RealtimeAgent`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| A new action verb      | Add it to `ACTION_VERBS` (protocol) and a choreography in `domain/demo/synthesizer.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| A new check type       | Add it to `@clio/protocol/checks.ts` and an evaluator in `domain/procedure/checks/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| A new coach tool       | Add it to `@clio/protocol/coach-tools.ts` and a handler in `LessonController.handlers()`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| A new recorded signal  | Add the event to `@clio/protocol/episode.ts`, emit it on the bus, then run `pnpm gen:schema`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 ## 9. Frames, units, time
 
@@ -350,3 +358,7 @@ Contracts live in `@clio/protocol`. Change them in a small PR everyone sees, the
    capture.
 7. **Append-only NDJSON episodes with batch sequence numbers.** Human-readable, streamable, safe to
    retry. LeRobot and Rerun are export targets, not the capture format.
+8. **Record live, compile after the episode, keep files.** The headset records only what exists
+   nowhere else (hands, head, live estimates, 2D observations, planes). Resampling, gap masks,
+   environment fitting and IK run after finish in `pipeline/`, into rebuildable files beside the
+   raw episode. No database: a local index can be built from the files later if search needs it.

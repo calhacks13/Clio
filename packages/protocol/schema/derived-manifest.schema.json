@@ -1,0 +1,356 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "clio.derived/1"
+    },
+    "episodeId": {
+      "type": "string"
+    },
+    "compiledAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+    },
+    "compiler": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "fps": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Raw file name inside the episode directory"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "name",
+          "bytes",
+          "sha256"
+        ],
+        "additionalProperties": false
+      },
+      "description": "Raw files read; a change makes the compile stale"
+    },
+    "retarget": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "profileSha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Of the profile file"
+          },
+          "urdfSha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "profileSha256",
+          "urdfSha256"
+        ],
+        "additionalProperties": false
+      },
+      "description": "Robot profiles compiled; editing one makes the compile stale"
+    },
+    "stages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "skipped",
+              "failed"
+            ]
+          },
+          "detail": {
+            "description": "Why it was skipped or how it failed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "status"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,95}\\.json$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "tracks",
+              "environment",
+              "retarget"
+            ]
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "bytes"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "quality": {
+      "type": "object",
+      "properties": {
+        "usable": {
+          "type": "boolean",
+          "description": "Safe to train on by default: finished, completed, nothing lost"
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Why it is not usable, as short plain sentences the viewer shows; empty when usable"
+        },
+        "finished": {
+          "type": "boolean"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "completed",
+                "aborted",
+                "interrupted"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "batches": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "sent": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "From finish.json"
+                },
+                "received": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "missing": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "description": "Seqs that never arrived, including any at the end below finish.batches"
+                }
+              },
+              "required": [
+                "sent",
+                "received",
+                "missing"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Null when batches.json is missing"
+        },
+        "durationMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "frames": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "frameRateHz": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Median XR frame rate"
+        },
+        "maxFrameGapMs": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hands": {
+          "type": "object",
+          "properties": {
+            "left": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "right": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "required": [
+            "left",
+            "right"
+          ],
+          "additionalProperties": false,
+          "description": "Fraction of frames in which each hand was tracked"
+        },
+        "objects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "validFraction": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1,
+                "description": "Grid frames with a usable position"
+              },
+              "trackedFraction": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1,
+                "description": "Grid frames whose position was measured recently"
+              }
+            },
+            "required": [
+              "id",
+              "validFraction",
+              "trackedFraction"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "validationIssues": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "usable",
+        "reasons",
+        "finished",
+        "outcome",
+        "batches",
+        "durationMs",
+        "frames",
+        "frameRateHz",
+        "maxFrameGapMs",
+        "hands",
+        "objects",
+        "validationIssues"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema",
+    "episodeId",
+    "compiledAt",
+    "compiler",
+    "fps",
+    "inputs",
+    "retarget",
+    "stages",
+    "artifacts",
+    "quality"
+  ],
+  "additionalProperties": false,
+  "$id": "https://clio.dev/schema/derived-manifest.schema.json",
+  "title": "Clio compiled manifest.json"
+}

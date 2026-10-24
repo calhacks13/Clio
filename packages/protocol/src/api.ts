@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CompileManifestSchema } from './derived';
 import {
   EpisodeFinishSchema,
   EpisodeMetaSchema,
@@ -29,6 +30,9 @@ export const ApiPaths = {
   episodeFrames: (id: string) => `/api/episodes/${seg(id)}/frames`,
   episodeEvents: (id: string) => `/api/episodes/${seg(id)}/events`,
   episodeObjects: (id: string) => `/api/episodes/${seg(id)}/objects`,
+  episodeObservations: (id: string) => `/api/episodes/${seg(id)}/observations`,
+  episodeCompile: (id: string) => `/api/episodes/${seg(id)}/compile`,
+  episodeDerived: (id: string, name: string) => `/api/episodes/${seg(id)}/derived/${seg(name)}`,
   clipsFromEpisode: '/api/clips/from-episode',
   clip: (procedureId: string, stepId: string) => `/api/clips/${seg(procedureId)}/${seg(stepId)}`,
 } as const;
@@ -167,11 +171,31 @@ export const EpisodeBatchIntegritySchema = z.object({
   gaps: z.array(z.number().int().nonnegative()).describe('Seqs skipped so far, ascending'),
   lastSeq: z.number().int().nonnegative().nullable().describe('Highest seq stored'),
 });
+/**
+ * none: never compiled; queued / running: a compile is waiting or in progress; ok: compiled from
+ * the current raw files; stale: a raw file changed since (for example a repeated finish), or the
+ * compile came from an older pipeline whose manifest this server cannot read; failed: the last
+ * compile run failed before writing a manifest. `error` can be set with ok or stale too, when a
+ * later recompile failed and the previous compile was kept.
+ */
+export const CompileStateSchema = z.enum(['none', 'queued', 'running', 'ok', 'stale', 'failed']);
+export const EpisodeDerivedStatusSchema = z.object({
+  state: CompileStateSchema,
+  manifest: CompileManifestSchema.nullable().describe('The last successful compile, if any'),
+  error: z.string().nullable().describe('Why the last compile run failed'),
+});
 export const EpisodeDetailResponseSchema = z.object({
   meta: EpisodeMetaSchema,
   summary: EpisodeSummarySchema,
   finish: EpisodeFinishSchema.nullable(),
   batches: EpisodeBatchIntegritySchema.optional().describe('Absent when the server has no record'),
+  derived: EpisodeDerivedStatusSchema.optional()
+    .catch(undefined)
+    .describe('Absent from servers older than compiling; unreadable compile state is dropped'),
+});
+export const EpisodeCompileResponseSchema = z.object({
+  ok: z.literal(true),
+  state: CompileStateSchema,
 });
 
 export const ClipsFromEpisodeRequestSchema = z.object({
@@ -217,6 +241,9 @@ export type EpisodeSummary = z.infer<typeof EpisodeSummarySchema>;
 export type EpisodeListResponse = z.infer<typeof EpisodeListResponseSchema>;
 export type EpisodeBatchIntegrity = z.infer<typeof EpisodeBatchIntegritySchema>;
 export type EpisodeDetailResponse = z.infer<typeof EpisodeDetailResponseSchema>;
+export type CompileState = z.infer<typeof CompileStateSchema>;
+export type EpisodeDerivedStatus = z.infer<typeof EpisodeDerivedStatusSchema>;
+export type EpisodeCompileResponse = z.infer<typeof EpisodeCompileResponseSchema>;
 export type ClipsFromEpisodeRequest = z.infer<typeof ClipsFromEpisodeRequestSchema>;
 export type ClipsFromEpisodeResponse = z.infer<typeof ClipsFromEpisodeResponseSchema>;
 export type ApiError = z.infer<typeof ApiErrorSchema>;

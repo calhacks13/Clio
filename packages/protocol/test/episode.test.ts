@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  EnvironmentPlaneSchema,
   EPISODE_EVENT_TYPES,
   EPISODE_FEATURE,
   EpisodeBatchSchema,
@@ -9,6 +10,7 @@ import {
   FrameRecordSchema,
   jointOffset,
   LOCATION_FLAG,
+  ObjectObservationSchema,
   ObjectStateSchema,
   ObjectTrackRecordSchema,
 } from '../src/index';
@@ -160,11 +162,24 @@ describe('episode meta', () => {
   it('accepts features it does not know, so a newer headset is not refused', () => {
     expect(EpisodeMetaSchema.safeParse({ ...meta, features: ['object.later'] }).success).toBe(true);
   });
+
+  it('records the camera model observations were lifted with, and none in older episodes', () => {
+    const camera = {
+      intrinsics: { width: 480, height: 360, fx: 300, fy: 300, cx: 240, cy: 180 },
+      headFromCamera: [0.032, 0.02, -0.025, -0.1305, 0, 0, 0.9914],
+      source: 'default',
+    };
+    expect(EpisodeMetaSchema.parse({ ...meta, camera }).camera).toEqual(camera);
+    expect(EpisodeMetaSchema.parse(meta).camera).toBeUndefined();
+    expect(
+      EpisodeMetaSchema.safeParse({ ...meta, camera: { ...camera, source: 'guessed' } }).success,
+    ).toBe(false);
+  });
 });
 
 describe('event type list', () => {
   it('is derived from the schema, so the recorder knows every recordable event', () => {
-    expect(EPISODE_EVENT_TYPES).toHaveLength(19);
+    expect(EPISODE_EVENT_TYPES).toHaveLength(20);
     expect(EPISODE_EVENT_TYPES).toEqual(
       expect.arrayContaining([
         'step.entered',
@@ -173,6 +188,7 @@ describe('event type list', () => {
         'annotation',
         'object.grasped',
         'object.released',
+        'environment.planes',
       ]),
     );
   });
@@ -335,5 +351,115 @@ describe('grasp events', () => {
     const { position: _position, ...withoutPosition } = released;
     expect(EpisodeEventSchema.safeParse(withoutHand).success).toBe(false);
     expect(EpisodeEventSchema.safeParse(withoutPosition).success).toBe(false);
+  });
+});
+
+describe('object observations', () => {
+  const observation = {
+    t: 1250,
+    observedT: 1190,
+    objectId: 'syringe',
+    status: 'measured',
+    role: 'tracker',
+    source: 'yoloe-26l-seg',
+    box: [0.4, 0.3, 0.5, 0.45],
+    outline: [
+      [0.4, 0.3],
+      [0.5, 0.3],
+      [0.45, 0.45],
+    ],
+    point: [0.45, 0.36],
+    contact: [0.45, 0.45],
+    score: 0.81,
+    frame: { seq: 42, width: 480, height: 360 },
+    trackId: '7',
+  };
+
+  it('keeps what was seen in the image, when it was captured and how sure the finder was', () => {
+    expect(ObjectObservationSchema.parse(observation)).toEqual(observation);
+  });
+
+  it('records a coasting tracker as predicted, never as measured', () => {
+    const coasting = { ...observation, status: 'predicted', score: 0.4 };
+    expect(ObjectObservationSchema.parse(coasting).status).toBe('predicted');
+    expect(ObjectObservationSchema.safeParse({ ...observation, status: 'coasting' }).success).toBe(
+      false,
+    );
+  });
+
+  it('allows a capture time before the episode started, and needs one', () => {
+    expect(ObjectObservationSchema.safeParse({ ...observation, observedT: -30 }).success).toBe(
+      true,
+    );
+    const { observedT: _, ...withoutCapture } = observation;
+    expect(ObjectObservationSchema.safeParse(withoutCapture).success).toBe(false);
+  });
+
+  it('allows a lost object with no image geometry', () => {
+    const lost = {
+      ...observation,
+      status: 'lost',
+      box: null,
+      outline: null,
+      point: null,
+      contact: null,
+      score: null,
+      frame: null,
+      trackId: null,
+    };
+    expect(ObjectObservationSchema.safeParse(lost).success).toBe(true);
+  });
+
+  it('rides in a batch, and a batch without observations has none', () => {
+    const batch = EpisodeBatchSchema.parse({
+      seq: 0,
+      frames: [],
+      events: [],
+      observations: [observation],
+    });
+    expect(batch.observations).toHaveLength(1);
+    expect(EpisodeBatchSchema.parse({ seq: 1, frames: [], events: [] }).observations).toEqual([]);
+  });
+});
+
+describe('environment planes', () => {
+  const plane = {
+    id: 'plane-1',
+    kind: 'wall',
+    label: 'wall',
+    orientation: 'vertical',
+    pose: [0.4, 0.5, -1.2, Math.SQRT1_2, 0, 0, Math.SQRT1_2],
+    polygon: [
+      [-1, -0.5],
+      [1, -0.5],
+      [1, 0.5],
+      [-1, 0.5],
+    ],
+  };
+
+  it('records every detected plane as a snapshot event', () => {
+    const e = EpisodeEventSchema.parse({ t: 40, type: 'environment.planes', planes: [plane] });
+    expect(e.type === 'environment.planes' && e.planes[0]?.kind).toBe('wall');
+  });
+
+  it('keeps unlabeled planes as other, with no label', () => {
+    const unlabeled = { ...plane, kind: 'other', label: null };
+    expect(EnvironmentPlaneSchema.safeParse(unlabeled).success).toBe(true);
+  });
+
+  it('needs a polygon with at least three points', () => {
+    const line = {
+      ...plane,
+      polygon: [
+        [0, 0],
+        [1, 0],
+      ],
+    };
+    expect(EnvironmentPlaneSchema.safeParse(line).success).toBe(false);
+  });
+
+  it('names the two new optional recording features', () => {
+    expect(EPISODE_FEATURE.objectObservations).toBe('object.observations');
+    expect(EPISODE_FEATURE.environmentPlanes).toBe('environment.planes');
   });
 });
