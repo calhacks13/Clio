@@ -48,15 +48,17 @@ More thinking was not better for our calls:
 | step check, 12 hard cases   | 9/12 right         | 6-7/12       | 6-7/12         | 9/12        |
 | object finder (2 objects)   | 2.3 s              |              | 4.9 s          | 1.7 s       |
 | full plan                   | 6.4 s, 8/12 met    | 10.1 s       | 18.8 s, 7/12   | 5.6 s, 4/12 |
-| stage 1 card, step 1 starts | 2.6-3.4 s          | 5.3-9.1 s    |                |             |
-| staged plan from the card   | 3.4 s, 22/27 met   | 6.2 s, 24/27 |                |             |
+| stage 1 card, step 1 starts | 2.7-3.9 s          | 5.3-9.1 s    |                |             |
+| staged plan from the card   | 3.8 s, 23/27 met   | 6.2 s, 24/27 |                |             |
+| pH outline tests the base   | 6 of 10            | 7 of 7       |                |             |
 
 With thinking on, the step check repeatedly invented "the dropper is held in the learner's hand"
 when no hand was in view. Pointing, boxes, yes/no state, counting and spatial relations were as
 accurate at minimal as at high. Trajectories, polygons and custom multi-image JSON were better
-with some thinking. Whole plans need low or more, but the planner's short first stage (the card)
-got its first step as right at minimal as at low and starts the lesson about 2.8 s sooner, so it
-thinks at minimal ([coach-plan.md](coach-plan.md)).
+with some thinking. Whole plans need low or more. The planner's short first stage (the card) gets
+its first step as right at minimal as at low, 2 to 3 s sooner, but at minimal 4 of 10 pH
+outlines left out the base, half the lesson's goal, which none did at low; so it thinks at low
+([coach-plan.md](coach-plan.md)). The low column of the card's rows is from its first version.
 
 ## What it does well
 
@@ -69,7 +71,7 @@ thinks at minimal ([coach-plan.md](coach-plan.md)).
   now (Google reports 87.7% on images, 82.4% on video), and to classify progress.
 - **Plans that see the scene**: it noticed that cup A was already pink in 18 of 18 plans and
   never reused it, where flash-lite often re-dosed cup A. The stage 1 card's first step left
-  cup A alone 12 of 12 times at minimal and low thinking, but one outline at minimal added
+  cup A alone 29 of 29 times at minimal and low thinking, but one outline at minimal added
   vinegar to it again.
 - **Several images per request**: crops, mirrored views and two scenes were told apart correctly.
 - **Trajectories**: points labeled "0" to "n" in `[y, x]`; pour paths started at the spout and
@@ -82,7 +84,7 @@ thinks at minimal ([coach-plan.md](coach-plan.md)).
   fixed it, 7 of 7. Every Clio prompt that points says so.
 - **Hazards**: it called a kitchen knife a "pipette" every time it listed all objects, and plans
   never warned about the knife until the prompt carried an explicit hazard checklist (then 6 of 6;
-  the stage 1 card named it first in its warnings 12 of 12).
+  the stage 1 card named it first in its warnings 29 of 29).
   Ask about hazards directly; don't trust its free labels for safety. The step check asks on every
   look (it named a drawn knife on 2 of 8 looks, and invented none in the fridge scenes).
 - **Out of view**: models answered `not_done` rather than `unsure` when the target was cropped
