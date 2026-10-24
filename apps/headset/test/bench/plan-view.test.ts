@@ -76,6 +76,8 @@ describe('renderRun', () => {
       judgeModel: 'gemini-pro-latest',
       judging: false,
       checks: new Map(),
+      watching: false,
+      canWatch: true,
     });
     expect(html).toContain('Test &#60;acid&#62; &#38; base');
     expect(html).not.toContain('<acid>');
@@ -85,6 +87,8 @@ describe('renderRun', () => {
     expect(html).toContain('pour(vinegar → cup_a)');
     expect(html).toContain('Grades are kept when you save the scenario.');
     expect(html).toContain('data-action="replan-open" data-step="0"');
+    expect(html).toContain('data-action="watch-start"');
+    expect(html).toContain('<span class="watch-status"></span>');
   });
 
   it('shows a failed run with the server error', () => {
@@ -103,6 +107,8 @@ describe('renderRun', () => {
       judgeModel: 'gemini-pro-latest',
       judging: false,
       checks: new Map(),
+      watching: false,
+      canWatch: true,
     });
     expect(html).toContain('plan_invalid');
     expect(html).toContain('<pre>steps: Required</pre>');

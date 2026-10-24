@@ -30,6 +30,10 @@ export interface RunViewOptions {
   judging: boolean;
   /** Step checks by step index. */
   checks: ReadonlyMap<number, StepCheckState>;
+  /** This run's plan is being watched live. */
+  watching: boolean;
+  /** The camera and the models are there, so watching live can start. */
+  canWatch: boolean;
 }
 
 const cm = (m: number) => `${Math.round(m * 100)} cm`;
@@ -124,10 +128,22 @@ export function renderRun(run: BenchRun, options: RunViewOptions): string {
           ? `<details class="retry"><summary>The first draft failed validation and was retried</summary><pre>${esc(run.firstAttemptErrors)}</pre></details>`
           : ''
       }
+      ${result.ok ? renderWatchStart(options) : ''}
       ${renderGrade(run, options)}
       ${run.judgement ? renderJudgement(run.judgement) : ''}
       ${result.ok ? renderPlan(result.procedure, result.warnings, revisedFrom, options.checks) : renderFailure(result)}
     </article>`;
+}
+
+function renderWatchStart(options: RunViewOptions): string {
+  if (options.watching) {
+    return '<p class="watch-start muted">Watching this plan live: progress is above and on each step.</p>';
+  }
+  return `
+    <section class="watch-start">
+      <button type="button" class="primary" data-action="watch-start" ${options.canWatch ? '' : 'disabled title="Needs the live camera and Gemini"'}>Watch me do it live</button>
+      <span class="hint">Do the steps in front of the camera. The step watcher looks at the live camera every few seconds and follows your progress through the plan.</span>
+    </section>`;
 }
 
 function renderGrade(run: BenchRun, options: RunViewOptions): string {
@@ -232,6 +248,7 @@ function renderStep(step: Step, index: number, kept: boolean, check?: StepCheckS
         <span class="step-n">${index + 1}</span>
         <code>${esc(step.id)}</code>
         ${kept ? '<span class="badge">done before the re-plan</span>' : ''}
+        <span class="watch-status"></span>
         <span class="hand">${esc(step.hand)} hand</span>
       </div>
       <p class="instruction">${esc(step.instruction)}</p>

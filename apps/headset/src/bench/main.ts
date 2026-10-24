@@ -9,6 +9,7 @@ import type {
   ImagePayload,
 } from '@clio/protocol';
 import { BenchClient } from './bench-client';
+import { type WatchLook, WatchSession } from './live-watch';
 import {
   esc,
   renderPendingChip,
@@ -18,13 +19,22 @@ import {
   type StepCheckState,
   shortModel,
 } from './plan-view';
+import {
+  HEADSET_INTERVAL_MS,
+  renderWatchControls,
+  renderWatchLog,
+  renderWatchStatus,
+  stepBadge,
+  watchState,
+} from './watch-view';
 import { Webcam } from './webcam';
 
 // The planner bench (bench.html, docs/planner-bench.md). Point the laptop camera at a scene,
 // give the planner a goal, and read the plan it writes, from one model or several at once. A
 // scene worth keeping becomes a scenario: its frames, its request and what a correct plan must
 // do. Saved scenarios can be re-run with any model, graded by hand or by a judge model, and run
-// all together after a prompt or model change.
+// all together after a prompt or model change. Watching live follows a plan while you do it in
+// front of the camera, asking the step watcher's question about each step in turn.
 
 type Scene =
   | { kind: 'live' }
@@ -54,6 +64,26 @@ interface Prefs {
   judgeModel: string;
   camera: string;
   frames: number;
+  watchIntervalMs: number;
+  watchAuto: boolean;
+  watchNeeded: number;
+}
+
+/** A plan followed live: its progress plus how and how often to look. */
+interface Watch {
+  runId: string;
+  title: string;
+  goal: string;
+  session: WatchSession;
+  model: string;
+  intervalMs: number;
+  autoAdvance: boolean;
+  needed: number;
+  paused: boolean;
+  looking: boolean;
+  suggest: boolean;
+  timer: ReturnType<typeof setTimeout> | null;
+  clock: ReturnType<typeof setInterval>;
 }
 
 const api = new BenchClient();
@@ -75,6 +105,7 @@ const state = {
   judging: new Set<string>(),
   library: [] as BenchScenarioSummary[],
   batch: null as Batch | null,
+  watch: null as Watch | null,
 };
 let webcam: Webcam | null = null;
 let pendingKey = 0;
@@ -155,6 +186,7 @@ function layout(): string {
       </section>
       <section class="panel runs-panel">
         <div id="chips" class="chips"></div>
+        <div id="watch"></div>
         <div id="run" class="run-view"></div>
       </section>
       <aside class="panel library-panel">
@@ -222,6 +254,11 @@ function bindEvents(): void {
     renderRunView();
   });
   $('#run').addEventListener('click', (e) => onRunClick(e));
+  $('#watch').addEventListener('click', (e) => onWatchClick(e));
+  $('#watch').addEventListener('change', (e) => onWatchChange(e));
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && state.watch && !state.watch.paused) scheduleLook(500);
+  });
   $('#run').addEventListener('change', (e) => {
     const target = e.target as HTMLElement;
     if (target.matches('[data-action="grade-notes"]'))
@@ -255,6 +292,9 @@ function onRunClick(e: Event): void {
       break;
     case 'check':
       void checkStep(step);
+      break;
+    case 'watch-start':
+      startWatch();
       break;
     case 'replan-open': {
       const replan = document.querySelector<HTMLFormElement>(
@@ -371,6 +411,7 @@ function setScene(scene: Scene): void {
   state.runId = null;
   state.pending = [];
   state.checks.clear();
+  stopWatch();
   renderScene();
   renderChips();
   renderRunView();
@@ -451,7 +492,7 @@ function renderScene(): void {
         : [];
   const frame = document.querySelector<HTMLImageElement>('#frame');
   if (!frame) return;
-  const live = frames.length === 0;
+  const live = frames.length === 0 || state.watch !== null;
   video().hidden = !live;
   frame.hidden = live;
   if (!live) frame.src = frames[Math.min(state.shown, frames.length - 1)] ?? '';
@@ -462,6 +503,7 @@ function renderScene(): void {
         ? `Captured ${scene.at.toLocaleTimeString()} · frame ${state.shown + 1} of ${frames.length}`
         : `Saved · frame ${state.shown + 1} of ${frames.length}`;
   $('#scene-badge').className = `scene-badge ${scene.kind}`;
+  if (state.watch) updateWatchBadge(state.watch);
   $('#thumbs').innerHTML = frames
     .map(
       (src, i) =>
@@ -647,7 +689,10 @@ function renderRunView(): void {
     judgeModel: state.judgeModel || state.models?.judgeModel || 'judge',
     judging: state.judging.has(run.id),
     checks: state.checks.get(run.id) ?? new Map(),
+    watching: state.watch?.runId === run.id,
+    canWatch: webcam !== null && state.models !== null,
   });
+  applyWatchBadges();
 }
 
 function judgeBlocked(run: BenchRun, scenario: BenchScenario | null): string | null {
@@ -754,6 +799,249 @@ function renderStepCheck(runId: string, _stepIndex: number): void {
   const typing = document.activeElement;
   if (typing instanceof HTMLInputElement && typing.closest('#run')) return;
   renderRunView();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Watching live: follow a plan step by step while you do it in front of the camera
+
+function startWatch(): void {
+  const run = selectedRun();
+  if (!run?.result.ok) return;
+  if (!webcam) {
+    toast('Watching needs the live camera. Allow camera access and reload.');
+    return;
+  }
+  stopWatch();
+  const now = Date.now();
+  const watch: Watch = {
+    runId: run.id,
+    title: run.result.procedure.title,
+    goal: run.request.goal,
+    session: new WatchSession(run.result.procedure.steps, now, run.request.revise?.fromStepIndex),
+    model: run.model,
+    intervalMs: prefs.watchIntervalMs,
+    autoAdvance: prefs.watchAuto,
+    needed: prefs.watchNeeded,
+    paused: false,
+    looking: false,
+    suggest: false,
+    timer: null,
+    clock: setInterval(() => renderWatchStatusOnly(), 1000),
+  };
+  state.watch = watch;
+  $('#watch').innerHTML = `
+    <section class="watch">
+      <div id="watch-status"></div>
+      <div id="watch-controls" class="watch-controls"></div>
+      <details id="watch-log" class="watch-log"></details>
+    </section>`;
+  renderWatch(true);
+  renderScene();
+  renderRunView();
+  $('#watch').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  scheduleLook(1500);
+}
+
+function stopWatch(): void {
+  const watch = state.watch;
+  if (!watch) return;
+  if (watch.timer) clearTimeout(watch.timer);
+  clearInterval(watch.clock);
+  state.watch = null;
+  $('#watch').innerHTML = '';
+  renderScene();
+  if (state.runs.some((r) => r.id === watch.runId)) renderRunView();
+}
+
+function scheduleLook(delayMs: number): void {
+  const watch = state.watch;
+  if (!watch) return;
+  if (watch.timer) clearTimeout(watch.timer);
+  watch.timer = setTimeout(() => void look(watch), delayMs);
+}
+
+/** One look at the focused step; the next starts `intervalMs` after this one did. */
+async function look(watch: Watch): Promise<void> {
+  watch.timer = null;
+  const { session } = watch;
+  if (state.watch !== watch || watch.paused || watch.looking || session.focus === null) return;
+  if (document.hidden) return; // picks up again when the page is shown
+  const stepIndex = session.focus;
+  const step = session.steps[stepIndex];
+  if (!step || !webcam) return;
+  const started = performance.now();
+  watch.looking = true;
+  renderWatchStatusOnly();
+  let entry: WatchLook;
+  let image: ImagePayload | undefined;
+  try {
+    [image] = await webcam.snapshots(1);
+    if (!image) throw new Error('no frame');
+    const answer = await api.benchCheck({
+      goal: watch.goal,
+      step: {
+        id: step.id,
+        instruction: step.instruction,
+        ...(step.doneWhen ? { doneWhen: step.doneWhen } : {}),
+      },
+      images: [image],
+      model: watch.model,
+    });
+    entry = {
+      at: Date.now(),
+      step: stepIndex,
+      verdict: answer.verdict,
+      observation: answer.observation,
+      latencyMs: answer.latencyMs,
+      model: answer.model,
+    };
+  } catch (err) {
+    entry = { at: Date.now(), step: stepIndex, error: message(err), model: watch.model };
+  }
+  if (image) entry.image = `data:${image.mimeType};base64,${image.data}`;
+  watch.looking = false;
+  if (state.watch !== watch) return;
+  const outcome = session.record(entry, { autoAdvance: watch.autoAdvance, needed: watch.needed });
+  watch.suggest = outcome.suggest;
+  renderWatch(outcome.advanced);
+  if (outcome.advanced) flashWatch();
+  if (!session.complete && !watch.paused && !watch.timer) {
+    scheduleLook(Math.max(250, watch.intervalMs - (performance.now() - started)));
+  }
+}
+
+function onWatchClick(e: Event): void {
+  const watch = state.watch;
+  const target = (e.target as HTMLElement).closest<HTMLElement>('button[data-watch]');
+  if (!watch || !target) return;
+  const { session } = watch;
+  const now = Date.now();
+  const focus = session.focus;
+  const action = target.dataset.watch ?? '';
+  switch (action) {
+    case 'stop':
+      stopWatch();
+      return;
+    case 'pause':
+      watch.paused = !watch.paused;
+      if (!watch.paused) scheduleLook(300);
+      break;
+    case 'look':
+      watch.paused = false;
+      scheduleLook(0);
+      break;
+    case 'done':
+      if (focus !== null) session.markDone(focus, now);
+      break;
+    case 'skip':
+      if (focus !== null) session.skip(focus, now);
+      break;
+    case 'back':
+      session.back(now);
+      break;
+    case 'focus':
+      session.focusOn(Number(target.dataset.step), now);
+      break;
+  }
+  if (['done', 'skip', 'back', 'focus'].includes(action)) {
+    watch.suggest = false;
+    if (!watch.paused && !session.complete) scheduleLook(watch.intervalMs);
+  }
+  renderWatch(true);
+}
+
+function onWatchChange(e: Event): void {
+  const watch = state.watch;
+  const target = e.target as HTMLInputElement | HTMLSelectElement;
+  if (!watch || !target.dataset.watch) return;
+  switch (target.dataset.watch) {
+    case 'interval':
+      watch.intervalMs = Number(target.value) || HEADSET_INTERVAL_MS;
+      if (!watch.looking && !watch.paused) scheduleLook(watch.intervalMs);
+      break;
+    case 'model':
+      watch.model = target.value;
+      break;
+    case 'auto':
+      watch.autoAdvance = (target as HTMLInputElement).checked;
+      break;
+    case 'needed':
+      watch.needed = Number(target.value) || 1;
+      break;
+  }
+  savePrefs();
+  renderWatchStatusOnly();
+}
+
+/** Redraws the panel; the controls only when asked, so an open dropdown stays open. */
+function renderWatch(withControls: boolean): void {
+  const watch = state.watch;
+  if (!watch) return;
+  renderWatchStatusOnly();
+  if (withControls) {
+    const models = state.models?.models ?? [];
+    $('#watch-controls').innerHTML = renderWatchControls({
+      paused: watch.paused,
+      complete: watch.session.complete,
+      intervalMs: watch.intervalMs,
+      autoAdvance: watch.autoAdvance,
+      needed: watch.needed,
+      model: watch.model,
+      models: models.includes(watch.model) ? models : [watch.model, ...models],
+    });
+  }
+  const log = document.querySelector<HTMLDetailsElement>('#watch-log');
+  if (log) {
+    const open = log.open;
+    log.innerHTML = renderWatchLog(watch.session);
+    log.open = open;
+  }
+  applyWatchBadges();
+}
+
+function renderWatchStatusOnly(): void {
+  const watch = state.watch;
+  const el = document.querySelector<HTMLElement>('#watch-status');
+  if (!watch || !el) return;
+  el.innerHTML = renderWatchStatus(watch.session, watch.title, {
+    now: Date.now(),
+    paused: watch.paused,
+    looking: watch.looking,
+    needed: watch.needed,
+    suggest: watch.suggest,
+  });
+  updateWatchBadge(watch);
+}
+
+/** Marks the watched plan's steps in its run view: done, skipped, or being done now. */
+function applyWatchBadges(): void {
+  const watch = state.watch;
+  for (const card of document.querySelectorAll<HTMLElement>('#run .step')) {
+    const i = Number(card.dataset.step);
+    const progress = watch?.runId === state.runId ? watch.session.progress[i] : undefined;
+    const focused = progress !== undefined && watch?.session.focus === i;
+    card.classList.toggle('watch-now-step', focused);
+    card.classList.toggle('watch-done-step', progress?.status === 'done');
+    const slot = card.querySelector('.watch-status');
+    if (slot) slot.innerHTML = progress ? stepBadge(progress, focused) : '';
+  }
+}
+
+function updateWatchBadge(watch: Watch): void {
+  const focus = watch.session.focus;
+  const where = focus === null ? '' : ` · step ${focus + 1} of ${watch.session.steps.length}`;
+  $('#scene-badge').textContent =
+    `${watchState(watch.session, watch.paused, watch.looking)}${where}`;
+  $('#scene-badge').className = 'scene-badge live';
+}
+
+/** A short highlight when the watcher moves on to the next step by itself. */
+function flashWatch(): void {
+  const panel = document.querySelector<HTMLElement>('#watch .watch');
+  if (!panel) return;
+  panel.classList.remove('advanced');
+  void panel.offsetWidth;
+  panel.classList.add('advanced');
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -976,6 +1264,9 @@ function loadPrefs(): Prefs {
     judgeModel: '',
     camera: '',
     frames: 2,
+    watchIntervalMs: 3000,
+    watchAuto: true,
+    watchNeeded: 1,
   };
   try {
     return {
@@ -995,7 +1286,11 @@ function savePrefs(): void {
     judgeModel: state.judgeModel,
     camera: webcam?.deviceId ?? prefs.camera,
     frames: Number(select('#frames').value) || 2,
+    watchIntervalMs: state.watch?.intervalMs ?? prefs.watchIntervalMs,
+    watchAuto: state.watch?.autoAdvance ?? prefs.watchAuto,
+    watchNeeded: state.watch?.needed ?? prefs.watchNeeded,
   };
+  Object.assign(prefs, next);
   try {
     localStorage.setItem('clio.bench', JSON.stringify(next));
   } catch {

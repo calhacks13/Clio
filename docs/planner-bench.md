@@ -33,6 +33,26 @@ gets closer to the headset's view than the laptop's own camera.
 7. **Save scenario** keeps the frames, the request (a re-plan keeps its base plan too), the runs
    you made and what a correct plan must do, one expectation per line.
 
+## Watching live
+
+**Watch me do it live** on a plan follows it while you do the steps in front of the camera. It
+asks the step watcher's question (`/api/plans/check`) about the focused step every few seconds,
+from one fresh 1024 px frame, as the headset does every 6 s:
+- the panel shows the step, its done-when, the last answer with the frame it judged, a progress
+  bar, and the time on this step and in all;
+- with **Move on by itself** (on by default) the watcher completes a step after 1, 2 or 3 answers
+  of "done" in a row; turn it off to see the headset's behavior, where the watcher only suggests
+  and the coach or **Mark done** decides;
+- **Mark done**, **Skip**, **Back a step** and the numbers on the progress bar move the focus by
+  hand; **Look now** asks at once; the interval (2, 3, 6 or 10 s) and the judging model can change
+  while it runs;
+- **Every look** lists each answer with its frame and latency, and the end shows how long each
+  step took and whether the watcher saw it done or you marked it.
+
+A plan from a re-plan starts with its kept steps done. Looks pause while the page is hidden.
+
+## Scenarios and judging
+
 A saved scenario can be run again with any model. **Judge** has a judge model (`GEMINI_JUDGE_MODEL`,
 by default `gemini-pro-latest`) read the plan next to the same frames and say for each
 expectation whether the plan meets it and why, plus other serious problems it noticed. Judging
