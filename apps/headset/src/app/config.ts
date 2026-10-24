@@ -28,6 +28,14 @@ export interface AppConfig {
   voice: string | null;
   /** How often to look again at what the step shows, in ms (0: only when the step starts). */
   showRefreshMs: number;
+  /** Follow what each step shows live with the tracker's /track, when it answers. */
+  live: boolean;
+  /** A tracker on this local port instead of the one Vite proxies (to compare models). */
+  trackerPort: number | null;
+  /** Width of the frames streamed to the tracker (frame-stream.ts takes 640, 512, 480 or 320). */
+  frameWidth: number | null;
+  /** Keep an object's live light on while it is in hand (0: hide it, as the other outlines do). */
+  liveHeld: boolean;
 }
 
 const DEFAULTS: AppConfig = {
@@ -44,6 +52,10 @@ const DEFAULTS: AppConfig = {
   table: 'auto',
   voice: null,
   showRefreshMs: 3000,
+  live: true,
+  trackerPort: null,
+  frameWidth: null,
+  liveHeld: true,
 };
 
 function oneOf<T extends string>(value: string | null, allowed: readonly T[], fallback: T): T {
@@ -57,6 +69,12 @@ function flag(value: string | null, fallback: boolean): boolean {
 }
 
 const text = (value: string | null) => (value?.trim() ? value.trim() : null);
+
+/** A positive whole number, else null. */
+function whole(value: string | null): number | null {
+  const n = value === null || value.trim() === '' ? Number.NaN : Number(value);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
 
 function millis(value: string | null, fallback: number): number {
   const ms = value === null || value.trim() === '' ? Number.NaN : Number(value);
@@ -79,5 +97,9 @@ export function readConfig(search: string): AppConfig {
     table: oneOf(q.get('table'), ['auto', 'off'], DEFAULTS.table),
     voice: text(q.get('voice')),
     showRefreshMs: millis(q.get('showRefresh'), DEFAULTS.showRefreshMs),
+    live: flag(q.get('live'), DEFAULTS.live),
+    trackerPort: whole(q.get('tracker')),
+    frameWidth: whole(q.get('frame')),
+    liveHeld: flag(q.get('liveHeld'), DEFAULTS.liveHeld),
   };
 }

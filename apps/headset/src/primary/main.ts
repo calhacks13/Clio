@@ -5,7 +5,6 @@ import {
   FrameStream,
   frameSize,
   RecentSamples,
-  videoFrames,
 } from '../adapters/camera/frame-stream';
 import { PassthroughCamera } from '../adapters/camera/passthrough-camera';
 import {
@@ -807,12 +806,6 @@ async function lowerFrameRate(session: XRSession): Promise<void> {
   }
 }
 
-/** PassthroughCamera keeps its video private; the stream draws its frames straight from it. */
-function cameraVideo(camera: PassthroughCamera): HTMLVideoElement | null {
-  const { video } = camera as unknown as { video?: unknown };
-  return video instanceof HTMLVideoElement ? video : null;
-}
-
 /** The photo from ?image=, else the passthrough camera (opened here: a prompt in XR ends it). */
 async function openCamera(): Promise<CameraFrameSource | null> {
   const image = params.get('image');
@@ -852,8 +845,7 @@ async function init(): Promise<void> {
     scene.add(photo.object);
     frames = () => opened.grab();
   } else if (opened instanceof PassthroughCamera) {
-    const video = cameraVideo(opened);
-    frames = video ? videoFrames(video) : null;
+    frames = () => opened.frame();
   }
   if (!button) return;
   const label = source ? 'Enter AR' : 'Enter AR without camera';

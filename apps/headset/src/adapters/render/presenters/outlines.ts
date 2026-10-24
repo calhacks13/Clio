@@ -1,3 +1,4 @@
+import type { ObjectSpec } from '@clio/protocol';
 import { Group, Matrix4, Vector3 } from 'three';
 import { add, invertPose, transformPoint } from '../../../core/math';
 import type { OverlayOutline } from '../../../domain/overlay/overlay-model';
@@ -8,10 +9,16 @@ import type { PresentContext, Presenter } from '../presenter';
 // Glows over the real objects the current step shows: the finder's silhouette, or corner
 // brackets around its box. Each one hangs on a plane through the object's current estimate, so it
 // rides along when the object is carried and put down, and the plane turns toward the learner
-// every frame, so the outline stays around the object as they move.
+// every frame, so the outline stays around the object as they move. An object the tracker follows
+// live is drawn by LiveHighlightsPresenter instead while its live light is on; this stays the
+// fallback (the Gemini finder, a tracker that is down or has not found it yet).
 
 /** What to act on, then where it goes. */
-const RANK_COLORS = [OBJECT_HIGHLIGHT_COLOR, 0xffd23f] as const;
+export const RANK_COLORS = [OBJECT_HIGHLIGHT_COLOR, 0xffd23f] as const;
+
+/** A whole tool or container glows around itself; anything else lights the surface it marks. */
+export const glowModeFor = (spec: Pick<ObjectSpec, 'kind'>): ObjectGlowMode =>
+  spec.kind === 'tool' || spec.kind === 'container' ? 'object' : 'surface';
 
 interface Drawn {
   group: ObjectHighlight;
@@ -29,6 +36,9 @@ export class OutlinesPresenter implements Presenter {
   readonly object = new Group();
   private readonly drawn = new Map<string, Drawn>();
 
+  /** `lit`: whether an object's live light is on (it is drawn there instead). */
+  constructor(private readonly lit: (objectId: string) => boolean = () => false) {}
+
   update(ctx: PresentContext): void {
     const eye = transformPoint(invertPose(ctx.worldFromWorkspace), ctx.head.p);
     const estimates = new Map(ctx.objects.map((o) => [o.id, o]));
@@ -36,14 +46,12 @@ export class OutlinesPresenter implements Presenter {
     for (const item of ctx.snapshot.outlines) {
       const estimate = estimates.get(item.objectId);
       // In hand, the outline would cover the fingers, and the shape it traced is out of date.
-      if (!estimate || estimate.heldBy) continue;
+      if (!estimate || estimate.heldBy || this.lit(item.objectId)) continue;
       const center = add(estimate.position, item.offset);
       const plane = billboard(center, eye);
       if (!plane) continue;
       visible.add(item.objectId);
-      const mode =
-        estimate.spec.kind === 'tool' || estimate.spec.kind === 'container' ? 'object' : 'surface';
-      const { group } = this.draw(item, mode);
+      const { group } = this.draw(item, glowModeFor(estimate.spec));
       group.position.set(...center);
       basis.makeBasis(right.set(...plane.right), up.set(...plane.up), toEye.set(...plane.normal));
       group.quaternion.setFromRotationMatrix(basis);

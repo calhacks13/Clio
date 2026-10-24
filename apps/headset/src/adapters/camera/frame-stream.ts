@@ -75,6 +75,17 @@ export const FRAME_WIDTHS = [640, 512, 480, 320] as const;
  */
 export const DEFAULT_FRAME_WIDTH = 480;
 
+/**
+ * A camera frame stamped further back than this is taken as captured now (ms). The frame clock
+ * (requestVideoFrameCallback) may stop during an immersive session, leaving a time from before
+ * it, and the pose history would then answer with its oldest pose.
+ */
+export const MAX_FRAME_AGE_MS = 200;
+
+/** When a frame stamped `frameT` was captured, unless the stamp is clearly stale (then `now`). */
+export const captureTime = (frameT: number, now: number): number =>
+  now - frameT <= MAX_FRAME_AGE_MS ? frameT : now;
+
 /** The stream's frame size for a ?frame= value: one of FRAME_WIDTHS wide, 4:3; else the default. */
 export function frameSize(param: string | null): { maxWidth: number; maxHeight: number } {
   const asked = Number(param);
@@ -409,24 +420,4 @@ export function bytesToBase64(bytes: Uint8Array): string {
     binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   }
   return btoa(binary);
-}
-
-/**
- * Frames from a playing video, stamped with their capture time (requestVideoFrameCallback), or
- * with the time they were asked for where the browser doesn't report it.
- */
-export function videoFrames(video: HTMLVideoElement): () => FrameImage | null {
-  let frameT = 0;
-  if ('requestVideoFrameCallback' in video) {
-    const onFrame = (now: number, meta: VideoFrameCallbackMetadata) => {
-      frameT = meta.captureTime ?? meta.expectedDisplayTime ?? now;
-      video.requestVideoFrameCallback(onFrame);
-    };
-    video.requestVideoFrameCallback(onFrame);
-  }
-  return () => {
-    const { videoWidth: width, videoHeight: height } = video;
-    if (video.readyState < 2 || !width || !height) return null;
-    return { source: video, width, height, t: frameT || performance.now() };
-  };
 }

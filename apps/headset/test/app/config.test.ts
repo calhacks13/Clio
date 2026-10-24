@@ -17,12 +17,16 @@ describe('readConfig', () => {
       table: 'auto',
       voice: null,
       showRefreshMs: 3000,
+      live: true,
+      trackerPort: null,
+      frameWidth: null,
+      liveHeld: true,
     });
   });
 
   it('reads options from the URL', () => {
     const c = readConfig(
-      '?coach=scripted&mode=record_demo&procedure=shirt-fold&goal=fold%20a%20shirt&debug=1&emulate=1&calibrate=1&camera=0&autoDemo=0&voice=Kore&transport=direct&showRefresh=5000&table=off',
+      '?coach=scripted&mode=record_demo&procedure=shirt-fold&goal=fold%20a%20shirt&debug=1&emulate=1&calibrate=1&camera=0&autoDemo=0&voice=Kore&transport=direct&showRefresh=5000&table=off&live=0&tracker=8791&frame=640&liveHeld=0',
     );
     expect(c).toEqual({
       coach: 'scripted',
@@ -38,6 +42,10 @@ describe('readConfig', () => {
       table: 'off',
       voice: 'Kore',
       showRefreshMs: 5000,
+      live: false,
+      trackerPort: 8791,
+      frameWidth: 640,
+      liveHeld: false,
     });
   });
 
@@ -52,5 +60,7 @@ describe('readConfig', () => {
     ]);
     expect(readConfig('?showRefresh=-5').showRefreshMs).toBe(3000);
     expect(readConfig('?showRefresh=0').showRefreshMs).toBe(0);
+    const tracker = readConfig('?tracker=localhost&frame=-1&live=maybe');
+    expect([tracker.trackerPort, tracker.frameWidth, tracker.live]).toEqual([null, null, true]);
   });
 });

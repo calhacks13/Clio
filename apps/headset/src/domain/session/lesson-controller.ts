@@ -98,6 +98,8 @@ export interface LessonDeps {
   templates?: TemplateSource | null;
   /** Wall clock, for the provenance of plans the coach writes. */
   now?: () => Date;
+  /** True while the tracker follows the step's show items live: Spotlight stops looking again. */
+  live?: () => boolean;
   options?: LessonOptions;
 }
 
@@ -215,6 +217,7 @@ export class LessonController {
       clock,
       registry,
       grounder,
+      live: deps.live,
       ...(options?.showRefreshMs === undefined
         ? {}
         : { options: { refreshMs: options.showRefreshMs } }),

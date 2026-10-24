@@ -58,6 +58,7 @@ const mask = (seq: number, t: number, extra: Partial<TrackerMask> = {}): Tracker
   state: 'tracking',
   ms: null,
   model: null,
+  track: null,
   ...extra,
 });
 

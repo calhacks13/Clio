@@ -47,7 +47,8 @@ export interface OverlaySnapshot {
   missing: string[];
 }
 
-const COACH_HIGHLIGHT_MS = 5000;
+/** How long a coach highlight shows (ms). */
+export const COACH_HIGHLIGHT_MS = 5000;
 const MISTAKE_MS = 4000;
 const SUCCESS_MS = 1200;
 const CAPTION_MS = 4000;
