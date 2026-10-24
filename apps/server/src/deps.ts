@@ -1,7 +1,9 @@
 import { consoleLogger, type Logger } from './log';
+import type { BenchModels } from './services/bench';
 import type { Planner } from './services/planner';
 import type { TokenMinter } from './services/token-minter';
 import type { VisionLocator } from './services/vision';
+import type { BenchStore } from './storage/bench-store';
 import type { ClipStore } from './storage/clip-store';
 import type { EpisodeStore } from './storage/episode-store';
 import type { ProcedureStore } from './storage/procedure-store';
@@ -18,6 +20,15 @@ export interface BodyLimits {
   imageBytes: number;
   /** Media uploads, streamed to disk. */
   mediaBytes: number;
+}
+
+/** The planner bench (docs/planner-bench.md): saved scenarios and planning with any model. */
+export interface BenchDeps {
+  store: BenchStore;
+  /** The bench's plans, apart from the headset's: they would crowd its lesson list. */
+  plans: ProcedureStore;
+  /** null when GEMINI_API_KEY is unset: runs, step checks and judging answer 503. */
+  models: BenchModels | null;
 }
 
 const MiB = 1024 * 1024;
@@ -39,17 +50,20 @@ export interface AppDeps {
   tokenMinter?: TokenMinter | null;
   planner?: Planner | null;
   locator?: VisionLocator | null;
+  /** The planner bench; its routes answer 503 without it. */
+  bench?: BenchDeps | null;
   now?: () => Date;
   logger?: Logger;
   limits?: Partial<BodyLimits>;
 }
 
-type GeminiServices = 'tokenMinter' | 'planner' | 'locator';
+type OptionalServices = 'tokenMinter' | 'planner' | 'locator' | 'bench';
 
-export interface ServerDeps extends Required<Omit<AppDeps, 'limits' | GeminiServices>> {
+export interface ServerDeps extends Required<Omit<AppDeps, 'limits' | OptionalServices>> {
   tokenMinter: TokenMinter | null;
   planner: Planner | null;
   locator: VisionLocator | null;
+  bench: BenchDeps | null;
   limits: BodyLimits;
 }
 
@@ -59,6 +73,7 @@ export function resolveDeps(deps: AppDeps): ServerDeps {
     tokenMinter: deps.tokenMinter ?? null,
     planner: deps.planner ?? null,
     locator: deps.locator ?? null,
+    bench: deps.bench ?? null,
     now: deps.now ?? (() => new Date()),
     logger: deps.logger ?? consoleLogger,
     limits: { ...DEFAULT_LIMITS, ...deps.limits },

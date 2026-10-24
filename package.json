@@ -11,6 +11,7 @@
     "dev": "pnpm --parallel --filter @clio/server --filter @clio/headset run dev",
     "dev:headset": "pnpm --filter @clio/headset run dev",
     "dev:server": "pnpm --filter @clio/server run dev",
+    "bench": "pnpm --filter @clio/server run bench",
     "build": "pnpm --filter @clio/headset run build",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -46,7 +46,7 @@ export function createGeminiPlanner(ai: GenerateContentApi, model: string): Plan
 }
 
 /** One call that gives up after `timeoutMs` and says so. Returns the response text. */
-async function generateJson(
+export async function generateJson(
   ai: GenerateContentApi,
   params: GenerateContentParameters,
   timeoutMs: number,

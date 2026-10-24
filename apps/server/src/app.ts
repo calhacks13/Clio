@@ -4,6 +4,7 @@ import { HTTPException } from 'hono/http-exception';
 import { type AppDeps, resolveDeps } from './deps';
 import { ApiError, errorBody } from './errors';
 import type { Logger } from './log';
+import { benchRoutes } from './routes/bench';
 import { clipRoutes } from './routes/clips';
 import { coachRoutes } from './routes/coach';
 import { episodeRoutes } from './routes/episodes';
@@ -28,6 +29,7 @@ export function createApp(deps: AppDeps): Hono {
   app.route('/', visionRoutes(d));
   app.route('/', episodeRoutes(d));
   app.route('/', clipRoutes(d));
+  app.route('/', benchRoutes(d));
 
   app.notFound((c) =>
     c.json(errorBody('not_found', `No route for ${c.req.method} ${c.req.path}`), 404),

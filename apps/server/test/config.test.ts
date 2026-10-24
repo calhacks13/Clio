@@ -16,6 +16,7 @@ describe('loadConfig', () => {
       liveModel: 'gemini-3.8-live',
       plannerModel: 'gemini-3.5-flash-lite',
       visionModel: 'gemini-3.5-flash-lite',
+      judgeModel: 'gemini-pro-latest',
       visionUrl: null,
       visionToken: null,
       relayLog: false,
@@ -30,6 +31,7 @@ describe('loadConfig', () => {
         GEMINI_LIVE_MODEL: '',
         GEMINI_PLANNER_MODEL: '',
         GEMINI_VISION_MODEL: '',
+        GEMINI_JUDGE_MODEL: '',
         CLIO_DATA_DIR: '',
       },
       '/repo',
@@ -39,6 +41,7 @@ describe('loadConfig', () => {
     expect(config.liveModel).toBe('gemini-3.8-live');
     expect(config.plannerModel).toBe('gemini-3.5-flash-lite');
     expect(config.visionModel).toBe('gemini-3.5-flash-lite');
+    expect(config.judgeModel).toBe('gemini-pro-latest');
     expect(config.dataDir).toBe('/repo/data');
   });
 
@@ -61,6 +64,7 @@ describe('loadConfig', () => {
         GEMINI_LIVE_MODEL: 'live-x',
         GEMINI_PLANNER_MODEL: 'planner-x',
         GEMINI_VISION_MODEL: 'vision-x',
+        GEMINI_JUDGE_MODEL: 'judge-x',
         CLIO_RELAY_LOG: '1',
       },
       '/repo',
@@ -72,6 +76,7 @@ describe('loadConfig', () => {
       liveModel: 'live-x',
       plannerModel: 'planner-x',
       visionModel: 'vision-x',
+      judgeModel: 'judge-x',
       relayLog: true,
     });
   });

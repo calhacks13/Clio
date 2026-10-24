@@ -28,6 +28,7 @@ pnpm dev                 # server :8787 + headset app :5173
 | [docs/object-finder.md](docs/object-finder.md) | plugging in jev or another object finder          |
 | [docs/data-format.md](docs/data-format.md)     | episodes on disk                                  |
 | [docs/dev-setup.md](docs/dev-setup.md)         | laptop, emulator, Quest, data, demo day           |
+| [docs/planner-bench.md](docs/planner-bench.md) | testing the planner on hard scenes from a webcam  |
 
 ```
 packages/protocol   shared contracts (zod → TS types + JSON Schema)

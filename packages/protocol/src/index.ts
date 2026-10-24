@@ -1,5 +1,6 @@
 export * from './actions';
 export * from './api';
+export * from './bench';
 export * from './checks';
 export * from './clip';
 export * from './coach-tools';

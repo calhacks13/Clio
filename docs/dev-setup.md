@@ -37,6 +37,9 @@ To see outlines, open `?emulate=1&debug=1&procedure=ph-indicator` (its steps sho
 bottles) or plan a lesson, and point the webcam at the objects. Outlines appear around what the
 finder reports. `?showRefresh=1000` makes them follow faster while you test.
 
+To test the planner alone on hard scenes, open `http://localhost:5173/bench.html`
+([planner-bench.md](planner-bench.md)).
+
 ## 3. Quest 3
 
 1. **Developer mode:** in the Meta Horizon phone app, go to your headset → Developer Mode. This

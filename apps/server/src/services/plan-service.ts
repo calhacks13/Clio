@@ -24,6 +24,8 @@ export interface PlanServiceDeps {
   planner: Planner;
   procedures: ProcedureStore;
   now: () => Date;
+  /** The draft and its retry together; the planner bench may allow slow models more. */
+  budgetMs?: number;
 }
 
 /**
@@ -45,7 +47,7 @@ export async function generatePlan(
   const { planner, procedures } = deps;
   const started = deps.now();
   const createdAt = started.toISOString();
-  const deadline = started.getTime() + PLAN_BUDGET_MS;
+  const deadline = started.getTime() + (deps.budgetMs ?? PLAN_BUDGET_MS);
   const timeLeft = () => deadline - deps.now().getTime();
   const request: PlannerRequest = { goal: body.goal, images: body.images };
   if (body.context) request.context = body.context;

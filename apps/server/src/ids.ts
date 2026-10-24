@@ -16,6 +16,15 @@ const pad = (n: number, width = 2) => String(n).padStart(width, '0');
 
 /** `ep-YYYYMMDD-HHMMSS-xxxx` in UTC: sorts by creation time, 4 random base36 chars. */
 export function newEpisodeId(now: Date, rand: () => number = Math.random): string {
+  return timeId('ep', now, rand);
+}
+
+/** `run-YYYYMMDD-HHMMSS-xxxx`: a planner bench run, like an episode id. */
+export function newRunId(now: Date, rand: () => number = Math.random): string {
+  return timeId('run', now, rand);
+}
+
+function timeId(prefix: string, now: Date, rand: () => number): string {
   const date = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}`;
   const time = `${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;
   let suffix = '';
@@ -23,5 +32,5 @@ export function newEpisodeId(now: Date, rand: () => number = Math.random): strin
     const digit = Math.min(35, Math.max(0, Math.floor(rand() * 36)));
     suffix += digit.toString(36);
   }
-  return `ep-${date}-${time}-${suffix}`;
+  return `${prefix}-${date}-${time}-${suffix}`;
 }

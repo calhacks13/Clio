@@ -8,11 +8,13 @@ import { createApp } from './app';
 import { type Config, loadConfig } from './config';
 import { consoleLogger, describeError, type Logger } from './log';
 import { attachGeminiRelay, type GeminiRelay } from './relay/gemini-relay';
+import { createBenchModels } from './services/bench';
 import { createGeminiClient, isGeminiConfigured } from './services/gemini';
 import { createGeminiPlanner } from './services/gemini-planner';
 import { createGeminiLocator } from './services/gemini-vision';
 import { createHttpLocator } from './services/http-vision';
 import { createGeminiTokenMinter } from './services/token-minter';
+import { BenchStore } from './storage/bench-store';
 import { ClipStore } from './storage/clip-store';
 import { EpisodeStore } from './storage/episode-store';
 import { ProcedureStore } from './storage/procedure-store';
@@ -33,6 +35,7 @@ function main(): void {
   const gemini = isGeminiConfigured(config.geminiApiKey)
     ? createGeminiClient(config.geminiApiKey)
     : null;
+  const benchDir = join(config.dataDir, 'bench');
   const app = createApp({
     version: pkg.version,
     liveModel: config.liveModel,
@@ -48,6 +51,15 @@ function main(): void {
     locator: config.visionUrl
       ? createHttpLocator({ url: config.visionUrl, token: config.visionToken })
       : gemini && createGeminiLocator(gemini, config.visionModel),
+    bench: {
+      store: new BenchStore(benchDir, { logger }),
+      plans: new ProcedureStore({
+        curatedDir: config.proceduresDir,
+        plansDir: join(benchDir, 'plans'),
+        logger,
+      }),
+      models: gemini && createBenchModels(gemini, config),
+    },
     logger,
   });
 

@@ -46,7 +46,7 @@ export class ApiRequestError extends Error {
 
 export class ApiClient {
   constructor(
-    private readonly base = '',
+    protected readonly base = '',
     private readonly fetchImpl: typeof fetch = (...args) => fetch(...args),
   ) {}
 
@@ -126,7 +126,7 @@ export class ApiClient {
     if (!res.ok) throw await this.failure(res);
   }
 
-  private async request<T>(
+  protected async request<T>(
     method: string,
     path: string,
     body: unknown,

@@ -7,6 +7,8 @@ export const REPO_ROOT = resolve(import.meta.dirname, '..', '..', '..');
 export const DEFAULT_LIVE_MODEL = 'gemini-3.8-live';
 export const DEFAULT_PLANNER_MODEL = 'gemini-3.5-flash-lite';
 export const DEFAULT_VISION_MODEL = 'gemini-3.5-flash-lite';
+/** The planner bench's judge: a stronger model than the planner it grades. */
+export const DEFAULT_JUDGE_MODEL = 'gemini-pro-latest';
 
 export interface Config {
   port: number;
@@ -20,6 +22,8 @@ export interface Config {
   liveModel: string;
   plannerModel: string;
   visionModel: string;
+  /** Grades planner bench runs against their expectations (docs/planner-bench.md). */
+  judgeModel: string;
   /** An external object finder (e.g. jev). When set, it answers /api/vision/locate, not Gemini. */
   visionUrl: string | null;
   /** Bearer token for visionUrl, if it needs one. */
@@ -50,6 +54,7 @@ const EnvSchema = z.object({
   GEMINI_LIVE_MODEL: text(DEFAULT_LIVE_MODEL),
   GEMINI_PLANNER_MODEL: text(DEFAULT_PLANNER_MODEL),
   GEMINI_VISION_MODEL: text(DEFAULT_VISION_MODEL),
+  GEMINI_JUDGE_MODEL: text(DEFAULT_JUDGE_MODEL),
   CLIO_VISION_URL: optionalHttpUrl,
   CLIO_VISION_TOKEN: optionalText,
   CLIO_RELAY_LOG: optionalText,
@@ -75,6 +80,7 @@ export function loadConfig(
     liveModel: e.GEMINI_LIVE_MODEL,
     plannerModel: e.GEMINI_PLANNER_MODEL,
     visionModel: e.GEMINI_VISION_MODEL,
+    judgeModel: e.GEMINI_JUDGE_MODEL,
     visionUrl: e.CLIO_VISION_URL ?? null,
     visionToken: e.CLIO_VISION_TOKEN ?? null,
     relayLog: e.CLIO_RELAY_LOG === '1' || e.CLIO_RELAY_LOG === 'true',
