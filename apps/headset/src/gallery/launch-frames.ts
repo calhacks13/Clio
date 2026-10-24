@@ -1,6 +1,6 @@
-import { renderBoot } from '../app/boot-view';
+import { bindBootView, renderBoot } from '../app/boot-view';
 import styles from '../styles.css?inline';
-import { bootViewNext, type LaunchState } from './states';
+import type { LaunchState } from './states';
 
 // The launch page in frames: each state is its own document (an iframe with the page's real
 // stylesheet), so ids don't collide and :root and body rules apply as they do in index.html. A
@@ -43,7 +43,7 @@ export function launchFrame(state: LaunchState, size: FrameSize): HTMLElement {
     if (!root) return;
     // Binding may focus a field, which would scroll this page to the frame.
     const { scrollX, scrollY } = window;
-    bootViewNext.bindBootView?.(root);
+    bindBootView(root);
     state.after?.(root);
     window.scrollTo(scrollX, scrollY);
   });

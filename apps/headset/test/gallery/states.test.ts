@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { renderBoot } from '../../src/app/boot-view';
 import { Emitter } from '../../src/core/emitter';
 import type { AppEvents } from '../../src/domain/events';
@@ -37,26 +37,14 @@ describe('gallery launch states', () => {
 });
 
 describe('gallery launch progress states', () => {
-  it('appear once boot-view.ts exports setBootProgress, and call it', async () => {
-    vi.resetModules();
-    const setBootProgress = vi.fn();
-    vi.doMock('../../src/app/boot-view', async (importOriginal) => ({
-      ...(await importOriginal<object>()),
-      setBootProgress,
-    }));
-    try {
-      const { LAUNCH_STATES: states } = await import('../../src/gallery/states');
-      const root = {} as HTMLElement;
-      for (const state of states) state.after?.(root);
-      expect(setBootProgress.mock.calls).toEqual([
-        [root, { kind: 'permissions' }],
-        [root, { kind: 'entering' }],
-        [root, { kind: 'error', message: 'Permission denied' }],
-      ]);
-    } finally {
-      vi.doUnmock('../../src/app/boot-view');
-      vi.resetModules();
-    }
+  it('show every way the button narrates a start', () => {
+    const names = LAUNCH_STATES.filter((s) => s.after).map((s) => s.name);
+    expect(names).toEqual([
+      'Asking for microphone and camera',
+      'Entering AR',
+      'In AR',
+      'Could not start',
+    ]);
   });
 });
 

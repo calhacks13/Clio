@@ -7,8 +7,7 @@ import {
 import phIndicatorJson from '../../../../procedures/ph-indicator.json';
 import shirtFoldJson from '../../../../procedures/shirt-fold.json';
 import type { PresentContext } from '../adapters/render/presenter';
-import type { BootModel } from '../app/boot-view';
-import * as bootView from '../app/boot-view';
+import { type BootModel, type BootProgress, setBootProgress } from '../app/boot-view';
 import type { OverlaySnapshot } from '../domain/overlay/overlay-model';
 
 // Every state the UI gallery (gallery.html) shows, as data: a new state is one entry. Lesson text
@@ -27,21 +26,6 @@ export interface LaunchState {
   /** Also shown at phone width. */
   phone?: boolean;
 }
-
-export type BootProgress = {
-  kind: 'idle' | 'permissions' | 'entering' | 'error';
-  message?: string;
-};
-
-/**
- * What the launch page redesign adds to boot-view.ts, optional until it lands.
- * TODO(boot progress): import these directly from '../app/boot-view' once it exports them.
- */
-interface BootViewNext {
-  setBootProgress?: (root: HTMLElement, progress: BootProgress) => void;
-  bindBootView?: (root: HTMLElement) => void;
-}
-export const bootViewNext = bootView as unknown as BootViewNext;
 
 const HEALTH: HealthResponse = {
   ok: true,
@@ -73,10 +57,9 @@ export const SAVED_LESSONS: ProcedureSummary[] = [
 
 const READY: BootModel = { health: HEALTH, procedures: SAVED_LESSONS, ar: true, goal: '' };
 
-/** The button narrating its progress; absent until boot-view.ts has setBootProgress. */
-function progressState(name: string, progress: BootProgress, phone = false): LaunchState[] {
-  const set = bootViewNext.setBootProgress;
-  return set ? [{ name, model: READY, after: (root) => set(root, progress), phone }] : [];
+/** The button narrating its own progress, as boot() drives it. */
+function progressState(name: string, progress: BootProgress, phone = false): LaunchState {
+  return { name, model: READY, after: (root) => setBootProgress(root, progress), phone };
 }
 
 export const LAUNCH_STATES: LaunchState[] = [
@@ -89,9 +72,12 @@ export const LAUNCH_STATES: LaunchState[] = [
     model: { ...READY, health: { ...HEALTH, coach: { ...HEALTH.coach, configured: false } } },
   },
   { name: 'No passthrough AR', model: { ...READY, ar: false } },
-  ...progressState('Asking for microphone and camera', { kind: 'permissions' }),
-  ...progressState('Entering AR', { kind: 'entering' }),
-  ...progressState('Could not start', { kind: 'error', message: 'Permission denied' }, true),
+  { name: 'Saved lesson chosen', model: { ...READY, procedureId: PH_INDICATOR.id } },
+  { name: 'Recording demonstrations', model: { ...READY, record: true } },
+  progressState('Asking for microphone and camera', { kind: 'permissions' }),
+  progressState('Entering AR', { kind: 'entering' }),
+  progressState('In AR', { kind: 'inside' }),
+  progressState('Could not start', { kind: 'error', message: 'Permission denied' }, true),
 ];
 
 // ---- in-headset instruction panel ----------------------------------------------------------------
