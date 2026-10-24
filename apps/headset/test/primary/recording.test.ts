@@ -302,6 +302,37 @@ describe('PrimaryRecording', () => {
     expect(mugStates.slice(0, -1).every((s) => s?.observedT !== undefined)).toBe(true);
   });
 
+  it('records a distance measured after a newer outline for its own frame, not as the latest', async () => {
+    const ctx = setup();
+    const { recording } = ctx;
+    recording.begin(info);
+    run(ctx, 1000, 1100, (t) => {
+      if (t === 1014) recording.answer(response('Red mug'), t - 300);
+    });
+    const mug: Vec3 = [0.3, 0.8, -0.5];
+    const moved: Vec3 = [0.32, 0.8, -0.5];
+    // Two masks placed at once at a reused distance, then the first one's own measurement.
+    recording.placed('Red mug', mug, 1050, 0.8, false);
+    recording.placed('Red mug', moved, 1080, 0.8, false);
+    recording.placed('Red mug', mug, 1050, 0.8, true);
+    recording.lost('Red mug', 1090);
+    // Measured for a frame before the loss: the loss is still the latest, so the switch away
+    // carries nothing over.
+    recording.placed('Red mug', moved, 1080, 0.8, true);
+    ctx.clock.set(1200);
+    recording.answer(response('Syringe'), 1150);
+    await recording.end();
+    const { objects } = collect(ctx.sink);
+    const mugStates = objects.filter((o) => o.state?.id === 'red-mug').map((o) => o.state);
+    expect(mugStates.map((s) => [s?.observedT, s?.locationFlags])).toEqual([
+      [50, 2],
+      [80, 2],
+      [50, 10],
+      [90, 0],
+      [80, 10],
+    ]);
+  });
+
   it('records detected planes and the camera model, when the session has them', async () => {
     const plane = {
       key: 'plane-1',

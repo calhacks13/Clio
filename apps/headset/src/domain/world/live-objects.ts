@@ -43,9 +43,12 @@ import type { Workspace } from './workspace';
 //              only when the tracker saw the object on that frame (not coasting) and its distance
 //              was measured on that frame along a ray that hit it (contact or point). A distance
 //              reused from an earlier frame or guessed from a surface is not. A guessed fixed
-//              distance gives no 3D at all, and a loss is a registry.lose().
+//              distance gives no 3D at all, and a loss is a registry.lose(). A distance measured
+//              after a newer detection was drawn is told all the same (just not drawn), unless the
+//              object was lost since.
 //   recording  one TrackedObjectSample per detection (role tracker), for the episode's
-//              observations, with the same labels; a loss is recorded once, not every frame.
+//              observations, with the same labels; a loss is recorded once, not every frame. One
+//              recorded only once its distance is measured says when it arrived.
 
 /** One object in one tracked frame, as the tracker reports it (tracker/TRACK.md, objects mode). */
 export interface LiveDetection {
@@ -171,9 +174,14 @@ interface Followed {
   depths: DepthMemory;
   motion: OutlineMotion;
   measuring: OneAtATime;
-  /** Bumped by every detection; a measurement finished after a newer one was drawn isn't drawn. */
+  /**
+   * Bumped by every detection; a measurement finished after a newer one was drawn isn't drawn, but
+   * the registry still hears of it (it keeps only what is newer than it knows).
+   */
   seq: number;
   shownSeq: number;
+  /** The last loss: a measurement for a detection before it is neither drawn nor told. */
+  lostSeq: number;
   found: boolean;
   /** The status of the last detection recorded, so a loss is recorded once. */
   recorded: ObservationStatus | null;
@@ -227,7 +235,7 @@ export class LiveObjects {
     const t = this.deps.now();
     for (const f of this.followed.values()) {
       f.measuring.clear();
-      f.shownSeq = ++f.seq;
+      f.shownSeq = f.lostSeq = ++f.seq;
       f.depths.forget();
       f.recorded = null;
       if (!f.found) continue;
@@ -273,6 +281,7 @@ export class LiveObjects {
       measuring: new OneAtATime(this.deps.failed),
       seq: 0,
       shownSeq: 0,
+      lostSeq: 0,
       found: false,
       recorded: null,
       observedT: Number.NEGATIVE_INFINITY,
@@ -313,32 +322,35 @@ export class LiveObjects {
         const depth = await this.measure(d);
         if (!depth) return;
         f.depths.remember(f.id, mask, rays.point, depth, this.deps.now(), epoch);
-        if (seq === f.shownSeq) this.place(d, depth, this.measured(d, depth));
+        // Redrawn unless a newer detection was drawn meanwhile; told unless it was lost since.
+        if (seq > f.lostSeq) this.place(d, depth, this.measured(d, depth), seq === f.shownSeq);
       });
       return;
     }
     f.depths.shouldMeasure(f.id, mask, now);
     const epoch = f.depths.epoch;
+    // Recorded once measured (or dropped) as arriving now, so a loss recorded meanwhile stays newer.
     f.measuring.run(
       async () => {
         const depth = await this.measure(d);
         if (depth) f.depths.remember(f.id, mask, rays.point, depth, this.deps.now(), epoch);
         const measured = depth !== null && this.measured(d, depth);
-        if (depth && seq > f.shownSeq) {
-          f.shownSeq = seq;
-          this.place(d, depth, measured);
+        if (depth && seq > f.lostSeq) {
+          const draw = seq > f.shownSeq;
+          if (draw) f.shownSeq = seq;
+          this.place(d, depth, measured, draw);
         }
         const position = depth && depth.kind !== 'fixed' ? depth.center : null;
-        this.record(f, det, frame, status, position, measured);
+        this.record(f, det, frame, status, position, measured, now);
       },
-      () => this.record(f, det, frame, status, null, false),
+      () => this.record(f, det, frame, status, null, false, now),
     );
   }
 
   private notFound(f: Followed, det: LiveDetection, frame: LiveFrame): void {
     const status = liveStatus(det);
-    // A measurement still running for an earlier frame is not drawn over the loss.
-    f.shownSeq = ++f.seq;
+    // A measurement still running for an earlier frame is neither drawn over the loss nor told.
+    f.shownSeq = f.lostSeq = ++f.seq;
     f.measuring.clear();
     if (f.found) {
       f.found = false;
@@ -366,14 +378,16 @@ export class LiveObjects {
     }
   }
 
-  /** Draw the detection at `depth`, and tell the registry when it is due. */
-  private place(d: Detected, depth: ObjectDepth, measured: boolean): void {
+  /** Draw the detection at `depth` (if `draw`), and tell the registry when it is due. */
+  private place(d: Detected, depth: ObjectDepth, measured: boolean, draw = true): void {
     const { f, det, frame, mask, model, head } = d;
     if (f.retired) return;
     const placement = placeOutline(mask, head, model, depth);
     if (!placement) return;
-    const eye = composePose(head, model.headFromCamera).p;
-    f.motion.add({ key: f.id, placement, t: frame.t, eye });
+    if (draw) {
+      const eye = composePose(head, model.headFromCamera).p;
+      f.motion.add({ key: f.id, placement, t: frame.t, eye });
+    }
     this.observe(f, det, frame.t, depth, measured);
   }
 
@@ -390,13 +404,15 @@ export class LiveObjects {
     if (t - f.observedT < every && !(measured && !f.observedMeasured)) return;
     const { registry } = this.deps;
     if (registry.get(f.id)?.heldBy) return;
-    registry.observe(f.id, {
+    const told = registry.observe(f.id, {
       position: this.deps.workspace().toWorkspacePoint(depth.center),
       confidence: clamp01(det.score),
       source: 'detector',
       t,
       measured,
     });
+    // Not taken (older than what it knows, or than a loss): the next one is not held back for it.
+    if (!told) return;
     f.observedT = t;
     f.observedMeasured = measured;
   }
@@ -408,6 +424,7 @@ export class LiveObjects {
     status: ObservationStatus,
     position: Vec3 | null,
     measured: boolean,
+    arrivedT?: number,
   ): void {
     const { record } = this.deps;
     if (!record) return;
@@ -415,6 +432,7 @@ export class LiveObjects {
     record({
       objectId: f.id,
       observedT: frame.t,
+      ...(arrivedT === undefined ? {} : { arrivedT }),
       status,
       role: 'tracker',
       source: frame.model ?? 'tracker',

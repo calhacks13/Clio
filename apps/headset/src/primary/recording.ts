@@ -87,6 +87,8 @@ interface ObjectTrack {
   /** Workspace frame. */
   position: Vec3;
   flags: number;
+  /** The camera frame the latest state is about, when known. */
+  captureT: number | null;
 }
 
 /** An object id from a target name: "Red mug" becomes "red-mug". */
@@ -216,6 +218,8 @@ export class PrimaryRecording {
    * its center at `center` (world), for the camera frame taken at `captureT` (null when unknown).
    * `confidence` is the tracker's score, if any. `measured` is false when the center was not
    * measured on that frame (a coasting tracker, a reused or surface distance): valid, not tracked.
+   * One measured after a newer frame was recorded (a slow distance) is recorded for its own frame,
+   * where readers place it, and leaves the newer one the latest.
    */
   placed(
     name: string,
@@ -229,11 +233,15 @@ export class PrimaryRecording {
     if (!this.isTarget(id)) return;
     const t = this.clock.now();
     const position = this.workspace.toWorkspacePoint(center);
-    if (!this.tracks.has(id)) {
+    const track = this.tracks.get(id);
+    if (!track) {
       this.bus.emit('object.registered', { t, objectId: id, position, method: 'detector' });
     }
     const flags = measured ? TRACKED : UNTRACKED;
-    this.tracks.set(id, { position, flags });
+    const latest = track?.captureT ?? null;
+    if (captureT === null || latest === null || captureT >= latest) {
+      this.tracks.set(id, { position, flags, captureT });
+    }
     this.update(t, id, position, flags, confidence ?? 1, captureT);
   }
 
@@ -249,6 +257,7 @@ export class PrimaryRecording {
     const track = this.tracks.get(id);
     if (!track || track.flags === LOST) return;
     track.flags = LOST;
+    track.captureT = captureT ?? track.captureT;
     this.update(this.clock.now(), id, track.position, LOST, 0, captureT);
   }
 

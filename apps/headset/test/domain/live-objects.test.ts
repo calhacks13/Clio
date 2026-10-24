@@ -218,6 +218,65 @@ describe('LiveObjects', () => {
     expect(samples).toHaveLength(3);
   });
 
+  it('tells the registry of a distance measured after a newer detection was drawn', async () => {
+    const { live, observe, clock, table } = setup();
+    live.handle(frame(1, 900, [detection('cap')]));
+    await flush();
+    // Due again: drawn at once, but its depth answers only after the next detection was drawn.
+    table.pause();
+    clock.now = 1250;
+    live.handle(frame(2, 1150, [detection('cap')]));
+    clock.now = 1290;
+    live.handle(frame(3, 1190, [detection('cap')]));
+    table.release();
+    await flush();
+    // Not drawn over the newer one, but frame 2 was measured all the same.
+    expect(observe.mock.calls.map(([, o]) => [o.t, o.measured])).toEqual([
+      [900, true],
+      [1150, false],
+      [1150, true],
+    ]);
+  });
+
+  it('changes nothing with a distance measured after the object was lost or dropped', async () => {
+    const { live, registry, observe, clock, table } = setup();
+    live.handle(frame(1, 900, [detection('cap')]));
+    await flush();
+    table.pause();
+    clock.now = 1250;
+    live.handle(frame(2, 1150, [detection('cap')]));
+    live.handle(frame(3, 1190, [lost('cap')]));
+    table.release();
+    await flush();
+    expect(registry.get('cap')).toMatchObject({ t: 1150, lostAt: 1190, measured: false });
+    // So the next sighting is told at once, measured.
+    clock.now = 1300;
+    live.handle(frame(4, 1240, [detection('cap')]));
+    await flush();
+    expect(observe.mock.calls.at(-1)?.[1]).toMatchObject({ t: 1240, measured: true });
+    expect(registry.get('cap')).toMatchObject({ t: 1240 });
+    expect(registry.get('cap')).not.toHaveProperty('lostAt');
+
+    // A first sighting measured only after the loss that followed it.
+    table.pause();
+    clock.now = 1400;
+    live.handle(frame(6, 1340, [detection('jug')]));
+    live.handle(frame(7, 1380, [lost('jug')]));
+    table.release();
+    await flush();
+    expect(registry.get('jug')).toBeUndefined();
+
+    // No longer followed while its distance was measured.
+    table.pause();
+    clock.now = 1500;
+    live.handle(frame(5, 1450, [detection('cap')]));
+    live.follow(['jug']);
+    observe.mockClear();
+    table.release();
+    await flush();
+    expect(observe).not.toHaveBeenCalled();
+  });
+
   it('never calls a coasting box measured', async () => {
     const { live, observe, samples } = setup();
     live.handle(frame(1, 900, [detection('cap', { state: 'coasting', score: 0.4 })]));
@@ -326,6 +385,28 @@ describe('LiveObjects', () => {
     await flush();
     expect(samples.map((s) => s.observedT)).toEqual([940, 900, 980]);
     expect(samples.every((s) => s.status === 'measured')).toBe(true);
+  });
+
+  it('records a detection placed after its distance is measured as arriving when it was handled', async () => {
+    const { live, samples, clock, table } = setup();
+    table.pause();
+    clock.now = 1050;
+    live.handle(frame(1, 1000, [detection('cap')]));
+    clock.now = 1070;
+    live.handle(frame(2, 1020, [detection('cap')]));
+    // Lost before the first one's distance came back: the loss is recorded at once, and the one
+    // waiting is dropped.
+    clock.now = 1090;
+    live.handle(frame(3, 1040, [lost('cap')]));
+    clock.now = 1100;
+    table.release();
+    await flush();
+    // Recorded after the loss, but each says when it arrived, so the loss stays the newest.
+    expect(samples.map((s) => [s.status, s.observedT, s.arrivedT])).toEqual([
+      ['measured', 1020, 1070],
+      ['lost', 1040, undefined],
+      ['measured', 1000, 1050],
+    ]);
   });
 
   it('loses every found object when the tracker goes away', async () => {
