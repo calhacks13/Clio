@@ -306,8 +306,9 @@ export function depthUsageOf(session: XRSession | null | undefined): XRDepthUsag
  * before the scene, so anything with depthTest (outlines, labels, panels) disappears wherever a
  * real surface is nearer, including the tracked object's own front, which is in front of an
  * outline placed at its contact plane. Call once, after creating the renderer, to keep the
- * depth map for measuring only. (three still moves the XR cameras' near/far to the map's
- * depthNear/depthFar when those differ from the render state; that changes no pixel.)
+ * depth map for measuring only. (three still moves the XR cameras' near plane to the map's
+ * depthNear, 0.1 m on Quest, which would clip content up close: keepNearPlane, near-plane.ts,
+ * holds it at the cameras' own.)
  */
 export function disableXrDepthOcclusion(renderer: {
   xr: { getDepthSensingMesh: () => unknown };

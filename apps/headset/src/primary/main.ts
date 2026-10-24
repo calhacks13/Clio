@@ -27,11 +27,12 @@ import {
   createDepthSampler,
   type DepthSampler,
   depthSensingInit,
-  disableXrDepthOcclusion,
   depthUsageOf,
+  disableXrDepthOcclusion,
   preferDepthSensing,
 } from '../adapters/xr/depth-sensing';
 import { poseFromMatrix } from '../adapters/xr/frame-sampler';
+import { keepNearPlane } from '../adapters/xr/near-plane';
 import { XrPlaneSurfaces } from '../adapters/xr/planes';
 import { createLogger } from '../core/log';
 import { composePose, type Pose, type Vec3 } from '../core/math';
@@ -827,6 +828,8 @@ async function enterAr(): Promise<void> {
   button.hidden = true;
   started.addEventListener('end', endSession);
   started.addEventListener('visibilitychange', updateStreaming);
+  // three would move the near plane to the depth map's 10 cm; content up close stays (near-plane.ts).
+  keepNearPlane(started);
   await renderer.xr.setSession(started);
   const space = renderer.xr.getReferenceSpace();
   probe = space && createDepthProbe(started, space);
