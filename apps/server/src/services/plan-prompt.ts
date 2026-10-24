@@ -23,8 +23,8 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
   '',
   'THE SCENE',
   '- Plan from the camera views, as things stand now. If the end state of a step is already ' +
-    'visible (a cup already pink, a cap already off), do not plan that step again: start from ' +
-    'there and say so in `warnings`.',
+    'visible (a cup already pink, a cap already off), that part of the goal is done: do not ' +
+    'plan it again, in the same place or a new one. Start from there and say so in `warnings`.',
   '- Declare only objects you can see in the views, plus anything the task needs that is not ' +
     'in view; then say in `warnings` that the learner must fetch it.',
   '- `sightings`: point at every declared object you can see, once for each view it is in: ' +
@@ -38,6 +38,11 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
   '',
   'STEPS',
   '- 3 to 10 steps, in the order a person does them, with exactly one physical action per step.',
+  '- Cover the whole goal: everything it asks to do, make or test gets its steps, in the order ' +
+    'it names them, unless the views show it done.',
+  '- Keep the control the setup implies: when more like samples are set out than the goal ' +
+    'treats (three cups for two tests), the spare one stays untouched for comparison. Use the ' +
+    'others in their order.',
   '- Every step changes something a camera can see. Looking, comparing or checking is not a ' +
     'step of its own: put what to notice in the coachNotes of the step that causes it.',
   '- Leave things as they should be: close a door, lid or cap that the task opens or uses, ' +
@@ -165,7 +170,8 @@ function firstStageText(r: PlannerRequest): string {
     'The lesson starts as soon as you answer, so answer briefly. Its later steps are written ' +
       'in full afterwards, while the learner works on the first one. So:',
     '- `outline`: every step of the lesson in order, 3 to 10, as an id and an instruction. ' +
-      'outline[0] is the first step.',
+      'It reaches the end of the goal: every part the goal names, not only the part the first ' +
+      'step starts, and it leaves any control untouched. outline[0] is the first step.',
     '- `objects`: only the objects the first step uses (its targets, what it shows and the ' +
       'look-alike it guards against). The later steps declare theirs when they are written. ' +
       "An object's `look` is its tracking.query and the description its outline is found by; " +
