@@ -198,16 +198,18 @@ describe('ObjectRegistry', () => {
       expect.objectContaining({ locationFlags: 3, heldBy: 'right', observedT: 2 }),
     ]);
     // The wrist drops out: one state with nothing valid (and no orientation), at the last place.
+    // It has no observedT, so it is not placed at the time of the last carried state.
     registry.updateHeld({}, 3);
-    expect(registry.drainChanges()).toEqual([
+    const [lost] = registry.drainChanges();
+    expect(lost).toEqual(
       expect.objectContaining({
         position: [0.3, 0.1, -0.3],
         orientation: null,
         locationFlags: 0,
         heldBy: 'right',
-        observedT: 2,
       }),
-    ]);
+    );
+    expect(lost).not.toHaveProperty('observedT');
     registry.updateHeld({}, 4);
     expect(registry.drainChanges()).toEqual([]);
     // Back: carried again, with its orientation.

@@ -91,7 +91,7 @@
 {"t":5366.67,"objects":[{"id":"syringe","position":[0.12,0.1999,-0.27],"orientation":null,"confidence":1,"source":"pinch","locationFlags":2,"heldBy":"right"}]}
 {"t":5400,"objects":[{"id":"syringe","position":[0.12,0.1999,-0.27],"orientation":null,"confidence":1,"source":"pinch","locationFlags":2,"heldBy":"right"}]}
 {"t":5433.33,"objects":[{"id":"syringe","position":[0.12,0.1998,-0.27],"orientation":null,"confidence":1,"source":"pinch","locationFlags":2,"heldBy":"right"}]}
-{"t":5466.67,"objects":[{"id":"syringe","position":[0.12,0.1998,-0.27],"orientation":null,"confidence":1,"source":"pinch","locationFlags":0,"heldBy":"right","observedT":5433.33}]}
+{"t":5466.67,"objects":[{"id":"syringe","position":[0.12,0.1998,-0.27],"orientation":null,"confidence":1,"source":"pinch","locationFlags":0,"heldBy":"right"}]}
 {"t":5600,"objects":[{"id":"syringe","position":[0.12,0.1998,-0.27],"orientation":null,"confidence":1,"source":"pinch","locationFlags":2,"heldBy":null}]}
 {"t":5766.67,"objects":[{"id":"syringe","position":[0.12,0.1998,-0.27],"orientation":null,"confidence":1,"source":"pinch","locationFlags":2,"heldBy":"right"}]}
 {"t":5800,"objects":[{"id":"syringe","position":[0.12,0.1995,-0.27],"orientation":null,"confidence":1,"source":"pinch","locationFlags":2,"heldBy":"right"}]}

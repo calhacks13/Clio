@@ -1,4 +1,6 @@
-import { type EpisodeCreate, HAND_LAYOUT } from '@clio/protocol';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { type EpisodeCreate, HAND_LAYOUT, LOCATION_FLAG, type ObjectState } from '@clio/protocol';
 import { describe, expect, it } from 'vitest';
 import { ManualClock } from '../../src/core/clock';
 import { Emitter } from '../../src/core/emitter';
@@ -329,5 +331,34 @@ describe('EpisodeUploader', () => {
     });
     expect(sink.only().batches.map((b) => b.seq)).toEqual([2, 3]);
     expect(dropped).toEqual(['batch 0: upload queue full', 'batch 1: upload queue full']);
+  });
+});
+
+describe('synthetic ph-syringe episode', () => {
+  const file = join(
+    import.meta.dirname,
+    '../../../../fixtures/episodes/synthetic-ph-syringe/objects.ndjson',
+  );
+  const records = readFileSync(file, 'utf8')
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .map((line) => JSON.parse(line) as { t: number; objects: ObjectState[] });
+
+  it('gives every object state its own time, so readers keep the tracking-lost state', () => {
+    // Readers place a state at `observedT ?? t` and drop a second state of an object at the same
+    // time, so these times must strictly increase per object.
+    const last = new Map<string, number>();
+    const lost: number[] = [];
+    for (const { t, objects } of records) {
+      for (const o of objects) {
+        const at = o.observedT ?? t;
+        expect(at, `${o.id} at line t ${t}`).toBeGreaterThan(last.get(o.id) ?? -Infinity);
+        last.set(o.id, at);
+        if (!((o.locationFlags ?? LOCATION_FLAG.positionValid) & LOCATION_FLAG.positionValid))
+          lost.push(at);
+      }
+    }
+    // The 300 ms hand dropout while the syringe is held.
+    expect(lost).toHaveLength(1);
   });
 });

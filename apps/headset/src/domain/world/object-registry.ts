@@ -249,7 +249,9 @@ export class ObjectRegistry {
 
   /**
    * Object states that changed since the last call, for the objects.ndjson stream. Like every
-   * time on the bus, `observedT` is performance.now ms here; the recorder rebases it.
+   * time on the bus, `observedT` is performance.now ms here; the recorder rebases it. A state
+   * without a valid position says what is true now, not what was measured, so it has no
+   * `observedT`: it is placed at its line's time, after the last carried state.
    */
   drainChanges(): ObjectState[] {
     const out: ObjectState[] = [];
@@ -265,7 +267,7 @@ export class ObjectRegistry {
         source: est.source,
         locationFlags: flags,
         heldBy: est.heldBy,
-        observedT: est.t,
+        ...(flags & LOCATION_FLAG.positionValid ? { observedT: est.t } : {}),
       });
     }
     this.changed.clear();
