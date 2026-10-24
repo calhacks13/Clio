@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   EpisodeBatchSchema,
   EpisodeEventSchema,
+  EpisodeMetaSchema,
   FrameRecordSchema,
   jointOffset,
   ObjectTrackRecordSchema,
@@ -95,5 +96,50 @@ describe('object tracks', () => {
   it('rejects a confidence outside 0..1', () => {
     const bad = { ...track, objects: [{ ...track.objects[0], confidence: 1.5 }] };
     expect(ObjectTrackRecordSchema.safeParse(bad).success).toBe(false);
+  });
+});
+
+describe('episode meta', () => {
+  const meta = {
+    schema: 'clio.episode/1',
+    episodeId: 'ep-20261024-040000-abcd',
+    createdAt: '2026-10-24T04:00:00.000Z',
+    mode: 'learn',
+    procedure: { id: 'tiny', version: 1, title: 'Tiny' },
+    operator: { role: 'learner' },
+    clock: { timeline: 'performance.now', startEpochMs: 1_792_000_000_000 },
+    space: {
+      frame: 'workspace',
+      units: 'm',
+      upAxis: '+y',
+      worldFromWorkspace: [0, 0.8, -0.5, 0, 0, 0, 1],
+      calibration: 'default_in_front',
+      anchored: false,
+    },
+    hands: { joints: [], jointFields: [] },
+    objects: [],
+    coach: { kind: 'gemini', model: 'gemini-3.8-live', transport: 'relay' },
+    device: { userAgent: 'test', emulated: true, xrFeatures: [] },
+    app: { version: '0.1.0' },
+  };
+  const plan = {
+    schema: 'clio.procedure/1',
+    id: 'tiny',
+    version: 1,
+    title: 'Tiny',
+    summary: 'One step.',
+    workspace: { size: [0.5, 0.5] },
+    objects: [],
+    steps: [{ id: 'wait', instruction: 'Wait a moment.', success: { type: 'elapsed', ms: 500 } }],
+  };
+
+  it('embeds the full plan so generated lessons are reproducible', () => {
+    const parsed = EpisodeMetaSchema.parse({ ...meta, plan });
+    expect(parsed.plan?.steps[0]?.instruction).toBe('Wait a moment.');
+    expect(parsed.plan?.origin).toEqual({ kind: 'curated' });
+  });
+
+  it('still accepts episodes recorded without a plan snapshot', () => {
+    expect(EpisodeMetaSchema.safeParse(meta).success).toBe(true);
   });
 });

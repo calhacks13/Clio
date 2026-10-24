@@ -15,6 +15,59 @@
       "exclusiveMinimum": 0,
       "maximum": 9007199254740991
     },
+    "origin": {
+      "default": {
+        "kind": "curated"
+      },
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "curated"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "description": "Hand-written, in procedures/"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "generated"
+            },
+            "goal": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The learner's request, e.g. \"add wiper fluid\""
+            },
+            "model": {
+              "type": "string"
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+            },
+            "revisionOf": {
+              "description": "Id of the plan this one revises",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "goal",
+            "model",
+            "createdAt"
+          ],
+          "description": "Written by the planner LLM at runtime"
+        }
+      ]
+    },
     "title": {
       "type": "string",
       "minLength": 1
@@ -196,6 +249,23 @@
                   "method"
                 ],
                 "description": "The user registers it by pinching at it during setup."
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "method": {
+                    "type": "string",
+                    "const": "detect"
+                  },
+                  "hint": {
+                    "description": "Where to look, e.g. \"front left of the engine bay\"",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "method"
+                ],
+                "description": "Found by the camera from tracking.query (or the label); falls back to a pinch."
               }
             ]
           },
@@ -310,6 +380,78 @@
               "right",
               "either",
               "both"
+            ]
+          },
+          "action": {
+            "description": "What the hands do; drives the synthesized demo",
+            "type": "object",
+            "properties": {
+              "verb": {
+                "type": "string",
+                "enum": [
+                  "point_at",
+                  "touch",
+                  "pinch",
+                  "grasp",
+                  "pick_up",
+                  "place",
+                  "pour",
+                  "insert",
+                  "twist",
+                  "press",
+                  "pull",
+                  "wipe",
+                  "fold",
+                  "lift",
+                  "observe",
+                  "wait",
+                  "other"
+                ]
+              },
+              "object": {
+                "description": "The object acted on (held, touched, twisted, ...)",
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+              },
+              "target": {
+                "description": "Destination or recipient (place, pour, insert, fold)",
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+              },
+              "hand": {
+                "default": "either",
+                "type": "string",
+                "enum": [
+                  "left",
+                  "right",
+                  "either",
+                  "both"
+                ]
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "cw",
+                  "ccw",
+                  "up",
+                  "down",
+                  "toward",
+                  "away",
+                  "left",
+                  "right"
+                ]
+              },
+              "amount": {
+                "description": "Turns for twist, meters for lift or pull, seconds for wait",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "note": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
             ]
           },
           "success": {

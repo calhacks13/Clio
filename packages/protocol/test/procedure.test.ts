@@ -171,3 +171,80 @@ describe('object-centric checks', () => {
     expect(() => parseProcedure(bad)).toThrow(/sink/);
   });
 });
+
+describe('AI-generated plans', () => {
+  const generated = {
+    schema: 'clio.procedure/1',
+    id: 'refill-washer-fluid',
+    version: 1,
+    title: 'Refill windshield washer fluid',
+    summary: 'Open the reservoir, pour in fluid, close it.',
+    origin: {
+      kind: 'generated',
+      goal: 'add wiper fluid',
+      model: 'gemini-3.5-flash',
+      createdAt: '2026-10-24T04:00:00.000Z',
+    },
+    workspace: { size: [1, 0.8] },
+    objects: [
+      {
+        id: 'cap',
+        label: 'blue reservoir cap',
+        placement: { method: 'detect' },
+        tracking: { query: 'blue cap with a windshield symbol' },
+      },
+      { id: 'reservoir', label: 'reservoir opening', placement: { method: 'detect' } },
+      {
+        id: 'jug',
+        label: 'washer fluid jug',
+        placement: { method: 'detect' },
+        tracking: { query: 'washer fluid jug', moves: true },
+      },
+    ],
+    steps: [
+      {
+        id: 'open-cap',
+        instruction: 'Twist the blue cap counterclockwise to open it.',
+        targets: ['cap'],
+        action: { verb: 'twist', object: 'cap', direction: 'ccw', amount: 1.5 },
+        success: { type: 'confirm', prompt: 'The cap is off' },
+      },
+      {
+        id: 'pour-fluid',
+        instruction: 'Pour the fluid into the reservoir.',
+        targets: ['jug', 'reservoir'],
+        action: { verb: 'pour', object: 'jug', target: 'reservoir' },
+        success: { type: 'confirm', prompt: 'The reservoir is full' },
+      },
+    ],
+  };
+
+  it('marks hand-written procedures as curated by default', () => {
+    expect(parseProcedure(base).origin).toEqual({ kind: 'curated' });
+  });
+
+  it('accepts camera-detected objects and action primitives', () => {
+    const p = parseProcedure(generated);
+    expect(p.origin.kind).toBe('generated');
+    expect(p.objects[0]?.placement).toEqual({ method: 'detect' });
+    expect(p.steps[0]?.action).toEqual({
+      verb: 'twist',
+      object: 'cap',
+      direction: 'ccw',
+      amount: 1.5,
+      hand: 'either',
+    });
+  });
+
+  it('rejects an action on an undeclared object', () => {
+    const bad = structuredClone(generated);
+    bad.steps[0] = { ...bad.steps[0], action: { verb: 'twist', object: 'bolt' } } as never;
+    expect(() => parseProcedure(bad)).toThrow(/Unknown object "bolt"/);
+  });
+
+  it('rejects an action missing an argument its verb requires', () => {
+    const bad = structuredClone(generated);
+    bad.steps[1] = { ...bad.steps[1], action: { verb: 'pour', object: 'jug' } } as never;
+    expect(() => parseProcedure(bad)).toThrow(/"pour" needs a target/);
+  });
+});

@@ -1,4 +1,5 @@
 import { prettifyError, z } from 'zod';
+import { ActionSchema, actionObjectRefs } from './actions';
 import { CheckSchema, checkObjectRefs, SlugSchema } from './checks';
 import { Vec3Schema } from './geometry';
 
@@ -17,6 +18,12 @@ export const ObjectPlacementSchema = z.discriminatedUnion('method', [
       prompt: z.string().optional().describe('e.g. "Touch the vinegar bottle and pinch"'),
     })
     .describe('The user registers it by pinching at it during setup.'),
+  z
+    .object({
+      method: z.literal('detect'),
+      hint: z.string().optional().describe('Where to look, e.g. "front left of the engine bay"'),
+    })
+    .describe('Found by the camera from tracking.query (or the label); falls back to a pinch.'),
 ]);
 
 export const MarkerSpecSchema = z
@@ -76,6 +83,7 @@ export const StepSchema = z.object({
   detail: z.string().optional(),
   targets: z.array(SlugSchema).default([]),
   hand: z.enum(['left', 'right', 'either', 'both']).default('either'),
+  action: ActionSchema.optional().describe('What the hands do; drives the synthesized demo'),
   success: CheckSchema,
   mistakes: z.array(MistakeRuleSchema).default([]),
   demo: z
@@ -86,10 +94,24 @@ export const StepSchema = z.object({
   stuckAfterMs: z.number().int().positive().optional().describe('Nudge the coach after this long'),
 });
 
+export const ProcedureOriginSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('curated') }).describe('Hand-written, in procedures/'),
+  z
+    .object({
+      kind: z.literal('generated'),
+      goal: z.string().min(1).describe('The learner\'s request, e.g. "add wiper fluid"'),
+      model: z.string(),
+      createdAt: z.iso.datetime(),
+      revisionOf: z.string().optional().describe('Id of the plan this one revises'),
+    })
+    .describe('Written by the planner LLM at runtime'),
+]);
+
 const ProcedureObjectSchema = z.object({
   schema: z.literal(PROCEDURE_SCHEMA_ID),
   id: SlugSchema,
   version: z.number().int().positive(),
+  origin: ProcedureOriginSchema.default({ kind: 'curated' }),
   title: z.string().min(1),
   summary: z.string().min(1),
   domain: z.string().optional(),
@@ -170,6 +192,7 @@ export const ProcedureSchema = ProcedureObjectSchema.superRefine((p, ctx) => {
     };
     for (const [j, id] of step.targets.entries()) requireObject(id, ['targets', j]);
     for (const id of checkObjectRefs(step.success)) requireObject(id, ['success']);
+    if (step.action) for (const id of actionObjectRefs(step.action)) requireObject(id, ['action']);
     for (const [j, rule] of step.mistakes.entries()) {
       for (const id of checkObjectRefs(rule.when)) requireObject(id, ['mistakes', j, 'when']);
     }
@@ -178,6 +201,7 @@ export const ProcedureSchema = ProcedureObjectSchema.superRefine((p, ctx) => {
 
 export type MarkerSpec = z.output<typeof MarkerSpecSchema>;
 export type TrackingSpec = z.output<typeof TrackingSpecSchema>;
+export type ProcedureOrigin = z.output<typeof ProcedureOriginSchema>;
 export type ObjectPlacement = z.output<typeof ObjectPlacementSchema>;
 export type ObjectSpec = z.output<typeof ObjectSpecSchema>;
 export type MistakeRule = z.output<typeof MistakeRuleSchema>;

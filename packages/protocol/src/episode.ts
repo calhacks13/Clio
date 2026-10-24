@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { Pose7Schema, QuatSchema, Vec3Schema } from './geometry';
 import { HAND_JOINTS, HandednessSchema, HandSampleSchema, JOINT_FIELDS } from './hand';
+import { ProcedureSchema } from './procedure';
 
 // An episode is one lesson run in one workspace frame. See docs/data-format.md for the on-disk
 // layout (meta.json, frames.ndjson, events.ndjson) and the meaning of every field.
@@ -33,6 +34,9 @@ export const EpisodeMetaSchema = z.object({
   createdAt: z.iso.datetime(),
   mode: EpisodeModeSchema,
   procedure: z.object({ id: z.string(), version: z.number().int(), title: z.string() }).nullable(),
+  plan: ProcedureSchema.optional().describe(
+    'Full snapshot of the procedure used; AI-generated plans exist nowhere else',
+  ),
   operator: z.object({
     role: z.enum(['learner', 'expert', 'collector']),
     id: z.string().optional(),

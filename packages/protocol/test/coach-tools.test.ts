@@ -23,7 +23,16 @@ describe('coach tools', () => {
   });
 
   it('describes each tool with a JSON Schema that marks required arguments', () => {
-    expect(COACH_TOOL_NAMES).toEqual(['highlight', 'show_demo', 'advance_step', 'flag_mistake']);
+    expect(COACH_TOOL_NAMES).toEqual([
+      'start_lesson',
+      'revise_plan',
+      'highlight',
+      'show_demo',
+      'advance_step',
+      'flag_mistake',
+    ]);
+    expect(toolParametersJsonSchema('start_lesson').required).toEqual(['goal']);
+    expect(toolParametersJsonSchema('revise_plan').required).toEqual(['reason']);
     expect(toolParametersJsonSchema('advance_step').required).toEqual(['reason']);
     expect(toolParametersJsonSchema('flag_mistake').required).toEqual(['kind', 'message']);
     expect(toolParametersJsonSchema('show_demo').required).toBeUndefined();

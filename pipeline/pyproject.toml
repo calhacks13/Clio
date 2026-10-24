@@ -1,0 +1,39 @@
+[project]
+name = "clio-pipeline"
+version = "0.1.0"
+description = "Offline data pipeline for Clio episodes: validate, replay in Rerun, export to LeRobot."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "numpy>=1.26",
+    "jsonschema>=4.18",
+]
+
+[project.optional-dependencies]
+viz = ["rerun-sdk>=0.23"]
+# LeRobot >= 0.5 requires Python >= 3.12. Without the marker, uv's universal resolver would fall
+# back to an old 0.4.x release (different dataset API) to satisfy the 3.11 lower bound.
+lerobot = ["lerobot>=0.6; python_version >= '3.12'"]
+
+[project.scripts]
+clio = "clio_pipeline.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["uv_build>=0.10.3,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+indent-width = 4
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "NPY"]

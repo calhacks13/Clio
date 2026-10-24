@@ -4,6 +4,24 @@ import { prettifyError, z } from 'zod';
 // the dataset. Descriptions are prompts: they tell the model when to use each tool.
 
 export const COACH_TOOLS = {
+  start_lesson: {
+    description:
+      'Plan a new hands-on lesson for what the user wants to learn. Call it as soon as you know the ' +
+      'goal; ask one short clarifying question first only if the goal is ambiguous. The app looks ' +
+      'at the scene, writes the step plan, and tells you when it is ready.',
+    args: z.object({
+      goal: z.string().min(3).describe('What to teach, e.g. "refill windshield washer fluid"'),
+      context: z.string().optional().describe('Anything the user said about their setup'),
+    }),
+  },
+  revise_plan: {
+    description:
+      'Re-plan the rest of the lesson when reality differs from the plan: a missing tool, a ' +
+      'different object, or the user wants another approach. Completed steps are kept.',
+    args: z.object({
+      reason: z.string().min(1).describe('What is different, e.g. "no funnel available"'),
+    }),
+  },
   highlight: {
     description:
       'Visually emphasize one object for the user. Call it right before you mention an object. ' +

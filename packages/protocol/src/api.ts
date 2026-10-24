@@ -17,7 +17,9 @@ export const ApiPaths = {
   coachToken: '/api/coach/token',
   procedures: '/api/procedures',
   procedure: (id: string) => `/api/procedures/${seg(id)}`,
-  procedureDraft: '/api/procedures/draft',
+  plans: '/api/plans',
+  plan: (id: string) => `/api/plans/${seg(id)}`,
+  visionLocate: '/api/vision/locate',
   episodes: '/api/episodes',
   episode: (id: string) => `/api/episodes/${seg(id)}`,
   episodeBatches: (id: string) => `/api/episodes/${seg(id)}/batches`,
@@ -56,19 +58,61 @@ export const ProcedureSummarySchema = z.object({
   summary: z.string(),
   stepCount: z.number().int(),
   source: z
-    .enum(['curated', 'draft'])
-    .describe('curated: procedures/ in the repo. draft: LLM-drafted, unreviewed (data/drafts/)'),
+    .enum(['curated', 'generated'])
+    .describe('curated: procedures/ in the repo. generated: written by the planner (data/plans/)'),
 });
 export const ProcedureListResponseSchema = z.object({
   procedures: z.array(ProcedureSummarySchema),
 });
-export const ProcedureDraftRequestSchema = z.object({
-  task: z.string().min(3).max(300).describe('What to teach, e.g. "change a bike tire"'),
-  notes: z.string().max(2000).optional().describe('Constraints: available objects, safety, etc.'),
+export const ImagePayloadSchema = z.object({
+  mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+  data: z.string().min(1).describe('base64, no data: prefix'),
 });
-export const ProcedureDraftResponseSchema = z.object({
+
+export const PlanRequestSchema = z.object({
+  goal: z.string().min(3).max(300).describe('What to teach, e.g. "refill windshield washer fluid"'),
+  context: z.string().max(2000).optional().describe('What the user said about their setup'),
+  images: z.array(ImagePayloadSchema).max(3).default([]).describe('Current camera views'),
+  revise: z
+    .object({
+      planId: z.string(),
+      fromStepIndex: z.number().int().nonnegative().describe('Steps before this are kept as-is'),
+      reason: z.string().min(1),
+    })
+    .optional(),
+});
+export const PlanResponseSchema = z.object({
+  planId: z.string(),
   procedure: ProcedureSchema,
-  savedAs: z.string().nullable(),
+  warnings: z.array(z.string()).describe('Non-fatal issues the planner fixed or skipped'),
+});
+
+const unit = () => z.number().min(0).max(1);
+export const NormalizedPointSchema = z
+  .tuple([unit(), unit()])
+  .describe('[x, y] in 0..1 of the image; x right, y down');
+export const NormalizedBoxSchema = z
+  .tuple([unit(), unit(), unit(), unit()])
+  .describe('[x0, y0, x1, y1] in 0..1 of the image');
+
+export const LocateRequestSchema = z.object({
+  image: ImagePayloadSchema,
+  objects: z
+    .array(z.object({ id: z.string(), query: z.string().min(1) }))
+    .min(1)
+    .max(16),
+});
+export const DetectionSchema = z.object({
+  id: z.string(),
+  found: z.boolean(),
+  point: NormalizedPointSchema.nullable().describe('Best single point on the object'),
+  box: NormalizedBoxSchema.nullable(),
+  confidence: z.number().min(0).max(1),
+});
+export const LocateResponseSchema = z.object({
+  detections: z.array(DetectionSchema),
+  model: z.string(),
+  latencyMs: z.number().nonnegative(),
 });
 
 export const EpisodeCreateResponseSchema = z.object({ episodeId: z.string() });
@@ -124,8 +168,12 @@ export type CoachTokenRequest = z.infer<typeof CoachTokenRequestSchema>;
 export type CoachTokenResponse = z.infer<typeof CoachTokenResponseSchema>;
 export type ProcedureSummary = z.infer<typeof ProcedureSummarySchema>;
 export type ProcedureListResponse = z.infer<typeof ProcedureListResponseSchema>;
-export type ProcedureDraftRequest = z.infer<typeof ProcedureDraftRequestSchema>;
-export type ProcedureDraftResponse = z.infer<typeof ProcedureDraftResponseSchema>;
+export type ImagePayload = z.infer<typeof ImagePayloadSchema>;
+export type PlanRequest = z.input<typeof PlanRequestSchema>;
+export type PlanResponse = z.infer<typeof PlanResponseSchema>;
+export type LocateRequest = z.infer<typeof LocateRequestSchema>;
+export type Detection = z.infer<typeof DetectionSchema>;
+export type LocateResponse = z.infer<typeof LocateResponseSchema>;
 export type EpisodeCreateResponse = z.infer<typeof EpisodeCreateResponseSchema>;
 export type EpisodeBatchResponse = z.infer<typeof EpisodeBatchResponseSchema>;
 export type EpisodeSummary = z.infer<typeof EpisodeSummarySchema>;
