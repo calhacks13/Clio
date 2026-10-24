@@ -375,6 +375,17 @@ function withCameraOffset(model: CameraModel): CameraModel {
   return applyStoredCalibration(model, cameraBase, STORED_CAMERA, CAMERA_OFFSET);
 }
 
+/** The model outlines are placed with, for meta.camera, and where it came from (camera-meta.ts). */
+function cameraInUse() {
+  const model = source?.model();
+  if (!model) return null;
+  const override = CAMERA_OFFSET.some((v) => v !== null);
+  const calibrated = !!STORED_CAMERA && storedCalibrationFits(model, cameraBase, STORED_CAMERA);
+  const base = cameraBase === 'lens' ? 'lens-metadata' : 'default';
+  const from = override ? 'override' : calibrated ? 'calibrated' : base;
+  return { model: withCameraOffset(model), source: from } as const;
+}
+
 /** Bumped by every outline update. */
 let outlineSeq = 0;
 /** The newest update drawn, so a placement measured after a newer update is dropped. */
@@ -394,6 +405,8 @@ interface Sighting {
   name: string;
   t: number;
   score: number | null;
+  /** The tracker did not see it in that frame (coasting): drawn where it is predicted to be. */
+  predicted: boolean;
 }
 
 /** Nothing to outline now: the smoothed outline is held a moment before it fades. */
@@ -422,7 +435,9 @@ function presentMotion(): void {
 
 /**
  * Draw the outline of `mask` at `depth` (seen from `head` in a frame captured at `t`), or fade it
- * when it can't be placed. A placed outline is recorded as `seen`, if given.
+ * when it can't be placed. A placed outline is recorded as `seen`, if given: tracked only when the
+ * tracker saw it in that frame and `depth` was measured for it (`fresh`, by depth sensing or
+ * hit-test), and not at all at a made-up distance.
  */
 function draw(
   mask: ObjectMask,
@@ -432,6 +447,7 @@ function draw(
   depth: ObjectDepth | null,
   seen: Sighting | null,
   t: number,
+  fresh = true,
 ): void {
   const placement = depth && placeOutline(mask, head, model, depth);
   if (!placement) {
@@ -446,7 +462,9 @@ function draw(
     outline.show(placement, name);
   }
   photo?.place(placement.center, model, head);
-  if (seen) recording.placed(seen.name, placement.center, seen.t, seen.score);
+  if (!seen || !depth || depth.kind === 'fixed') return;
+  const measured = fresh && !seen.predicted && (depth.kind === 'contact' || depth.kind === 'point');
+  recording.placed(seen.name, placement.center, seen.t, seen.score, measured);
 }
 
 /**
@@ -510,7 +528,7 @@ function outlineAtOnce(
   if (!rays || !reused) return false;
   const seq = ++outlineSeq;
   shownSeq = seq;
-  draw(mask, name, tuned, head, reused, seen, mask.t);
+  draw(mask, name, tuned, head, reused, seen, mask.t, false);
   drawnMaskT = mask.t;
   if (!depths.shouldMeasure(target, mask, now)) return true;
   const epoch = depths.epoch;
@@ -572,7 +590,7 @@ function showAnswer({ response, model, head, seq, t }: Look, cycleMs: number): v
   }
   if (seq !== null && tracker.connected) return;
   if (!answer.found && answer.name) recording.lost(answer.name, t);
-  const seen = answer.found ? { name: answer.name, t, score: null } : null;
+  const seen = answer.found ? { name: answer.name, t, score: null, predicted: false } : null;
   outlineAt(
     answer.found ? answer.detection : null,
     answer.name ?? '',
@@ -596,7 +614,9 @@ function showMask(mask: TrackerMask): void {
   const name = label ?? mask.name ?? '';
   const target = mask.name ?? name;
   const recordable = target !== '' && (mask.name === null || mask.name === tracking);
-  const seen = recordable ? { name: target, t: mask.t, score: mask.score } : null;
+  // A tracker that omits the state (older ones) only sends masks it saw.
+  const predicted = mask.state !== null && mask.state !== 'tracking';
+  const seen = recordable ? { name: target, t: mask.t, score: mask.score, predicted } : null;
   if (!mask.found) {
     if (seen) recording.lost(seen.name, mask.t);
     depths.forget();
@@ -793,6 +813,8 @@ async function enterAr(): Promise<void> {
     emulated: params.get('emulate') === '1',
     xrFeatures: [...(started.enabledFeatures ?? [])],
     version: __CLIO_VERSION__,
+    planes: planesEnabled,
+    camera: cameraInUse(),
   });
   tracker.open();
   updateStreaming();

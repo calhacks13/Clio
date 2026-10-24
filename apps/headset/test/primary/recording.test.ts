@@ -281,6 +281,102 @@ describe('PrimaryRecording', () => {
     expect(episode.meta.space.worldFromWorkspace.slice(0, 3)).toEqual([-0.3, 1.05, -0.45]);
   });
 
+  it('records an outline not measured on its frame as valid, never tracked', async () => {
+    const ctx = setup();
+    const { recording } = ctx;
+    recording.begin(info);
+    const mug: Vec3 = [0.3, 0.8, -0.5];
+    run(ctx, 1000, 1200, (t) => {
+      if (t === 1014) recording.answer(response('Red mug'), t - 300);
+      // A coasting tracker, a reused distance or a surface cast: placed, but not measured there.
+      else if (t > 1014 && t < 1100) recording.placed('Red mug', mug, t - 40, 0.8, false);
+      else if (t > 1014) recording.placed('Red mug', mug, t - 40, 0.8, t > 1150);
+    });
+    ctx.clock.set(1200);
+    recording.answer(response('Syringe'), 1150);
+    await recording.end();
+    const { objects } = collect(ctx.sink);
+    const mugStates = objects.filter((o) => o.state?.id === 'red-mug').map((o) => o.state);
+    expect(runs(mugStates.map((s) => s?.locationFlags))).toEqual([2, 10, 2]);
+    // Placed ones keep their frame time; the switch away says what is true when it is written.
+    expect(mugStates.slice(0, -1).every((s) => s?.observedT !== undefined)).toBe(true);
+  });
+
+  it('records detected planes and the camera model, when the session has them', async () => {
+    const plane = {
+      key: 'plane-1',
+      orientation: 'horizontal' as const,
+      label: 'table',
+      pose: { p: [0, 0.75, -0.5] as Vec3, q: [0, 0, 0, 1] as [number, number, number, number] },
+      polygon: [[-0.4, -0.3] as const, [0.4, -0.3] as const, [0.4, 0.3] as const],
+      changedAt: 900,
+    };
+    const matrix = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1.5, 0, 1]);
+    const frame = {
+      getViewerPose: () => ({ transform: { matrix } }),
+      session: { inputSources: [] },
+    } as unknown as XRFrame;
+    const model = {
+      intrinsics: { width: 1280, height: 960, fx: 800, fy: 800, cx: 640, cy: 480 },
+      headFromCamera: { p: [0.032, 0.02, -0.025] as Vec3, q: [0, 0, 0, 1] as const },
+    };
+    const record = async (withPlanes: boolean) => {
+      const sink = new MemoryEpisodeSink();
+      const clock = new ManualClock(1000);
+      const reads: number[] = [];
+      const recording = new PrimaryRecording({
+        sink,
+        clock,
+        sleep: async () => {},
+        planes: {
+          read: () => {
+            reads.push(1);
+            return [plane];
+          },
+        },
+      });
+      recording.begin({
+        ...info,
+        planes: withPlanes,
+        camera: withPlanes
+          ? {
+              model: { ...model, headFromCamera: { ...model.headFromCamera, q: [0, 0, 0, 1] } },
+              source: 'override',
+            }
+          : null,
+      });
+      for (const t of [1000, 1014, 1028]) {
+        clock.set(t);
+        recording.xrFrame(frame, {} as XRReferenceSpace, t);
+      }
+      await recording.end();
+      const episode = sink.only();
+      const events = episode.batches.flatMap((b) => b.events);
+      return { episode, events, reads: reads.length };
+    };
+
+    const on = await record(true);
+    expect(EpisodeCreateSchema.safeParse(on.episode.meta).success).toBe(true);
+    expect(on.episode.meta.features).toEqual(['object.flags', 'environment.planes']);
+    expect(on.episode.meta.camera).toEqual({
+      intrinsics: model.intrinsics,
+      headFromCamera: [0.032, 0.02, -0.025, 0, 0, 0, 1],
+      source: 'override',
+    });
+    // One snapshot at the start, in W; the unchanged plane is not recorded again.
+    const planes = on.events.filter((e) => e.type === 'environment.planes');
+    expect(planes).toHaveLength(1);
+    expect(planes[0]).toMatchObject({ t: 0, planes: [{ id: 'plane-1', kind: 'table' }] });
+    for (const batch of on.episode.batches)
+      expect(EpisodeBatchSchema.safeParse(batch).success).toBe(true);
+
+    const off = await record(false);
+    expect(off.episode.meta.features).toEqual(['object.flags']);
+    expect(off.episode.meta).not.toHaveProperty('camera');
+    expect(off.events.filter((e) => e.type === 'environment.planes')).toEqual([]);
+    expect(off.reads).toBe(0);
+  });
+
   it('turns target names into object ids', () => {
     expect(objectIdFor('Red mug')).toBe('red-mug');
     expect(objectIdFor('  Syringe (10 ml) ')).toBe('syringe-10-ml');

@@ -132,11 +132,12 @@ export class NdjsonTail {
   }
 }
 
-/** The three NDJSON channels of one episode. */
+/** The NDJSON channels of one episode. */
 export function episodeTails(id: string, fetchFn = browserFetch, apiBase = API) {
   return {
     frames: new NdjsonTail(under(apiBase, ApiPaths.episodeFrames(id)), fetchFn),
     events: new NdjsonTail(under(apiBase, ApiPaths.episodeEvents(id)), fetchFn),
     objects: new NdjsonTail(under(apiBase, ApiPaths.episodeObjects(id)), fetchFn),
+    observations: new NdjsonTail(under(apiBase, ApiPaths.episodeObservations(id)), fetchFn),
   };
 }

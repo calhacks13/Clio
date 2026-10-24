@@ -54,12 +54,12 @@ An episode inside an `episodes/` directory compiles into the `derived/` director
 anywhere else, `--out` says where (never the episode itself or its `episodes/` directory: that is
 refused). Each episode gets `<out>/<episodeId>/`:
 
-| File                      | Contents                                                                                         |
-| ------------------------- | ------------------------------------------------------------------------------------------------ |
-| `manifest.json`           | compiler version, raw inputs (bytes, SHA-256), stage results, artifacts, quality verdict         |
-| `tracks.json`             | head, wrists (pose, pinch) and every object on one grid: masks, sources, held spans              |
-| `environment.json`        | table, floor and every detected plane                                                            |
-| `retarget-<profile>.json` | one per `--retarget` profile: robot joint trajectories                                           |
+| File                      | Contents                                                                                          |
+| ------------------------- | ------------------------------------------------------------------------------------------------- |
+| `manifest.json`           | compiler version, raw inputs (bytes, SHA-256), stage results, artifacts, quality verdict          |
+| `tracks.json`             | head, wrists (pose, pinch) and every object on one grid: masks, sources, held spans, observations |
+| `environment.json`        | table, floor and every detected plane                                                             |
+| `retarget-<profile>.json` | one per `--retarget` profile: robot joint trajectories                                            |
 
 - Raw files are only read. Everything is written to a hidden directory first, then swapped in.
   Only an earlier compile (a directory with a `clio.derived/1` manifest.json) or an empty

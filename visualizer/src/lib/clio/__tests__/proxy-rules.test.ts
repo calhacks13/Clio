@@ -45,7 +45,7 @@ describe("planClioProxy: allowed reads", () => {
   });
 
   test("each channel, with and without a from offset", () => {
-    for (const channel of ["frames", "events", "objects"]) {
+    for (const channel of ["frames", "events", "objects", "observations"]) {
       expect(url({ path: ["episodes", ID, channel] })).toBe(
         `http://127.0.0.1:8787/api/episodes/${ID}/${channel}`,
       );
@@ -160,6 +160,7 @@ describe("planClioProxy: rejected", () => {
       "tracks.JSON",
       "frames.ndjson",
       "objects.ndjson",
+      "observations.ndjson",
       "manifest",
       "manifest.json.bak",
       "manifest.json?x=1",

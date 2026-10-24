@@ -1,6 +1,7 @@
 import { EPISODE_FEATURE, type HealthResponse, type Procedure } from '@clio/protocol';
 import { MicCapture } from '../adapters/audio/mic-capture';
 import type { SpeakerOutput } from '../adapters/audio/voice-output';
+import { passthroughCameraRecord } from '../adapters/camera/camera-meta';
 import type { PassthroughCamera } from '../adapters/camera/passthrough-camera';
 import { GeminiLiveAgent } from '../adapters/gemini/gemini-live-agent';
 import type { ApiClient } from '../adapters/net/api-client';
@@ -451,6 +452,8 @@ export class ClioApp {
         xrFeatures: this.runtime?.features ?? [],
       },
       app: { version: this.o.version },
+      // The model the camera's answers are lifted with, so they can be lifted again offline.
+      ...(this.o.camera ? { camera: passthroughCameraRecord(this.o.camera) } : {}),
       ...(this.planeDetection ? { features: [EPISODE_FEATURE.environmentPlanes] } : {}),
     };
   }

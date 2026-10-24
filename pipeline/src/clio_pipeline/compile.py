@@ -53,6 +53,7 @@ from .objects import (
     ObjectSeries,
     object_series,
 )
+from .observations import observation_summaries
 from .quality import quality
 from .resample import MAX_FRAME_GAP_MS, Resampled, resample_episode
 from .schema import ValidationIssue, parse_json, validate_episode
@@ -247,11 +248,13 @@ def tracks_doc(
     stale_ms: float = DEFAULT_STALE_MS,
 ) -> dict[str, Any]:
     """TracksDoc (packages/protocol/src/derived.ts) from the resampled frames and the object
-    series on the same grid. The frames must be resampled with a `max_gap_ms` (see
+    series on the same grid, each object with a summary of its 2D observations when there are
+    any (observations.py). The frames must be resampled with a `max_gap_ms` (see
     MAX_FRAME_GAP_MS): head and wrists are null across longer frame gaps, never filled in."""
     if resampled.max_gap_ms is None:
         raise ValueError("tracks need frames resampled with max_gap_ms: gaps must not be filled")
     wrist = resampled.hands[:, :, WRIST, :7]
+    observed = observation_summaries(episode)
     return {
         "schema": DERIVED_SCHEMA_ID,
         "episodeId": episode.episode_id,
@@ -273,11 +276,11 @@ def tracks_doc(
             }
             for h, side in enumerate(HANDS)
         ],
-        "objects": [_object_doc(s) for s in series.values()],
+        "objects": [_object_doc(s, observed.get(s.id)) for s in series.values()],
     }
 
 
-def _object_doc(s: ObjectSeries) -> dict[str, Any]:
+def _object_doc(s: ObjectSeries, observations: dict[str, Any] | None) -> dict[str, Any]:
     return {
         "id": s.id,
         "label": s.label,
@@ -302,6 +305,7 @@ def _object_doc(s: ObjectSeries) -> dict[str, Any]:
             }
             for span in s.held_spans
         ],
+        **({"observations": observations} if observations else {}),
     }
 
 

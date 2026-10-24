@@ -9,6 +9,7 @@ import {
   buildCaptureFromClio,
   ClioCaptureBuilder,
   HEADSET,
+  observationsFor,
 } from "@clio-viewer/capture/from-clio";
 import type { Capture } from "@clio-viewer/capture/model";
 import {
@@ -147,6 +148,7 @@ class FakeServer {
         frames: new FakeFile(),
         events: new FakeFile(),
         objects: new FakeFile(),
+        observations: new FakeFile(),
       },
     };
     this.episodes.set(meta.episodeId, episode);
@@ -310,6 +312,53 @@ const headsetCount = (source: ClioSource) =>
   source.getSnapshot().capture?.poses.get(HEADSET)?.samples.length ?? 0;
 
 describe("reading", () => {
+  test("observations are read only for an episode that records them", async () => {
+    const server = new FakeServer();
+    const clocks = new Clocks();
+    clocks.wallMs = START_EPOCH_MS + 3_600_000;
+    const plain = episodeData();
+    serve(server, plain);
+    const data = episodeData("ep-20261024-120000-obsv");
+    data.meta.features = ["object.flags", "object.observations"];
+    const episode = serve(server, data);
+    const observation = {
+      t: 400,
+      observedT: 340,
+      objectId: "syringe",
+      status: "predicted",
+      role: "tracker",
+      source: "yoloe-26l-seg",
+      box: [0.4, 0.3, 0.5, 0.45],
+      outline: null,
+      point: [0.45, 0.36],
+      contact: [0.45, 0.45],
+      score: 0.5,
+      frame: { seq: 4, width: 480, height: 360 },
+      trackId: "7",
+    };
+    episode.files.observations.append(toNdjson([observation]));
+
+    const without = sourceOn(server, clocks, {
+      episodeId: plain.meta.episodeId,
+    });
+    await drain(without);
+    expect(server.channelRequests("observations")).toEqual([]);
+
+    const source = sourceOn(server, clocks, { episodeId: data.meta.episodeId });
+    await drain(source);
+    const state = source.getSnapshot();
+    expect(server.channelRequests("observations")).toEqual(["observations:0"]);
+    expect(state.offsets.observations).toBe(episode.files.observations.size);
+    expect(
+      observationsFor(state.capture as Capture, "syringe").map((o) => [
+        o.availableUs,
+        o.observedUs,
+        o.status,
+      ]),
+    ).toEqual([[400_000, 340_000, "predicted"]]);
+    expect(state.counts.rejected).toBe(0);
+  });
+
   test("a finished episode loads in full and the source stops", async () => {
     const server = new FakeServer();
     const clocks = new Clocks();
@@ -328,6 +377,7 @@ describe("reading", () => {
       frames: episode.files.frames.size,
       events: episode.files.events.size,
       objects: episode.files.objects.size,
+      observations: 0,
     });
     expect(state.loaded).toEqual({
       fromUs: 0,
@@ -512,6 +562,7 @@ describe("reading", () => {
       frames: toNdjson(data.frames.slice(-90)),
       events: toNdjson(data.events.slice(-3)),
       objects: toNdjson(data.objects.slice(-40)),
+      observations: toNdjson([]),
     };
     for (const c of CHANNELS) episode.files[c].append(batch[c]);
     clocks.advance(POLL_EVERY_MS);

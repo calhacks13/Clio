@@ -3,6 +3,7 @@ import {
   type EpisodeMeta,
   type FrameRecord,
   HAND_LAYOUT,
+  type ObjectObservation,
   type ObjectState,
   type ObjectTrackRecord,
   type Procedure,
@@ -29,6 +30,7 @@ import {
   wFromRos,
   wQuatFromRos,
 } from '../../../src/viewer/capture';
+import { observationsFor } from '../../../src/viewer/capture/from-clio';
 
 function meta(overrides: Partial<EpisodeMeta> = {}): EpisodeMeta {
   return {
@@ -781,6 +783,25 @@ describe('ClioCaptureBuilder recorded grasps and flags', () => {
     });
   });
 
+  it('types a valid but untracked camera estimate as predicted, keeping its score', () => {
+    const builder = new ClioCaptureBuilder(recording([{ id: 'syringe', kind: 'tool' }]));
+    builder.addObjects([
+      flagged(100, { source: 'detector', confidence: 0.8, locationFlags: 10 }),
+      // The tracker coasts: a predicted box, or a box placed at a reused depth.
+      flagged(150, { source: 'detector', confidence: 0.4, locationFlags: 2, observedT: 140 }),
+      flagged(200, { source: 'marker', orientation: [0, 0, 0, 1], locationFlags: 3 }),
+      flagged(300, { source: 'detector', confidence: 0, locationFlags: 0 }),
+    ]);
+    const samples = builder.capture.poses.get('syringe')?.samples ?? [];
+    expect(samples.map((s) => [s.t_us / 1000, s.estimate_type, s.confidence])).toEqual([
+      [0, 'manual', null],
+      [100, 'vision_estimate', 0.8],
+      [140, 'predicted', 0.4],
+      [200, 'predicted', 1],
+      [300, 'vision_estimate', 0],
+    ]);
+  });
+
   it('places an estimate at its observedT, but a lost one at its line time', () => {
     const builder = new ClioCaptureBuilder(recording([{ id: 'syringe', kind: 'tool' }]));
     builder.addObjects([
@@ -864,5 +885,70 @@ describe('ClioCaptureBuilder recorded grasps and flags', () => {
       objects: track('shoulder', 'detector', [10, 20]),
     });
     expect(old.events.samples).toEqual([]);
+  });
+});
+
+const observation = (t: number, fields: Partial<ObjectObservation> = {}): ObjectObservation => ({
+  t,
+  observedT: t - 60,
+  objectId: 'syringe',
+  status: 'measured',
+  role: 'tracker',
+  source: 'yoloe-26l-seg',
+  box: [0.4, 0.3, 0.5, 0.45],
+  outline: [
+    [0.4, 0.3],
+    [0.5, 0.3],
+    [0.45, 0.45],
+  ],
+  point: [0.45, 0.36],
+  contact: [0.45, 0.45],
+  score: 0.8,
+  frame: { seq: 4, width: 480, height: 360 },
+  trackId: '7',
+  ...fields,
+});
+
+describe('ClioCaptureBuilder observations', () => {
+  it('keeps each object observations by arrival, without the image geometry', () => {
+    const builder = new ClioCaptureBuilder(recording([{ id: 'syringe', kind: 'tool' }]));
+    builder.addObservations([
+      observation(200, { status: 'predicted', score: 0.5 }),
+      observation(100),
+      observation(150, { objectId: 'cup', role: 'identifier', source: 'jev', trackId: null }),
+      { t: 'soon' },
+    ]);
+    // Read again after a server restart: the same lines are not kept twice.
+    builder.addObservations([observation(200, { status: 'predicted', score: 0.5 })]);
+    expect(observationsFor(builder.capture, 'syringe')).toEqual([
+      {
+        availableUs: 100_000,
+        observedUs: 40_000,
+        status: 'measured',
+        role: 'tracker',
+        source: 'yoloe-26l-seg',
+        score: 0.8,
+        trackId: '7',
+      },
+      expect.objectContaining({ availableUs: 200_000, status: 'predicted', score: 0.5 }),
+    ]);
+    expect(observationsFor(builder.capture, 'cup')).toEqual([
+      expect.objectContaining({ role: 'identifier', source: 'jev', trackId: null }),
+    ]);
+    expect(observationsFor(builder.capture, 'tape')).toEqual([]);
+    expect([builder.rejected, builder.duplicates]).toEqual([1, 1]);
+    // They change no pose.
+    expect(builder.capture.poses.get('syringe')?.samples).toHaveLength(1);
+  });
+
+  it('reads observations with a whole episode', () => {
+    const capture = buildCaptureFromClio({
+      meta: recording([{ id: 'syringe', kind: 'tool' }]),
+      frames: [],
+      events: [],
+      objects: [],
+      observations: [observation(100, { status: 'lost', box: null, score: null })],
+    });
+    expect(observationsFor(capture, 'syringe').map((o) => o.status)).toEqual(['lost']);
   });
 });

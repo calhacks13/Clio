@@ -8,9 +8,9 @@ import { DERIVED_FILE_NAME } from "@clio/protocol";
 //
 // - GET and HEAD only. Writes (episode create, batches, finish, media) never
 //   pass through.
-// - Only the episode list, one episode's detail, its frames, events and
-//   objects files, and its compiled files (derived/<name>, a DERIVED_FILE_NAME
-//   from @clio/protocol). /gemini, /api/coach/token, /api/plans, /api/vision,
+// - Only the episode list, one episode's detail, its frames, events, objects
+//   and observations files, and its compiled files (derived/<name>, a
+//   DERIVED_FILE_NAME from @clio/protocol). /gemini, /api/coach/token, /api/plans, /api/vision,
 //   /api/clips and the compile trigger are never reachable.
 // - The upstream must be a loopback http(s) origin, and so must the Host the
 //   request arrived on (a DNS-rebound page can't read local recordings).
@@ -23,7 +23,12 @@ export const DEFAULT_CLIO_SERVER_URL = "http://127.0.0.1:8787";
 
 export const CLIO_PROXY_METHODS: readonly string[] = ["GET", "HEAD"];
 
-export const CLIO_CHANNELS = ["frames", "events", "objects"] as const;
+export const CLIO_CHANNELS = [
+  "frames",
+  "events",
+  "objects",
+  "observations",
+] as const;
 
 /** The segment before a compiled file's name: episodes/<id>/derived/<name>. */
 const DERIVED = "derived";

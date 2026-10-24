@@ -7,6 +7,8 @@ import {
   type ObjectState,
   type PrimaryResponse,
 } from '@clio/protocol';
+import { type CameraModelSource, cameraRecord } from '../adapters/camera/camera-meta';
+import { XrPlaneReader } from '../adapters/xr/environment';
 import { FrameSampler } from '../adapters/xr/frame-sampler';
 import { type Clock, performanceClock } from '../core/clock';
 import { Emitter } from '../core/emitter';
@@ -16,6 +18,8 @@ import type { TrackedFrame } from '../domain/hands/types';
 import { q4 } from '../domain/recording/quantize';
 import { EpisodeRecorder } from '../domain/recording/recorder';
 import type { EpisodeSink } from '../domain/recording/sink';
+import type { CameraModel } from '../domain/world/camera-model';
+import { type DetectedPlane, EnvironmentRecorder } from '../domain/world/environment';
 import { Workspace, workspaceInFrontOf } from '../domain/world/workspace';
 
 // Records a primary-demo session as an ordinary Clio episode (clio.episode/1, mode "free"), through
@@ -23,12 +27,16 @@ import { Workspace, workspaceInFrontOf } from '../domain/world/workspace';
 // appears in /api/episodes and replays in viewer.html.
 //
 //   frames   head and both hands, every XR frame
-//   objects  one object per target name: the placed outline's center while it is tracked
-//            (locationFlags 10, observedT = the camera frame's capture time), the last center with
-//            0 once the tracker loses it, and with 2 once the demo moves on to another target
+//   objects  one object per target name: the placed outline's center (observedT = the camera
+//            frame's capture time), tracked (locationFlags 10) only when the object was seen in
+//            that frame and its distance measured for it there, valid but not tracked (2) when the
+//            tracker coasted or the distance was reused or cast onto a surface; the last center
+//            with 0 once the tracker loses it, and with 2 once the demo moves on to another target.
+//            An outline at a made-up distance is not recorded
 //   events   object.registered on an object's first placement, object.detected for every answer
-//            that named something, and an annotation "primary.target" whenever the named target
-//            changes
+//            that named something, an annotation "primary.target" whenever the named target
+//            changes, and environment.planes snapshots when the session detects planes
+//   meta     the camera model outlines were placed with (meta.camera), when there is a camera
 //
 // Only the current target is recorded: placed() and lost() for any other name are ignored, so a
 // mask still in flight for the previous target (or for one the tracker was told to drop) cannot
@@ -42,7 +50,7 @@ export const TARGET_ANNOTATION = 'primary.target';
 
 /** A tracked object: position valid and measured just now. */
 const TRACKED = LOCATION_FLAG.positionValid | LOCATION_FLAG.positionTracked;
-/** No longer followed: its last position still stands, but nothing measures it. */
+/** Not measured just now (predicted, or no longer followed): the position stands, untracked. */
 const UNTRACKED = LOCATION_FLAG.positionValid;
 /** Lost by the tracker: where it is now is unknown. */
 const LOST = 0;
@@ -57,6 +65,8 @@ export interface PrimaryRecordingDeps {
   batchIntervalMs?: number;
   sleep?: (ms: number) => Promise<void>;
   onDrop?: (why: string) => void;
+  /** Reads the detected planes of an XR frame; default XrPlaneReader. */
+  planes?: { read(frame: XRFrame, space: XRReferenceSpace): DetectedPlane[] };
 }
 
 /** What the episode's meta says about the session. */
@@ -67,6 +77,10 @@ export interface PrimarySessionInfo {
   xrFeatures: readonly string[];
   /** __CLIO_VERSION__. */
   version: string;
+  /** Whether planes are detected (and recorded); default: xrFeatures lists plane-detection. */
+  planes?: boolean;
+  /** The camera model outlines are placed with (calibration applied), and where it came from. */
+  camera?: { model: CameraModel; source: CameraModelSource } | null;
 }
 
 interface ObjectTrack {
@@ -92,9 +106,13 @@ export class PrimaryRecording {
   private readonly clock: Clock;
   private readonly recorder: EpisodeRecorder;
   private readonly sampler = new FrameSampler();
+  private readonly planes: NonNullable<PrimaryRecordingDeps['planes']>;
+  private readonly environment: EnvironmentRecorder;
   /** Set by begin(); the episode starts on the next frame, which fixes the workspace. */
   private info: PrimarySessionInfo | null = null;
   private workspace: Workspace | null = null;
+  /** Whether this episode records planes. */
+  private recordPlanes = false;
   private readonly tracks = new Map<string, ObjectTrack>();
   /** The object the latest answer named. */
   private target: string | null = null;
@@ -110,6 +128,10 @@ export class PrimaryRecording {
       ...(deps.sleep ? { sleep: deps.sleep } : {}),
       ...(deps.onDrop ? { onDrop: deps.onDrop } : {}),
     });
+    this.environment = new EnvironmentRecorder({ bus: this.bus });
+    this.planes =
+      deps.planes ??
+      new XrPlaneReader((err) => deps.onDrop?.(`planes: plane detection failed (${String(err)})`));
   }
 
   get recording(): boolean {
@@ -131,13 +153,21 @@ export class PrimaryRecording {
     this.workspace = null;
     this.tracks.clear();
     this.target = null;
+    this.recordPlanes = info.planes ?? info.xrFeatures.includes('plane-detection');
+    this.environment.reset();
   }
 
-  /** Every XR frame: samples the head and both hands (world space) and records them. */
+  /**
+   * Every XR frame: samples the head and both hands (world space) and records them, and the
+   * detected planes when they changed.
+   */
   xrFrame(frame: XRFrame, space: XRReferenceSpace, t: number): void {
     if (!this.info && !this.recorder.recording) return;
     const sampled = this.sampler.sample(frame, space, t);
     if (sampled) this.frame(sampled);
+    if (this.recordPlanes && this.workspace && this.recorder.recording) {
+      this.environment.update(t, this.planes.read(frame, space), this.workspace);
+    }
   }
 
   /** One frame in world (local-floor) space; the first after begin() starts the episode. */
@@ -182,14 +212,17 @@ export class PrimaryRecording {
   }
 
   /**
-   * The outline of `name` was placed (ignored unless `name` is the latest answer's target) with its center at `center` (world), seen in the camera frame
-   * taken at `captureT` (null when unknown). `confidence` is the tracker's score, if any.
+   * The outline of `name` was placed (ignored unless `name` is the latest answer's target) with
+   * its center at `center` (world), for the camera frame taken at `captureT` (null when unknown).
+   * `confidence` is the tracker's score, if any. `measured` is false when the center was not
+   * measured on that frame (a coasting tracker, a reused or surface distance): valid, not tracked.
    */
   placed(
     name: string,
     center: Readonly<Vec3>,
     captureT: number | null,
     confidence: number | null = null,
+    measured = true,
   ): void {
     if (!this.workspace || !this.recorder.recording) return;
     const id = objectIdFor(name);
@@ -199,8 +232,9 @@ export class PrimaryRecording {
     if (!this.tracks.has(id)) {
       this.bus.emit('object.registered', { t, objectId: id, position, method: 'detector' });
     }
-    this.tracks.set(id, { position, flags: TRACKED });
-    this.update(t, id, position, TRACKED, confidence ?? 1, captureT);
+    const flags = measured ? TRACKED : UNTRACKED;
+    this.tracks.set(id, { position, flags });
+    this.update(t, id, position, flags, confidence ?? 1, captureT);
   }
 
   /**
@@ -278,6 +312,7 @@ export class PrimaryRecording {
   }
 
   private meta(info: PrimarySessionInfo, workspace: Workspace): Omit<EpisodeCreate, 'clock'> {
+    const camera = info.camera;
     return {
       schema: 'clio.episode/1',
       mode: 'free',
@@ -300,7 +335,11 @@ export class PrimaryRecording {
         xrFeatures: [...info.xrFeatures],
       },
       app: { version: info.version },
-      features: [EPISODE_FEATURE.objectFlags],
+      ...(camera ? { camera: cameraRecord(camera.model, camera.source) } : {}),
+      features: [
+        EPISODE_FEATURE.objectFlags,
+        ...(this.recordPlanes ? [EPISODE_FEATURE.environmentPlanes] : []),
+      ],
     };
   }
 }

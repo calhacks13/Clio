@@ -402,6 +402,101 @@
               ],
               "additionalProperties": false
             }
+          },
+          "observations": {
+            "description": "Absent when observations.ndjson says nothing about the object (and from compilers before 0.4.0)",
+            "type": "object",
+            "properties": {
+              "count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "observations.ndjson lines about this object"
+              },
+              "statuses": {
+                "type": "object",
+                "properties": {
+                  "measured": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "predicted": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "lost": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "absent": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "unknown": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "measured",
+                  "predicted",
+                  "lost",
+                  "absent",
+                  "unknown"
+                ],
+                "additionalProperties": false,
+                "description": "How many had each status; predicted ones were carried forward without being seen"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "tracker",
+                    "identifier",
+                    "detector"
+                  ]
+                },
+                "description": "The roles that answered, in first-seen order"
+              },
+              "sources": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The models that answered, in first-seen order"
+              },
+              "trackIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The trackers' own ids, in first-seen order: provenance only"
+              },
+              "firstObservedT": {
+                "type": "number",
+                "description": "Capture time of the earliest frame observed; can be negative"
+              },
+              "lastObservedT": {
+                "type": "number",
+                "description": "Capture time of the latest frame observed"
+              }
+            },
+            "required": [
+              "count",
+              "statuses",
+              "roles",
+              "sources",
+              "trackIds",
+              "firstObservedT",
+              "lastObservedT"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [

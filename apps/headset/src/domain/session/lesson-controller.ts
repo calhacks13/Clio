@@ -58,7 +58,10 @@ export interface PlanImageSource {
   snapshots(max: number): Promise<ImagePayload[]>;
 }
 
-export type EpisodeContext = Pick<EpisodeCreate, 'operator' | 'coach' | 'device' | 'app'> & {
+export type EpisodeContext = Pick<
+  EpisodeCreate,
+  'operator' | 'coach' | 'device' | 'app' | 'camera'
+> & {
   /** Recording features the app adds to the lesson's own (e.g. "environment.planes"). */
   features?: readonly string[];
 };
@@ -1366,6 +1369,7 @@ export class LessonController {
       coach: context.coach,
       device: context.device,
       app: context.app,
+      ...(context.camera ? { camera: context.camera } : {}),
       features: [
         EPISODE_FEATURE.objectFlags,
         EPISODE_FEATURE.objectGrasp,
