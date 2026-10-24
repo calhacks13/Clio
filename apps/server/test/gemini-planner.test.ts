@@ -263,6 +263,10 @@ describe('createGeminiPlanner', () => {
     ]);
   });
 
+  it('starts a lesson at minimal thinking, as measured on the bench (docs/coach-plan.md)', () => {
+    expect(PLAN_THINKING).toEqual({ full: 'low', first: 'minimal', rest: 'medium' });
+  });
+
   it('thinks as hard as each stage needs, and lets the bench choose', async () => {
     const er = 'gemini-robotics-er-2-preview';
     const ai = fakeAi('{}');

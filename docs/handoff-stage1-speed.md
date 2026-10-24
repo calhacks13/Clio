@@ -15,28 +15,32 @@
 
 The integration started from `a45a84e` and its coordinator merged the streams: s1 finished the
 card on the server, s2 the headset's start path, s3 measured stage first's thinking (this page,
-the timing script, the docs), and a follow-up took stage rest's upgraded objects to the headset.
+the timing script, the docs), a follow-up took stage rest's upgraded objects to the headset, and
+another made the outline cover the whole goal, so stage first thinks at minimal again.
 
 ## Where the time goes (measured)
 
-The lesson starts on the planner's stage `first` (Robotics-ER 2, thinking low). Streamed, on the
+The lesson starts on the planner's stage `first` (Robotics-ER 2, thinking minimal). Streamed, on the
 two bench scenes, pH and fridge (`data/bench/scenarios`):
 
-| Stage 1 answer                          | Thinking | Thinks for | First step starts | Done       | Output tokens |
-| --------------------------------------- | -------- | ---------- | ----------------- | ---------- | ------------- |
-| as on `feat/coach-plan-robotics-er2`    | low      | 1.9-5.0 s  | 4.6-8.3 s         | 6.2-10.1 s | 1,140-1,410   |
-| fewer fields, full objects and step     | low      | 1.6-3.8 s  | 3.7-6.7 s         | 5.1-8.1 s  | 950-1,300     |
-| fewer fields, full objects and step     | minimal  | 0.9-1.5 s  | 2.3-4.5 s         | 3.3-6.4 s  | 600-1,350     |
-| the card (`er2/stage1-card`)            | minimal  | 0.9-1.4 s  | 2.1-3.8 s         | 2.5-4.7 s  | 400-850       |
-| the card's first version, recreated     | minimal  | 1.1-1.6 s  | 2.6-3.4 s         | 3.0-4.0 s  | 495-673       |
-| the card's first version, recreated     | low      | 3.1-5.3 s  | 5.3-9.1 s         | 5.9-10.1 s | 589-1,289     |
-| the card now, recreated                 | minimal  | 1.1-1.5 s  | 2.7-3.9 s         | 3.2-4.5 s  | 505-897       |
-| **the card now, pH only, not streamed** | low      |            |                   | 5.2-8.7 s  | 664-1,116     |
+| Stage 1 answer                           | Thinking | Thinks for | First step starts | Done       | Output tokens |
+| ---------------------------------------- | -------- | ---------- | ----------------- | ---------- | ------------- |
+| as on `feat/coach-plan-robotics-er2`     | low      | 1.9-5.0 s  | 4.6-8.3 s         | 6.2-10.1 s | 1,140-1,410   |
+| fewer fields, full objects and step      | low      | 1.6-3.8 s  | 3.7-6.7 s         | 5.1-8.1 s  | 950-1,300     |
+| fewer fields, full objects and step      | minimal  | 0.9-1.5 s  | 2.3-4.5 s         | 3.3-6.4 s  | 600-1,350     |
+| the card (`er2/stage1-card`)             | minimal  | 0.9-1.4 s  | 2.1-3.8 s         | 2.5-4.7 s  | 400-850       |
+| the card's first version, recreated      | minimal  | 1.1-1.6 s  | 2.6-3.4 s         | 3.0-4.0 s  | 495-673       |
+| the card's first version, recreated      | low      | 3.1-5.3 s  | 5.3-9.1 s         | 5.9-10.1 s | 589-1,289     |
+| the card after s1, recreated             | minimal  | 1.1-1.5 s  | 2.7-3.9 s         | 3.2-4.5 s  | 505-897       |
+| the card after s1, pH only, not streamed | low      |            |                   | 5.2-8.7 s  | 664-1,116     |
+| **the card now, pH only, not streamed**  | minimal  |            |                   | 3.6-4.9 s  | 673-825       |
 
 The first four rows are on the original scenes, the others on recreated ones (below), 3 runs a
 scene; "thinks for" is the time to the first answer text, round trip included. At minimal the
-card uses no thought tokens; at low it thinks for 490 to 1,020 of them. The last row is 7 calls
-(4 alone, 3 in staged bench runs), timed whole.
+card uses no thought tokens; at low it thinks for 490 to 1,020 of them. The last two rows are 7
+calls each (4 alone, 3 in staged bench runs), timed whole; the last row's tokens are from the 4
+alone. "Now" is after the whole-goal prompt rule (below), which adds about 90 words to the
+prompt; it wasn't streamed again.
 
 Two things cost about the same: the model's thinking (up to 1,020 thought tokens at low) and the
 length of the answer (Robotics-ER writes about 250-300 tokens a second). The old first stage
@@ -82,8 +86,9 @@ second view from the first so both show the same scene. They live in `data/bench
 - `ph-lesson-cup-a-already-pink-knife-on-the-table`, goal "Test an acid and a base with
   red-cabbage indicator": three white paper cups A, B, C (A pink, B and C purple), squeeze bottles
   INDICATOR, VINEGAR and BASE, a syringe, and a chef's knife left of cup A. Expectations: doesn't
-  add anything to cup A again; base into cup B with cup C left purple as the control; never asks
-  for the knife; the warnings name the knife, left of cup A.
+  add anything to cup A again; base into cup B with cup C left purple as the control; tests the
+  base too (added after s3, so the judge sees an outline that stops at the acid); never asks for
+  the knife; the warnings name the knife, left of cup A.
 - `fridge-yogurt-drink-beside-the-milk`, goal "Get a yogurt drink from the fridge": an open fridge,
   a white YOGURT DRINK bottle with a pink cap touching a slightly taller MILK bottle with a blue
   cap. Expectations: step 1 takes the yogurt drink, not the milk; says how to tell them apart; a
@@ -106,14 +111,21 @@ second view from the first so both show the same scene. They live in `data/bench
    Recorded as `lesson.first_step` (`frames`, `captureMs`, `planMs`, `totalMs`) and
    `lesson.first_locate` annotations ([coach-plan.md](coach-plan.md), "Recording").
 3. **Stage first's thinking** (s3): measured at minimal and low on the card's first version,
-   then again on the card now, which put it back at low (below). `scripts/stage1-timing.ts` runs
-   on any checkout: `cd apps/server && npx tsx --env-file-if-exists=../../.env
-   scripts/stage1-timing.ts [scenario-id ...] [--thinking minimal] [--repeat 3]`.
+   then again after s1, which put it back at low, and after the whole-goal rule (item 5), which
+   put it at minimal again (below). `scripts/stage1-timing.ts` runs on any checkout: `cd
+   apps/server && npx tsx --env-file-if-exists=../../.env scripts/stage1-timing.ts
+   [scenario-id ...] [--thinking minimal] [--repeat 3]`.
 4. **Upgraded objects on the headset** (the follow-up): stage rest's upgraded specs reach the
    headset's object registry under the same ids, so the glow mode follows the kind, the locate
    the new `tracking.query` and the grip the radius.
+5. **The whole goal in the prompt**: the shared system instruction says to cover the whole goal,
+   each part in the order it names them, unless the views show it done; to keep the control the
+   setup implies (a spare sample stays untouched, the others are used in order); and that a part
+   already done is not planned again, in the same place or a new one. Stage first's outline must
+   reach the end of the goal, not only the part step 1 starts. The pH scene got its base
+   expectation.
 
-### Measured on the card now
+### Measured on the card after s1
 
 Robotics-ER 2, stage rest at medium, judged by `gemini-pro-latest`, 3 runs a scene (6 for pH at
 minimal, 3 of them unjudged). Ranges, with the median in brackets; "lesson starts" is the bench's
@@ -136,9 +148,9 @@ Read from the cards themselves (13 at minimal, 7 at low, 8 of them asked alone):
   declared the knife with a "do not touch the knife" mistake.
 - **But at minimal, 4 of 10 pH outlines only test the acid**: vinegar into cup B, then stir or
   observe, never the base. Stage rest kept them so. At low all 7 used the base, as did all 12 on
-  the card's first version. The judge doesn't see it, as no expectation asks for the base (the
-  control-cup one fails either way). So `PLAN_THINKING.first` is `low` again: the lesson starts
-  2 to 3 s later than at minimal, still before the 8.7 s median from before the card.
+  the card's first version. The judge didn't see it, as no expectation asked for the base (the
+  control-cup one fails either way). So `PLAN_THINKING.first` went back to `low`, 2 to 3 s
+  later than at minimal, until the whole-goal rule (below).
 - **The phrases are short nouns**: 2 to 4 words, never a position or a verb, mostly the label's
   word and a category noun ("vinegar bottle", "paper cup B", "strawberry yogurt drink"). A few
   spell the label out ("plastic bottle labeled VINEGAR") and one has a colour-like word ("clear
@@ -153,17 +165,47 @@ Read from the cards themselves (13 at minimal, 7 at low, 8 of them asked alone):
   followed the acid-only syringe cards, which left 4 new objects to declare, so at minimal the
   pH plan completes no sooner than at low.
 
+### Measured after the whole-goal rule
+
+Stage first at minimal and stage rest at medium, judged as above: `pnpm bench --staged
+--thinking first=minimal --repeat 3` (18 calls), plus 4 stage-first pH calls alone. The pH scene is judged against 5
+expectations now, so "on the 9" counts only the ones the rows above had:
+
+| Scene, stage first | Lesson starts     | Stage rest           | Plan complete | Judged                     |
+| ------------------ | ----------------- | -------------------- | ------------- | -------------------------- |
+| fridge, minimal    | 2.9-3.3 s (3.2 s) | 10.7-17.5 s (13.6 s) | 16.5 s        | 15/15, 3 of 3              |
+| pH, minimal        | 3.7-4.9 s (3.8 s) | 11.8-22.4 s (17.5 s) | 21.2 s        | 12/15, 0 of 3; base 3 of 3 |
+| both, minimal      | 3.5 s             |                      | 18.7 s        | 27/30; 24/27 on the 9      |
+
+Read from the cards (3 fridge, 7 pH):
+- **Every pH outline tests the base** (7 of 7, against 6 of 10 before the rule), and stage rest
+  kept it. All go vinegar into cup B, then base into cup C; two pick up each bottle first.
+- **Step 1 is still right**: the yogurt drink with a milk mistake (3 of 3); nothing added to cup
+  A and the knife first in the warnings (7 of 7).
+- **The judged score is as good as low's**: 24/27 on the 9 expectations, as low scored on the
+  first version (minimal before the rule: 23/27), and the new base expectation 3 of 3. The only
+  pH miss is the control cup, every time. So `PLAN_THINKING.first` is `minimal` again: the
+  lesson starts 3.5 s after the request (median), and no stage rest took over 23 s.
+- **The control is still not kept**: every pH plan puts vinegar in cup B and the base in cup C.
+  The model reads cup A's pink as setup ("indicator has already been added", "leave Cup A
+  untouched as a reference"), not as the acid already tested, so it sees two cups for two tests
+  and no spare. A further sentence ("a sample that already shows a result counts as used")
+  changed nothing in 4 calls (one called cup A the control) and was dropped.
+- **Looking steps are back in outlines**: 5 of 7 pH outlines have an "observe" or "compare the
+  colors" step, which the system instruction says is not a step, and stage rest wrote them in full
+  with a done-when like "the learner has observed all three cups". One pH plan had only 2 steps.
+
 ## Left to do
 
 1. **Real scenes**: the two scenes here are generated. Capture them on bench.html (or copy the
    original folders) and run the bench again.
-2. **The pH plan in the prompt**: when the scene is half done, the plan should finish the
-   lesson's design from there (the acid is done in cup A, so the base goes in cup B and cup C
-   stays purple), not redo the acid in a fresh cup. No level keeps cup C as the control. The
-   outline must also reach the whole goal (the base too), and stage rest should drop or rewrite
-   outline steps whose outcome is already in view (one outline redid cup A, before s1). Add a
-   pH expectation for the base, so the judge sees it. With those fixed, minimal may be worth
-   measuring again for the 2 to 3 s.
+2. **The pH control cup**: the outline now reaches the whole goal (the base too), but when the
+   scene is half done the plan should finish the lesson's design from there (the acid is done in
+   cup A, so the base goes in cup B and cup C stays purple), not redo the acid in a fresh cup.
+   No level and no wording tried so far keeps cup C; it may need low thinking, or a real scene
+   where the learner says what cup A is. Stage rest should also drop or rewrite outline steps
+   whose outcome is already in view (one outline redid cup A, before s1) and looking steps
+   ("observe the color change"), which minimal outlines keep writing.
 3. **Drop `sightings` from stage 1** unless something uses them early (only the bench overlay
    does today): they are 18 to 22% of the card's characters at minimal (about 90 to 190 tokens,
    0.3 to 0.7 s).
@@ -186,12 +228,13 @@ Read from the cards themselves (13 at minimal, 7 at low, 8 of them asked alone):
 ## How to check quality quickly
 
 ```bash
-pnpm bench --staged --repeat 3                             # judged, both scenes, stage first low
-pnpm bench --staged --thinking first=minimal --repeat 3    # the same at minimal, to compare
-pnpm bench --checks --repeat 3                             # the milk watcher test still says "wrong"
+pnpm bench --staged --repeat 3                          # judged, both scenes, stage first minimal
+pnpm bench --staged --thinking first=low --repeat 3     # the same at low, to compare
+pnpm bench --checks --repeat 3                          # the milk watcher test still says "wrong"
 pnpm check
 ```
 
-The judge misses an outline that drops half the goal: read the pH plans' steps too (does each
-test the base?). Open the bench at http://localhost:5173/bench.html (`pnpm dev`), tick "Plan in
-two stages", and watch the "step 1 ready in X s" line.
+The pH scene's base expectation catches an outline that drops half the goal, but only in this
+worktree's copy of the scene: add it to any other copy, and read the pH plans' steps too (which
+cup is the control?). Open the bench at http://localhost:5173/bench.html (`pnpm dev`), tick
+"Plan in two stages", and watch the "step 1 ready in X s" line.

@@ -25,7 +25,7 @@ export type StageThinking = Record<PlanStage, Thinking | null>;
  * (docs/coach-plan.md): more thinking is not always better. The first stage is what the learner
  * waits for; the rest has time. A revise_plan thinks like a full plan: the learner waits for both.
  */
-export const PLAN_THINKING: StageThinking = { full: 'low', first: 'low', rest: 'medium' };
+export const PLAN_THINKING: StageThinking = { full: 'low', first: 'minimal', rest: 'medium' };
 
 export interface GeminiPlannerOptions {
   /** Overrides PLAN_THINKING, e.g. to compare levels on the bench. */
