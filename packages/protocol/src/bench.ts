@@ -4,7 +4,9 @@ import {
   PlanRequestSchema,
   PlanSightingSchema,
   PlanStageSchema,
+  StepCheckObjectSchema,
   StepCheckRequestSchema,
+  StepCheckResponseSchema,
 } from './api';
 import { SlugSchema } from './checks';
 import { ProcedureSchema } from './procedure';
@@ -13,6 +15,9 @@ import { ProcedureSchema } from './procedure';
 // planner in front of real scenes from a webcam. A scenario is one planner request (goal, what the
 // learner said, the camera views, and for a re-plan the plan so far) plus what a correct plan must
 // do. Runs are the planner's answers to it, graded by the tester and optionally by a judge model.
+// A watcher test is one look of the step watcher (the frames from when the step started, the
+// frames it judged, the step and what its objects look like) and the answer it should have given,
+// so a mistake seen live, like taking the milk for the yogurt drink, can be replayed on any model.
 // A development tool: none of this is recorded in episodes.
 
 const seg = encodeURIComponent;
@@ -28,6 +33,10 @@ export const BenchPaths = {
   scenarioRun: (id: string, runId: string) => `/api/bench/scenarios/${seg(id)}/runs/${seg(runId)}`,
   scenarioRunJudge: (id: string, runId: string) =>
     `/api/bench/scenarios/${seg(id)}/runs/${seg(runId)}/judge`,
+  checkTests: '/api/bench/checks',
+  checkTest: (id: string) => `/api/bench/checks/${seg(id)}`,
+  checkTestFrame: (id: string, file: string) => `/api/bench/checks/${seg(id)}/frames/${seg(file)}`,
+  checkTestRuns: (id: string) => `/api/bench/checks/${seg(id)}/runs`,
 } as const;
 
 const ModelNameSchema = z
@@ -200,14 +209,125 @@ export const BenchScenarioDetailSchema = z.object({
   runs: z.array(BenchRunSchema).describe('Newest first'),
 });
 
-export const BenchRunScenarioRequestSchema = z.object({
-  model: ModelNameSchema.optional(),
-  budgetMs: BudgetSchema.optional(),
-});
+export const BenchRunScenarioRequestSchema = z
+  .object({
+    model: ModelNameSchema.optional(),
+    budgetMs: BudgetSchema.optional(),
+    stage: PlanStageSchema.optional().describe('Defaults to full'),
+    revise: BenchReviseSchema.optional().describe(
+      'For stage rest: the stage-first plan and where its outline starts',
+    ),
+  })
+  .refine((body) => body.stage !== 'rest' || body.revise !== undefined, {
+    message: 'stage rest needs revise: the plan whose outline to rewrite',
+    path: ['revise'],
+  });
 export const BenchRunUpdateSchema = z.object({
   verdict: BenchVerdictSchema.omit({ at: true }).nullable().describe('null clears it'),
 });
 export const BenchJudgeRequestSchema = z.object({ model: ModelNameSchema.optional() });
+
+// Watcher tests: data/bench/checks/<id>/
+
+export const BenchCheckExpectSchema = z
+  .enum(['done', 'not_done', 'wrong'])
+  .describe(
+    'done: the watcher must say done. not_done: it must not say done (unsure passes). ' +
+      'wrong: it must not say done, and must say what the learner did instead',
+  );
+
+const FrameFileSchema = z.object({ file: z.string(), mimeType: ImagePayloadSchema.shape.mimeType });
+
+/** A step check's answer, without who gave it and how long it took. */
+export const BenchCheckAnswerSchema = StepCheckResponseSchema.omit({
+  model: true,
+  latencyMs: true,
+});
+
+const CheckTitleSchema = z.string().trim().min(1).max(120);
+const CheckNotesSchema = z.string().max(2000);
+
+export const BenchCheckTestSchema = z.object({
+  id: SlugSchema,
+  title: CheckTitleSchema,
+  expect: BenchCheckExpectSchema,
+  goal: StepCheckRequestSchema.shape.goal,
+  step: StepCheckRequestSchema.shape.step,
+  objects: z.array(StepCheckObjectSchema).max(6),
+  confusions: z.array(z.string().min(1).max(200)).max(4),
+  before: z
+    .array(FrameFileSchema)
+    .max(2)
+    .describe('Views from when the step started, oldest first'),
+  now: z.array(FrameFileSchema).min(1).max(3).describe('The views it judged, newest last'),
+  seen: StepCheckResponseSchema.optional().describe('What the watcher answered when it was saved'),
+  notes: CheckNotesSchema.optional(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+
+/** A look to keep: the step check as it was asked, and the answer it should get. */
+export const BenchCheckTestCreateSchema = StepCheckRequestSchema.extend({
+  title: CheckTitleSchema,
+  expect: BenchCheckExpectSchema,
+  seen: StepCheckResponseSchema.optional(),
+  notes: CheckNotesSchema.optional(),
+});
+
+export const BenchCheckTestUpdateSchema = z.object({
+  title: CheckTitleSchema.optional(),
+  expect: BenchCheckExpectSchema.optional(),
+  notes: CheckNotesSchema.nullable().optional().describe('null clears it'),
+});
+
+export const BenchCheckRunSchema = z.object({
+  id: z.string(),
+  createdAt: z.iso.datetime(),
+  model: z.string(),
+  latencyMs: z.number().nonnegative(),
+  expect: BenchCheckExpectSchema.describe('The expectation it was graded against'),
+  result: z.discriminatedUnion('ok', [
+    z.object({ ok: z.literal(true), answer: BenchCheckAnswerSchema }),
+    z.object({ ok: z.literal(false), code: z.string(), message: z.string() }),
+  ]),
+  passed: z.boolean().describe('The answer meets the expectation; a failed call never passes'),
+});
+
+export const BenchCheckModelTallySchema = z.object({
+  model: z.string(),
+  runs: z.number().int(),
+  passed: z.number().int(),
+});
+
+export const BenchCheckTestSummarySchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  goal: z.string(),
+  instruction: z.string(),
+  expect: BenchCheckExpectSchema,
+  thumb: z.string().describe('The newest view it judged, a file for BenchPaths.checkTestFrame'),
+  hasBefore: z.boolean(),
+  createdAt: z.string(),
+  runCount: z.number().int(),
+  models: z.array(BenchCheckModelTallySchema).describe('Passes per model, most runs first'),
+  lastRun: z
+    .object({
+      model: z.string(),
+      createdAt: z.string(),
+      passed: z.boolean(),
+      verdict: StepCheckResponseSchema.shape.verdict.optional(),
+    })
+    .nullable(),
+});
+
+export const BenchCheckTestListResponseSchema = z.object({
+  tests: z.array(BenchCheckTestSummarySchema),
+});
+export const BenchCheckTestDetailSchema = z.object({
+  test: BenchCheckTestSchema,
+  runs: z.array(BenchCheckRunSchema).describe('Newest first'),
+});
+export const BenchCheckTestRunRequestSchema = z.object({ model: ModelNameSchema.optional() });
 
 export type BenchModelsResponse = z.infer<typeof BenchModelsResponseSchema>;
 export type BenchPlanRequest = z.input<typeof BenchPlanRequestSchema>;
@@ -225,3 +345,14 @@ export type BenchScenarioSummary = z.infer<typeof BenchScenarioSummarySchema>;
 export type BenchScenarioListResponse = z.infer<typeof BenchScenarioListResponseSchema>;
 export type BenchScenarioDetail = z.output<typeof BenchScenarioDetailSchema>;
 export type BenchRunUpdate = z.input<typeof BenchRunUpdateSchema>;
+export type BenchRunScenarioRequest = z.input<typeof BenchRunScenarioRequestSchema>;
+export type BenchCheckExpect = z.infer<typeof BenchCheckExpectSchema>;
+export type BenchCheckAnswer = z.infer<typeof BenchCheckAnswerSchema>;
+export type BenchCheckTest = z.output<typeof BenchCheckTestSchema>;
+export type BenchCheckTestCreate = z.input<typeof BenchCheckTestCreateSchema>;
+export type BenchCheckTestUpdate = z.input<typeof BenchCheckTestUpdateSchema>;
+export type BenchCheckRun = z.output<typeof BenchCheckRunSchema>;
+export type BenchCheckModelTally = z.infer<typeof BenchCheckModelTallySchema>;
+export type BenchCheckTestSummary = z.infer<typeof BenchCheckTestSummarySchema>;
+export type BenchCheckTestListResponse = z.infer<typeof BenchCheckTestListResponseSchema>;
+export type BenchCheckTestDetail = z.output<typeof BenchCheckTestDetailSchema>;

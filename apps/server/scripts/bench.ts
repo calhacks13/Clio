@@ -1,30 +1,44 @@
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import type { BenchRun, BenchScenarioSummary } from '@clio/protocol';
-import { loadConfig } from '../src/config';
+import type {
+  BenchCheckExpect,
+  BenchCheckRun,
+  BenchCheckTestSummary,
+  BenchRun,
+  BenchScenarioSummary,
+} from '@clio/protocol';
+import { type Config, loadConfig } from '../src/config';
 import { describeError } from '../src/log';
 import { benchPlan, createBenchModels, judgeRun, scenarioPlanRequest } from '../src/services/bench';
+import { expectLabel, runCheckTest } from '../src/services/bench-checks';
 import { createGeminiClient, isGeminiConfigured } from '../src/services/gemini';
+import { BenchCheckStore } from '../src/storage/bench-check-store';
 import { BenchStore } from '../src/storage/bench-store';
 import { ProcedureStore } from '../src/storage/procedure-store';
 
 // `pnpm bench`: replays the planner bench's saved scenarios (docs/planner-bench.md) without the
-// page, e.g. after changing the planner prompt. Every run and judgement is saved with its
-// scenario, so the page shows them too. No server needed; it reads .env like the server does.
+// page, e.g. after changing the planner prompt, and with --checks its watcher tests, after
+// changing the step check. Every run is saved with its scenario or test, so the page shows them
+// too. No server needed; it reads .env like the server does.
 
 const USAGE = `Usage: pnpm bench [scenario-id ...] [options]
+       pnpm bench --checks [test-id ...] [--model <name> ...] [--repeat <n>]
 
 Runs saved planner bench scenarios (data/bench/scenarios) and judges each plan against the
-scenario's expectations. With no ids, runs them all.
+scenario's expectations. With --checks, runs the saved watcher tests (data/bench/checks) instead:
+the step watcher's question on each saved look, graded against the answer it should give. With no
+ids, runs them all.
 
 Options:
-  --model <name>        Plan with this model; repeat to compare several (default: the planner model)
+  --model <name>        Plan (or check) with this model; repeat to compare several
+                        (default: the planner model)
   --tag <tag>           Only scenarios with this tag; repeat for any of several
-  --repeat <n>          Run each scenario n times per model, to see how steady the answers are
+  --repeat <n>          Run each scenario or test n times per model, to see how steady it is
   --judge-model <name>  Judge with this model (default: GEMINI_JUDGE_MODEL)
   --no-judge            Plan only
   --slow                Allow 2 minutes per plan instead of the headset's 40 s
-  --list                List the scenarios and exit
+  --checks              Run the watcher tests instead of the scenarios
+  --list                List the scenarios (or watcher tests) and exit
   -h, --help            Show this help`;
 
 const SLOW_BUDGET_MS = 120_000;
@@ -47,6 +61,7 @@ async function main(): Promise<void> {
       'judge-model': { type: 'string' },
       'no-judge': { type: 'boolean' },
       slow: { type: 'boolean' },
+      checks: { type: 'boolean' },
       list: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -55,6 +70,13 @@ async function main(): Promise<void> {
 
   const config = loadConfig();
   const benchDir = join(config.dataDir, 'bench');
+  if (values.checks) {
+    return runChecks(config, benchDir, positionals, {
+      models: values.model ?? [],
+      repeat: values.repeat,
+      list: values.list ?? false,
+    });
+  }
   const store = new BenchStore(benchDir);
   const all = await store.list();
   const tags = values.tag ?? [];
@@ -150,6 +172,128 @@ function listScenarios(scenarios: BenchScenarioSummary[]): void {
   for (const s of scenarios) {
     const tags = s.tags.length ? ` [${s.tags.join(', ')}]` : '';
     console.log(`${s.id}${tags}\n  ${s.goal}\n  ${s.expectCount} expectations, ${s.runCount} runs`);
+  }
+}
+
+interface CheckTally {
+  runs: number;
+  passed: number;
+  failed: number;
+  byExpect: Record<BenchCheckExpect, { runs: number; passed: number }>;
+  times: number[];
+}
+
+const EXPECTS: readonly BenchCheckExpect[] = ['done', 'not_done', 'wrong'];
+
+/** `pnpm bench --checks`: every watcher test with every model, then a pass rate per model. */
+async function runChecks(
+  config: Config,
+  benchDir: string,
+  ids: string[],
+  options: { models: string[]; repeat: string | undefined; list: boolean },
+): Promise<void> {
+  const store = new BenchCheckStore(benchDir);
+  const all = await store.list();
+  const tests = all.filter((t) => ids.length === 0 || ids.includes(t.id));
+  const unknown = ids.filter((id) => !all.some((t) => t.id === id));
+  if (unknown.length)
+    throw new Error(`No watcher test ${unknown.map((id) => `"${id}"`).join(', ')}`);
+  if (options.list) return listChecks(tests);
+  if (!tests.length) {
+    return console.log(
+      'No watcher tests to run. Save some from the live watch log on the bench page first.',
+    );
+  }
+  if (!isGeminiConfigured(config.geminiApiKey)) throw new Error('Set GEMINI_API_KEY in .env');
+
+  const models = createBenchModels(createGeminiClient(config.geminiApiKey), config);
+  const checkModels = options.models.length ? options.models : [config.plannerModel];
+  const repeat = Math.max(1, Number(options.repeat ?? 1) || 1);
+  const now = () => new Date();
+  const total = tests.length * checkModels.length * repeat;
+  console.log(
+    `Watcher tests: ${tests.length} test${tests.length === 1 ? '' : 's'} × ` +
+      `${checkModels.length} model${checkModels.length === 1 ? '' : 's'} × ${repeat} = ` +
+      `${total} look${total === 1 ? '' : 's'}\n`,
+  );
+  const tallies = new Map<string, CheckTally>(
+    checkModels.map((m) => [
+      m,
+      {
+        runs: 0,
+        passed: 0,
+        failed: 0,
+        byExpect: {
+          done: { runs: 0, passed: 0 },
+          not_done: { runs: 0, passed: 0 },
+          wrong: { runs: 0, passed: 0 },
+        },
+        times: [],
+      },
+    ]),
+  );
+  const width = Math.min(40, Math.max(...tests.map((t) => t.id.length)));
+
+  for (const summary of tests) {
+    const test = await store.getTest(summary.id);
+    if (!test) continue;
+    const frames = await store.readFrames(test);
+    for (const model of checkModels) {
+      for (let i = 0; i < repeat; i++) {
+        const tally = tallies.get(model) as CheckTally;
+        const run = await runCheckTest({ planner: models.planner(model), now }, test, frames);
+        await store.addRun(test.id, run);
+        tally.runs++;
+        tally.times.push(run.latencyMs);
+        tally.byExpect[run.expect].runs++;
+        if (run.passed) {
+          tally.passed++;
+          tally.byExpect[run.expect].passed++;
+        }
+        if (!run.result.ok) tally.failed++;
+        console.log(
+          `  ${test.id.slice(0, width).padEnd(width)}  ${model.padEnd(28)} ` +
+            `${seconds(run.latencyMs).padStart(7)}  expects ${expectLabel(run.expect).padEnd(8)}  ` +
+            `${checkAnswer(run)}  ${run.passed ? '✓' : '✗'}`,
+        );
+      }
+    }
+  }
+
+  console.log(
+    '\nModel                         looks  passed   rate     done  not done  wrong  median time',
+  );
+  for (const [model, t] of tallies) {
+    const rate = t.runs ? `${Math.round((100 * t.passed) / t.runs)}%` : '-';
+    const by = EXPECTS.map((e) => {
+      const x = t.byExpect[e];
+      return x.runs ? `${x.passed}/${x.runs}` : '-';
+    });
+    console.log(
+      `${model.padEnd(28)}  ${String(t.runs).padStart(5)}  ${String(t.passed).padStart(6)}  ` +
+        `${rate.padStart(5)}  ${(by[0] ?? '').padStart(7)}  ${(by[1] ?? '').padStart(8)}  ` +
+        `${(by[2] ?? '').padStart(5)}  ${seconds(median(t.times)).padStart(11)}` +
+        `${t.failed ? `  (${t.failed} failed calls)` : ''}`,
+    );
+  }
+  console.log('\nRuns are saved with their tests; open bench.html to see the frames.');
+}
+
+function checkAnswer(run: BenchCheckRun): string {
+  if (!run.result.ok) return `FAILED ${run.result.code}: ${run.result.message}`;
+  const { verdict, observation, wrong } = run.result.answer;
+  const said = verdict === 'not_done' ? 'not done' : verdict;
+  return `said ${said}${wrong ? `, wrong: ${wrong}` : ''} “${observation}”`;
+}
+
+function listChecks(tests: BenchCheckTestSummary[]): void {
+  if (!tests.length) console.log('No watcher tests.');
+  for (const t of tests) {
+    const tallies = t.models.map((m) => `${m.model} ${m.passed}/${m.runs}`).join(', ');
+    console.log(
+      `${t.id}  (expects ${expectLabel(t.expect)})\n  ${t.instruction}\n  ` +
+        `${t.runCount} runs${tallies ? `: ${tallies}` : ''}`,
+    );
   }
 }
 

@@ -284,6 +284,49 @@ label.check input {
   display: none;
 }
 
+.overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.overlay:empty {
+  display: none;
+}
+
+.sightings {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.sighting rect {
+  fill: color-mix(in srgb, var(--accent) 12%, transparent);
+  stroke: var(--accent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.sighting circle {
+  fill: var(--warn);
+  stroke: #000;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.sighting text {
+  fill: #fff;
+  stroke: #000;
+  stroke-width: 4;
+  paint-order: stroke;
+  font-weight: 650;
+  font-family: system-ui, sans-serif;
+}
+
+.sightings-row[hidden] {
+  display: none;
+}
+
 .scene-badge {
   position: absolute;
   top: 0.5rem;
@@ -413,6 +456,20 @@ label.check input {
 
 .chip.failed strong {
   color: var(--bad);
+}
+
+.chip-pair {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 0.25rem;
+  padding: 0.15rem;
+  border: 1px dashed var(--line);
+  border-radius: 0.5rem;
+}
+
+.pair-arrow {
+  align-self: center;
+  color: var(--muted);
 }
 
 .chip.pending {
@@ -651,8 +708,33 @@ label.check input {
   background: var(--bg);
 }
 
-.step.kept {
+.step.kept,
+.step.stage1 {
   opacity: 0.6;
+}
+
+.step.outline {
+  border-style: dashed;
+  background: transparent;
+}
+
+.badge.mark-outline {
+  color: var(--warn);
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+}
+
+.badge.mark-refined {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.outline-note {
+  border-left-color: var(--warn);
+}
+
+.stage-line .link {
+  font-size: inherit;
 }
 
 .step-head {
@@ -876,6 +958,84 @@ label.check input {
   padding: 1rem 0.3rem;
 }
 
+/* Watcher tests, under the scenarios */
+
+.tests-head {
+  margin-top: 1.2rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--line);
+}
+
+.tag.expect-done {
+  color: var(--ok);
+}
+
+.tag.expect-not_done {
+  color: var(--warn);
+}
+
+.tag.expect-wrong {
+  color: var(--bad);
+}
+
+.check-test.open {
+  border: 1px solid var(--accent);
+  border-radius: 0.5rem;
+}
+
+.check-test.open > .scenario {
+  border: none;
+}
+
+.check-test-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem;
+}
+
+.check-test-detail .small {
+  margin: 0;
+}
+
+.check-test-detail label.inline {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  color: var(--muted);
+}
+
+.check-test-detail select {
+  width: auto;
+}
+
+.check-runs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85em;
+}
+
+.check-runs li {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.check-runs .run-mark {
+  font-weight: 700;
+}
+
+.check-runs li.pass .run-mark {
+  color: var(--ok);
+}
+
+.check-runs li.fail .run-mark {
+  color: var(--bad);
+}
+
 .toast {
   position: fixed;
   bottom: 1rem;
@@ -1007,6 +1167,14 @@ p.watch-start {
   font-weight: 700;
 }
 
+.watch-progress .focus button[style] {
+  background: linear-gradient(
+    to right,
+    var(--accent) var(--along),
+    color-mix(in srgb, var(--accent) 40%, var(--panel-2)) var(--along)
+  );
+}
+
 .watch-body {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
@@ -1041,10 +1209,86 @@ p.watch-start {
   padding: 0.5rem;
 }
 
-.watch-last img {
-  width: 9rem;
+.watch-last.wrong {
+  outline: 2px solid var(--bad);
+}
+
+.watch-wrong {
+  color: var(--bad);
+  font-weight: 700;
+  font-size: 1.05rem;
+  background: color-mix(in srgb, var(--bad) 14%, transparent);
+  border-left: 3px solid var(--bad);
   border-radius: 0.3rem;
-  flex: none;
+  padding: 0.3rem 0.5rem;
+}
+
+.step-meter {
+  height: 0.5rem;
+  border-radius: 0.25rem;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  overflow: hidden;
+  margin-top: 0.4rem;
+}
+
+.step-meter span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s ease-out;
+}
+
+/* A frame a look judged, with the point that decided it */
+
+.look-frame {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+
+.look-frame img {
+  width: 100%;
+  border-radius: 0.3rem;
+}
+
+.look-frame.thumb {
+  width: 4rem;
+}
+
+.evidence {
+  position: absolute;
+  width: 0.9rem;
+  height: 0.9rem;
+  margin: -0.45rem 0 0 -0.45rem;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  background: color-mix(in srgb, var(--warn) 80%, transparent);
+  box-shadow: 0 0 0 2px rgb(0 0 0 / 0.6);
+  pointer-events: none;
+}
+
+.look-frame.thumb .evidence {
+  width: 0.5rem;
+  height: 0.5rem;
+  margin: -0.25rem 0 0 -0.25rem;
+  border-width: 1px;
+}
+
+.evidence-label {
+  position: absolute;
+  transform: translate(0.7rem, -50%);
+  line-height: 1.3;
+  font-size: 0.78em;
+  white-space: nowrap;
+  background: rgb(0 0 0 / 0.7);
+  padding: 0.05rem 0.35rem;
+  border-radius: 0.3rem;
+  pointer-events: none;
+}
+
+.evidence-label.left {
+  transform: translate(calc(-100% - 0.7rem), -50%);
 }
 
 .watch .watch-last p {
@@ -1095,15 +1339,71 @@ button.ok {
 
 .watch-log li {
   display: grid;
-  grid-template-columns: 4rem 3rem 3.5rem 1fr auto;
+  grid-template-columns: 4rem 3rem 3.5rem 1fr auto auto;
   gap: 0.5rem;
   align-items: center;
   font-size: 0.88em;
 }
 
-.watch-log img {
-  width: 4rem;
-  border-radius: 0.2rem;
+.watch-log li.wrong {
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  border-radius: 0.3rem;
+}
+
+.verdict.wrong {
+  color: #04121a;
+  background: var(--bad);
+}
+
+/* Saving a look as a watcher test */
+
+.save-test {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.7rem;
+}
+
+.save-test h3 {
+  font-size: 1rem;
+}
+
+.save-test .small {
+  margin: 0;
+}
+
+.save-test label:not(.check) {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.save-test-frames {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.save-test-frames figure {
+  margin: 0;
+  width: 14rem;
+  max-width: 100%;
+}
+
+.save-test-frames img {
+  width: 100%;
+  border-radius: 0.3rem;
+}
+
+.save-test-frames figcaption {
+  color: var(--muted);
+  font-size: 0.8em;
+  margin-top: 0.2rem;
+}
+
+.expect-row .label {
+  color: var(--muted);
 }
 
 .watch-durations {
@@ -1130,4 +1430,19 @@ button.ok {
   color: #04121a;
   background: var(--accent);
   border-color: var(--accent);
+}
+
+/* Placed last: more specific versions of rules above */
+
+.watch-last .look-frame {
+  width: 14rem;
+  flex: none;
+}
+
+.check-test-detail .save-test-frames figure {
+  width: calc(50% - 0.3rem);
+}
+
+.step.outline .instruction {
+  color: var(--muted);
 }

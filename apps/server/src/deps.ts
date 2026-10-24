@@ -3,6 +3,7 @@ import type { BenchModels } from './services/bench';
 import type { Planner } from './services/planner';
 import type { TokenMinter } from './services/token-minter';
 import type { VisionLocator } from './services/vision';
+import type { BenchCheckStore } from './storage/bench-check-store';
 import type { BenchStore } from './storage/bench-store';
 import type { ClipStore } from './storage/clip-store';
 import type { EpisodeStore } from './storage/episode-store';
@@ -25,6 +26,8 @@ export interface BodyLimits {
 /** The planner bench (docs/planner-bench.md): saved scenarios and planning with any model. */
 export interface BenchDeps {
   store: BenchStore;
+  /** Watcher tests: saved looks of the step watcher and the answers they should get. */
+  checks: BenchCheckStore;
   /** The bench's plans, apart from the headset's: they would crowd its lesson list. */
   plans: ProcedureStore;
   /** null when GEMINI_API_KEY is unset: runs, step checks and judging answer 503. */

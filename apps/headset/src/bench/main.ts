@@ -1,5 +1,8 @@
 import './bench.css';
 import type {
+  BenchCheckExpect,
+  BenchCheckTestDetail,
+  BenchCheckTestSummary,
   BenchModelsResponse,
   BenchPlanRequest,
   BenchRevise,
@@ -7,20 +10,33 @@ import type {
   BenchScenario,
   BenchScenarioSummary,
   ImagePayload,
+  PlanStage,
+  Procedure,
 } from '@clio/protocol';
 import { BenchClient } from './bench-client';
-import { type WatchLook, WatchSession } from './live-watch';
+import { renderCheckTestDetail, renderCheckTestItem } from './check-view';
+import {
+  type LookAsked,
+  nextLookDelay,
+  stepCheckHints,
+  type WatchLook,
+  WatchSession,
+} from './live-watch';
 import {
   esc,
-  renderPendingChip,
+  renderChipList,
   renderRun,
-  renderRunChip,
   renderScenarioItem,
+  renderSightings,
+  type StageView,
   type StepCheckState,
   shortModel,
 } from './plan-view';
+import { firstOf, pairStages, restRevise } from './stages';
 import {
-  HEADSET_INTERVAL_MS,
+  AS_FAST_AS_IT_ANSWERS,
+  expectText,
+  renderSaveTest,
   renderWatchControls,
   renderWatchLog,
   renderWatchStatus,
@@ -30,11 +46,13 @@ import {
 import { Webcam } from './webcam';
 
 // The planner bench (bench.html, docs/planner-bench.md). Point the laptop camera at a scene,
-// give the planner a goal, and read the plan it writes, from one model or several at once. A
-// scene worth keeping becomes a scenario: its frames, its request and what a correct plan must
-// do. Saved scenarios can be re-run with any model, graded by hand or by a judge model, and run
-// all together after a prompt or model change. Watching live follows a plan while you do it in
-// front of the camera, asking the step watcher's question about each step in turn.
+// give the planner a goal, and read the plan it writes, from one model or several at once, in
+// one go or in two stages (step 1 first, the rest refined after). A scene worth keeping becomes
+// a scenario: its frames, its request and what a correct plan must do. Saved scenarios can be
+// re-run with any model, graded by hand or by a judge model, and run all together after a prompt
+// or model change. Watching live follows a plan while you do it in front of the camera, asking
+// the step watcher's question about the focused step over and over; any of its looks can be kept
+// as a watcher test, with the answer it should have given, and replayed on any model.
 
 type Scene =
   | { kind: 'live' }
@@ -45,6 +63,9 @@ interface Pending {
   key: number;
   model: string;
   started: number;
+  stage?: PlanStage;
+  /** For stage rest: the run whose outline it refines. */
+  after?: string;
 }
 
 interface Batch {
@@ -64,9 +85,12 @@ interface Prefs {
   judgeModel: string;
   camera: string;
   frames: number;
-  watchIntervalMs: number;
+  twoStage: boolean;
+  sightings: boolean;
+  /** 0: look again as soon as the last answer is in. */
+  watchEveryMs: number;
   watchAuto: boolean;
-  watchNeeded: number;
+  watchInARow: number;
 }
 
 /** A plan followed live: its progress plus how and how often to look. */
@@ -74,6 +98,8 @@ interface Watch {
   runId: string;
   title: string;
   goal: string;
+  /** The plan being followed, for what its steps' objects look like. */
+  procedure: Procedure;
   session: WatchSession;
   model: string;
   intervalMs: number;
@@ -82,8 +108,19 @@ interface Watch {
   paused: boolean;
   looking: boolean;
   suggest: boolean;
+  /** The frame from when the focused step gained focus (session.focusTurn), sent as `before`. */
+  before: { turn: number; image: ImagePayload; url: string } | null;
+  /** The look whose save-as-test form is open. */
+  saving: WatchLook | null;
   timer: ReturnType<typeof setTimeout> | null;
   clock: ReturnType<typeof setInterval>;
+}
+
+interface TestBatch {
+  done: number;
+  total: number;
+  passed: number;
+  stop: boolean;
 }
 
 const api = new BenchClient();
@@ -106,6 +143,11 @@ const state = {
   library: [] as BenchScenarioSummary[],
   batch: null as Batch | null,
   watch: null as Watch | null,
+  /** Watcher tests, the one shown open and the models each is running with now. */
+  tests: [] as BenchCheckTestSummary[],
+  openTest: null as BenchCheckTestDetail | null,
+  testsRunning: new Map<string, string[]>(),
+  testBatch: null as TestBatch | null,
 };
 let webcam: Webcam | null = null;
 let pendingKey = 0;
@@ -118,10 +160,17 @@ async function init(el: HTMLElement): Promise<void> {
   input('#goal').value = prefs.goal;
   textarea('#context').value = prefs.context;
   select('#frames').value = String(prefs.frames);
+  input('#two-stage').checked = prefs.twoStage;
+  input('#sightings-on').checked = prefs.sightings;
   renderScene();
   renderChips();
   renderRunView();
-  await Promise.all([loadModels(), openCamera(prefs.camera || undefined), refreshLibrary()]);
+  await Promise.all([
+    loadModels(),
+    openCamera(prefs.camera || undefined),
+    refreshLibrary(),
+    refreshTests(),
+  ]);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -139,10 +188,14 @@ function layout(): string {
         <div class="viewer">
           <video id="video" autoplay muted playsinline></video>
           <img id="frame" alt="Captured frame" hidden>
+          <div id="overlay" class="overlay"></div>
           <span id="scene-badge" class="scene-badge">Live</span>
           <p id="camera-error" class="camera-error" hidden></p>
         </div>
         <div id="thumbs" class="thumbs"></div>
+        <label id="sightings-row" class="check sightings-row" hidden title="The planner's sightings: where it saw each object it declared, in these frames">
+          <input id="sightings-on" type="checkbox"> Show where the plan saw its objects <span id="sightings-count" class="muted"></span>
+        </label>
         <div class="row">
           <select id="camera" title="Camera"></select>
           <select id="frames" title="Frames per capture">
@@ -165,6 +218,9 @@ function layout(): string {
             <summary id="models-summary">Models</summary>
             <div id="model-list" class="model-list"></div>
           </details>
+          <label class="check" title="Stage 1 writes step 1 in full and the rest as an outline, so a lesson can start quickly; then the rest is refined in full while the learner works on step 1">
+            <input id="two-stage" type="checkbox"> Plan in two stages: step 1 first, the rest refined after
+          </label>
           <label class="check" title="The headset gives the planner 40 s, retry included">
             <input id="slow" type="checkbox"> Give slow models 2 minutes, not the headset's 40 s
           </label>
@@ -200,6 +256,15 @@ function layout(): string {
           <p id="batch" class="batch" hidden></p>
         </div>
         <ul id="library" class="library"></ul>
+        <div class="library-head tests-head">
+          <h2>Watcher tests <span id="tests-count" class="muted"></span></h2>
+          <p class="hint">Looks kept from <strong>Every look</strong> while watching live, each with the answer it should have given. They run with the ticked models.</p>
+          <div class="row">
+            <button id="tests-run-all" type="button">Run all tests</button>
+          </div>
+          <p id="tests-batch" class="batch" hidden></p>
+        </div>
+        <ul id="tests" class="library"></ul>
       </aside>
     </main>
     <div id="toast" class="toast" hidden></div>`;
@@ -223,11 +288,18 @@ function bindEvents(): void {
   button('#live').addEventListener('click', () => backToLive());
   select('#camera').addEventListener('change', () => void openCamera(select('#camera').value));
   select('#frames').addEventListener('change', () => savePrefs());
+  input('#two-stage').addEventListener('change', () => savePrefs());
+  input('#sightings-on').addEventListener('change', () => {
+    savePrefs();
+    renderOverlay();
+  });
+  $('#frame').addEventListener('load', () => renderOverlay());
   $('#model-list').addEventListener('change', () => {
     state.selected = [...document.querySelectorAll<HTMLInputElement>('#model-list input:checked')]
       .map((i) => i.value)
       .filter(Boolean);
     renderModels();
+    renderTests();
     savePrefs();
   });
   select('#judge-model').addEventListener('change', () => {
@@ -248,14 +320,17 @@ function bindEvents(): void {
   });
   $('#chips').addEventListener('click', (e) => {
     const chip = (e.target as HTMLElement).closest<HTMLElement>('[data-action="select-run"]');
-    if (!chip?.dataset.run) return;
-    state.runId = chip.dataset.run;
-    renderChips();
-    renderRunView();
+    if (chip?.dataset.run) selectRun(chip.dataset.run);
   });
   $('#run').addEventListener('click', (e) => onRunClick(e));
   $('#watch').addEventListener('click', (e) => onWatchClick(e));
   $('#watch').addEventListener('change', (e) => onWatchChange(e));
+  $('#watch').addEventListener('submit', (e) => {
+    const form = (e.target as HTMLElement).closest<HTMLFormElement>('form.save-test');
+    if (!form) return;
+    e.preventDefault();
+    void saveLookAsTest(form);
+  });
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && state.watch && !state.watch.paused) scheduleLook(500);
   });
@@ -277,6 +352,20 @@ function bindEvents(): void {
   });
   input('#lib-filter').addEventListener('input', () => renderLibrary());
   button('#run-all').addEventListener('click', () => void runAll());
+  $('#tests').addEventListener('click', (e) => onTestsClick(e));
+  $('#tests').addEventListener('change', (e) => {
+    const target = e.target as HTMLSelectElement;
+    if (target.dataset.action === 'test-expect' && target.dataset.id) {
+      void setTestExpect(target.dataset.id, target.value as BenchCheckExpect);
+    }
+  });
+  button('#tests-run-all').addEventListener('click', () => void runAllTests());
+}
+
+function selectRun(runId: string): void {
+  state.runId = runId;
+  renderChips();
+  renderRunView();
 }
 
 function onRunClick(e: Event): void {
@@ -284,6 +373,9 @@ function onRunClick(e: Event): void {
   if (!target) return;
   const step = Number(target.dataset.step);
   switch (target.dataset.action) {
+    case 'select-run':
+      if (target.dataset.run) selectRun(target.dataset.run);
+      break;
     case 'grade':
       void grade(target.dataset.grade as 'pass' | 'partial' | 'fail');
       break;
@@ -338,6 +430,7 @@ async function loadModels(): Promise<void> {
   select('#judge-model').value = state.judgeModel;
   renderModels();
   renderRunView();
+  renderTests();
 }
 
 function renderModels(): void {
@@ -540,6 +633,28 @@ function renderScene(): void {
   button('#save-btn').textContent = scene.kind === 'scenario' ? 'Save changes' : 'Save scenario';
   button('#save-btn').disabled = scene.kind === 'live';
   button('#delete').hidden = scene.kind !== 'scenario';
+  renderOverlay();
+}
+
+/** Draws where the selected run's planner saw its objects, over the frame shown. */
+function renderOverlay(): void {
+  const overlay = document.querySelector<HTMLElement>('#overlay');
+  const frame = document.querySelector<HTMLImageElement>('#frame');
+  if (!overlay || !frame) return;
+  const run = selectedRun();
+  const result = run?.result.ok ? run.result : null;
+  const sightings = result?.sightings ?? [];
+  const row = $('#sightings-row');
+  row.hidden = sightings.length === 0 || frame.hidden;
+  const here = sightings.filter((s) => s.view === state.shown).length;
+  $('#sightings-count').textContent = `(${here} in this frame, ${sightings.length} in all)`;
+  const show = result && !row.hidden && input('#sightings-on').checked && frame.naturalWidth > 0;
+  overlay.innerHTML = show
+    ? renderSightings(sightings, result.procedure.objects, state.shown, {
+        width: frame.naturalWidth,
+        height: frame.naturalHeight,
+      })
+    : '';
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -575,11 +690,28 @@ async function plan(): Promise<void> {
       : {}),
   };
   const budget = budgetMs();
+  const ask = (model: string, stage?: PlanStage, rest?: BenchRevise) => () =>
+    api.benchPlan({
+      ...body,
+      ...(stage ? { stage } : {}),
+      ...(rest
+        ? {
+            revise: {
+              planId: rest.base.id,
+              fromStepIndex: rest.fromStepIndex,
+              reason: rest.reason,
+              base: rest.base,
+            },
+          }
+        : {}),
+      model,
+      ...(budget === undefined ? {} : { budgetMs: budget }),
+    });
   await Promise.all(
     models.map((model) =>
-      track(model, () =>
-        api.benchPlan({ ...body, model, ...(budget === undefined ? {} : { budgetMs: budget }) }),
-      ),
+      twoStages()
+        ? planInStages(model, (stage, rest) => ask(model, stage, rest)())
+        : track(model, ask(model)),
     ),
   );
 }
@@ -589,28 +721,92 @@ async function runScenario(scenario: BenchScenario, models: string[]): Promise<v
   if (!saved) return;
   const budget = budgetMs();
   await Promise.all(
-    models.map((model) => track(model, () => api.runScenario(saved.id, model, budget))),
+    models.map((model) =>
+      twoStages()
+        ? planInStages(model, (stage, revise) =>
+            api.runScenario(saved.id, model, budget, { stage, ...(revise ? { revise } : {}) }),
+          )
+        : track(model, () => api.runScenario(saved.id, model, budget)),
+    ),
   );
   await refreshLibrary();
 }
 
-/** Shows a run in flight, then adds its answer to the scene it was asked for. */
-async function track(model: string, ask: () => Promise<BenchRun>): Promise<void> {
+function twoStages(): boolean {
+  return input('#two-stage').checked;
+}
+
+/**
+ * A plan in two stages, as the headset would make it: stage 1 writes step 1 in full and the rest
+ * as an outline; as soon as it is in, the rest stage rewrites the outline from the same frames.
+ */
+async function planInStages(
+  model: string,
+  ask: (stage: PlanStage, rest?: BenchRevise) => Promise<BenchRun>,
+): Promise<void> {
   const sceneKey = state.sceneKey;
-  const pending: Pending = { key: ++pendingKey, model, started: performance.now() };
+  const first = await track(model, () => ask('first'), { stage: 'first' });
+  if (!first || state.sceneKey !== sceneKey) return;
+  const rest = restRevise(first);
+  if (!rest) {
+    if (first.result.ok && first.result.outlineFrom === undefined) {
+      toast(
+        `${shortModel(model)} answered stage 1 with a whole plan: there is no outline to refine.`,
+      );
+    }
+    return;
+  }
+  const refined = await track(model, () => ask('rest', rest), { stage: 'rest', after: first.id });
+  if (refined) onRefined(first, refined);
+}
+
+/**
+ * The rest of a two-stage plan came in: show it instead of stage 1, and if stage 1 is being
+ * watched live, swap the refined steps in for the ones not done yet without losing progress.
+ */
+function onRefined(first: BenchRun, rest: BenchRun): void {
+  const from = first.result.ok ? first.result.outlineFrom : undefined;
+  if (rest.result.ok && from !== undefined) {
+    if (state.runId === first.id) state.runId = rest.id;
+    const watch = state.watch;
+    if (watch?.runId === first.id) {
+      watch.session.refine(rest.result.procedure.steps, from, Date.now());
+      watch.runId = rest.id;
+      watch.procedure = rest.result.procedure;
+      watch.title = rest.result.procedure.title;
+      watch.suggest = false;
+      void keepBefore(watch);
+      renderWatch(true);
+      toast('The rest of the plan is refined: the steps not done yet are the refined ones now.');
+    }
+  }
+  renderChips();
+  renderRunView();
+}
+
+/** Shows a run in flight, then adds its answer to the scene it was asked for. */
+async function track(
+  model: string,
+  ask: () => Promise<BenchRun>,
+  options: { stage?: PlanStage; after?: string } = {},
+): Promise<BenchRun | null> {
+  const sceneKey = state.sceneKey;
+  const pending: Pending = { key: ++pendingKey, model, started: performance.now(), ...options };
   state.pending.push(pending);
   startTicker();
   renderChips();
-  if (!selectedRun()) renderRunView();
+  if (!selectedRun() || (options.after && options.after === state.runId)) renderRunView();
   try {
     const run = await ask();
-    if (state.sceneKey !== sceneKey) return;
+    if (state.sceneKey !== sceneKey) return null;
     state.runs.unshift(run);
     if (!state.runId || !state.runs.some((r) => r.id === state.runId)) state.runId = run.id;
     else if (state.pending.length === 1 && state.runs.length === 1) state.runId = run.id;
     renderRunView();
+    return run;
   } catch (err) {
     if (state.sceneKey === sceneKey) toast(`${model}: ${message(err)}`);
+    return null;
   } finally {
     state.pending = state.pending.filter((p) => p.key !== pending.key);
     renderChips();
@@ -659,13 +855,36 @@ function savedScenario(): BenchScenario | null {
 function renderChips(): void {
   const now = performance.now();
   const goal = input('#goal')?.value.trim();
-  const chips = [
-    ...state.pending.map((p) => renderPendingChip(p.model, now - p.started)),
-    ...state.runs.map((r) =>
-      renderRunChip(r, r.id === state.runId, goal !== undefined && r.request.goal !== goal),
-    ),
-  ];
-  $('#chips').innerHTML = chips.join('');
+  const pending = state.pending.map((p) => ({
+    model: p.model,
+    elapsedMs: now - p.started,
+    ...(p.stage ? { stage: p.stage } : {}),
+    ...(p.after ? { after: p.after } : {}),
+  }));
+  $('#chips').innerHTML = renderChipList(state.runs, pending, {
+    selected: state.runId,
+    ...(goal === undefined ? {} : { goal }),
+  });
+}
+
+/** The two stages a run belongs to, when it is one of a two-stage plan. */
+function stageViewOf(run: BenchRun): StageView | undefined {
+  const pairs = pairStages(state.runs);
+  if (run.request.stage === 'first') {
+    const rest = pairs.get(run.id);
+    const refining = state.pending.some((p) => p.after === run.id);
+    return { first: run, ...(rest ? { rest } : {}), refining };
+  }
+  if (run.request.stage !== 'rest') return undefined;
+  const first = state.runs.find((r) => r.id === firstOf(pairs, run));
+  return first ? { first, rest: run, refining: false } : undefined;
+}
+
+/** Steps a plan starts with done when watched: those kept from before a re-plan. */
+function doneBeforeOf(run: BenchRun): number {
+  if (run.request.stage !== 'rest') return run.request.revise?.fromStepIndex ?? 0;
+  const first = state.runs.find((r) => r.id === firstOf(pairStages(state.runs), run));
+  return first?.request.revise?.fromStepIndex ?? 0;
 }
 
 function renderRunView(): void {
@@ -680,9 +899,11 @@ function renderRunView(): void {
           <p>Ideas: look-alike distractors, a task that is already half done, something missing or broken, a hazard in view, a goal that doesn't fit the scene. Then re-plan from a step after changing the scene.</p>
           <p>Save the scenes worth keeping with what a correct plan must do. The judge grades runs against those expectations, and <strong>Run all shown</strong> replays every saved scene.</p>
         </div>`;
+    renderOverlay();
     return;
   }
   const scenario = savedScenario();
+  const stage = stageViewOf(run);
   view.innerHTML = renderRun(run, {
     saved: scenario !== null,
     judgeBlocked: judgeBlocked(run, scenario),
@@ -691,8 +912,10 @@ function renderRunView(): void {
     checks: state.checks.get(run.id) ?? new Map(),
     watching: state.watch?.runId === run.id,
     canWatch: webcam !== null && state.models !== null,
+    ...(stage ? { stage } : {}),
   });
   applyWatchBadges();
+  renderOverlay();
 }
 
 function judgeBlocked(run: BenchRun, scenario: BenchScenario | null): string | null {
@@ -776,6 +999,7 @@ async function checkStep(stepIndex: number): Promise<void> {
   try {
     const images = webcam ? await snapshots() : await sceneImages();
     if (!images) throw new Error('no frames');
+    const { objects, confusions } = stepCheckHints(run.result.procedure, stepIndex);
     const result = await api.benchCheck({
       goal: run.request.goal,
       step: {
@@ -784,6 +1008,8 @@ async function checkStep(stepIndex: number): Promise<void> {
         ...(step.doneWhen ? { doneWhen: step.doneWhen } : {}),
       },
       images,
+      ...(objects.length ? { objects } : {}),
+      ...(confusions.length ? { confusions } : {}),
       model: run.model,
     });
     checks.set(stepIndex, { pending: false, result });
@@ -813,18 +1039,22 @@ function startWatch(): void {
   }
   stopWatch();
   const now = Date.now();
+  const procedure = run.result.procedure;
   const watch: Watch = {
     runId: run.id,
-    title: run.result.procedure.title,
+    title: procedure.title,
     goal: run.request.goal,
-    session: new WatchSession(run.result.procedure.steps, now, run.request.revise?.fromStepIndex),
+    procedure,
+    session: new WatchSession(procedure.steps, now, doneBeforeOf(run)),
     model: run.model,
-    intervalMs: prefs.watchIntervalMs,
+    intervalMs: prefs.watchEveryMs,
     autoAdvance: prefs.watchAuto,
-    needed: prefs.watchNeeded,
+    needed: prefs.watchInARow,
     paused: false,
     looking: false,
     suggest: false,
+    before: null,
+    saving: null,
     timer: null,
     clock: setInterval(() => renderWatchStatusOnly(), 1000),
   };
@@ -834,7 +1064,9 @@ function startWatch(): void {
       <div id="watch-status"></div>
       <div id="watch-controls" class="watch-controls"></div>
       <details id="watch-log" class="watch-log"></details>
+      <div id="watch-save"></div>
     </section>`;
+  void keepBefore(watch);
   renderWatch(true);
   renderScene();
   renderRunView();
@@ -860,7 +1092,22 @@ function scheduleLook(delayMs: number): void {
   watch.timer = setTimeout(() => void look(watch), delayMs);
 }
 
-/** One look at the focused step; the next starts `intervalMs` after this one did. */
+/** Keeps a frame from the moment the focused step gained focus, to send with its looks. */
+async function keepBefore(watch: Watch): Promise<Watch['before']> {
+  const turn = watch.session.focusTurn;
+  if (watch.before?.turn === turn) return watch.before;
+  if (!webcam || watch.session.focus === null) return null;
+  const [image] = await webcam.snapshots(1).catch(() => []);
+  if (!image || state.watch !== watch || watch.session.focusTurn !== turn) return null;
+  watch.before = { turn, image, url: dataUrl(image) };
+  return watch.before;
+}
+
+/**
+ * One look at the focused step. It sends the frame from when the step gained focus, what the
+ * step's objects look like and its likely mix-ups. The next look starts a moment after the
+ * answer, or `intervalMs` after this one started.
+ */
 async function look(watch: Watch): Promise<void> {
   watch.timer = null;
   const { session } = watch;
@@ -872,6 +1119,15 @@ async function look(watch: Watch): Promise<void> {
   const started = performance.now();
   watch.looking = true;
   renderWatchStatusOnly();
+  const before = await keepBefore(watch);
+  const asked: LookAsked = {
+    step: {
+      id: step.id,
+      instruction: step.instruction,
+      ...(step.doneWhen ? { doneWhen: step.doneWhen } : {}),
+    },
+    ...stepCheckHints({ ...watch.procedure, steps: session.steps }, stepIndex),
+  };
   let entry: WatchLook;
   let image: ImagePayload | undefined;
   try {
@@ -879,12 +1135,11 @@ async function look(watch: Watch): Promise<void> {
     if (!image) throw new Error('no frame');
     const answer = await api.benchCheck({
       goal: watch.goal,
-      step: {
-        id: step.id,
-        instruction: step.instruction,
-        ...(step.doneWhen ? { doneWhen: step.doneWhen } : {}),
-      },
+      step: asked.step,
       images: [image],
+      ...(before ? { before: [before.image] } : {}),
+      ...(asked.objects.length ? { objects: asked.objects } : {}),
+      ...(asked.confusions.length ? { confusions: asked.confusions } : {}),
       model: watch.model,
     });
     entry = {
@@ -894,19 +1149,26 @@ async function look(watch: Watch): Promise<void> {
       observation: answer.observation,
       latencyMs: answer.latencyMs,
       model: answer.model,
+      ...(answer.progress === undefined ? {} : { progress: answer.progress }),
+      ...(answer.wrong?.trim() ? { wrong: answer.wrong.trim() } : {}),
+      ...(answer.evidence ? { evidence: answer.evidence } : {}),
     };
   } catch (err) {
     entry = { at: Date.now(), step: stepIndex, error: message(err), model: watch.model };
   }
-  if (image) entry.image = `data:${image.mimeType};base64,${image.data}`;
+  entry.asked = asked;
+  if (image) entry.image = dataUrl(image);
+  if (before) entry.before = before.url;
   watch.looking = false;
   if (state.watch !== watch) return;
   const outcome = session.record(entry, { autoAdvance: watch.autoAdvance, needed: watch.needed });
   watch.suggest = outcome.suggest;
+  if (outcome.advanced) void keepBefore(watch);
   renderWatch(outcome.advanced);
   if (outcome.advanced) flashWatch();
   if (!session.complete && !watch.paused && !watch.timer) {
-    scheduleLook(Math.max(250, watch.intervalMs - (performance.now() - started)));
+    const took = performance.now() - started;
+    scheduleLook(nextLookDelay(watch.intervalMs, took, entry.error !== undefined));
   }
 }
 
@@ -921,6 +1183,14 @@ function onWatchClick(e: Event): void {
   switch (action) {
     case 'stop':
       stopWatch();
+      return;
+    case 'save-test':
+      watch.saving = session.looks.find((l) => String(l.n) === target.dataset.look) ?? null;
+      renderSaveForm(true);
+      return;
+    case 'save-cancel':
+      watch.saving = null;
+      renderSaveForm(false);
       return;
     case 'pause':
       watch.paused = !watch.paused;
@@ -945,9 +1215,67 @@ function onWatchClick(e: Event): void {
   }
   if (['done', 'skip', 'back', 'focus'].includes(action)) {
     watch.suggest = false;
-    if (!watch.paused && !session.complete) scheduleLook(watch.intervalMs);
+    void keepBefore(watch);
+    if (!watch.paused && !session.complete) scheduleLook(nextLookDelay(watch.intervalMs, 0));
   }
   renderWatch(true);
+}
+
+/** The form that keeps a look as a watcher test, under the log. */
+function renderSaveForm(scroll: boolean): void {
+  const watch = state.watch;
+  const el = document.querySelector<HTMLElement>('#watch-save');
+  if (!el) return;
+  el.innerHTML = watch?.saving ? renderSaveTest(watch.saving, watch.goal) : '';
+  if (scroll && watch?.saving) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+/** Saves the look whose form is open as a watcher test, with the answer it should have given. */
+async function saveLookAsTest(form: HTMLFormElement): Promise<void> {
+  const watch = state.watch;
+  const look = watch?.saving;
+  if (!watch || !look?.asked || !look.image) return;
+  const data = new FormData(form);
+  const expect = data.get('expect')?.toString() as BenchCheckExpect | undefined;
+  const title = data.get('title')?.toString().trim() ?? '';
+  if (!expect || !title) return toast('Pick the answer it should have given, and give it a title.');
+  const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+  if (submit) submit.disabled = true;
+  const { step, objects, confusions } = look.asked;
+  const seen =
+    look.verdict && look.model
+      ? {
+          verdict: look.verdict,
+          observation: look.observation ?? '',
+          model: look.model,
+          latencyMs: look.latencyMs ?? 0,
+          ...(look.progress === undefined ? {} : { progress: look.progress }),
+          ...(look.wrong ? { wrong: look.wrong } : {}),
+          ...(look.evidence ? { evidence: look.evidence } : {}),
+        }
+      : undefined;
+  try {
+    const detail = await api.createCheckTest({
+      title,
+      expect,
+      goal: watch.goal,
+      step,
+      images: [payloadOf(look.image)],
+      ...(look.before ? { before: [payloadOf(look.before)] } : {}),
+      ...(objects.length ? { objects } : {}),
+      ...(confusions.length ? { confusions } : {}),
+      ...(seen ? { seen } : {}),
+    });
+    if (state.watch === watch && watch.saving === look) {
+      watch.saving = null;
+      renderSaveForm(false);
+    }
+    toast(`Saved the watcher test “${detail.test.title}”: it should say ${expectText(expect)}.`);
+    await refreshTests();
+  } catch (err) {
+    toast(`Could not save the watcher test: ${message(err)}`);
+    if (submit) submit.disabled = false;
+  }
 }
 
 function onWatchChange(e: Event): void {
@@ -955,10 +1283,12 @@ function onWatchChange(e: Event): void {
   const target = e.target as HTMLInputElement | HTMLSelectElement;
   if (!watch || !target.dataset.watch) return;
   switch (target.dataset.watch) {
-    case 'interval':
-      watch.intervalMs = Number(target.value) || HEADSET_INTERVAL_MS;
-      if (!watch.looking && !watch.paused) scheduleLook(watch.intervalMs);
+    case 'interval': {
+      const ms = Number(target.value);
+      watch.intervalMs = Number.isFinite(ms) && ms >= 0 ? ms : AS_FAST_AS_IT_ANSWERS;
+      if (!watch.looking && !watch.paused) scheduleLook(nextLookDelay(watch.intervalMs, 0));
       break;
+    }
     case 'model':
       watch.model = target.value;
       break;
@@ -995,6 +1325,7 @@ function renderWatch(withControls: boolean): void {
     const open = log.open;
     log.innerHTML = renderWatchLog(watch.session);
     log.open = open;
+    log.hidden = watch.session.looks.length === 0;
   }
   applyWatchBadges();
 }
@@ -1080,14 +1411,18 @@ async function save(): Promise<void> {
   const context = textarea('#context').value.trim();
   const title = input('#title').value.trim() || goal;
   const revise = state.revise;
-  // Only runs that asked what the scenario asks belong to it.
-  const runs = state.runs.filter(
+  // Only runs that asked what the scenario asks belong to it, and the rest stages that refined them.
+  const asked = state.runs.filter(
     (r) =>
       r.request.goal === goal &&
       (r.request.context ?? '') === context &&
+      r.request.stage !== 'rest' &&
       r.request.revise?.fromStepIndex === revise?.fromStepIndex &&
       r.request.revise?.reason === revise?.reason,
   );
+  const pairs = pairStages(state.runs);
+  const refined = asked.flatMap((r) => pairs.get(r.id) ?? []);
+  const runs = state.runs.filter((r) => asked.includes(r) || refined.includes(r));
   try {
     const detail = await api.createScenario({
       title: title.slice(0, 120),
@@ -1254,6 +1589,150 @@ function renderBatch(): void {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Watcher tests: looks kept from the live watch, run again with the ticked models
+
+async function refreshTests(): Promise<void> {
+  try {
+    state.tests = (await api.checkTests()).tests;
+  } catch {
+    state.tests = [];
+  }
+  renderTests();
+}
+
+function renderTests(): void {
+  const open = state.openTest;
+  $('#tests-count').textContent = `(${state.tests.length})`;
+  $('#tests').innerHTML = state.tests.length
+    ? state.tests
+        .map((t) =>
+          renderCheckTestItem(
+            t,
+            api.checkFrameUrl(t.id, t.thumb),
+            open?.test.id === t.id
+              ? renderCheckTestDetail(open, {
+                  frameUrl: (file) => api.checkFrameUrl(t.id, file),
+                  running: state.testsRunning.get(t.id) ?? [],
+                  models: state.selected,
+                })
+              : undefined,
+          ),
+        )
+        .join('')
+    : '<li class="muted empty-list">No watcher tests yet. Watch a plan live and press <strong>Save as test</strong> on a look in <strong>Every look</strong>.</li>';
+  button('#tests-run-all').disabled =
+    !state.testBatch && (!state.tests.length || !state.models || !state.selected.length);
+}
+
+function onTestsClick(e: Event): void {
+  const target = (e.target as HTMLElement).closest<HTMLElement>('[data-action]');
+  const id = target?.dataset.id;
+  if (!target || !id) return;
+  switch (target.dataset.action) {
+    case 'open-test':
+      void openTest(id);
+      break;
+    case 'run-test':
+      void runTest(id, state.selected);
+      break;
+    case 'delete-test':
+      void deleteTest(id);
+      break;
+  }
+}
+
+async function openTest(id: string): Promise<void> {
+  if (state.openTest?.test.id === id) {
+    state.openTest = null;
+    return renderTests();
+  }
+  try {
+    state.openTest = await api.checkTest(id);
+  } catch (err) {
+    toast(`Could not load the watcher test: ${message(err)}`);
+  }
+  renderTests();
+}
+
+/** Asks one watcher test with each model at once; returns how many passed. */
+async function runTest(id: string, models: string[]): Promise<number> {
+  if (!models.length) {
+    toast('Tick a model to run the test with.');
+    return 0;
+  }
+  state.testsRunning.set(id, models);
+  renderTests();
+  const passes = await Promise.all(
+    models.map(async (model) => {
+      try {
+        return (await api.runCheckTest(id, model)).passed;
+      } catch (err) {
+        toast(`Watcher test ${id} with ${model}: ${message(err)}`);
+        return false;
+      }
+    }),
+  );
+  state.testsRunning.delete(id);
+  if (state.openTest?.test.id === id) {
+    state.openTest = await api.checkTest(id).catch(() => state.openTest);
+  }
+  await refreshTests();
+  return passes.filter(Boolean).length;
+}
+
+/** Runs every watcher test with the ticked models, one test at a time. */
+async function runAllTests(): Promise<void> {
+  if (state.testBatch) {
+    state.testBatch.stop = true;
+    return;
+  }
+  const tests = state.tests.map((t) => t.id);
+  const models = [...state.selected];
+  if (!tests.length || !models.length) return;
+  const batch: TestBatch = { done: 0, total: tests.length * models.length, passed: 0, stop: false };
+  state.testBatch = batch;
+  button('#tests-run-all').textContent = 'Stop';
+  const el = $('#tests-batch');
+  el.hidden = false;
+  for (const id of tests) {
+    if (batch.stop) break;
+    el.textContent = `Running ${batch.done + 1} of ${batch.total}…`;
+    batch.passed += await runTest(id, models);
+    batch.done += models.length;
+  }
+  state.testBatch = null;
+  button('#tests-run-all').textContent = 'Run all tests';
+  el.textContent = `${batch.stop ? 'Stopped after' : 'Done:'} ${batch.passed} of ${batch.done} passed`;
+  renderTests();
+}
+
+async function setTestExpect(id: string, expect: BenchCheckExpect): Promise<void> {
+  try {
+    const test = await api.updateCheckTest(id, { expect });
+    if (state.openTest?.test.id === id) state.openTest = { ...state.openTest, test };
+    await refreshTests();
+  } catch (err) {
+    toast(`Could not change the test: ${message(err)}`);
+  }
+}
+
+async function deleteTest(id: string): Promise<void> {
+  const test = state.tests.find((t) => t.id === id);
+  if (
+    !confirm(`Delete the watcher test “${test?.title ?? id}”? It moves to data/bench/deleted/.`)
+  ) {
+    return;
+  }
+  try {
+    await api.deleteCheckTest(id);
+    if (state.openTest?.test.id === id) state.openTest = null;
+    await refreshTests();
+  } catch (err) {
+    toast(`Could not delete: ${message(err)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Small helpers
 
 function loadPrefs(): Prefs {
@@ -1264,9 +1743,11 @@ function loadPrefs(): Prefs {
     judgeModel: '',
     camera: '',
     frames: 2,
-    watchIntervalMs: 3000,
+    twoStage: false,
+    sightings: true,
+    watchEveryMs: AS_FAST_AS_IT_ANSWERS,
     watchAuto: true,
-    watchNeeded: 1,
+    watchInARow: 2,
   };
   try {
     return {
@@ -1286,9 +1767,11 @@ function savePrefs(): void {
     judgeModel: state.judgeModel,
     camera: webcam?.deviceId ?? prefs.camera,
     frames: Number(select('#frames').value) || 2,
-    watchIntervalMs: state.watch?.intervalMs ?? prefs.watchIntervalMs,
+    twoStage: input('#two-stage').checked,
+    sightings: input('#sightings-on').checked,
+    watchEveryMs: state.watch?.intervalMs ?? prefs.watchEveryMs,
     watchAuto: state.watch?.autoAdvance ?? prefs.watchAuto,
-    watchNeeded: state.watch?.needed ?? prefs.watchNeeded,
+    watchInARow: state.watch?.needed ?? prefs.watchInARow,
   };
   Object.assign(prefs, next);
   try {
@@ -1296,6 +1779,14 @@ function savePrefs(): void {
   } catch {
     // Private windows may refuse storage; preferences are only a convenience.
   }
+}
+
+const dataUrl = (image: ImagePayload) => `data:${image.mimeType};base64,${image.data}`;
+
+/** A frame kept as a data URL, back as an image payload. */
+function payloadOf(url: string): ImagePayload {
+  const mimeType = url.slice('data:'.length, url.indexOf(';')) as ImagePayload['mimeType'];
+  return { mimeType, data: url.slice(url.indexOf(',') + 1) };
 }
 
 function base64(blob: Blob): Promise<string> {
