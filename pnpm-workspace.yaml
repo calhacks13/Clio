@@ -1,0 +1,11 @@
+packages:
+  - apps/*
+  - packages/*
+
+onlyBuiltDependencies:
+  - esbuild
+
+# Their install scripts are a no-op echo and a version check; skipping them is safe.
+ignoredBuiltDependencies:
+  - "@google/genai"
+  - protobufjs

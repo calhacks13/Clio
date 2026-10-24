@@ -1,0 +1,32 @@
+{
+  "name": "clio",
+  "private": true,
+  "type": "module",
+  "description": "AR coach for Quest 3 that turns every hands-on lesson into robot training data.",
+  "packageManager": "pnpm@10.30.3",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @clio/server --filter @clio/headset run dev",
+    "dev:headset": "pnpm --filter @clio/headset run dev",
+    "dev:server": "pnpm --filter @clio/server run dev",
+    "build": "pnpm --filter @clio/headset run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "pnpm -r run typecheck",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "gen:schema": "pnpm --filter @clio/protocol run gen:schema",
+    "synth": "pnpm --filter @clio/headset run synth",
+    "quest:reverse": "adb reverse tcp:5173 tcp:5173",
+    "check": "pnpm run lint && pnpm run typecheck && pnpm run test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.2",
+    "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

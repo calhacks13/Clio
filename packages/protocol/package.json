@@ -1,0 +1,17 @@
+{
+  "name": "@clio/protocol",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared contracts: procedures, episodes, demo clips, coach tools, HTTP API. Source of truth for TS; exported as JSON Schema for Python.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "gen:schema": "tsx scripts/export-json-schema.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  }
+}

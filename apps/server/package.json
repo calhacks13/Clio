@@ -1,0 +1,23 @@
+{
+  "name": "@clio/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Laptop-side server: Gemini relay + ephemeral tokens, procedures, episode ingest, demo clips.",
+  "scripts": {
+    "dev": "tsx watch --env-file-if-exists=../../.env src/index.ts",
+    "start": "tsx --env-file-if-exists=../../.env src/index.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@clio/protocol": "workspace:*",
+    "@google/genai": "^2.31.0",
+    "@hono/node-server": "^2.1.5",
+    "hono": "^4.13.13",
+    "ws": "^8.22.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.2"
+  }
+}
