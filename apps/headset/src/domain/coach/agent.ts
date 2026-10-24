@@ -29,6 +29,8 @@ export interface Narration {
   kind: string;
   text: string;
   reply: boolean;
+  /** Structured fields, for agents that don't read prose (the scripted coach). */
+  data?: Record<string, string>;
 }
 
 export type AgentState = 'connecting' | 'ready' | 'reconnecting' | 'closed' | 'error';

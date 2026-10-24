@@ -44,6 +44,7 @@ export class Narrator {
           'plan_failed',
           `Planning failed (${error}). Apologize briefly and ask them to describe the task or their setup again.`,
           true,
+          { error },
         );
       }),
       b.on('step.completed', ({ index, by, forced }) => {
@@ -55,7 +56,9 @@ export class Narrator {
         if (!procedure || !step) return;
         const done = this.pendingDone ? `${this.pendingDone} ` : '';
         this.pendingDone = null;
-        this.say(t, 'step', done + this.briefing(step, index, procedure.steps.length), true);
+        this.say(t, 'step', done + this.briefing(step, index, procedure.steps.length), true, {
+          instruction: step.instruction,
+        });
       }),
       b.on('procedure.completed', ({ t, durationMs }) => {
         this.pendingDone = null;
@@ -73,6 +76,7 @@ export class Narrator {
           'mistake',
           `Mistake "${kind}": ${message} Correct them now in a few words.`,
           true,
+          { message },
         );
       }),
       b.on('step.stuck', ({ t, elapsedMs }) => {
@@ -90,6 +94,7 @@ export class Narrator {
           'missing',
           `I can't see: ${names}. Ask them to look at it, or to pinch it so I can register it. If it isn't there, call revise_plan.`,
           true,
+          { names },
         );
       }),
       b.on('object.registered', ({ t, objectId, method }) => {
@@ -99,6 +104,7 @@ export class Narrator {
           'registered',
           `Registered the ${this.view.label(objectId)} where they pinched.`,
           true,
+          { name: this.view.label(objectId) },
         );
       }),
       b.on('hand.pinch', ({ t, hand, phase, nearest }) => {
@@ -133,8 +139,14 @@ export class Narrator {
     return `Step ${index + 1}/${total}: "${step.instruction}"${targets}${notes}${confirm} Tell them what to do in under 15 words.`;
   }
 
-  private say(t: number, kind: string, body: string, reply: boolean): void {
-    const narration: Narration = { kind, text: `[app] ${body}`, reply };
+  private say(
+    t: number,
+    kind: string,
+    body: string,
+    reply: boolean,
+    data?: Record<string, string>,
+  ): void {
+    const narration: Narration = { kind, text: `[app] ${body}`, reply, ...(data ? { data } : {}) };
     this.bus.emit('coach.narration', { t, kind, text: narration.text });
     this.sink(narration, t);
   }
