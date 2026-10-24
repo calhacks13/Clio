@@ -8,7 +8,13 @@ import HfAuthButton from "@/components/hf-auth-button";
 import { Spinner, ThemeToggle } from "@/components/ui";
 import { ClioBrand } from "@/components/clio-brand";
 import Link from "next/link";
-import { LuSearch, LuBox, LuExternalLink } from "react-icons/lu";
+import {
+  LuSearch,
+  LuBox,
+  LuExternalLink,
+  LuFolderOpen,
+  LuChevronRight,
+} from "react-icons/lu";
 
 export default function Home() {
   return (
@@ -260,6 +266,31 @@ function HomeInner() {
             Open dataset
           </button>
         </form>
+        <section className="mt-12" aria-labelledby="clio-heading">
+          <h2 id="clio-heading" className="text-base font-semibold">
+            Clio recordings
+          </h2>
+          <div className="mt-3">
+            <Link href="/clio" className="dataset-row">
+              <span className="flex min-w-0 items-center gap-4">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-surface-0">
+                  <LuFolderOpen size={20} aria-hidden="true" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block font-medium">Recordings</span>
+                  <span className="mt-1 block text-xs text-fg-muted">
+                    This computer
+                  </span>
+                </span>
+              </span>
+              <LuChevronRight
+                size={16}
+                className="shrink-0 text-fg-muted"
+                aria-hidden="true"
+              />
+            </Link>
+          </div>
+        </section>
         <section className="mt-12" aria-labelledby="example-heading">
           <h2 id="example-heading" className="text-base font-semibold">
             Example recordings
