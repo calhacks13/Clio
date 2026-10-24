@@ -12,6 +12,7 @@ import { GlyphsPresenter } from '../adapters/render/presenters/glyphs';
 import { HudPresenter } from '../adapters/render/presenters/hud';
 import { InstructionPanelPresenter } from '../adapters/render/presenters/instruction-panel';
 import { ObjectMarkersPresenter } from '../adapters/render/presenters/object-markers';
+import { OutlinesPresenter } from '../adapters/render/presenters/outlines';
 import {
   CalibrationMarkerPresenter,
   WorkspacePresenter,
@@ -127,13 +128,19 @@ export class ClioApp {
       demos: new DemoLibrary(new RemoteClipSource(o.api)),
       recorder: this.recorder,
       context: () => this.episodeContext(),
-      options: { mode: o.config.mode, autoDemo: o.config.autoDemo, coachCanForce: true },
+      options: {
+        mode: o.config.mode,
+        autoDemo: o.config.autoDemo,
+        coachCanForce: true,
+        showRefreshMs: o.config.showRefreshMs,
+      },
     });
     this.overlay = new OverlayModel(bus, this.lesson.view());
     this.overlay.attach();
 
     this.workspacePresenters = [
       new ObjectMarkersPresenter(),
+      new OutlinesPresenter(),
       new GhostHandsPresenter(),
       new GlyphsPresenter(),
       new WorkspacePresenter(),

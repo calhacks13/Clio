@@ -5,7 +5,8 @@ import type { PresentContext, Presenter } from '../presenter';
 import { makeText, setText } from '../text';
 
 // Where Clio thinks each object is (a faint dot, so learners can see what it sees) and highlight
-// rings for the objects the step or the coach points at.
+// rings for the objects the step or the coach points at. An object with an outline around it
+// (OutlinesPresenter) keeps its label but loses the ring.
 
 const STYLE_COLOR: Record<HighlightStyle, number> = {
   target: 0x4fe3ff,
@@ -32,6 +33,7 @@ export class ObjectMarkersPresenter implements Presenter {
   update(ctx: PresentContext): void {
     const seen = new Set<string>();
     const styles = new Map(ctx.snapshot.highlights.map((h) => [h.objectId, h.style]));
+    const outlined = new Set(ctx.snapshot.outlines.map((o) => o.objectId));
     head.set(...ctx.head.p);
 
     for (const est of ctx.objects) {
@@ -42,7 +44,8 @@ export class ObjectMarkersPresenter implements Presenter {
       setText(marker.label, est.spec.label);
 
       const style = styles.get(est.id);
-      marker.ring.visible = style !== undefined;
+      // Outlines hide while the object is in hand, so the ring comes back then.
+      marker.ring.visible = style !== undefined && (!outlined.has(est.id) || est.heldBy !== null);
       marker.label.visible = style !== undefined || ctx.debug;
       if (style) {
         marker.ringMaterial.color.setHex(STYLE_COLOR[style]);

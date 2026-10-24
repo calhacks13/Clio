@@ -24,6 +24,8 @@ export interface AppConfig {
   calibrate: boolean;
   /** Gemini prebuilt voice name. */
   voice: string | null;
+  /** How often to look again at what the step shows, in ms (0: only when the step starts). */
+  showRefreshMs: number;
 }
 
 const DEFAULTS: AppConfig = {
@@ -38,6 +40,7 @@ const DEFAULTS: AppConfig = {
   autoDemo: true,
   calibrate: false,
   voice: null,
+  showRefreshMs: 3000,
 };
 
 function oneOf<T extends string>(value: string | null, allowed: readonly T[], fallback: T): T {
@@ -51,6 +54,11 @@ function flag(value: string | null, fallback: boolean): boolean {
 }
 
 const text = (value: string | null) => (value?.trim() ? value.trim() : null);
+
+function millis(value: string | null, fallback: number): number {
+  const ms = value === null || value.trim() === '' ? Number.NaN : Number(value);
+  return Number.isFinite(ms) && ms >= 0 ? ms : fallback;
+}
 
 export function readConfig(search: string): AppConfig {
   const q = new URLSearchParams(search);
@@ -66,5 +74,6 @@ export function readConfig(search: string): AppConfig {
     autoDemo: flag(q.get('autoDemo'), DEFAULTS.autoDemo),
     calibrate: flag(q.get('calibrate'), DEFAULTS.calibrate),
     voice: text(q.get('voice')),
+    showRefreshMs: millis(q.get('showRefresh'), DEFAULTS.showRefreshMs),
   };
 }

@@ -15,12 +15,13 @@ describe('readConfig', () => {
       autoDemo: true,
       calibrate: false,
       voice: null,
+      showRefreshMs: 3000,
     });
   });
 
   it('reads options from the URL', () => {
     const c = readConfig(
-      '?coach=scripted&mode=record_demo&procedure=shirt-fold&goal=fold%20a%20shirt&debug=1&emulate=1&calibrate=1&camera=0&autoDemo=0&voice=Kore&transport=direct',
+      '?coach=scripted&mode=record_demo&procedure=shirt-fold&goal=fold%20a%20shirt&debug=1&emulate=1&calibrate=1&camera=0&autoDemo=0&voice=Kore&transport=direct&showRefresh=5000',
     );
     expect(c).toEqual({
       coach: 'scripted',
@@ -34,11 +35,14 @@ describe('readConfig', () => {
       autoDemo: false,
       calibrate: true,
       voice: 'Kore',
+      showRefreshMs: 5000,
     });
   });
 
   it('falls back to defaults for invalid values instead of failing to boot', () => {
-    const c = readConfig('?coach=telepathy&mode=sideways&debug=maybe');
-    expect([c.coach, c.mode, c.debug]).toEqual(['gemini', 'learn', false]);
+    const c = readConfig('?coach=telepathy&mode=sideways&debug=maybe&showRefresh=soon');
+    expect([c.coach, c.mode, c.debug, c.showRefreshMs]).toEqual(['gemini', 'learn', false, 3000]);
+    expect(readConfig('?showRefresh=-5').showRefreshMs).toBe(3000);
+    expect(readConfig('?showRefresh=0').showRefreshMs).toBe(0);
   });
 });
