@@ -1,10 +1,10 @@
-# Clio episode viewer in serializer/: implementation plan
+# Clio episode viewer in visualizer/: implementation plan
 
 Date: 2026-10-24. Facts come from the four reader reports and were re-checked in the repo where cited. Repo files were only read; the status check below ran read-only commands.
 
 ## 1. Decision summary
 
-- **Where:** a new route tree in `serializer/`:
+- **Where:** a new route tree in `visualizer/`:
   - `/clio` is the episode list.
   - `/clio/live` follows the newest episode.
   - `/clio/[episodeId]` is pinned to one episode.
@@ -29,9 +29,9 @@ Date: 2026-10-24. Facts come from the four reader reports and were re-checked in
   - `clio.episode/1` stays the stored and wire format.
   - Capture v1 is the viewer's in-memory shape, and later an export.
   - Held state, location flags and observation time come from an optional, backward-compatible extension inside `clio.episode/1` (P1 to P3, needs your approval).
-  - **Alternative (not recommended):** store and transfer Capture v1 packages (`serializer/docs/capture-v1/TRANSFER.md`). That gives no live data, needs a second receiver on 8787 and creates a second production contract.
+  - **Alternative (not recommended):** store and transfer Capture v1 packages (`visualizer/docs/capture-v1/TRANSFER.md`). That gives no live data, needs a second receiver on 8787 and creates a second production contract.
 - **Code sharing:**
-  - The serializer imports the framework-free modules through one alias, `@clio-viewer/*`. Its target is `apps/headset/src/viewer` (option 1) or `packages/episode-model` (option 2). Wave 0 waits for your answer to decision 2.
+  - The visualizer imports the framework-free modules through one alias, `@clio-viewer/*`. Its target is `apps/headset/src/viewer` (option 1) or `packages/episode-model` (option 2). Wave 0 waits for your answer to decision 2.
   - Webpack only, never `--turbopack`.
   - `three` is pinned by a webpack alias, and an import-graph test guards against a second copy.
 - **`apps/headset/viewer.html`:** frozen as the fallback that runs on `pnpm dev` alone. It is retired only after check C passes, if you choose to (decision 3).
@@ -48,7 +48,7 @@ Date: 2026-10-24. Facts come from the four reader reports and were re-checked in
 - This copies the headset viewer's rule that the address names an episode only when the user picked one (`main.ts:84-89`).
 - `live` can't collide with server ids, which are `ep-YYYYMMDD-HHMMSS-xxxx` (`apps/server/src/ids.ts:17-26`).
 
-### 2.2 Serializer modules (new unless noted)
+### 2.2 Visualizer modules (new unless noted)
 
 | Module                    | File(s)                                                                                                                          | Role                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -91,21 +91,21 @@ Date: 2026-10-24. Facts come from the four reader reports and were re-checked in
 
 ### 2.3 Shared code
 
-- **`serializer/tsconfig.json` `paths`:**
+- **`visualizer/tsconfig.json` `paths`:**
   - `"@clio/protocol": ["../packages/protocol/src/index.ts"]`
   - `"@clio-viewer/*": [<target from decision 2>]`
 
   With option 1 or option 2, only that target path differs.
-- **`serializer/next.config.ts`:**
+- **`visualizer/next.config.ts`:**
   - Set `experimental.externalDir: true`. Today it is on only as a side effect of `transpilePackages`.
-  - Add a webpack `resolve.alias` pinning `three` to `serializer/node_modules/three`, so even an indirect import resolves to 0.182.0, never the headset's 0.186.1.
-- **Import guard:** a bun test (`src/lib/clio/__tests__/import-graph.test.ts`) walks the transitive imports of every allowed module (`Bun.Transpiler.scanImports`). It fails on `three`, `capture/index.ts`, `object-tracks-view.ts`, `scene.ts`, `panel.ts` or `main.ts`. The `no-restricted-imports` lint rule is a second line and catches only direct imports from serializer files.
+  - Add a webpack `resolve.alias` pinning `three` to `visualizer/node_modules/three`, so even an indirect import resolves to 0.182.0, never the headset's 0.186.1.
+- **Import guard:** a bun test (`src/lib/clio/__tests__/import-graph.test.ts`) walks the transitive imports of every allowed module (`Bun.Transpiler.scanImports`). It fails on `three`, `capture/index.ts`, `object-tracks-view.ts`, `scene.ts`, `panel.ts` or `main.ts`. The `no-restricted-imports` lint rule is a second line and catches only direct imports from visualizer files.
 - **Allowed imports:**
   - `capture/model.ts`, `capture/from-clio.ts`, `capture/clio-events.ts` (new in H1), `capture/from-package.ts`
   - `api.ts`, `event-log.ts`
   - `detection-outline.ts` and its four pure dependencies (`core/math`, `domain/world/camera-model`, `domain/world/outline`, `adapters/camera/calibration`)
-  - `episode-data.ts` only as a transitive dependency (`NdjsonDecoder`, `formatClock`). The serializer never constructs `EpisodeData`. That class keeps the raw `FrameRecord[]`, and `stepAt`, `detectionsAt` and `headAtCapture` are its methods (`episode-data.ts:112,179,224,249`). H1 provides those lookups over the Capture instead.
-- **Dependency on the parent workspace:** `@clio/protocol` needs zod from `packages/protocol/node_modules`, so the root `pnpm install` must have run. That goes against `GOALS.md:21` (item 7). An unverified option to avoid it: add zod to the serializer and alias `zod` to the serializer's copy.
+  - `episode-data.ts` only as a transitive dependency (`NdjsonDecoder`, `formatClock`). The visualizer never constructs `EpisodeData`. That class keeps the raw `FrameRecord[]`, and `stepAt`, `detectionsAt` and `headAtCapture` are its methods (`episode-data.ts:112,179,224,249`). H1 provides those lookups over the Capture instead.
+- **Dependency on the parent workspace:** `@clio/protocol` needs zod from `packages/protocol/node_modules`, so the root `pnpm install` must have run. That goes against `GOALS.md:21` (item 7). An unverified option to avoid it: add zod to the visualizer and alias `zod` to the visualizer's copy.
 
 ### 2.4 Server
 
@@ -263,7 +263,7 @@ features: z.array(z.string()).optional()         // "object.flags", "object.gras
 
 **Fix order:**
 1. Your answers to decisions 0 and 2.
-2. In parallel: T0 (serializer checks and plumbing; `tsconfig.test.json` type-checks zero test files and its `lib` is ES2020) and H1 (section 3.2).
+2. In parallel: T0 (visualizer checks and plumbing; `tsconfig.test.json` type-checks zero test files and its `lib` is ES2020) and H1 (section 3.2).
 3. Everything else, as scheduled in section 5.
 
 **Deferred, explicitly:**
@@ -282,11 +282,11 @@ The pure modules stay either way.
 
 ## 5. Work breakdown
 
-UI tasks (T3, T4, T5, T7) load the `awesome-design-md` and `impeccable` skills and follow `serializer/DESIGN.md` as updated by D0. No `·`, no arrow characters, solid fills, no outlined buttons, no gradients.
+UI tasks (T3, T4, T5, T7) load the `awesome-design-md` and `impeccable` skills and follow `visualizer/DESIGN.md` as updated by D0. No `·`, no arrow characters, solid fills, no outlined buttons, no gradients.
 
 **Checks:**
 - **Root `pnpm check`** = `biome check .`, then `pnpm -r typecheck` (strict, `noUncheckedIndexedAccess`, `noUnusedLocals`), then `vitest run`.
-- **Serializer check** = `pnpm serializer:check`.
+- **Visualizer check** = `pnpm visualizer:check`.
 
 Every task preserves uncommitted work, including `apps/headset/src/tracking/` and the episode-server changes.
 
@@ -294,15 +294,15 @@ Every task preserves uncommitted work, including `apps/headset/src/tracking/` an
 
 ### Wave 0 (parallel, disjoint files)
 
-**T0, serializer plumbing.**
-- Owns: `serializer/{tsconfig.json,tsconfig.test.json,next.config.ts,eslint.config.mjs}`, `src/lib/clio/types.ts`, `src/lib/clio/__fixtures__/synthetic-episode.ts`, `src/lib/clio/__tests__/{import-smoke,import-graph}.test.ts`, and fixes to existing tests that the type-check exposes.
+**T0, visualizer plumbing.**
+- Owns: `visualizer/{tsconfig.json,tsconfig.test.json,next.config.ts,eslint.config.mjs}`, `src/lib/clio/types.ts`, `src/lib/clio/__fixtures__/synthetic-episode.ts`, `src/lib/clio/__tests__/{import-smoke,import-graph}.test.ts`, and fixes to existing tests that the type-check exposes.
 - Accept:
-  - The serializer check is green.
+  - The visualizer check is green.
   - `tsc -p tsconfig.test.json --listFilesOnly` lists the `__tests__` files.
   - The smoke test builds a Capture from shirt-fold: 337 headset samples, both hand series, an entity for each of the 4 `meta.objects` ids. It does not assert which objects are drawn.
   - The smoke test also checks that the median right-wrist ROS y is below the left (not mirrored). If that fails, investigate before wave 1.
   - The import-graph test fails when `capture/index.ts` is added to the allowed list.
-  - `pnpm serializer:build` compiles a page importing `@clio-viewer/capture/from-clio`.
+  - `pnpm visualizer:build` compiles a page importing `@clio-viewer/capture/from-clio`.
 
 **H1, model and adapter (section 3.2).**
 - Owns: `apps/headset/src/viewer/capture/{model,from-clio,clio-events,object-tracks-view}.ts`, `apps/headset/src/viewer/api.ts`, `apps/headset/test/viewer/capture/*`, `apps/headset/test/viewer/api.test.ts`.
@@ -322,8 +322,8 @@ Every task preserves uncommitted work, including `apps/headset/src/tracking/` an
   - `NdjsonTail` with `from` and `skipFirstLine`.
 
 **D0, design rules.**
-- Owns: `serializer/DESIGN.md`. Adds a "Clio episode viewer" section: lane styling (measured vs derived vs inferred), held ring, unknown orientation, live/stopped/finished colors (citrus for live), approximate outlines, no ids in headers.
-- Accept: the serializer check's prettier step passes, it is reviewed against the global UI rules, and it is merged before wave 1.
+- Owns: `visualizer/DESIGN.md`. Adds a "Clio episode viewer" section: lane styling (measured vs derived vs inferred), held ring, unknown orientation, live/stopped/finished colors (citrus for live), approximate outlines, no ids in headers.
+- Accept: the visualizer check's prettier step passes, it is reviewed against the global UI rules, and it is merged before wave 1.
 
 **V, server.**
 - Owns: `apps/server/src/storage/{files,episode-store}.ts`, `apps/server/test/episodes.test.ts`, `packages/protocol/src/api.ts` (only the optional `batches` field).
@@ -399,7 +399,7 @@ Every task preserves uncommitted work, including `apps/headset/src/tracking/` an
 
 **T7, SceneEditor Clio variant.**
 - Owns: `src/components/scene-workspace.tsx`.
-- Accept: the serializer check is green; the default variant is unchanged on the G1 demo (visual check); the Clio variant shows no "Robot root" and none of the replaced text.
+- Accept: the visualizer check is green; the default variant is unchanged on the G1 demo (visual check); the Clio variant shows no "Robot root" and none of the replaced text.
 
 ### Wave 2 (after wave 1)
 
@@ -410,9 +410,9 @@ Every task preserves uncommitted work, including `apps/headset/src/tracking/` an
 ### Wave 3
 
 **D1, docs** (after T5).
-- Owns: `serializer/{INTEGRATION,GOALS,AGENTS,PRODUCT}.md`.
+- Owns: `visualizer/{INTEGRATION,GOALS,AGENTS,PRODUCT}.md`.
 - Records: the proxy, the routes, the import rules and alias target (decision 2), the root `pnpm install` requirement, the three.js guard, the quaternion-convention difference and the test type-check fix.
-- Accept: the serializer check passes; every path and command named exists.
+- Accept: the visualizer check passes; every path and command named exists.
 
 **Gate C, live Quest session.**
 - Owner: T5's agent, with Peter wearing the headset.
@@ -433,7 +433,7 @@ Every task preserves uncommitted work, including `apps/headset/src/tracking/` an
 
 ### End-to-end checks
 
-Setup for A, B and S: run a server with a scratch `CLIO_DATA_DIR`, Vite, and `pnpm serializer:dev`.
+Setup for A, B and S: run a server with a scratch `CLIO_DATA_DIR`, Vite, and `pnpm visualizer:dev`.
 - **A. Synthetic replay:** copy both fixtures into the scratch data dir and open `/clio/<id>`.
   - Scrub both ways: no later poses leak; hands vanish when untracked; the hidden region is not drawn; hands sit on the table plane and are not mirrored.
   - ph-syringe: a trail, a held ring, an inferred held span, and a detector answer with latency.
@@ -461,9 +461,9 @@ Setup for A, B and S: run a server with a scratch `CLIO_DATA_DIR`, Vite, and `pn
 2. **Shared code** (blocks wave 0):
    - (1) Import from `apps/headset/src/viewer` (recommended now; needs the root `pnpm install`).
    - (2) Move the code to `packages/episode-model` now.
-   - (3) Copy it into the serializer (the copies will drift).
+   - (3) Copy it into the visualizer (the copies will drift).
 3. **`viewer.html`:** retire it or keep it after check C?
-4. **CORS:** restrict `cors()` at `apps/server/src/app.ts:22` to the serializer's origins, or remove it? Today any website open on the laptop can read recordings and mint coach tokens.
+4. **CORS:** restrict `cors()` at `apps/server/src/app.ts:22` to the visualizer's origins, or remove it? Today any website open on the laptop can read recordings and mint coach tokens.
 5. **Home page:** keep the G1 redirect as the default, or default to `/clio`?
 6. **Latency:** accept about 2.3 s on screen, or set `batchIntervalMs: 250` (`clio-app.ts:104`; 4 POSTs per second) and/or build SSE now?
 7. **Quaternion convention for exports:** the viewer's `B·R·Bᵀ` or the pipeline's `q_B ⊗ q_W` (`frames.py:100-103`)?
@@ -471,9 +471,9 @@ Setup for A, B and S: run a server with a scratch `CLIO_DATA_DIR`, Vite, and `pn
 
 ### Risks
 
-- **Second three.js:** the lint rule catches only direct imports from serializer files. The webpack alias and the import-graph test are the real guard.
-- **Turbopack** cannot compile files outside `serializer/`, so dev must stay on webpack.
-- **Test type-checking** may surface existing serializer test errors (T0's scope).
+- **Second three.js:** the lint rule catches only direct imports from visualizer files. The webpack alias and the import-graph test are the real guard.
+- **Turbopack** cannot compile files outside `visualizer/`, so dev must stay on webpack.
+- **Test type-checking** may surface existing visualizer test errors (T0's scope).
 - **Stale server:** after a protocol change, a server on the old protocol drops fields or rejects batches until it is restarted.
 - **Cable replug:** it can reload the headset page through Vite HMR (ends the XR session, loses the in-memory upload queue) and needs `pnpm quest:reverse` again. Right now adb sees the Quest as `unauthorized`.
 - **Inferred held spans** follow event arrival order and miss fist grasps that have no frame-rate run. They are labeled inferred until P3.

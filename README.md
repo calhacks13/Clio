@@ -36,3 +36,22 @@ apps/server         Gemini relay, planner, vision, episode ingest (Node + Hono)
 pipeline            validate, Rerun replay, LeRobot export (Python + uv)
 procedures          curated golden lessons (shirt fold, pH indicator)
 ```
+
+## Visualizer / desktop dataset inspection
+
+The imported browser visualizer lives in [`visualizer/`](visualizer/README.md). Read
+[`visualizer/GOALS.md`](visualizer/GOALS.md) for the product intent and agent handoff, and
+[`visualizer/INTEGRATION.md`](visualizer/INTEGRATION.md) for how it should adapt to Clio's existing
+lesson recorder, local episode API and Python LeRobot exporter. The draft recording format is
+included as design context; `@clio/protocol` remains the source of truth.
+
+```sh
+pnpm visualizer:install
+pnpm visualizer:dev        # loopback :3001, currently the public G1 LeRobot demo
+pnpm visualizer:check      # independent Bun/Next.js checks
+```
+
+Private episode inspection is intended to stay local. This import adds no Supabase, cloud ingest
+or automatic publishing. A Clio episode reader for this particular viewer is future work; existing
+headset/server/viewer work is preserved. The visualizer has its own Bun dependencies and checks,
+separate from the pnpm workspace.

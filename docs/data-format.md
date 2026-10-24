@@ -53,6 +53,7 @@ by creation time.
 | `objects`                | object placements at episode start: `{ id, label, position, radius, method }`                                                                 |
 | `coach`                  | `{ kind: gemini \| scripted \| none, model?, transport? }`                                                                                    |
 | `device`                 | `{ userAgent, emulated, xrFeatures }`                                                                                                         |
+| `features`               | optional recording features in use: `"object.flags"` and `"object.grasp"` (see [Optional fields](#optional-fields)). Absent in older episodes |
 
 ## `frames.ndjson`: `FrameRecord` (one per XR frame, 72–120 Hz)
 
@@ -79,9 +80,11 @@ Every event has `t` and `type`.
 | `step.completed`                            | `stepId, index, by (check\|coach\|user\|skip), forced, durationMs`                                           | segment end, and who decided it was done                                                                                                                                                                                                                                                       |
 | `procedure.completed` / `procedure.aborted` | `durationMs` / `reason`                                                                                      | outcome                                                                                                                                                                                                                                                                                        |
 | `mistake.detected`                          | `stepId, kind, message, source (rule\|coach)`                                                                | failure labels; the frames that follow are the recovery                                                                                                                                                                                                                                        |
-| `hand.pinch`                                | `hand, phase (start\|end), point, nearest`                                                                   | grasp events                                                                                                                                                                                                                                                                                   |
+| `hand.pinch`                                | `hand, phase (start\|end), point, nearest`                                                                   | pinch gestures; without recorded grasps (older episodes), grasps are inferred from these                                                                                                                                                                                                       |
 | `object.detected`                           | `objectId, stepId, phrase, description, found, point, box, outline, confidence, position, source, latencyMs` | **detection labels**: what the object finder was asked (the step's words) and answered, in normalized image coordinates (x right, y down), plus the lifted workspace position. The frame was captured at `t - latencyMs`. `source` is the finder's model (Gemini, or jev at `CLIO_VISION_URL`) |
 | `object.registered`                         | `objectId, position, method`                                                                                 | placement changes mid-episode                                                                                                                                                                                                                                                                  |
+| `object.grasped`                            | `objectId, hand, grip (pinch\|fist), position`                                                               | a hand took hold of the object (`"object.grasp"` feature). `position` is the object's reference point at that moment                                                                                                                                                                           |
+| `object.released`                           | `objectId, hand, reason (opened\|hand_lost\|plan_changed), position`                                         | the hand let go (`opened`), hand tracking dropped out (`hand_lost`) or a new plan was loaded (`plan_changed`)                                                                                                                                                                                  |
 | `coach.status`                              | `state, detail?`                                                                                             | coach availability                                                                                                                                                                                                                                                                             |
 | `coach.narration`                           | `kind, text`                                                                                                 | what the app told the model (its inputs)                                                                                                                                                                                                                                                       |
 | `coach.tool_call` / `coach.tool_result`     | `callId, name, args` / `callId, name, ok, result`                                                            | coach actions                                                                                                                                                                                                                                                                                  |
@@ -90,7 +93,7 @@ Every event has `t` and `type`.
 | `media.started`                             | `name, mimeType`                                                                                             | aligns `media/<name>` with `t`                                                                                                                                                                                                                                                                 |
 | `annotation`                                | `label, data?`                                                                                               | free-form labels (an escape hatch, so you don't have to change the schema)                                                                                                                                                                                                                     |
 
-## `objects.ndjson`: `ObjectTrackRecord` (one per tracker update, typically 5–30 Hz)
+## `objects.ndjson`: `ObjectTrackRecord` (one per update that changed an estimate)
 
 ```json
 {
@@ -109,6 +112,9 @@ Every event has `t` and `type`.
 
 - Each line lists the objects whose estimate **changed** in that update. To reconstruct the state at
   time `t`, start from `meta.objects` and apply every line up to `t`.
+- Lines are sparse. An object at rest gets a line only when it is placed, registered or detected
+  again. A held object follows the wrist, so it gets one line per XR frame (72–120 Hz) until it is
+  released.
 - `position` is the object's reference point (rim center, bottle mouth, tool tip) in `W`.
 - `orientation` is set only for marker-tracked objects; it's `null` for detector or layout estimates.
 - `source` is one of `layout`, `pinch`, `marker`, `detector` or `manual`. `confidence` is in 0..1.
@@ -116,6 +122,48 @@ Every event has `t` and `type`.
 Marker frame (used by `tracking.marker.offset` in procedures): the origin is the marker's center,
 +x points to the marker's right, +y toward its top edge, and +z comes out of the printed face toward
 the viewer. Meters.
+
+### Optional fields
+
+Newer episodes add three fields to each object state and list `"object.flags"` in `meta.features`.
+The schema id stays `clio.episode/1`; older episodes leave the fields out and stay valid.
+
+| Field           | Meaning                                                                                                                                                                                    |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `locationFlags` | bits, as in OpenXR and Capture v1: 1 orientation valid, 2 position valid, 4 orientation tracked, 8 position tracked. Valid means the value can be used; tracked means it was just measured |
+| `heldBy`        | `left` or `right` while that hand carries the object, otherwise `null`                                                                                                                     |
+| `observedT`     | ms since episode start when the estimate was measured (for a detection, when its camera frame was taken). Omitted when within 1 ms of `t`; negative if measured before the episode started |
+
+```json
+{
+  "id": "syringe",
+  "position": [0.21, 0.05, -0.1],
+  "orientation": null,
+  "confidence": 0.8,
+  "source": "detector",
+  "locationFlags": 10,
+  "heldBy": null,
+  "observedT": 1180.0
+}
+```
+
+Rules, checked by the protocol schema at ingest (the JSON Schema checks only the 0–15 range):
+- `position` is always present. Without the position-valid bit it holds the last valid estimate,
+  because readers such as the pipeline use it.
+- A tracked bit needs its valid bit, so the allowed values are 0, 1, 2, 3, 5, 7, 10, 11 and 15.
+- `orientation` is non-null exactly when the orientation-valid bit is set.
+
+What the headset writes: 2 for `layout`, `pinch` and `manual` placements; 10 for `detector`; 15 for
+`marker` with an orientation, 10 without. A held object has 2 while its wrist is tracked (3 if its
+orientation is known) and 0 while the wrist is lost.
+
+Without `locationFlags` (older episodes), derive them from `source`: position valid always, plus
+position tracked for `marker` and `detector`; when `orientation` is non-null, also orientation valid,
+plus orientation tracked for `marker`.
+
+Episodes that list `"object.grasp"` in `meta.features` record every grasp and release as
+`object.grasped` and `object.released` events. Without it, grasps can only be inferred from
+`hand.pinch` events and from runs of per-frame `source: "pinch"` lines.
 
 ## `finish.json`: `EpisodeFinish`
 
@@ -130,6 +178,10 @@ the viewer. Meters.
    acknowledged. The server appends in arrival order. A repeated `seq` returns
    `{ ok: true, duplicate: true }` and is not appended twice.
 3. `POST /api/episodes/:id/finish` with `EpisodeFinish`.
+
+Restart the server whenever the headset's protocol changes. A server on an older protocol silently
+drops fields it doesn't know and rejects batches containing new event types with 400; the headset
+drops each rejected batch (about a second of data).
 
 ## Demo clips: `DemoClip`
 

@@ -1,4 +1,4 @@
-> Written 2026-10-24 from the three Codex chats and ~/Desktop/Jev fun. Since then: the server gained incremental reads (`?from=` with `x-next-from`), and the forked viewer now lives in `serializer/` (port 3001).
+> Written 2026-10-24 from the three Codex chats and ~/Desktop/Jev fun. Since then: the server gained incremental reads (`?from=` with `x-next-from`), and the forked viewer now lives in `visualizer/` (port 3001).
 
 # Highlighting pipeline: the three Codex chats and how they fit into Clio
 
