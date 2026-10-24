@@ -26,6 +26,30 @@ const page = (state: LaunchState) => `<!doctype html>
   <body><div id="app">${renderBoot(state.model)}</div></body>
 </html>`;
 
+/** The state's name in a URL: `?launch=<slug>` shows that state alone. */
+export const stateSlug = (name: string) =>
+  name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+
+/**
+ * Replaces the gallery with one launch state as its own page, at the window's real size, for
+ * resizing it, inspecting it, or a screenshot. `focus` names an element id to focus.
+ */
+export function showLaunchAlone(state: LaunchState, focus: string | null): void {
+  document.title = `${state.name}: Clio launch page`;
+  const style = document.createElement('style');
+  style.textContent = styles;
+  document.head.append(style);
+  document.body.innerHTML = `<div id="app">${renderBoot(state.model)}</div>`;
+  const root = document.getElementById('app');
+  if (!root) return;
+  bindBootView(root);
+  state.after?.(root);
+  if (focus) document.getElementById(focus)?.focus();
+}
+
 export function launchFrame(state: LaunchState, size: FrameSize): HTMLElement {
   const figure = document.createElement('figure');
   figure.className = 'frame';
@@ -51,8 +75,11 @@ export function launchFrame(state: LaunchState, size: FrameSize): HTMLElement {
   box.append(iframe);
 
   const caption = document.createElement('figcaption');
-  const name = document.createElement('span');
+  const name = document.createElement('a');
   name.textContent = state.name;
+  name.href = `?launch=${stateSlug(state.name)}`;
+  name.target = '_blank';
+  name.title = 'Open this state alone, to resize or inspect it';
   const dims = document.createElement('span');
   dims.className = 'dims';
   dims.textContent = `${size.width} × ${size.height}`;

@@ -23,3 +23,6 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.rrd
+
+# Impeccable review captures (regenerated per review)
+.impeccable/review/

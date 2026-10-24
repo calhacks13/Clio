@@ -169,6 +169,17 @@ figcaption {
   width: calc(var(--w) * var(--scale) * 1px);
 }
 
+.frame figcaption a {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.frame figcaption a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
 .dims {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
