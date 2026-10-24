@@ -6,4 +6,5 @@ export * from './coach-tools';
 export * from './episode';
 export * from './geometry';
 export * from './hand';
+export * from './primary';
 export * from './procedure';

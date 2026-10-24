@@ -146,10 +146,17 @@ export const EpisodeSummarySchema = z.object({
   eventCount: z.number().int(),
 });
 export const EpisodeListResponseSchema = z.object({ episodes: z.array(EpisodeSummarySchema) });
+/** What batches.json says arrived. Complete when `finish.batches === received` and no gaps. */
+export const EpisodeBatchIntegritySchema = z.object({
+  received: z.number().int().nonnegative().describe('Distinct batch seqs stored'),
+  gaps: z.array(z.number().int().nonnegative()).describe('Seqs skipped so far, ascending'),
+  lastSeq: z.number().int().nonnegative().nullable().describe('Highest seq stored'),
+});
 export const EpisodeDetailResponseSchema = z.object({
   meta: EpisodeMetaSchema,
   summary: EpisodeSummarySchema,
   finish: EpisodeFinishSchema.nullable(),
+  batches: EpisodeBatchIntegritySchema.optional().describe('Absent when the server has no record'),
 });
 
 export const ClipsFromEpisodeRequestSchema = z.object({
@@ -193,6 +200,7 @@ export type EpisodeFinishResponse = z.infer<typeof EpisodeFinishResponseSchema>;
 export type MediaUploadResponse = z.infer<typeof MediaUploadResponseSchema>;
 export type EpisodeSummary = z.infer<typeof EpisodeSummarySchema>;
 export type EpisodeListResponse = z.infer<typeof EpisodeListResponseSchema>;
+export type EpisodeBatchIntegrity = z.infer<typeof EpisodeBatchIntegritySchema>;
 export type EpisodeDetailResponse = z.infer<typeof EpisodeDetailResponseSchema>;
 export type ClipsFromEpisodeRequest = z.infer<typeof ClipsFromEpisodeRequestSchema>;
 export type ClipsFromEpisodeResponse = z.infer<typeof ClipsFromEpisodeResponseSchema>;

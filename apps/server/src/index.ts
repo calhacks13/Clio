@@ -12,6 +12,7 @@ import { createGeminiClient, isGeminiConfigured } from './services/gemini';
 import { createGeminiPlanner } from './services/gemini-planner';
 import { createGeminiLocator } from './services/gemini-vision';
 import { createHttpLocator } from './services/http-vision';
+import { createGeminiPrimaryPicker, createPrimaryObjectFinder } from './services/primary-object';
 import { createGeminiTokenMinter } from './services/token-minter';
 import { ClipStore } from './storage/clip-store';
 import { EpisodeStore } from './storage/episode-store';
@@ -48,6 +49,14 @@ function main(): void {
     locator: config.visionUrl
       ? createHttpLocator({ url: config.visionUrl, token: config.visionToken })
       : gemini && createGeminiLocator(gemini, config.visionModel),
+    primary:
+      gemini &&
+      createPrimaryObjectFinder({
+        picker: createGeminiPrimaryPicker(gemini, config.visionModel),
+        finder: createHttpLocator({ url: config.primaryFinderUrl }),
+        fallback: createGeminiLocator(gemini, config.visionModel),
+        logger,
+      }),
     logger,
   });
 
@@ -84,6 +93,9 @@ function logStartup(config: Config, logger: Logger, geminiReady: boolean): void 
       : '  Gemini: off. Set GEMINI_API_KEY in .env; until then use the scripted coach.',
     `  Object finder: ${
       config.visionUrl ?? (geminiReady ? `Gemini ${config.visionModel}` : 'off')
+    }`,
+    `  Primary object: ${
+      geminiReady ? `Gemini ${config.visionModel}, then ${config.primaryFinderUrl}` : 'off'
     }`,
     `  Data: ${config.dataDir}`,
     `  Procedures: ${config.proceduresDir}`,

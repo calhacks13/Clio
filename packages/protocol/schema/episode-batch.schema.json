@@ -652,6 +652,122 @@
               },
               "type": {
                 "type": "string",
+                "const": "object.grasped"
+              },
+              "objectId": {
+                "type": "string"
+              },
+              "hand": {
+                "type": "string",
+                "enum": [
+                  "left",
+                  "right"
+                ]
+              },
+              "grip": {
+                "type": "string",
+                "enum": [
+                  "pinch",
+                  "fist"
+                ]
+              },
+              "position": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "items": false,
+                "minItems": 3,
+                "maxItems": 3,
+                "description": "Object reference point when grasped, workspace frame"
+              }
+            },
+            "required": [
+              "t",
+              "type",
+              "objectId",
+              "hand",
+              "grip",
+              "position"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "t": {
+                "type": "number",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "const": "object.released"
+              },
+              "objectId": {
+                "type": "string"
+              },
+              "hand": {
+                "type": "string",
+                "enum": [
+                  "left",
+                  "right"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "opened",
+                  "hand_lost",
+                  "plan_changed"
+                ],
+                "description": "opened: the hand let go; hand_lost: hand tracking dropped out; plan_changed: a new plan was loaded"
+              },
+              "position": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "items": false,
+                "minItems": 3,
+                "maxItems": 3,
+                "description": "Object reference point when released, workspace frame"
+              }
+            },
+            "required": [
+              "t",
+              "type",
+              "objectId",
+              "hand",
+              "reason",
+              "position"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "t": {
+                "type": "number",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
                 "const": "coach.status"
               },
               "state": {
@@ -921,7 +1037,7 @@
                   "items": false,
                   "minItems": 3,
                   "maxItems": 3,
-                  "description": "Reference point, workspace frame"
+                  "description": "Reference point, workspace frame; the last valid estimate while the position is not valid"
                 },
                 "orientation": {
                   "anyOf": [
@@ -966,6 +1082,31 @@
                     "detector",
                     "manual"
                   ]
+                },
+                "locationFlags": {
+                  "description": "Bits: 1 orientation valid, 2 position valid, 4 orientation tracked, 8 position tracked. Absent in older episodes: derive them from source",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 15
+                },
+                "heldBy": {
+                  "description": "The hand carrying it; null when not held",
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "left",
+                        "right"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "observedT": {
+                  "description": "ms since episode start when the estimate was measured; omitted within 1 ms of t, negative if before the episode started",
+                  "type": "number"
                 }
               },
               "required": [
@@ -985,7 +1126,7 @@
           "objects"
         ],
         "additionalProperties": false,
-        "description": "One tracker update (objects.ndjson line), typically 5–30 Hz"
+        "description": "One tracker update (objects.ndjson line): written when an estimate changes, and every XR frame while an object is held"
       }
     }
   },

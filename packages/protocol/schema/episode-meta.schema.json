@@ -913,6 +913,13 @@
         "version"
       ],
       "additionalProperties": false
+    },
+    "features": {
+      "description": "Optional recording features used, e.g. \"object.flags\" and \"object.grasp\"",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   },
   "required": [

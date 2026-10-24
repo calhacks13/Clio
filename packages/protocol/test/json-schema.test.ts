@@ -22,4 +22,17 @@ describe('generated JSON Schemas', () => {
     expect(procedure.required).toContain('steps');
     expect(procedure.required).not.toContain('coach');
   });
+
+  it('keep the optional object fields optional, so older episodes still validate', () => {
+    const track = buildJsonSchemas()['object-track.schema.json'] as {
+      properties: { objects: { items: { properties: object; required: string[] } } };
+    };
+    const state = track.properties.objects.items;
+    expect(Object.keys(state.properties)).toEqual(
+      expect.arrayContaining(['locationFlags', 'heldBy', 'observedT']),
+    );
+    expect(state.required).toEqual(['id', 'position', 'orientation', 'confidence', 'source']);
+    const meta = buildJsonSchemas()['episode-meta.schema.json'] as { required: string[] };
+    expect(meta.required).not.toContain('features');
+  });
 });

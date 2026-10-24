@@ -20,7 +20,15 @@ import {
 import { z } from 'zod';
 import { isSafeId, newEpisodeId } from '../ids';
 import { describeError, type Logger } from '../log';
-import { countLines, exists, isMissing, readJson, toNdjson, writeJsonAtomic } from './files';
+import {
+  countLines,
+  exists,
+  isMissing,
+  lastLineEnd,
+  readJson,
+  toNdjson,
+  writeJsonAtomic,
+} from './files';
 import { KeyedMutex } from './keyed-mutex';
 
 // <root>/<episodeId>/ meta.json, frames.ndjson, events.ndjson, objects.ndjson, batches.json,
@@ -63,6 +71,7 @@ export interface EpisodeStoreOptions {
 }
 
 interface LineCount {
+  ino: number;
   size: number;
   mtimeMs: number;
   lines: number;
@@ -119,7 +128,7 @@ export class EpisodeStore {
   appendBatch(id: string, batch: EpisodeBatch): Promise<BatchResult> {
     return this.#mutex.run(id, async () => {
       if (!(await this.exists(id))) return 'not_found';
-      const book = await this.#readBookkeeping(id);
+      const book = (await this.#readBookkeeping(id)) ?? { received: [], gaps: [] };
       // A retried batch is acknowledged even after finish: the client only wants its ack.
       if (book.received.includes(batch.seq)) return 'duplicate';
       if (await exists(this.#path(id, 'finish.json'))) return 'finished';
@@ -228,13 +237,29 @@ export class EpisodeStore {
     const meta = await this.readMeta(id);
     if (!meta) return null;
     const finish = await this.#readFinish(id);
-    return { meta, summary: await this.#summary(meta, finish), finish: finish.value };
+    const detail: EpisodeDetailResponse = {
+      meta,
+      summary: await this.#summary(meta, finish),
+      finish: finish.value,
+    };
+    // Left out when batches.json is missing: an unknown count is not "nothing arrived".
+    const book = await this.#readBookkeeping(id);
+    if (book) {
+      detail.batches = {
+        received: book.received.length,
+        gaps: book.gaps,
+        lastSeq: book.received.at(-1) ?? null,
+      };
+    }
+    return detail;
   }
 
   /**
    * The complete lines of an NDJSON file from byte `from` on, as a byte stream, or null for an
-   * unknown episode. `end` is the settled size, always a line boundary: passing it back as `from`
-   * reads only what was appended since, which is how a viewer follows a live episode.
+   * unknown episode. `end` is the settled size cut back to its last newline, so it is always a line
+   * boundary: passing it back as `from` reads only what was appended since, which is how a viewer
+   * follows a live episode. A partial last line (a crash mid-append) is served only once it is
+   * whole. If the file shrank below `from`, `end` comes back smaller than `from`.
    */
   async openNdjson(
     id: string,
@@ -243,7 +268,8 @@ export class EpisodeStore {
   ): Promise<{ stream: ReadableStream<Uint8Array>; end: number } | null> {
     if (!(await this.exists(id))) return null;
     const path = this.#path(id, `${file}.ndjson`);
-    const end = await this.#settledSize(id, path);
+    const size = await this.#settledSize(id, path);
+    const end = await lastLineEnd(path, from < size ? from : 0, size);
     const stream =
       from >= end ? Readable.from([]) : createReadStream(path, { start: from, end: end - 1 });
     return { stream: Readable.toWeb(stream) as ReadableStream<Uint8Array>, end };
@@ -300,14 +326,15 @@ export class EpisodeStore {
     });
   }
 
-  async #readBookkeeping(id: string): Promise<Bookkeeping> {
+  /** null when batches.json is missing, unreadable or not bookkeeping. */
+  async #readBookkeeping(id: string): Promise<Bookkeeping | null> {
     try {
       const parsed = BookkeepingSchema.safeParse(await readJson(this.#path(id, 'batches.json')));
       if (parsed.success) return parsed.data;
     } catch (error) {
       this.#logger?.warn(`Episode ${id}: unreadable batches.json (${describeError(error)})`);
     }
-    return { received: [], gaps: [] };
+    return null;
   }
 
   async #readFinish(id: string): Promise<{ exists: boolean; value: EpisodeFinish | null }> {
@@ -341,19 +368,29 @@ export class EpisodeStore {
     };
   }
 
-  /** Line counts are cached per (size, mtime): listing is cheap even for long recordings. */
+  /**
+   * Line counts are cached per file. The files only grow, so a grown file costs only its new bytes
+   * and listing stays cheap while a long recording is written. A file that shrank or was replaced
+   * (a new inode) is counted again from the start.
+   */
   async #lineCount(path: string): Promise<number> {
-    let info: { size: number; mtimeMs: number };
+    let info: { ino: number; size: number; mtimeMs: number };
     try {
       info = await stat(path);
     } catch (error) {
       if (isMissing(error)) return 0;
       throw error;
     }
+    const { ino, size, mtimeMs } = info;
     const cached = this.#lineCounts.get(path);
-    if (cached && cached.size === info.size && cached.mtimeMs === info.mtimeMs) return cached.lines;
-    const lines = await countLines(path, info.size);
-    this.#lineCounts.set(path, { size: info.size, mtimeMs: info.mtimeMs, lines });
+    if (cached?.ino === ino && cached.size === size && cached.mtimeMs === mtimeMs) {
+      return cached.lines;
+    }
+    const lines =
+      cached?.ino === ino && size > cached.size
+        ? cached.lines + (await countLines(path, cached.size, size))
+        : await countLines(path, 0, size);
+    this.#lineCounts.set(path, { ino, size, mtimeMs, lines });
     return lines;
   }
 }

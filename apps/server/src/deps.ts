@@ -1,5 +1,6 @@
 import { consoleLogger, type Logger } from './log';
 import type { Planner } from './services/planner';
+import type { PrimaryObjectFinder } from './services/primary-object';
 import type { TokenMinter } from './services/token-minter';
 import type { VisionLocator } from './services/vision';
 import type { ClipStore } from './storage/clip-store';
@@ -39,17 +40,20 @@ export interface AppDeps {
   tokenMinter?: TokenMinter | null;
   planner?: Planner | null;
   locator?: VisionLocator | null;
+  /** The primary-object demo: Gemini names the main object, the object finder outlines it. */
+  primary?: PrimaryObjectFinder | null;
   now?: () => Date;
   logger?: Logger;
   limits?: Partial<BodyLimits>;
 }
 
-type GeminiServices = 'tokenMinter' | 'planner' | 'locator';
+type GeminiServices = 'tokenMinter' | 'planner' | 'locator' | 'primary';
 
 export interface ServerDeps extends Required<Omit<AppDeps, 'limits' | GeminiServices>> {
   tokenMinter: TokenMinter | null;
   planner: Planner | null;
   locator: VisionLocator | null;
+  primary: PrimaryObjectFinder | null;
   limits: BodyLimits;
 }
 
@@ -59,6 +63,7 @@ export function resolveDeps(deps: AppDeps): ServerDeps {
     tokenMinter: deps.tokenMinter ?? null,
     planner: deps.planner ?? null,
     locator: deps.locator ?? null,
+    primary: deps.primary ?? null,
     now: deps.now ?? (() => new Date()),
     logger: deps.logger ?? consoleLogger,
     limits: { ...DEFAULT_LIMITS, ...deps.limits },

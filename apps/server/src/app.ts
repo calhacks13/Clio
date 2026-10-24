@@ -1,6 +1,7 @@
 import { Hono, type MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
+import { DEFAULT_CORS_ORIGINS } from './config';
 import { type AppDeps, resolveDeps } from './deps';
 import { ApiError, errorBody } from './errors';
 import type { Logger } from './log';
@@ -12,14 +13,19 @@ import { planRoutes } from './routes/plans';
 import { procedureRoutes } from './routes/procedures';
 import { visionRoutes } from './routes/vision';
 
+export interface AppOptions extends AppDeps {
+  /** Browser origins that may call /api cross-origin. Default: the visualizer viewer's. */
+  corsOrigins?: readonly string[];
+}
+
 /** The HTTP API. The Gemini Live relay is not here: it hooks the server's `upgrade` event. */
-export function createApp(deps: AppDeps): Hono {
+export function createApp({ corsOrigins = DEFAULT_CORS_ORIGINS, ...deps }: AppOptions): Hono {
   const d = resolveDeps(deps);
   const app = new Hono();
 
   app.use('*', logRequests(d.logger));
-  // The headset reaches us through the Vite proxy (same origin); CORS is for tools in dev.
-  app.use('/api/*', cors());
+  // The headset reaches us through the Vite proxy (same origin), which needs no CORS.
+  app.use('/api/*', corsFor(corsOrigins));
 
   app.route('/', healthRoutes(d));
   app.route('/', coachRoutes(d));
@@ -42,6 +48,31 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(errorBody('internal', 'Internal server error'), 500);
   });
   return app;
+}
+
+/**
+ * CORS for the listed origins only. Any other website open on this laptop gets no CORS headers, so
+ * its scripts can't read recordings or minted coach tokens. Hono's `cors()` alone would still send
+ * the expose and preflight headers to every origin. Other websites' requests are refused too: a form
+ * post or a `no-cors` fetch with a text/plain body needs no preflight, so it would still reach the
+ * routes and could create episodes, mint tokens or spend the Gemini key.
+ */
+function corsFor(origins: readonly string[]): MiddlewareHandler {
+  const allowed = new Set(origins);
+  // `x-next-from` is how a viewer following a live episode resumes its frames/events/objects reads.
+  const handler = cors({ origin: [...allowed], exposeHeaders: ['x-next-from'] });
+  return async (c, next) => {
+    const origin = c.req.header('origin');
+    if (origin === undefined) return next();
+    if (allowed.has(origin)) return handler(c, next);
+    // Browsers send Sec-Fetch-Site to loopback. The headset's posts come through the Vite proxy as
+    // same-origin; tools such as curl send neither header.
+    const site = c.req.header('sec-fetch-site');
+    if (site === 'cross-site' || site === 'same-site') {
+      return c.json(errorBody('forbidden_origin', `Requests from ${origin} are not allowed`), 403);
+    }
+    return next();
+  };
 }
 
 function logRequests(logger: Logger): MiddlewareHandler {

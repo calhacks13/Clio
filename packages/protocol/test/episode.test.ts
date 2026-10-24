@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   EPISODE_EVENT_TYPES,
+  EPISODE_FEATURE,
   EpisodeBatchSchema,
+  EpisodeCreateSchema,
   EpisodeEventSchema,
   EpisodeMetaSchema,
   FrameRecordSchema,
   jointOffset,
+  LOCATION_FLAG,
+  ObjectStateSchema,
   ObjectTrackRecordSchema,
 } from '../src/index';
 
@@ -143,13 +147,33 @@ describe('episode meta', () => {
   it('still accepts episodes recorded without a plan snapshot', () => {
     expect(EpisodeMetaSchema.safeParse(meta).success).toBe(true);
   });
+
+  it('lists the optional recording features an episode uses, and none in older episodes', () => {
+    const features = [EPISODE_FEATURE.objectFlags, EPISODE_FEATURE.objectGrasp];
+    expect(features).toEqual(['object.flags', 'object.grasp']);
+    expect(EpisodeMetaSchema.parse({ ...meta, features }).features).toEqual(features);
+    expect(EpisodeMetaSchema.parse(meta).features).toBeUndefined();
+    const { episodeId: _id, createdAt: _at, ...create } = meta;
+    expect(EpisodeCreateSchema.parse({ ...create, features }).features).toEqual(features);
+  });
+
+  it('accepts features it does not know, so a newer headset is not refused', () => {
+    expect(EpisodeMetaSchema.safeParse({ ...meta, features: ['object.later'] }).success).toBe(true);
+  });
 });
 
 describe('event type list', () => {
   it('is derived from the schema, so the recorder knows every recordable event', () => {
-    expect(EPISODE_EVENT_TYPES).toHaveLength(17);
+    expect(EPISODE_EVENT_TYPES).toHaveLength(19);
     expect(EPISODE_EVENT_TYPES).toEqual(
-      expect.arrayContaining(['step.entered', 'coach.tool_call', 'transcript', 'annotation']),
+      expect.arrayContaining([
+        'step.entered',
+        'coach.tool_call',
+        'transcript',
+        'annotation',
+        'object.grasped',
+        'object.released',
+      ]),
     );
   });
 });
@@ -194,5 +218,122 @@ describe('detections as labels', () => {
     expect(EpisodeEventSchema.safeParse(base).success).toBe(false);
     expect(EpisodeEventSchema.safeParse({ ...base, latencyMs: -1 }).success).toBe(false);
     expect(EpisodeEventSchema.safeParse({ ...base, latencyMs: 0 }).success).toBe(true);
+  });
+});
+
+// The optional extension inside clio.episode/1 (docs/data-format.md, "objects.ndjson"). Older
+// episodes leave every new field out and must keep parsing.
+describe('object location flags', () => {
+  const quat = [0, 0, 0, 1];
+  const state = {
+    id: 'syringe',
+    position: [0.2, 0.05, -0.1],
+    orientation: null,
+    confidence: 0.9,
+    source: 'detector',
+  };
+  const ok = (extra: object) => ObjectStateSchema.safeParse({ ...state, ...extra }).success;
+
+  it('names the four bits as in OpenXR and Capture v1', () => {
+    expect(LOCATION_FLAG).toEqual({
+      orientationValid: 1,
+      positionValid: 2,
+      orientationTracked: 4,
+      positionTracked: 8,
+    });
+  });
+
+  it('keeps every new field optional, so older object states still parse', () => {
+    const parsed = ObjectStateSchema.parse(state);
+    expect(parsed).toEqual(state);
+    expect(ok({ orientation: quat, source: 'marker' })).toBe(true);
+  });
+
+  it('carries flags, the holding hand and the observation time', () => {
+    const parsed = ObjectStateSchema.parse({
+      ...state,
+      locationFlags: 10,
+      heldBy: 'right',
+      observedT: -12.5,
+    });
+    expect(parsed).toMatchObject({ locationFlags: 10, heldBy: 'right', observedT: -12.5 });
+    expect(ok({ locationFlags: 2, heldBy: null })).toBe(true);
+    expect(ok({ heldBy: 'both' })).toBe(false);
+  });
+
+  it('accepts only flags whose tracked bits come with their valid bits', () => {
+    const allowed = [0, 1, 2, 3, 5, 7, 10, 11, 15];
+    for (let flags = 0; flags <= 15; flags++) {
+      const orientation = flags & LOCATION_FLAG.orientationValid ? quat : null;
+      expect(ok({ locationFlags: flags, orientation }), `flags ${flags}`).toBe(
+        allowed.includes(flags),
+      );
+    }
+    expect(ok({ locationFlags: 16 })).toBe(false);
+    expect(ok({ locationFlags: -1 })).toBe(false);
+    expect(ok({ locationFlags: 2.5 })).toBe(false);
+  });
+
+  it('keeps the last valid position while the position is not valid', () => {
+    expect(ok({ locationFlags: 0 })).toBe(true);
+    expect(ok({ locationFlags: 0, position: null })).toBe(false);
+    const { position: _position, ...withoutPosition } = state;
+    expect(ObjectStateSchema.safeParse({ ...withoutPosition, locationFlags: 0 }).success).toBe(
+      false,
+    );
+  });
+
+  it('sets the orientation exactly when the orientation is valid', () => {
+    expect(ok({ locationFlags: 15, orientation: quat, source: 'marker' })).toBe(true);
+    expect(ok({ locationFlags: 10, orientation: null, source: 'marker' })).toBe(true);
+    expect(ok({ locationFlags: 10, orientation: quat, source: 'marker' })).toBe(false);
+    expect(ok({ locationFlags: 2, orientation: quat, source: 'pinch' })).toBe(false);
+    expect(ok({ locationFlags: 3, orientation: null })).toBe(false);
+  });
+
+  it('applies the same rules to object states inside a batch', () => {
+    const track = { t: 40, objects: [{ ...state, locationFlags: 4 }] };
+    expect(ObjectTrackRecordSchema.safeParse(track).success).toBe(false);
+    expect(
+      EpisodeBatchSchema.safeParse({ seq: 0, frames: [], events: [], objects: [track] }).success,
+    ).toBe(false);
+  });
+});
+
+describe('grasp events', () => {
+  const grasped = {
+    t: 2000,
+    type: 'object.grasped',
+    objectId: 'syringe',
+    hand: 'right',
+    grip: 'fist',
+    position: [0.2, 0.05, -0.1],
+  };
+  const released = {
+    t: 3500,
+    type: 'object.released',
+    objectId: 'syringe',
+    hand: 'right',
+    reason: 'hand_lost',
+    position: [0.25, 0.12, -0.2],
+  };
+
+  it('records a grasp with its grip and a release with its reason', () => {
+    const g = EpisodeEventSchema.parse(grasped);
+    const r = EpisodeEventSchema.parse(released);
+    expect(g.type === 'object.grasped' && g.grip).toBe('fist');
+    expect(r.type === 'object.released' && r.reason).toBe('hand_lost');
+  });
+
+  it('rejects an unknown grip or release reason', () => {
+    expect(EpisodeEventSchema.safeParse({ ...grasped, grip: 'claw' }).success).toBe(false);
+    expect(EpisodeEventSchema.safeParse({ ...released, reason: 'dropped' }).success).toBe(false);
+  });
+
+  it('needs the hand and the object position', () => {
+    const { hand: _hand, ...withoutHand } = grasped;
+    const { position: _position, ...withoutPosition } = released;
+    expect(EpisodeEventSchema.safeParse(withoutHand).success).toBe(false);
+    expect(EpisodeEventSchema.safeParse(withoutPosition).success).toBe(false);
   });
 });

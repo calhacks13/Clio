@@ -529,6 +529,122 @@
         },
         "type": {
           "type": "string",
+          "const": "object.grasped"
+        },
+        "objectId": {
+          "type": "string"
+        },
+        "hand": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right"
+          ]
+        },
+        "grip": {
+          "type": "string",
+          "enum": [
+            "pinch",
+            "fist"
+          ]
+        },
+        "position": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "items": false,
+          "minItems": 3,
+          "maxItems": 3,
+          "description": "Object reference point when grasped, workspace frame"
+        }
+      },
+      "required": [
+        "t",
+        "type",
+        "objectId",
+        "hand",
+        "grip",
+        "position"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "t": {
+          "type": "number",
+          "minimum": 0
+        },
+        "type": {
+          "type": "string",
+          "const": "object.released"
+        },
+        "objectId": {
+          "type": "string"
+        },
+        "hand": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "opened",
+            "hand_lost",
+            "plan_changed"
+          ],
+          "description": "opened: the hand let go; hand_lost: hand tracking dropped out; plan_changed: a new plan was loaded"
+        },
+        "position": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "items": false,
+          "minItems": 3,
+          "maxItems": 3,
+          "description": "Object reference point when released, workspace frame"
+        }
+      },
+      "required": [
+        "t",
+        "type",
+        "objectId",
+        "hand",
+        "reason",
+        "position"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "t": {
+          "type": "number",
+          "minimum": 0
+        },
+        "type": {
+          "type": "string",
           "const": "coach.status"
         },
         "state": {

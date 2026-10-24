@@ -30,7 +30,7 @@
             "items": false,
             "minItems": 3,
             "maxItems": 3,
-            "description": "Reference point, workspace frame"
+            "description": "Reference point, workspace frame; the last valid estimate while the position is not valid"
           },
           "orientation": {
             "anyOf": [
@@ -75,6 +75,31 @@
               "detector",
               "manual"
             ]
+          },
+          "locationFlags": {
+            "description": "Bits: 1 orientation valid, 2 position valid, 4 orientation tracked, 8 position tracked. Absent in older episodes: derive them from source",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 15
+          },
+          "heldBy": {
+            "description": "The hand carrying it; null when not held",
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "left",
+                  "right"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "observedT": {
+            "description": "ms since episode start when the estimate was measured; omitted within 1 ms of t, negative if before the episode started",
+            "type": "number"
           }
         },
         "required": [
@@ -94,7 +119,7 @@
     "objects"
   ],
   "additionalProperties": false,
-  "description": "One tracker update (objects.ndjson line), typically 5–30 Hz",
+  "description": "One tracker update (objects.ndjson line): written when an estimate changes, and every XR frame while an object is held",
   "$id": "https://clio.dev/schema/object-track.schema.json",
   "title": "Clio objects.ndjson line"
 }
