@@ -27,7 +27,7 @@ import { BenchCheckStore } from '../src/storage/bench-check-store';
 import { BenchStore } from '../src/storage/bench-store';
 import { ProcedureStore } from '../src/storage/procedure-store';
 import { type Harness, harness, steppingClock, tempDir } from './harness';
-import { modelFirstStage, modelPlan, modelRevision } from './plan-fixtures';
+import { modelFirstStage, modelPlan, modelRestStage } from './plan-fixtures';
 
 // The planner bench's routes on real stores in a temp dir, with scripted planner and judge models.
 
@@ -256,7 +256,7 @@ describe('POST /api/bench/plan', () => {
 
   it('plans in two stages as the headset does, and records the stage, outline and sightings', async () => {
     const models = fakeModels({
-      plans: [JSON.stringify(modelFirstStage()), JSON.stringify(modelRevision())],
+      plans: [JSON.stringify(modelFirstStage()), JSON.stringify(modelRestStage())],
     });
     const h = await benchHarness(models);
     const body = { goal: 'Refill the washer fluid', images: [IMAGE], stage: 'first' as const };
@@ -621,7 +621,11 @@ describe('staged plans on the bench', () => {
     const models = fakeModels({
       plans: [
         JSON.stringify(modelFirstStage()),
-        JSON.stringify({ objects: [], steps: modelPlan().steps.slice(1), warnings: [] }),
+        JSON.stringify({
+          objects: [modelPlan().objects[2]],
+          steps: modelPlan().steps.slice(1),
+          warnings: [],
+        }),
       ],
     });
     const h = await benchHarness(models);
@@ -632,7 +636,7 @@ describe('staged plans on the bench', () => {
     expect(first.request.stage).toBe('first');
     if (!first.result.ok) throw new Error('expected a plan');
     expect(first.result.outlineFrom).toBe(1);
-    expect(first.result.sightings?.map((x) => x.objectId)).toEqual(['washer_cap', 'fluid_jug']);
+    expect(first.result.sightings?.map((x) => x.objectId)).toEqual(['washer_cap', 'coolant_cap']);
 
     const rest = await h.request('POST', BenchPaths.scenarioRuns(scenario.id), {
       stage: 'rest',

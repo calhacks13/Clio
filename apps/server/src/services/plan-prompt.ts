@@ -3,8 +3,8 @@ import type { Content, Part } from '@google/genai';
 import type { PlannerRequest } from './planner';
 
 // Pure: the planner's system instruction and conversation turns. One system instruction serves
-// every stage; what a stage asks for (the whole plan, the first step and an outline, or the rest
-// of an outline) is in the request turn.
+// every stage; what a stage asks for (the whole plan, an outline with its first step as a card,
+// or the rest of an outline) is in the request turn.
 
 function verbLine(verb: ActionVerb): string {
   const spec: { object: string; target: string; means: string } = ACTION_VERBS[verb];
@@ -103,6 +103,10 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
     'mistake checks counts), and nothing else. Ids are lowercase slugs (a-z, 0-9, "_" or "-"), ' +
     'e.g. "washer_cap".',
   '- `label`: a short spoken name, 1 to 3 words, e.g. "washer cap".',
+  '- Object `kind`: "tool" or "container" only when the whole tool or container is meant; ' +
+    '"item" otherwise. An attached component or a bounded area of a larger object, such as a ' +
+    "caliper's vernier scale or locking screw, is an object of its own, with its own id and kind " +
+    '"item": describe only that part, so its glow stays on the component.',
   '- `placement.method` is always "detect": the headset camera finds the object. Add ' +
     '`placement.hint` with where to look when it helps.',
   "- `tracking.query`: the object's visual appearance as seen in the camera views (color, " +
@@ -163,8 +167,13 @@ function firstStageText(r: PlannerRequest): string {
     '- `outline`: every step of the lesson in order, 3 to 10, as an id and an instruction. ' +
       'outline[0] is the first step.',
     '- `objects`: only the objects the first step uses (its targets, what it shows and the ' +
-      'look-alike it guards against). The later steps declare theirs when they are written.',
-    '- `firstStep`: that first step written in full, with the same id as outline[0].',
+      'look-alike it guards against). The later steps declare theirs when they are written. ' +
+      "An object's `look` is its tracking.query and the description its outline is found by; " +
+      'its `phrase` names it for the object finder.',
+    '- `firstStep`: that first step as a card, with the same id as outline[0]. `show` lists ' +
+      'object ids. Each mistake names the object it is made with, never one the step itself ' +
+      'uses: Clio speaks its message when a hand lingers at that object. Clio confirms the step ' +
+      'by its `doneWhen`.',
     'Get the first step right: it starts from the scene as it is now, it names the right ' +
       'object so that a look-alike cannot pass for it, and its doneWhen is a state the camera ' +
       'will see.',
@@ -180,17 +189,21 @@ function stepLine(step: Revising['revision']['base']['steps'][number], n: number
   return `${n}. ${step.id}: ${step.instruction}${doneWhen}${uses}`;
 }
 
+function objectLines(r: Revising): string[] {
+  return r.revision.base.objects.map(
+    (o) => `- ${o.id} (${o.label}): ${o.tracking?.query ?? o.description ?? o.label}`,
+  );
+}
+
 function declaredObjects(r: Revising): string[] {
   return [
     'Objects already declared (reuse these ids; declare a new object only if a new step needs it):',
-    ...r.revision.base.objects.map(
-      (o) => `- ${o.id} (${o.label}): ${o.tracking?.query ?? o.description ?? o.label}`,
-    ),
+    ...objectLines(r),
   ];
 }
 
 function newStepsLine(kept: readonly { id: string }[], what: string): string {
-  return `Return only ${what} and any NEW objects.${
+  return `Return only ${what}.${
     kept.length ? ` New step ids must not be: ${kept.map((s) => s.id).join(', ')}.` : ''
   }`;
 }
@@ -224,14 +237,16 @@ function revisionText(r: Revising): string {
     ...(replaced.length ? replaced : ['(none)']),
     ...declaredObjects(r),
     viewsLine(r.images.length, true),
-    newStepsLine(kept, 'the new remaining steps'),
+    newStepsLine(kept, 'the new remaining steps and any NEW objects'),
   );
   return lines.join('\n');
 }
 
 /**
  * Stage rest: the outline a stage "first" answer wrote quickly is the intended lesson; write its
- * steps in full now, with time to think, while the learner does the first step.
+ * steps in full now, with time to think, while the learner does the first step. Its objects were
+ * quick cards too (a default kind and size), so they are written again in full, under the same
+ * ids (mergeRevision's `upgrade`).
  */
 function restText(r: Revising): string {
   const { base, fromStepIndex } = r.revision;
@@ -248,9 +263,14 @@ function restText(r: Revising): string {
     ...(outline.length
       ? outline.map((s, i) => stepLine(s, fromStepIndex + i + 1))
       : ['(none: finish the lesson)']),
-    ...declaredObjects(r),
+    'Objects already declared, written quickly with a default kind and size (keep these ids):',
+    ...objectLines(r),
     viewsLine(r.images.length, true),
-    newStepsLine(kept, 'the remaining steps, in full,') +
+    newStepsLine(
+      kept,
+      'the remaining steps, in full, and `objects`: each object above again in full, with its ' +
+        'id and label, then any new object a step needs',
+    ) +
       ' Write `warnings` as for a new plan, hazards in view first, without mentioning the ' +
       'outline or the step under way.',
   ].join('\n');
@@ -268,8 +288,11 @@ function retryText(r: PlannerRequest & { retry: NonNullable<PlannerRequest['retr
     );
   } else if (r.stage === 'first') {
     lines.push(
-      'Paths refer to the plan built from your answer: steps[0] is firstStep, and every later ' +
-        'steps[n] is outline[n].',
+      'Paths refer to the plan built from your answer. steps[0] is firstStep: its show items are ' +
+        "built from firstStep.show with each object's phrase and look, its mistakes from " +
+        'firstStep.mistakes, and its success from firstStep.doneWhen. The later steps are the ' +
+        'other outline lines, in order. objects[n] is objects[n], and its tracking.query is ' +
+        'objects[n].look.',
     );
   }
   return lines.join('\n');

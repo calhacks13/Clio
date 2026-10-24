@@ -1,13 +1,15 @@
-import { safeParseProcedure } from '@clio/protocol';
+import { ObjectSpecSchema, safeParseProcedure } from '@clio/protocol';
 import { describe, expect, it } from 'vitest';
 import { parseModelJson } from '../src/services/model-json';
 import {
   buildFirstStageCandidate,
   buildPlanCandidate,
+  cardObject,
+  cardStep,
   mergeRevision,
   type PlanContext,
 } from '../src/services/plan-build';
-import { modelFirstStage, modelPlan, modelRevision } from './plan-fixtures';
+import { modelFirstStage, modelPlan, modelRestStage, modelRevision } from './plan-fixtures';
 
 const ctx: PlanContext = {
   id: 'refill-washer-fluid',
@@ -124,50 +126,263 @@ describe('buildPlanCandidate', () => {
   });
 });
 
+describe('cardObject', () => {
+  const [washerCap] = modelFirstStage().objects;
+
+  it('makes a card an object found by its look, with the default kind and size', () => {
+    const spec = cardObject(washerCap);
+    expect(spec).toEqual({
+      id: 'washer_cap',
+      label: 'washer cap',
+      kind: 'item',
+      placement: { method: 'detect' },
+      tracking: { query: washerCap?.look, moves: false },
+    });
+    expect(ObjectSpecSchema.parse(spec)).toMatchObject({ radius: 0.03, hidden: false });
+  });
+
+  it('tracks it as moving only when the card says exactly true', () => {
+    const moves = (value: unknown) =>
+      (cardObject({ ...washerCap, moves: value }) as { tracking: { moves: boolean } }).tracking
+        .moves;
+    expect([moves(true), moves('true'), moves(1), moves(undefined), moves(false)]).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  it('leaves anything that is not a card for validation to catch', () => {
+    expect(cardObject('washer_cap')).toBe('washer_cap');
+  });
+});
+
+describe('cardStep', () => {
+  const { objects, firstStep } = modelFirstStage();
+  const card = (patch: Record<string, unknown>) => ({ ...firstStep, ...patch });
+
+  it('outlines each shown object by its phrase and look, and confirms the step by its done-when', () => {
+    expect(cardStep(firstStep, objects)).toEqual({
+      id: 'open-cap',
+      instruction: 'Flip open the blue washer fluid cap.',
+      doneWhen: 'The blue cap is flipped open and the reservoir neck is visible.',
+      targets: ['washer_cap'],
+      action: { verb: 'twist', object: 'washer_cap', direction: 'ccw', amount: 0.5 },
+      show: [{ object: 'washer_cap', phrase: 'washer fluid cap', description: objects[0]?.look }],
+      mistakes: [
+        {
+          kind: 'wrong_cap',
+          message: 'That is the coolant cap. Use the blue one.',
+          when: { type: 'hand_near', object: 'coolant_cap', dwellMs: 700 },
+        },
+      ],
+      success: {
+        type: 'confirm',
+        prompt: 'The blue cap is flipped open and the reservoir neck is visible.',
+      },
+    });
+  });
+
+  it('shows each declared object once, and names it by its label without a phrase', () => {
+    const cards = [{ ...objects[0], phrase: ' ' }, objects[1]];
+    const step = cardStep(card({ show: ['ghost', 'washer_cap', 'washer_cap', 7] }), cards);
+    expect((step as { show: unknown[] }).show).toEqual([
+      { object: 'washer_cap', phrase: 'washer cap', description: objects[0]?.look },
+    ]);
+  });
+
+  it('cuts a phrase to 60 characters and a look to 300, as the show items allow', () => {
+    const cards = [{ ...objects[0], phrase: 'p'.repeat(80), look: 'l'.repeat(400) }];
+    const [item] = (
+      cardStep(firstStep, cards) as { show: { phrase: string; description: string }[] }
+    ).show;
+    expect([item?.phrase.length, item?.description.length]).toEqual([60, 300]);
+  });
+
+  it('drops a mistake made with an undeclared object or one the step itself uses', () => {
+    const mistakes = [
+      { kind: 'ghost', message: 'No.', object: 'ghost' },
+      { kind: 'own_target', message: 'No.', object: 'washer_cap' },
+      { kind: 'shown', message: 'No.', object: 'coolant_cap' },
+      { kind: 'not_a_record', message: 'No.' },
+    ];
+    const shownLookAlike = cardStep(
+      card({ show: ['washer_cap', 'coolant_cap'], mistakes }),
+      objects,
+    ) as { mistakes: unknown[] };
+    expect(shownLookAlike.mistakes).toEqual([]);
+    const acted = cardStep(
+      card({
+        targets: [],
+        show: [],
+        action: { verb: 'pour', object: 'washer_cap', target: 'coolant_cap' },
+        mistakes,
+      }),
+      objects,
+    ) as { mistakes: unknown[] };
+    expect(acted.mistakes).toEqual([]);
+  });
+
+  it('is confirmed without a prompt when the card has no done-when', () => {
+    const { doneWhen: _none, ...step } = firstStep;
+    expect((cardStep(step, objects) as { success: unknown }).success).toEqual({ type: 'confirm' });
+  });
+});
+
 describe('buildFirstStageCandidate', () => {
-  it('writes the first step in full and the rest of the outline as steps to confirm', () => {
+  it('writes the first step from its card and the rest of the outline as steps to confirm', () => {
     const built = buildFirstStageCandidate(modelFirstStage(), { ...ctx, views: 2 });
     const p = parsed(built.candidate);
-    const full = parsed(buildPlanCandidate(modelPlan(), ctx).candidate);
-    expect(p.steps[0]).toEqual(full.steps[0]);
-    expect(p.steps.slice(1)).toEqual([
-      {
-        id: 'pour-fluid',
-        instruction: 'Pour the fluid into the reservoir.',
-        doneWhen: 'The blue fluid reaches the top mark on the reservoir.',
-        targets: ['fluid_jug', 'washer_cap'],
+    expect(p.steps[0]).toEqual({
+      id: 'open-cap',
+      instruction: 'Flip open the blue washer fluid cap.',
+      doneWhen: 'The blue cap is flipped open and the reservoir neck is visible.',
+      targets: ['washer_cap'],
+      hand: 'either',
+      action: {
+        verb: 'twist',
+        object: 'washer_cap',
+        direction: 'ccw',
+        amount: 0.5,
         hand: 'either',
-        show: [],
-        success: {
-          type: 'confirm',
-          by: 'either',
-          prompt: 'The blue fluid reaches the top mark on the reservoir.',
-        },
-        mistakes: [],
       },
-      expect.objectContaining({
-        id: 'close-cap',
-        success: expect.objectContaining({ type: 'confirm' }),
-      }),
+      show: [
+        {
+          object: 'washer_cap',
+          phrase: 'washer fluid cap',
+          description: modelFirstStage().objects[0]?.look,
+        },
+      ],
+      success: {
+        type: 'confirm',
+        by: 'either',
+        prompt: 'The blue cap is flipped open and the reservoir neck is visible.',
+      },
+      mistakes: [
+        {
+          kind: 'wrong_cap',
+          message: 'That is the coolant cap. Use the blue one.',
+          when: {
+            type: 'hand_near',
+            object: 'coolant_cap',
+            hand: 'either',
+            point: 'pinch',
+            radius: 0.06,
+            dwellMs: 700,
+          },
+          cooldownMs: 4000,
+        },
+      ],
+    });
+    const outlined = (id: string, instruction: string) => ({
+      id,
+      instruction,
+      targets: [],
+      hand: 'either',
+      show: [],
+      success: { type: 'confirm', by: 'either', prompt: instruction },
+      mistakes: [],
+    });
+    expect(p.steps.slice(1)).toEqual([
+      outlined('pour-fluid', 'Pour the fluid into the reservoir.'),
+      outlined('close-cap', 'Close the washer fluid cap.'),
     ]);
+    expect(p.objects).toEqual(
+      modelFirstStage().objects.map((card) => ({
+        id: card.id,
+        label: card.label,
+        kind: 'item',
+        radius: 0.03,
+        hidden: false,
+        placement: { method: 'detect' },
+        tracking: { query: card.look, moves: false },
+      })),
+    );
+    expect(p.workspace).toEqual({ size: [0.8, 0.6] });
     expect(built.outlineFrom).toBe(1);
-    expect(built.sightings.map((s) => s.objectId)).toEqual(['washer_cap', 'fluid_jug']);
+    // The jug was seen but is not declared until stage rest.
+    expect(built.sightings.map((s) => [s.objectId, s.view])).toEqual([
+      ['washer_cap', 0],
+      ['coolant_cap', 1],
+    ]);
     expect(built.candidate).not.toHaveProperty('outline');
     expect(built.candidate).not.toHaveProperty('firstStep');
     expect(built.warnings).toEqual(['Make sure the engine is off and cool.']);
   });
 
-  it('has no outline when the lesson is only its first step', () => {
+  const ids = (answer: unknown) =>
+    parsed(buildFirstStageCandidate(answer, ctx).candidate).steps.map((s) => s.id);
+  const [opening, pouring, closing] = modelFirstStage().outline;
+
+  it('takes the first step out of the outline wherever its line is', () => {
     const answer = modelFirstStage();
-    const built = buildFirstStageCandidate({ ...answer, outline: answer.outline.slice(0, 1) }, ctx);
-    expect(parsed(built.candidate).steps.map((s) => s.id)).toEqual(['open-cap']);
-    expect(built).not.toHaveProperty('outlineFrom');
+    expect(ids({ ...answer, outline: [pouring, opening, closing] })).toEqual([
+      'open-cap',
+      'pour-fluid',
+      'close-cap',
+    ]);
   });
 
-  it('leaves a missing first step for validation (and the retry) to catch', () => {
+  it('keeps every line when none is the first step, unless outline[0] says the same', () => {
+    const answer = modelFirstStage();
+    // The bug this guards against: outline[0] taken for the first step, losing pour-fluid.
+    expect(ids({ ...answer, outline: [pouring, closing] })).toEqual([
+      'open-cap',
+      'pour-fluid',
+      'close-cap',
+    ]);
+    const renamed = { id: 'open-washer-cap', instruction: 'flip open the blue washer fluid cap' };
+    expect(ids({ ...answer, outline: [renamed, pouring, closing] })).toEqual([
+      'open-cap',
+      'pour-fluid',
+      'close-cap',
+    ]);
+    const other = { id: 'check-level', instruction: 'Check the fluid level.' };
+    expect(ids({ ...answer, outline: [other, pouring] })).toEqual([
+      'open-cap',
+      'check-level',
+      'pour-fluid',
+    ]);
+  });
+
+  it('has no outline when the lesson is only its first step', () => {
+    const answer = modelFirstStage();
+    for (const outline of [[opening], [], undefined]) {
+      const built = buildFirstStageCandidate({ ...answer, outline }, ctx);
+      expect(parsed(built.candidate).steps.map((s) => s.id)).toEqual(['open-cap']);
+      expect(built).not.toHaveProperty('outlineFrom');
+    }
+  });
+
+  it('leaves a missing or broken first step for validation (and the retry) to catch', () => {
     const { firstStep: _missing, ...answer } = modelFirstStage();
-    const r = safeParseProcedure(buildFirstStageCandidate(answer, ctx).candidate);
-    expect(r.ok ? '' : r.error).toMatch(/steps\[0\]|steps\.0/);
+    for (const firstStep of [undefined, 'open-cap']) {
+      const r = safeParseProcedure(
+        buildFirstStageCandidate({ ...answer, firstStep }, ctx).candidate,
+      );
+      expect(r.ok ? '' : r.error).toMatch(/steps\[0\]|steps\.0/);
+    }
+  });
+
+  it('leaves undeclared targets and duplicate cards for validation to name', () => {
+    const answer = modelFirstStage();
+    const error = (patch: Record<string, unknown>) => {
+      const r = safeParseProcedure(
+        buildFirstStageCandidate({ ...answer, ...patch }, ctx).candidate,
+      );
+      return r.ok ? '' : r.error;
+    };
+    expect(error({ firstStep: { ...answer.firstStep, targets: ['fluid_jug'] } })).toMatch(
+      /Unknown object "fluid_jug"[\s\S]*steps\[0\]\.targets\[0\]/,
+    );
+    expect(error({ objects: [...answer.objects, answer.objects[0]] })).toMatch(
+      /Duplicate object id "washer_cap"[\s\S]*objects\[2\]\.id/,
+    );
+    expect(error({ objects: [{ ...answer.objects[0], look: '' }, answer.objects[1]] })).toMatch(
+      /objects\[0\]\.tracking\.query/,
+    );
   });
 });
 
@@ -232,5 +447,81 @@ describe('mergeRevision', () => {
   it('can replace every step', () => {
     const p = parsed(mergeRevision(base, modelRevision(), 0, revisionCtx).candidate);
     expect(p.steps.map((s) => s.id)).toEqual(['open-cap', 'pour-slowly']);
+  });
+
+  describe('upgrading a first stage', () => {
+    const first = parsed(buildFirstStageCandidate(modelFirstStage(), ctx).candidate);
+    const restCtx = { ...revisionCtx, goal: ctx.goal };
+
+    it('fills in the objects its cards declared, keeping their ids, labels and places', () => {
+      const answer = modelRestStage();
+      const fullCap = { ...answer.objects[0], kind: 'tool', radius: 0.04, label: 'blue cap' };
+      const p = parsed(
+        mergeRevision(
+          first,
+          { ...answer, objects: [fullCap, ...answer.objects.slice(1)] },
+          1,
+          restCtx,
+          {
+            upgrade: true,
+          },
+        ).candidate,
+      );
+      expect(p.objects.map((o) => o.id)).toEqual([
+        'washer_cap',
+        'coolant_cap',
+        'fluid_jug',
+        'funnel',
+      ]);
+      expect(p.objects[0]).toEqual({
+        id: 'washer_cap',
+        label: 'washer cap',
+        kind: 'tool',
+        radius: 0.04,
+        hidden: false,
+        placement: { method: 'detect', hint: 'front left of the engine bay' },
+        tracking: { query: 'blue cap with a windshield symbol', moves: false },
+      });
+      // Not written again: the card stays as it was.
+      expect(p.objects[1]).toEqual(first.objects[1]);
+      expect(p.steps[0]).toEqual(first.steps[0]);
+    });
+
+    it('keeps the card when the new declaration is not a valid object', () => {
+      const answer = modelRestStage();
+      const broken = { ...answer.objects[0], kind: 'banana', radius: 9 };
+      const p = parsed(
+        mergeRevision(
+          first,
+          { ...answer, objects: [broken, ...answer.objects.slice(1)] },
+          1,
+          restCtx,
+          {
+            upgrade: true,
+          },
+        ).candidate,
+      );
+      expect(p.objects[0]).toEqual(first.objects[0]);
+    });
+
+    it('takes only the first of two declarations of the same object', () => {
+      const answer = modelRestStage();
+      const again = { ...answer.objects[0], radius: 0.2 };
+      const p = parsed(
+        mergeRevision(first, { ...answer, objects: [...answer.objects, again] }, 1, restCtx, {
+          upgrade: true,
+        }).candidate,
+      );
+      expect(p.objects[0]?.radius).toBe(0.03);
+      expect(p.objects[0]?.placement).toEqual({
+        method: 'detect',
+        hint: 'front left of the engine bay',
+      });
+    });
+
+    it('ignores them without upgrade, as a revise_plan does', () => {
+      const p = parsed(mergeRevision(first, modelRestStage(), 1, restCtx).candidate);
+      expect(p.objects.slice(0, 2)).toEqual(first.objects);
+    });
   });
 });

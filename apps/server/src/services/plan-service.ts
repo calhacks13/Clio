@@ -24,9 +24,10 @@ import type { Planner, PlannerRequest } from './planner';
 // skipped, of the plan as the headset sends it (`revise.base`, with the coach's edits) or as
 // stored. The draft and its retry share one time budget.
 //
-// A plan comes whole (stage full) or in two stages: stage first writes the first step in full and
-// the rest as an outline, so the lesson starts quickly; stage rest then writes the outline in full
-// as a revision of that plan, while the learner works on the first step (docs/coach-plan.md).
+// A plan comes whole (stage full) or in two stages: stage first writes the first step as a short
+// card and the rest as an outline, so the lesson starts quickly; stage rest then writes the outline
+// in full as a revision of that plan, while the learner works on the first step, and fills in the
+// objects the card declared (docs/coach-plan.md).
 
 export type PlanRequestBody = z.output<typeof PlanRequestSchema>;
 
@@ -119,7 +120,7 @@ export async function generatePlan(
     planner,
     { ...request, revision: { reason, base, fromStepIndex: from, skippedStepIds } },
     timeLeft,
-    (output) => mergeRevision(base, output, from, ctx),
+    (output) => mergeRevision(base, output, from, ctx, { upgrade: stage === 'rest' }),
   );
   const saved = await procedures.savePlan(draft.procedure, revisionIdCandidates(planId));
   return { planId: saved.id, procedure: saved, warnings: [...notes, ...draft.warnings] };

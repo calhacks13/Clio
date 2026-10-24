@@ -1,4 +1,11 @@
-import { type PlanSighting, PROCEDURE_SCHEMA_ID, type Procedure, type Step } from '@clio/protocol';
+import {
+  type ObjectSpec,
+  ObjectSpecSchema,
+  type PlanSighting,
+  PROCEDURE_SCHEMA_ID,
+  type Procedure,
+  type Step,
+} from '@clio/protocol';
 import { isRecord, type Json } from './model-json';
 import { boxCenter, fromGeminiBox, fromGeminiPoint } from './vision';
 
@@ -115,8 +122,11 @@ function outlineStep(line: unknown): unknown {
   };
 }
 
-/** A first-stage object card as an object spec: its look is what the camera looks for. */
-function cardObject(card: unknown): unknown {
+/**
+ * A first-stage object card as an object spec: its look is what the camera looks for. Its kind
+ * and size take the defaults until stage rest writes it in full (mergeRevision's `upgrade`).
+ */
+export function cardObject(card: unknown): unknown {
   if (!isRecord(card)) return card;
   const { id, label, look, moves } = card;
   return {
@@ -128,28 +138,49 @@ function cardObject(card: unknown): unknown {
   };
 }
 
+const trimmed = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+/** Lowercase words without the punctuation, to compare two sentences. */
+const words = (value: unknown): string =>
+  trimmed(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
 /**
- * The first step's card in full: its outlines are its objects' looks, each mistake made with a
- * declared object is caught by a hand lingering near it, and the step is confirmed by its
- * done-when (the coach and the step watcher judge it from the camera).
+ * The first step's card in full: it outlines each object it shows (once) by that object's phrase
+ * and look, each mistake made with another declared object is caught by a hand lingering near it,
+ * and the step is confirmed by its done-when (the coach and the step watcher judge it from the
+ * camera). A mistake made with an object the step itself uses is dropped: its hand_near rule
+ * would go off during the right action.
  */
-function cardStep(card: unknown, objects: readonly unknown[]): unknown {
+export function cardStep(card: unknown, objects: readonly unknown[]): unknown {
   if (!isRecord(card)) return card;
   const { show, mistakes, ...step } = card;
-  const looks = new Map<string, { label: string; look: string }>();
+  const cards = new Map<string, { phrase: string; look: string }>();
   for (const o of objects) {
-    if (isRecord(o) && typeof o.id === 'string' && typeof o.look === 'string') {
-      looks.set(o.id, { label: typeof o.label === 'string' ? o.label : o.id, look: o.look });
-    }
+    if (!isRecord(o) || typeof o.id !== 'string' || typeof o.look !== 'string') continue;
+    const phrase = trimmed(o.phrase) || trimmed(o.label) || o.id;
+    if (!cards.has(o.id)) cards.set(o.id, { phrase, look: o.look });
   }
-  const shown = (Array.isArray(show) ? show : []).flatMap((id) => {
-    const seen = typeof id === 'string' ? looks.get(id) : undefined;
-    return seen
-      ? [{ object: id, phrase: seen.label.slice(0, 60), description: seen.look.slice(0, 300) }]
-      : [];
-  });
+  const shown: { object: string; phrase: string; description: string }[] = [];
+  for (const id of Array.isArray(show) ? show : []) {
+    const seen = typeof id === 'string' ? cards.get(id) : undefined;
+    if (!seen || shown.some((item) => item.object === id)) continue;
+    shown.push({
+      object: id,
+      phrase: seen.phrase.slice(0, 60),
+      description: seen.look.slice(0, 300),
+    });
+  }
+  const action = isRecord(step.action) ? step.action : {};
+  const own = new Set<unknown>([
+    ...(Array.isArray(step.targets) ? step.targets : []),
+    ...shown.map((item) => item.object),
+    action.object,
+    action.target,
+  ]);
   const rules = (Array.isArray(mistakes) ? mistakes : []).flatMap((m) =>
-    isRecord(m) && typeof m.object === 'string' && looks.has(m.object)
+    isRecord(m) && typeof m.object === 'string' && cards.has(m.object) && !own.has(m.object)
       ? [
           {
             kind: m.kind,
@@ -169,14 +200,30 @@ function cardStep(card: unknown, objects: readonly unknown[]): unknown {
 }
 
 /**
- * Stage first: the first step's card in full, then the rest of the `outline` (whose first line
- * is that same step) as plain steps, until a stage "rest" request writes them in full. So
- * steps[n] is outline[n] for every n after the first, which keeps validation paths readable.
+ * The outline without the first step, which the card writes: the line with the card's id,
+ * wherever it is. With no such line, outline[0] is taken for the first step only when it says
+ * the same thing; otherwise every line stays, since a step done twice is plain to see and a
+ * dropped one is not.
+ */
+function laterLines(outline: readonly unknown[], first: unknown): unknown[] {
+  const id = isRecord(first) && typeof first.id === 'string' ? first.id : undefined;
+  const at = id ? outline.findIndex((line) => isRecord(line) && line.id === id) : -1;
+  if (at >= 0) return outline.filter((_, i) => i !== at);
+  const [head, ...rest] = outline;
+  const said = isRecord(first) ? words(first.instruction) : '';
+  return said && isRecord(head) && words(head.instruction) === said ? rest : [...outline];
+}
+
+/**
+ * Stage first: the first step's card in full, then the other lines of the `outline` as plain
+ * steps, in order, until a stage "rest" request writes them in full. When outline[0] is the
+ * first step, as asked, steps[n] is outline[n] for every n after the first, which keeps
+ * validation paths readable.
  */
 export function buildFirstStageCandidate(output: unknown, ctx: PlanContext): Candidate {
   const { outline, firstStep, objects, ...o } = isRecord(output) ? output : {};
   const cards = Array.isArray(objects) ? objects : [];
-  const later = Array.isArray(outline) ? outline.slice(1).map(outlineStep) : [];
+  const later = Array.isArray(outline) ? laterLines(outline, firstStep).map(outlineStep) : [];
   const built = buildPlanCandidate(
     { ...o, objects: cards.map(cardObject), steps: [cardStep(firstStep, cards), ...later] },
     ctx,
@@ -197,23 +244,52 @@ function uniqueStepIds(kept: readonly Step[], fresh: readonly unknown[]): unknow
 }
 
 /**
+ * An object stage rest wrote again in full, over the one the first stage's card declared: its
+ * kind, size, description, where to look and how to track it replace the card's defaults, and its
+ * id and label (the learner may have heard it) stay. A declaration that does not make a valid
+ * object leaves the card's as it was.
+ */
+function upgraded(card: ObjectSpec, full: Json): ObjectSpec {
+  const { id: _id, label: _label, hidden: _hidden, ...spec } = full;
+  const tracking = isRecord(spec.tracking) ? spec.tracking : {};
+  const r = ObjectSpecSchema.safeParse({
+    ...card,
+    ...spec,
+    placement: card.placement.method === 'detect' ? spec.placement : card.placement,
+    tracking: { ...card.tracking, ...tracking },
+  });
+  return r.success ? r.data : card;
+}
+
+/**
  * Revision: the base plan's steps before `fromStepIndex` stay verbatim, the model's steps follow.
- * Objects are the base objects plus any new ids the model declared. Everything else (title,
- * workspace, coach) comes from the base plan.
+ * Objects are the base objects plus any new ids the model declared. A base object the model
+ * declares again is ignored, unless `upgrade` (stage rest, writing out a first stage's cards):
+ * then its spec is filled in from the new one. Everything else (title, workspace, coach) comes
+ * from the base plan.
  */
 export function mergeRevision(
   base: Procedure,
   output: unknown,
   fromStepIndex: number,
   ctx: PlanContext,
+  options: { upgrade?: boolean } = {},
 ): Candidate {
   const o = isRecord(output) ? output : {};
   const known = new Set(base.objects.map((obj) => obj.id));
+  const redeclared = new Map<string, Json>();
   const added = (Array.isArray(o.objects) ? o.objects : []).map(detected).filter((obj) => {
     if (!isRecord(obj) || typeof obj.id !== 'string') return true;
-    if (known.has(obj.id)) return false;
+    if (known.has(obj.id)) {
+      if (!redeclared.has(obj.id)) redeclared.set(obj.id, obj);
+      return false;
+    }
     known.add(obj.id);
     return true;
+  });
+  const objects = base.objects.map((obj) => {
+    const full = options.upgrade ? redeclared.get(obj.id) : undefined;
+    return full ? upgraded(obj, full) : obj;
   });
   const kept = base.steps.slice(0, fromStepIndex);
   return {
@@ -223,7 +299,7 @@ export function mergeRevision(
       summary: base.summary,
       domain: base.domain,
       workspace: base.workspace,
-      objects: [...base.objects, ...added],
+      objects: [...objects, ...added],
       // A missing steps array stays invalid so validation (and the retry) catches it.
       steps: Array.isArray(o.steps) ? [...kept, ...uniqueStepIds(kept, o.steps)] : o.steps,
       coach: base.coach,

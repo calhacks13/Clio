@@ -294,7 +294,7 @@ describe('createGeminiPlanner', () => {
     ]);
   });
 
-  it('asks a first stage for the lesson in outline and its first step in full', () => {
+  it('asks a first stage for the lesson in outline and its first step as a card', () => {
     const contents = plannerContents({
       goal: 'Refill the washer fluid',
       images: [IMAGE, IMAGE],
@@ -304,11 +304,18 @@ describe('createGeminiPlanner', () => {
       [
         'Goal: Refill the washer fluid',
         "Attached: 2 current camera views from the learner's headset, numbered 1 to 2 in order.",
-        'The lesson starts as soon as you answer. Its later steps are written in full ' +
-          'afterwards, while the learner works on the first one. So:',
-        '- `outline`: every step of the lesson in order, 3 to 10, one line each (id, ' +
-          'instruction, doneWhen, targets). outline[0] is the first step.',
-        '- `firstStep`: that first step written in full, with the same id as outline[0].',
+        'The lesson starts as soon as you answer, so answer briefly. Its later steps are ' +
+          'written in full afterwards, while the learner works on the first one. So:',
+        '- `outline`: every step of the lesson in order, 3 to 10, as an id and an instruction. ' +
+          'outline[0] is the first step.',
+        '- `objects`: only the objects the first step uses (its targets, what it shows and the ' +
+          'look-alike it guards against). The later steps declare theirs when they are ' +
+          "written. An object's `look` is its tracking.query and the description its outline " +
+          'is found by; its `phrase` names it for the object finder.',
+        '- `firstStep`: that first step as a card, with the same id as outline[0]. `show` ' +
+          'lists object ids. Each mistake names the object it is made with, never one the ' +
+          'step itself uses: Clio speaks its message when a hand lingers at that object. Clio ' +
+          'confirms the step by its `doneWhen`.',
         'Get the first step right: it starts from the scene as it is now, it names the right ' +
           'object so that a look-alike cannot pass for it, and its doneWhen is a state the ' +
           'camera will see.',
@@ -324,8 +331,11 @@ describe('createGeminiPlanner', () => {
     expect(retry.at(-1)?.parts?.[0]?.text).toBe(
       'Your JSON did not pass validation. Fix these errors and return the complete corrected JSON:\n' +
         '✖ Invalid input at steps[2].targets[0]\n' +
-        'Paths refer to the plan built from your answer: steps[0] is firstStep, and every later ' +
-        'steps[n] is outline[n].',
+        'Paths refer to the plan built from your answer. steps[0] is firstStep: its show items ' +
+        "are built from firstStep.show with each object's phrase and look, its mistakes from " +
+        'firstStep.mistakes, and its success from firstStep.doneWhen. The later steps are the ' +
+        'other outline lines, in order. objects[n] is objects[n], and its tracking.query is ' +
+        'objects[n].look.',
     );
   });
 
@@ -353,13 +363,14 @@ describe('createGeminiPlanner', () => {
           'the top mark on the reservoir. Uses: fluid_jug, washer_cap.',
         '3. close-cap: Close the washer fluid cap. Done when: The blue cap is shut flat on the ' +
           'reservoir. Uses: washer_cap.',
-        'Objects already declared (reuse these ids; declare a new object only if a new step needs it):',
+        'Objects already declared, written quickly with a default kind and size (keep these ids):',
         '- washer_cap (washer cap): blue cap with a windshield symbol',
         '- coolant_cap (coolant cap): yellow cap with a warning symbol',
         '- fluid_jug (fluid jug): blue plastic jug of washer fluid',
         "Attached: 1 current camera view from the learner's headset.",
-        'Return only the remaining steps, in full, and any NEW objects. New step ids must not ' +
-          'be: open-cap. Write `warnings` as for a new plan, hazards in view first, without ' +
+        'Return only the remaining steps, in full, and `objects`: each object above again in ' +
+          'full, with its id and label, then any new object a step needs. New step ids must ' +
+          'not be: open-cap. Write `warnings` as for a new plan, hazards in view first, without ' +
           'mentioning the outline or the step under way.',
       ].join('\n'),
     );
@@ -427,8 +438,16 @@ describe('PLANNER_SYSTEM_INSTRUCTION', () => {
     'sharp tools (knives, blades, scissors, needles)',
     'hot things (kettles, stoves, pans, irons)',
     'what it looks like, where it is, and what to do',
+    // Parts: an attached component is its own object, and kind "region" is left to the mat.
+    'Object `kind`: "tool" or "container" only when the whole tool or container is meant',
+    "caliper's vernier scale or locking screw, is an object of its own",
+    'describe only that part',
   ])('covers %j', (phrase) => {
     expect(PLANNER_SYSTEM_INSTRUCTION).toContain(phrase);
+  });
+
+  it('never offers kind "region", which means a static zone on the mat', () => {
+    expect(PLANNER_SYSTEM_INSTRUCTION).not.toContain('region');
   });
 
   it('explains every action verb with its meaning and arguments', () => {

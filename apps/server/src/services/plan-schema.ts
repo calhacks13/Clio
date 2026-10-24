@@ -9,7 +9,7 @@ import { ACTION_VERB_NAMES } from '@clio/protocol';
 // enforced afterwards by safeParseProcedure, or asked for in the prompt.
 
 export type JsonSchema = { [keyword: string]: unknown };
-/** plan: a whole plan. first: the first step in full plus an outline. revision: the rest of one. */
+/** plan: a whole plan. first: an outline and its first step as a card. revision: the rest of one. */
 export type PlanSchemaKind = 'plan' | 'first' | 'revision';
 
 const described = (schema: JsonSchema, description?: string): JsonSchema =>
@@ -233,20 +233,24 @@ const outlineLine = obj(
 
 // The first stage writes the first step as a card, not in full: every token is time the learner
 // waits. plan-build.ts expands the card into an ordinary step and objects: an object's `look` is
-// its detector query and the description its outline finds it by, a mistake's object becomes a
-// hand_near rule, and the step is confirmed by its done-when.
+// its detector query and the description its outline is found by, with its `phrase` as the short
+// name, a mistake's object becomes a hand_near rule, and the step is confirmed by its done-when.
 
 const cardObject = obj(
   {
     id: str('Lowercase slug, e.g. "yogurt_drink"'),
     label: str('Short spoken name, 1 to 3 words'),
+    phrase: str(
+      '2 to 5 words naming what it is, like a label on a box, for an object detector, e.g. ' +
+        '"washer fluid cap". No colors, positions or verbs',
+    ),
     look: str(
       'One sentence of 10 to 25 words that finds it in a camera frame on its own: what it is, ' +
         'color, shape, markings, and where it is',
     ),
     moves: bool('true if it gets picked up and carried during the task'),
   },
-  ['id', 'label', 'look', 'moves'],
+  ['id', 'label', 'phrase', 'look', 'moves'],
 );
 
 const cardStep = obj(
@@ -265,7 +269,10 @@ const cardStep = obj(
         {
           kind: str('Lowercase slug label, e.g. "wrong_bottle"'),
           message: str('A short spoken correction that says how to tell the right one apart'),
-          object: str('The declared object the mistake is made with, e.g. the look-alike'),
+          object: str(
+            'The declared object the mistake is made with, e.g. the look-alike; never one this ' +
+              'step targets or shows',
+          ),
         },
         ['kind', 'message', 'object'],
       ),
@@ -299,7 +306,11 @@ export function buildPlanJsonSchema(kind: PlanSchemaKind): JsonSchema {
     return {
       ...obj(
         {
-          objects: arr(ref('object'), { description: 'Only NEW objects, at most 16; [] if none' }),
+          objects: arr(ref('object'), {
+            description:
+              'Only NEW objects, plus any declared object the request asks to write again; at ' +
+              'most 16; [] if none',
+          }),
           steps: arr(ref('step'), { description: 'The new remaining steps, 1 to 10' }),
           warnings,
         },
@@ -311,17 +322,21 @@ export function buildPlanJsonSchema(kind: PlanSchemaKind): JsonSchema {
   if (kind === 'first') {
     // The lesson starts on this answer, and every token of it is time the learner waits, so it
     // holds only what the first step needs: the lesson in one line a step (so the first step
-    // fits it), the first step's objects and where they are, the hazards, and the first step in
-    // full. The workspace takes its default; the later steps' objects come with stage rest.
+    // fits it), the first step's objects and where they are, the hazards, and the first step as
+    // a card. The workspace takes its default; the later steps and their objects come with stage
+    // rest. Only `action` is a shared definition here, so the other $defs stay out.
     return {
       ...obj(
         {
           title: PLAN_HEAD.title as JsonSchema,
           summary: PLAN_HEAD.summary as JsonSchema,
           outline: arr(outlineLine, {
+            min: 1,
+            max: 10,
             description: 'Every step in order, 3 to 10: id and instruction; the first is firstStep',
           }),
           objects: arr(cardObject, {
+            max: 8,
             description:
               'Only the objects the first step uses and the look-alikes it guards against',
           }),
@@ -331,7 +346,7 @@ export function buildPlanJsonSchema(kind: PlanSchemaKind): JsonSchema {
         },
         ['title', 'summary', 'outline', 'objects', 'sightings', 'warnings', 'firstStep'],
       ),
-      $defs: DEFS,
+      $defs: { action: DEFS.action as JsonSchema },
     };
   }
   return {
