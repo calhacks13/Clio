@@ -82,7 +82,15 @@ const OUTLINE: ObjectOutline = {
 };
 
 /** A grounder that "sees" the objects in `visible`, placing them like the real one would. */
-function setup({ refreshMs, camera = true }: { refreshMs?: number; camera?: boolean } = {}) {
+function setup({
+  refreshMs,
+  camera = true,
+  hint,
+}: {
+  refreshMs?: number;
+  camera?: boolean;
+  hint?: number;
+} = {}) {
   const bus = new Emitter<AppEvents>();
   const clock = new ManualClock(1000);
   const registry = new ObjectRegistry(bus);
@@ -130,6 +138,7 @@ function setup({ refreshMs, camera = true }: { refreshMs?: number; camera?: bool
       sightings,
       source: 'jev',
       frameT: 900,
+      ...(hint !== undefined && { refreshMs: hint }),
     };
   };
   const grounder: Grounder = {
@@ -283,6 +292,23 @@ describe('Spotlight', () => {
     await look;
     expect(spotlight.tick(clock.now() + 2999)).toBeNull();
     expect(spotlight.tick(clock.now() + 3000)).not.toBeNull();
+  });
+
+  it('looks again as soon as a tracking finder asks, but never later than refreshMs', async () => {
+    const fast = setup({ refreshMs: 3000, hint: 50 });
+    await fast.spotlight.enterStep(POUR);
+    expect(fast.spotlight.tick(fast.clock.now() + 49)).toBeNull();
+    expect(fast.spotlight.tick(fast.clock.now() + 50)).not.toBeNull();
+
+    const slow = setup({ refreshMs: 3000, hint: 10_000 });
+    await slow.spotlight.enterStep(POUR);
+    expect(slow.spotlight.tick(slow.clock.now() + 3000)).not.toBeNull();
+  });
+
+  it('never refreshes with refreshMs 0, even when the finder asks', async () => {
+    const { spotlight, clock } = setup({ refreshMs: 0, hint: 50 });
+    await spotlight.enterStep(POUR);
+    expect(spotlight.tick(clock.advance(60_000))).toBeNull();
   });
 
   it('never refreshes with refreshMs 0', async () => {

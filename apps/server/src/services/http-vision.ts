@@ -12,9 +12,10 @@ import {
 } from './vision';
 
 // An external object finder behind CLIO_VISION_URL (jev, a segmenter on a GPU box, anything that
-// speaks HTTP). Clio POSTs its LocateRequest as JSON and accepts { detections, model? }. Each
-// detection needs only an id and any of point, box or outline, in 0..1 of the image; Clio fills
-// in the rest and simplifies long outlines. The contract is in docs/object-finder.md.
+// speaks HTTP). Clio POSTs its LocateRequest as JSON and accepts { detections, model?,
+// refreshMs? }. Each detection needs only an id and any of point, box or outline, in 0..1 of the
+// image; Clio fills in the rest and simplifies long outlines. The contract is in
+// docs/object-finder.md.
 
 export interface HttpLocatorOptions {
   url: string;
@@ -40,6 +41,7 @@ const FinderDetectionSchema = z.object({
 const FinderAnswerSchema = z.object({
   detections: z.array(FinderDetectionSchema),
   model: z.string().trim().min(1).optional(),
+  refreshMs: z.number().int().nonnegative().max(60_000).optional(),
 });
 type FinderDetection = z.infer<typeof FinderDetectionSchema>;
 
@@ -78,9 +80,11 @@ export function createHttpLocator(options: HttpLocatorOptions): VisionLocator {
           `${FINDER} answer is not { detections: [...] }: ${prettifyError(answer.error)}`,
         );
       }
+      const { refreshMs } = answer.data;
       return {
         detections: answer.data.detections.map(fromFinderDetection),
         model: answer.data.model ?? 'http',
+        ...(refreshMs !== undefined && { refreshMs }),
       };
     },
   };

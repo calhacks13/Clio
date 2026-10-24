@@ -3,6 +3,7 @@ import {
   EPISODE_EVENT_TYPES,
   type EpisodeEventPayload,
   type EpisodeEventType,
+  type ObjectObservation,
   type ObjectState,
   type PlanStage,
   type Procedure,
@@ -67,6 +68,11 @@ export interface InternalEvents {
   'step.stuck': Timed<{ stepId: string; elapsedMs: number }>;
   'object.missing': Timed<{ objectIds: string[] }>;
   'objects.updated': Timed<{ objects: ObjectState[] }>;
+  /**
+   * What an object finder saw in one camera frame (2D). Its `t` and `observedT` are performance.now
+   * ms like every bus time; the recorder rebases them and writes it to observations.ndjson.
+   */
+  'objects.observed': Timed<{ observation: ObjectObservation }>;
   'overlay.highlight': Timed<{ objectId: string; style: HighlightStyle; source: 'auto' | 'coach' }>;
   'overlay.demo': Timed<{ stepId: string; playing: boolean }>;
   /** An outline for something the current step shows (replaces the object's previous one). */

@@ -388,6 +388,10 @@
   "app": {
     "version": "synthetic"
   },
+  "features": [
+    "object.flags",
+    "object.grasp"
+  ],
   "clock": {
     "timeline": "performance.now",
     "startEpochMs": 1792814400000

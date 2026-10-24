@@ -13,7 +13,9 @@
       "!packages/protocol/schema",
       "!fixtures",
       "!pipeline",
-      "!pnpm-lock.yaml"
+      "!tracker",
+      "!pnpm-lock.yaml",
+      "!visualizer"
     ]
   },
   "formatter": {

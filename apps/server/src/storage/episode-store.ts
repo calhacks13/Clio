@@ -20,14 +20,24 @@ import {
 import { z } from 'zod';
 import { isSafeId, newEpisodeId } from '../ids';
 import { describeError, type Logger } from '../log';
-import { countLines, exists, isMissing, readJson, toNdjson, writeJsonAtomic } from './files';
+import {
+  countLines,
+  exists,
+  isMissing,
+  lastLineEnd,
+  readJson,
+  toNdjson,
+  writeJsonAtomic,
+} from './files';
 import { KeyedMutex } from './keyed-mutex';
 
-// <root>/<episodeId>/ meta.json, frames.ndjson, events.ndjson, objects.ndjson, batches.json,
-// finish.json, media/<name>. See docs/data-format.md. Every write to one episode runs under that
-// episode's mutex, so concurrent batches append whole and the seq bookkeeping never loses an update.
+// <root>/<episodeId>/ meta.json, frames.ndjson, events.ndjson, objects.ndjson, observations.ndjson,
+// batches.json, finish.json, media/<name>. See docs/data-format.md. Every write to one episode runs
+// under that episode's mutex, so concurrent batches append whole and the seq bookkeeping never loses
+// an update. Episodes recorded before observations.ndjson existed have no such file; it reads as
+// empty.
 
-export const NDJSON_FILES = ['frames', 'events', 'objects'] as const;
+export const NDJSON_FILES = ['frames', 'events', 'objects', 'observations'] as const;
 export type NdjsonFile = (typeof NDJSON_FILES)[number];
 
 export type BatchResult = 'appended' | 'duplicate' | 'not_found' | 'finished';
@@ -63,6 +73,7 @@ export interface EpisodeStoreOptions {
 }
 
 interface LineCount {
+  ino: number;
   size: number;
   mtimeMs: number;
   lines: number;
@@ -119,7 +130,7 @@ export class EpisodeStore {
   appendBatch(id: string, batch: EpisodeBatch): Promise<BatchResult> {
     return this.#mutex.run(id, async () => {
       if (!(await this.exists(id))) return 'not_found';
-      const book = await this.#readBookkeeping(id);
+      const book = (await this.#readBookkeeping(id)) ?? { received: [], gaps: [] };
       // A retried batch is acknowledged even after finish: the client only wants its ack.
       if (book.received.includes(batch.seq)) return 'duplicate';
       if (await exists(this.#path(id, 'finish.json'))) return 'finished';
@@ -129,6 +140,9 @@ export class EpisodeStore {
         await appendFile(this.#path(id, 'events.ndjson'), toNdjson(batch.events));
       if (batch.objects.length) {
         await appendFile(this.#path(id, 'objects.ndjson'), toNdjson(batch.objects));
+      }
+      if (batch.observations.length) {
+        await appendFile(this.#path(id, 'observations.ndjson'), toNdjson(batch.observations));
       }
       const max = book.received.at(-1) ?? -1;
       if (batch.seq - max - 1 > MAX_RECORDED_GAP) {
@@ -146,6 +160,27 @@ export class EpisodeStore {
       if (!(await this.exists(id))) return 'not_found';
       await writeJsonAtomic(this.#path(id, 'finish.json'), finish);
       return 'ok';
+    });
+  }
+
+  /**
+   * Byte sizes of the named files of an episode, leaving out those that do not exist. Taken under
+   * the episode lock, so a size never counts half of an append.
+   */
+  fileSizes(id: string, names: readonly string[]): Promise<Map<string, number>> {
+    if (!isSafeId(id) || !names.every(isSafeId)) {
+      throw new Error(`Unsafe episode path: ${id}/{${names.join(',')}}`);
+    }
+    return this.#mutex.run(id, async () => {
+      const sizes = new Map<string, number>();
+      for (const name of names) {
+        try {
+          sizes.set(name, (await stat(this.#path(id, name))).size);
+        } catch (error) {
+          if (!isMissing(error)) throw error;
+        }
+      }
+      return sizes;
     });
   }
 
@@ -228,17 +263,43 @@ export class EpisodeStore {
     const meta = await this.readMeta(id);
     if (!meta) return null;
     const finish = await this.#readFinish(id);
-    return { meta, summary: await this.#summary(meta, finish), finish: finish.value };
+    const detail: EpisodeDetailResponse = {
+      meta,
+      summary: await this.#summary(meta, finish),
+      finish: finish.value,
+    };
+    // Left out when batches.json is missing: an unknown count is not "nothing arrived".
+    const book = await this.#readBookkeeping(id);
+    if (book) {
+      detail.batches = {
+        received: book.received.length,
+        gaps: book.gaps,
+        lastSeq: book.received.at(-1) ?? null,
+      };
+    }
+    return detail;
   }
 
-  /** The complete lines of an NDJSON file as a byte stream, or null for an unknown episode. */
-  async openNdjson(id: string, file: NdjsonFile): Promise<ReadableStream<Uint8Array> | null> {
+  /**
+   * The complete lines of an NDJSON file from byte `from` on, as a byte stream, or null for an
+   * unknown episode. `end` is the settled size cut back to its last newline, so it is always a line
+   * boundary: passing it back as `from` reads only what was appended since, which is how a viewer
+   * follows a live episode. A partial last line (a crash mid-append) is served only once it is
+   * whole. If the file shrank below `from`, `end` comes back smaller than `from`. A file the
+   * episode does not have (observations.ndjson in an older episode) reads as empty, with `end` 0.
+   */
+  async openNdjson(
+    id: string,
+    file: NdjsonFile,
+    from = 0,
+  ): Promise<{ stream: ReadableStream<Uint8Array>; end: number } | null> {
     if (!(await this.exists(id))) return null;
     const path = this.#path(id, `${file}.ndjson`);
     const size = await this.#settledSize(id, path);
+    const end = await lastLineEnd(path, from < size ? from : 0, size);
     const stream =
-      size === 0 ? Readable.from([]) : createReadStream(path, { start: 0, end: size - 1 });
-    return Readable.toWeb(stream) as ReadableStream<Uint8Array>;
+      from >= end ? Readable.from([]) : createReadStream(path, { start: from, end: end - 1 });
+    return { stream: Readable.toWeb(stream) as ReadableStream<Uint8Array>, end };
   }
 
   async readFrames(id: string): Promise<FrameRecord[]> {
@@ -292,14 +353,15 @@ export class EpisodeStore {
     });
   }
 
-  async #readBookkeeping(id: string): Promise<Bookkeeping> {
+  /** null when batches.json is missing, unreadable or not bookkeeping. */
+  async #readBookkeeping(id: string): Promise<Bookkeeping | null> {
     try {
       const parsed = BookkeepingSchema.safeParse(await readJson(this.#path(id, 'batches.json')));
       if (parsed.success) return parsed.data;
     } catch (error) {
       this.#logger?.warn(`Episode ${id}: unreadable batches.json (${describeError(error)})`);
     }
-    return { received: [], gaps: [] };
+    return null;
   }
 
   async #readFinish(id: string): Promise<{ exists: boolean; value: EpisodeFinish | null }> {
@@ -333,19 +395,29 @@ export class EpisodeStore {
     };
   }
 
-  /** Line counts are cached per (size, mtime): listing is cheap even for long recordings. */
+  /**
+   * Line counts are cached per file. The files only grow, so a grown file costs only its new bytes
+   * and listing stays cheap while a long recording is written. A file that shrank or was replaced
+   * (a new inode) is counted again from the start.
+   */
   async #lineCount(path: string): Promise<number> {
-    let info: { size: number; mtimeMs: number };
+    let info: { ino: number; size: number; mtimeMs: number };
     try {
       info = await stat(path);
     } catch (error) {
       if (isMissing(error)) return 0;
       throw error;
     }
+    const { ino, size, mtimeMs } = info;
     const cached = this.#lineCounts.get(path);
-    if (cached && cached.size === info.size && cached.mtimeMs === info.mtimeMs) return cached.lines;
-    const lines = await countLines(path, info.size);
-    this.#lineCounts.set(path, { size: info.size, mtimeMs: info.mtimeMs, lines });
+    if (cached?.ino === ino && cached.size === size && cached.mtimeMs === mtimeMs) {
+      return cached.lines;
+    }
+    const lines =
+      cached?.ino === ino && size > cached.size
+        ? cached.lines + (await countLines(path, cached.size, size))
+        : await countLines(path, 0, size);
+    this.#lineCounts.set(path, { ino, size, mtimeMs, lines });
     return lines;
   }
 }

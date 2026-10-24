@@ -125,6 +125,7 @@ describe('LessonController', () => {
     expect(episode?.meta.plan?.id).toBe('refill-fluid');
     expect(episode?.meta.hands).toEqual(HAND_LAYOUT);
     expect(episode?.meta.objects.map((o) => o.id)).toEqual(['jug', 'tank']);
+    expect(episode?.meta.features).toEqual(['object.flags', 'object.grasp']);
   });
 
   it('tells the coach when planning fails', async () => {

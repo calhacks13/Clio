@@ -4,18 +4,29 @@ import {
   EpisodeEventSchema,
   type EpisodeOutcome,
   type FrameRecord,
+  type ObjectObservation,
+  ObjectObservationSchema,
+  type ObjectState,
+  ObjectStateSchema,
   type ObjectTrackRecord,
 } from '@clio/protocol';
 import type { Clock } from '../../core/clock';
 import { type AppBus, isRecordable } from '../events';
 import type { TrackedFrame } from '../hands/types';
-import { qTime, quantizeDeep, quantizeObject, toFrameRecord } from './quantize';
+import {
+  qTime,
+  quantizeDeep,
+  quantizeObject,
+  quantizeObservation,
+  toFrameRecord,
+} from './quantize';
 import type { EpisodeSink } from './sink';
 import { EpisodeUploader } from './uploader';
 
 // Records one episode at a time: every XR frame (frames channel), every recordable bus event
-// (events channel) and every object-estimate change (objects channel), all rebased onto the
-// episode's start time. Batches are cut by size or age and handed to an EpisodeUploader.
+// (events channel), every object-estimate change (objects channel) and every 2D object observation
+// (observations channel), all rebased onto the episode's start time. Batches are cut by size or
+// age and handed to an EpisodeUploader.
 
 export interface RecorderDeps {
   bus: AppBus;
@@ -42,6 +53,7 @@ export class EpisodeRecorder {
   private frames: FrameRecord[] = [];
   private events: EpisodeEvent[] = [];
   private objects: ObjectTrackRecord[] = [];
+  private observations: ObjectObservation[] = [];
   private unsubscribe: (() => void)[] = [];
 
   constructor(private readonly deps: RecorderDeps) {}
@@ -63,6 +75,7 @@ export class EpisodeRecorder {
     this.frames = [];
     this.events = [];
     this.objects = [];
+    this.observations = [];
     const options = {
       ...(this.deps.sleep ? { sleep: this.deps.sleep } : {}),
       ...(this.deps.onDrop ? { onDrop: this.deps.onDrop } : {}),
@@ -76,11 +89,8 @@ export class EpisodeRecorder {
       bus.onAny((type, payload) => {
         if (isRecordable(type)) this.recordEvent(type, payload as { t: number });
       }),
-      bus.on('objects.updated', ({ t: at, objects }) => {
-        if (objects.length > 0) {
-          this.objects.push({ t: qTime(at - this.startT), objects: objects.map(quantizeObject) });
-        }
-      }),
+      bus.on('objects.updated', ({ t: at, objects }) => this.recordObjects(at, objects)),
+      bus.on('objects.observed', ({ observation }) => this.recordObservation(observation)),
     ];
     this.status(t);
   }
@@ -118,19 +128,48 @@ export class EpisodeRecorder {
     else this.deps.onDrop?.(`event ${type}: ${parsed.error.issues[0]?.message ?? 'invalid'}`);
   }
 
+  /** Each state validated like an event, so one malformed state cannot get a batch rejected. */
+  private recordObjects(at: number, objects: readonly ObjectState[]): void {
+    const valid: ObjectState[] = [];
+    for (const o of objects) {
+      const parsed = ObjectStateSchema.safeParse(quantizeObject(o, this.startT, at));
+      if (parsed.success) valid.push(parsed.data);
+      else this.deps.onDrop?.(`object ${o.id}: ${parsed.error.issues[0]?.message ?? 'invalid'}`);
+    }
+    if (valid.length > 0) this.objects.push({ t: qTime(at - this.startT), objects: valid });
+  }
+
+  /** Validated like an event, so one malformed observation cannot get a whole batch rejected. */
+  private recordObservation(observation: ObjectObservation): void {
+    const parsed = ObjectObservationSchema.safeParse(quantizeObservation(observation, this.startT));
+    if (parsed.success) this.observations.push(parsed.data);
+    else {
+      const why = parsed.error.issues[0]?.message ?? 'invalid';
+      this.deps.onDrop?.(`observation ${observation.objectId}: ${why}`);
+    }
+  }
+
   private flush(t: number): void {
     this.lastFlushT = t;
     if (!this.uploader) return;
-    if (this.frames.length === 0 && this.events.length === 0 && this.objects.length === 0) return;
+    if (
+      this.frames.length === 0 &&
+      this.events.length === 0 &&
+      this.objects.length === 0 &&
+      this.observations.length === 0
+    )
+      return;
     this.uploader.push({
       seq: this.seq++,
       frames: this.frames,
       events: this.events,
       objects: this.objects,
+      observations: this.observations,
     });
     this.frames = [];
     this.events = [];
     this.objects = [];
+    this.observations = [];
   }
 
   private status(t: number): void {

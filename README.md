@@ -26,7 +26,9 @@ pnpm dev                 # server :8787 + headset app :5173
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)   | how it works and why: start here                  |
 | [docs/procedures.md](docs/procedures.md)       | the plan language (checks, actions, what to show) |
 | [docs/object-finder.md](docs/object-finder.md) | plugging in jev or another object finder          |
+| [tracker/README.md](tracker/README.md)         | real-time tracking: YOLOE-26 + ByteTrack + jev    |
 | [docs/data-format.md](docs/data-format.md)     | episodes on disk                                  |
+| [docs/data-pipeline.md](docs/data-pipeline.md) | when episodes are recorded, compiled and exported |
 | [docs/dev-setup.md](docs/dev-setup.md)         | laptop, emulator, Quest, data, demo day           |
 | [docs/planner-bench.md](docs/planner-bench.md) | testing the planner on hard scenes from a webcam  |
 | [docs/robotics-er.md](docs/robotics-er.md)     | Gemini Robotics-ER 2: what it does, measured      |
@@ -36,5 +38,25 @@ packages/protocol   shared contracts (zod → TS types + JSON Schema)
 apps/headset        the WebXR app (three.js); domain logic is framework-free and unit-tested
 apps/server         Gemini relay, planner, vision, episode ingest (Node + Hono)
 pipeline            validate, Rerun replay, LeRobot export (Python + uv)
+tracker             real-time object tracking for the finder: YOLOE-26 + ByteTrack + jev (Python + uv)
 procedures          curated golden lessons (shirt fold, pH indicator)
 ```
+
+## Visualizer / desktop dataset inspection
+
+The imported browser visualizer lives in [`visualizer/`](visualizer/README.md). Read
+[`visualizer/GOALS.md`](visualizer/GOALS.md) for the product intent and agent handoff, and
+[`visualizer/INTEGRATION.md`](visualizer/INTEGRATION.md) for how it should adapt to Clio's existing
+lesson recorder, local episode API and Python LeRobot exporter. The draft recording format is
+included as design context; `@clio/protocol` remains the source of truth.
+
+```sh
+pnpm visualizer:install
+pnpm visualizer:dev        # loopback :3001, currently the public G1 LeRobot demo
+pnpm visualizer:check      # independent Bun/Next.js checks
+```
+
+Private episode inspection is intended to stay local. This import adds no Supabase, cloud ingest
+or automatic publishing. A Clio episode reader for this particular viewer is future work; existing
+headset/server/viewer work is preserved. The visualizer has its own Bun dependencies and checks,
+separate from the pnpm workspace.

@@ -1,0 +1,395 @@
+"use client";
+
+import React, { useState, useMemo, useCallback } from "react";
+import { useFlaggedEpisodes } from "@/context/flagged-episodes-context";
+import type {
+  CrossEpisodeVarianceData,
+  LowMovementEpisode,
+  EpisodeLengthStats,
+  EpisodeLengthInfo,
+} from "@/app/[org]/[dataset]/[episode]/fetch-data";
+import {
+  ActionVelocitySection,
+  FullscreenWrapper,
+} from "@/components/action-insights-panel";
+import { InlineLoading, PageHeader } from "@/components/ui";
+
+// ─── Shared small components ─────────────────────────────────────
+
+function FlagBtn({ id }: { id: number }) {
+  const { has, toggle } = useFlaggedEpisodes();
+  const flagged = has(id);
+  return (
+    <button
+      onClick={() => toggle(id)}
+      title={flagged ? "Unflag episode" : "Flag for review"}
+      className={`p-0.5 rounded transition-colors ${flagged ? "text-rose-500 hover:text-flag-fg" : "text-fg-faint hover:text-fg-muted"}`}
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="12"
+        height="12"
+        viewBox="0 0 24 24"
+        fill={flagged ? "currentColor" : "none"}
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
+        <line x1="4" y1="22" x2="4" y2="15" />
+      </svg>
+    </button>
+  );
+}
+
+function FlagAllBtn({ ids, label }: { ids: number[]; label?: string }) {
+  const { addMany } = useFlaggedEpisodes();
+  return (
+    <button
+      onClick={() => addMany(ids)}
+      className="text-xs text-fg-faint hover:text-flag-fg transition-colors flex items-center gap-1"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="10"
+        height="10"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
+        <line x1="4" y1="22" x2="4" y2="15" />
+      </svg>
+      {label ?? "Flag all"}
+    </button>
+  );
+}
+
+// ─── Lowest-Movement Episodes ────────────────────────────────────
+
+function LowMovementSection({ episodes }: { episodes: LowMovementEpisode[] }) {
+  if (episodes.length === 0) return null;
+  const maxMovement = Math.max(...episodes.map((e) => e.totalMovement), 1e-10);
+
+  return (
+    <div className="bg-[var(--surface-1)]/60 rounded-lg p-5 border border-line space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-fg">
+          Lowest-Movement Episodes
+        </h3>
+        <FlagAllBtn ids={episodes.map((e) => e.episodeIndex)} />
+      </div>
+      <p className="text-xs text-fg-muted">
+        Episodes with the lowest average action change per frame. Very low
+        values may indicate the robot was standing still or the episode was
+        recorded incorrectly.
+      </p>
+      <div
+        className="grid gap-2"
+        style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}
+      >
+        {episodes.map((ep) => (
+          <div
+            key={ep.episodeIndex}
+            className="bg-[var(--surface-0)]/50 rounded-md px-3 py-2 flex items-center gap-3"
+          >
+            <FlagBtn id={ep.episodeIndex} />
+            {/* Fixed width so every bar starts at the same x, whatever the index's digit count. */}
+            <span className="w-14 text-xs text-fg-soft font-medium tabular-nums shrink-0">
+              ep {ep.episodeIndex}
+            </span>
+            <div className="flex-1 min-w-0">
+              <div className="h-1.5 bg-fill rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${Math.max(2, (ep.totalMovement / maxMovement) * 100)}%`,
+                    background:
+                      ep.totalMovement / maxMovement < 0.15
+                        ? "#ef4444"
+                        : ep.totalMovement / maxMovement < 0.4
+                          ? "#eab308"
+                          : "#22c55e",
+                  }}
+                />
+              </div>
+            </div>
+            <span className="text-xs text-fg-faint tabular-nums shrink-0">
+              {ep.totalMovement.toFixed(2)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Episode Length Filter ────────────────────────────────────────
+
+function EpisodeLengthFilter({ episodes }: { episodes: EpisodeLengthInfo[] }) {
+  const { addMany } = useFlaggedEpisodes();
+  const globalMin = useMemo(
+    () => Math.min(...episodes.map((e) => e.lengthSeconds)),
+    [episodes],
+  );
+  const globalMax = useMemo(
+    () => Math.max(...episodes.map((e) => e.lengthSeconds)),
+    [episodes],
+  );
+
+  const [rangeMin, setRangeMin] = useState(globalMin);
+  const [rangeMax, setRangeMax] = useState(globalMax);
+
+  const outsideIds = useMemo(
+    () =>
+      episodes
+        .filter((e) => e.lengthSeconds < rangeMin || e.lengthSeconds > rangeMax)
+        .map((e) => e.episodeIndex)
+        .sort((a, b) => a - b),
+    [episodes, rangeMin, rangeMax],
+  );
+
+  const rangeChanged = rangeMin > globalMin || rangeMax < globalMax;
+  const step =
+    Math.max(0.01, Math.round((globalMax - globalMin) * 0.001 * 100) / 100) ||
+    0.01;
+
+  return (
+    <div className="bg-[var(--surface-1)]/60 rounded-lg p-5 border border-line space-y-4">
+      <h3 className="text-sm font-semibold text-fg">Episode Length Filter</h3>
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between text-xs text-fg-muted">
+          <span className="tabular-nums">{rangeMin.toFixed(1)}s</span>
+          <span className="tabular-nums">{rangeMax.toFixed(1)}s</span>
+        </div>
+        <div className="relative h-5">
+          <div className="absolute top-1/2 -translate-y-1/2 left-0 right-0 h-1 rounded bg-fill" />
+          <div
+            className="absolute top-1/2 -translate-y-1/2 h-1 rounded bg-accent"
+            style={{
+              left: `${((rangeMin - globalMin) / (globalMax - globalMin || 1)) * 100}%`,
+              right: `${100 - ((rangeMax - globalMin) / (globalMax - globalMin || 1)) * 100}%`,
+            }}
+          />
+          <input
+            type="range"
+            min={globalMin}
+            max={globalMax}
+            step={step}
+            value={rangeMin}
+            onChange={(e) =>
+              setRangeMin(Math.min(Number(e.target.value), rangeMax))
+            }
+            className="absolute inset-0 w-full appearance-none bg-transparent pointer-events-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-accent [&::-webkit-slider-thumb]:cursor-pointer [&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:w-3.5 [&::-moz-range-thumb]:h-3.5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-accent [&::-moz-range-thumb]:cursor-pointer"
+          />
+          <input
+            type="range"
+            min={globalMin}
+            max={globalMax}
+            step={step}
+            value={rangeMax}
+            onChange={(e) =>
+              setRangeMax(Math.max(Number(e.target.value), rangeMin))
+            }
+            className="absolute inset-0 w-full appearance-none bg-transparent pointer-events-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-accent [&::-webkit-slider-thumb]:cursor-pointer [&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:w-3.5 [&::-moz-range-thumb]:h-3.5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-accent [&::-moz-range-thumb]:cursor-pointer"
+          />
+        </div>
+      </div>
+
+      {rangeChanged && (
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-fg-muted">
+            {outsideIds.length} episode{outsideIds.length !== 1 ? "s" : ""}{" "}
+            outside range
+          </span>
+          {outsideIds.length > 0 && (
+            <button
+              onClick={() => addMany(outsideIds)}
+              className="btn btn-flagged"
+            >
+              Flag {outsideIds.length} outside range
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main Filtering Panel ────────────────────────────────────────
+
+interface FilteringPanelProps {
+  repoId: string;
+  crossEpisodeData: CrossEpisodeVarianceData | null;
+  crossEpisodeLoading: boolean;
+  episodeLengthStats: EpisodeLengthStats | null;
+  flatChartData: Record<string, number>[];
+  onViewFlaggedEpisodes?: () => void;
+}
+
+function FlaggedIdsCopyBar({
+  repoId,
+  onViewEpisodes,
+}: {
+  repoId: string;
+  onViewEpisodes?: () => void;
+}) {
+  const { flagged, count, clear } = useFlaggedEpisodes();
+  const [copied, setCopied] = useState(false);
+
+  const ids = useMemo(() => [...flagged].sort((a, b) => a - b), [flagged]);
+  const idStr = ids.join(", ");
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(idStr);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }, [idStr]);
+
+  if (count === 0) return null;
+
+  return (
+    <div className="bg-[var(--surface-1)]/60 rounded-lg p-4 border border-rose-500/30 space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-flag-fg">
+          Flagged Episodes
+          <span className="text-xs text-fg-faint ml-2 font-normal">
+            ({count})
+          </span>
+        </h3>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleCopy}
+            className="text-xs text-fg-muted hover:text-fg transition-colors flex items-center gap-1"
+            title="Copy IDs"
+          >
+            {copied ? (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                className="text-green-400"
+              >
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            ) : (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <rect x="9" y="9" width="13" height="13" rx="2" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
+            )}
+            Copy
+          </button>
+          <button
+            onClick={clear}
+            className="text-xs text-fg-faint hover:text-red-400 transition-colors"
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+      <p className="text-xs text-fg-soft tabular-nums leading-relaxed max-h-20 overflow-y-auto">
+        {idStr}
+      </p>
+      {onViewEpisodes && (
+        <button onClick={onViewEpisodes} className="btn w-full py-1.5">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
+            <line x1="4" y1="22" x2="4" y2="15" />
+          </svg>
+          View flagged episodes
+        </button>
+      )}
+      <div className="bg-[var(--surface-0)]/60 rounded-md px-3 py-2 border border-line space-y-2.5">
+        <p className="text-xs text-fg-muted">
+          <a
+            href="https://github.com/huggingface/lerobot"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-accent-fg underline"
+          >
+            LeRobot CLI
+          </a>{" "}
+          — delete flagged episodes:
+        </p>
+        <pre className="text-xs text-fg-soft bg-[var(--bg)]/50 rounded px-2 py-1.5 overflow-x-auto select-all">{`# Delete episodes (modifies original dataset)\nlerobot-edit-dataset \\\n    --repo_id ${repoId} \\\n    --operation.type delete_episodes \\\n    --operation.episode_indices "[${ids.join(", ")}]"`}</pre>
+        <pre className="text-xs text-fg-soft bg-[var(--bg)]/50 rounded px-2 py-1.5 overflow-x-auto select-all">{`# Delete episodes and save to a new dataset (preserves original)\nlerobot-edit-dataset \\\n    --repo_id ${repoId} \\\n    --new_repo_id ${repoId}_filtered \\\n    --operation.type delete_episodes \\\n    --operation.episode_indices "[${ids.join(", ")}]"`}</pre>
+      </div>
+    </div>
+  );
+}
+
+function FilteringPanel({
+  repoId,
+  crossEpisodeData,
+  crossEpisodeLoading,
+  episodeLengthStats,
+  flatChartData,
+  onViewFlaggedEpisodes,
+}: FilteringPanelProps) {
+  return (
+    <div className="w-full max-w-5xl mx-auto py-6 space-y-6">
+      <PageHeader
+        title="Filtering"
+        description="Identify and flag problematic episodes for removal. Flagged episodes appear in the sidebar and can be exported as a CLI command."
+      />
+
+      <FlaggedIdsCopyBar
+        repoId={repoId}
+        onViewEpisodes={onViewFlaggedEpisodes}
+      />
+
+      {episodeLengthStats?.allEpisodeLengths && (
+        <EpisodeLengthFilter episodes={episodeLengthStats.allEpisodeLengths} />
+      )}
+
+      {crossEpisodeLoading && (
+        <div className="bg-[var(--surface-1)]/60 rounded-lg p-5 border border-line">
+          <InlineLoading label="Loading cross-episode data…" />
+        </div>
+      )}
+
+      {crossEpisodeData?.lowMovementEpisodes && (
+        <LowMovementSection episodes={crossEpisodeData.lowMovementEpisodes} />
+      )}
+
+      <FullscreenWrapper>
+        <ActionVelocitySection
+          data={flatChartData}
+          agg={crossEpisodeData?.aggVelocity}
+          numEpisodes={crossEpisodeData?.numEpisodes}
+          jerkyEpisodes={crossEpisodeData?.jerkyEpisodes}
+        />
+      </FullscreenWrapper>
+    </div>
+  );
+}
+
+export default FilteringPanel;

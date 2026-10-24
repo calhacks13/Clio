@@ -1,4 +1,14 @@
-import { readdir, readFile } from 'node:fs/promises';
+import {
+  appendFile,
+  cp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  truncate,
+  writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   ApiErrorSchema,
@@ -6,13 +16,30 @@ import {
   EpisodeDetailResponseSchema,
   EpisodeListResponseSchema,
 } from '@clio/protocol';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_LIMITS } from '../src/deps';
 import { recordSeq } from '../src/storage/episode-store';
-import { entered, episodeCreate, finishBody, frame, framesEvery, objectTrack } from './fixtures';
-import { type Harness, harness, ndjsonLines, sequence, steppingClock } from './harness';
+import { countLines, lastLineEnd } from '../src/storage/files';
+import {
+  entered,
+  episodeCreate,
+  finishBody,
+  frame,
+  framesEvery,
+  objectTrack,
+  observation,
+} from './fixtures';
+import { type Harness, harness, ndjsonLines, sequence, steppingClock, tempDir } from './harness';
+
+// Passes through, so a test can see which byte ranges the store counts.
+vi.mock('../src/storage/files', async (importOriginal) => {
+  const files = await importOriginal<typeof import('../src/storage/files')>();
+  return { ...files, countLines: vi.fn(files.countLines) };
+});
+const countLinesSpy = vi.mocked(countLines);
 
 const ID = 'ep-20261024-031502-abcz';
+const SHIRT_FOLD = join(import.meta.dirname, '../../../fixtures/episodes/synthetic-shirt-fold');
 
 async function fixedHarness(extra: Parameters<typeof harness>[0] = {}) {
   return harness({
@@ -32,6 +59,26 @@ async function errorOf(res: Response) {
   return ApiErrorSchema.parse(await res.json()).error;
 }
 
+async function listed(h: Harness) {
+  return EpisodeListResponseSchema.parse(await (await h.request('GET', ApiPaths.episodes)).json())
+    .episodes;
+}
+
+async function detail(h: Harness, id: string) {
+  const res = await h.request('GET', ApiPaths.episode(id));
+  expect(res.status).toBe(200);
+  return EpisodeDetailResponseSchema.parse(await res.json());
+}
+
+/** One `?from=` read: the decoded lines and the offset the server says to pass next. */
+async function readFrom(h: Harness, path: string, from?: number) {
+  const res = await h.request('GET', from === undefined ? path : `${path}?from=${from}`);
+  expect(res.status).toBe(200);
+  return { lines: ndjsonLines(await res.text()), next: Number(res.headers.get('x-next-from')) };
+}
+
+const lineOf = (record: unknown) => `${JSON.stringify(record)}\n`;
+
 describe('POST /api/episodes', () => {
   it('assigns an id and createdAt and writes the episode layout', async () => {
     const h = await fixedHarness();
@@ -47,6 +94,7 @@ describe('POST /api/episodes', () => {
     expect(await h.readData('episodes', ID, 'frames.ndjson')).toBe('');
     expect(await h.readData('episodes', ID, 'events.ndjson')).toBe('');
     expect(await h.readData('episodes', ID, 'objects.ndjson')).toBe('');
+    expect(await h.readData('episodes', ID, 'observations.ndjson')).toBe('');
     expect(JSON.parse(await h.readData('episodes', ID, 'batches.json'))).toEqual({
       received: [],
       gaps: [],
@@ -378,6 +426,103 @@ describe('GET /api/episodes', () => {
     const h = await fixedHarness();
     expect(await (await h.request('GET', ApiPaths.episodes)).json()).toEqual({ episodes: [] });
   });
+
+  it('counts only the bytes appended since the last listing', async () => {
+    const h = await fixedHarness();
+    const id = await create(h);
+    const path = join(h.dataDir, 'episodes', id, 'frames.ndjson');
+    const size = async () => (await stat(path)).size;
+    const post = (seq: number, fromT: number) =>
+      h.request('POST', ApiPaths.episodeBatches(id), {
+        seq,
+        frames: framesEvery(10, fromT, fromT + 20),
+        events: [],
+      });
+    const countedRanges = async () => {
+      countLinesSpy.mockClear();
+      const frameCount = (await listed(h))[0]?.frameCount;
+      const ranges = countLinesSpy.mock.calls.filter(([p]) => p === path).map(([, ...r]) => r);
+      return { frameCount, ranges };
+    };
+
+    await post(0, 0);
+    const first = await size();
+    expect(await countedRanges()).toEqual({ frameCount: 3, ranges: [[0, first]] });
+
+    await post(1, 30);
+    const second = await size();
+    expect(await countedRanges()).toEqual({ frameCount: 6, ranges: [[first, second]] });
+
+    expect(await countedRanges()).toEqual({ frameCount: 6, ranges: [] });
+  });
+
+  it('counts a shrunk or replaced file again from the start', async () => {
+    const h = await fixedHarness();
+    const id = await create(h);
+    const path = join(h.dataDir, 'episodes', id, 'frames.ndjson');
+    await h.request('POST', ApiPaths.episodeBatches(id), {
+      seq: 0,
+      frames: framesEvery(10, 0, 40),
+      events: [],
+    });
+    expect((await listed(h))[0]?.frameCount).toBe(5);
+
+    await writeFile(path, lineOf(frame(0)) + lineOf(frame(10)));
+    expect((await listed(h))[0]?.frameCount).toBe(2);
+
+    // Larger than before, under a new inode: the old count says nothing about its first bytes.
+    const tmp = join(h.dataDir, 'episodes', id, 'replacement.tmp');
+    await writeFile(tmp, lineOf({ t: 0 }).repeat(1000));
+    await rename(tmp, path);
+    countLinesSpy.mockClear();
+    expect((await listed(h))[0]?.frameCount).toBe(1000);
+    expect(countLinesSpy).toHaveBeenCalledWith(path, 0, (await stat(path)).size);
+  });
+
+  it('counts only complete lines', async () => {
+    const h = await fixedHarness();
+    const id = await create(h);
+    const path = join(h.dataDir, 'episodes', id, 'frames.ndjson');
+    const line = lineOf(frame(20));
+    await h.request('POST', ApiPaths.episodeBatches(id), {
+      seq: 0,
+      frames: [frame(0), frame(10)],
+      events: [],
+    });
+    await appendFile(path, line.slice(0, 25));
+    expect((await listed(h))[0]?.frameCount).toBe(2);
+    await appendFile(path, line.slice(25));
+    expect((await listed(h))[0]?.frameCount).toBe(3);
+  });
+});
+
+describe('countLines and lastLineEnd', () => {
+  it('count and find newlines inside a byte range only', async () => {
+    const dir = await tempDir();
+    const path = join(dir, 'lines.txt');
+    await writeFile(path, 'ab\ncd\nef');
+    expect(await countLines(path)).toBe(2);
+    expect(await countLines(path, 0, 3)).toBe(1);
+    expect(await countLines(path, 3, 8)).toBe(1);
+    expect(await countLines(path, 6, 8)).toBe(0);
+    expect(await countLines(path, 4, 4)).toBe(0);
+    expect(await countLines(join(dir, 'missing.txt'))).toBe(0);
+
+    expect(await lastLineEnd(path, 0, 8)).toBe(6);
+    expect(await lastLineEnd(path, 0, 6)).toBe(6);
+    expect(await lastLineEnd(path, 0, 5)).toBe(3);
+    expect(await lastLineEnd(path, 4, 5)).toBe(4);
+    expect(await lastLineEnd(path, 0, 2)).toBe(0);
+    expect(await lastLineEnd(path, 0, 0)).toBe(0);
+  });
+
+  it('finds the last newline far before the end', async () => {
+    const path = join(await tempDir(), 'long.txt');
+    const head = `${'x'.repeat(10)}\n`;
+    await writeFile(path, head + 'y'.repeat(100_000));
+    expect(await lastLineEnd(path, 0, head.length + 100_000)).toBe(head.length);
+    expect(await lastLineEnd(path, head.length, head.length + 100_000)).toBe(head.length);
+  });
 });
 
 describe('GET /api/episodes/:id', () => {
@@ -399,6 +544,52 @@ describe('GET /api/episodes/:id', () => {
     const res = await h.request('GET', ApiPaths.episode(id));
     expect(EpisodeDetailResponseSchema.parse(await res.json()).finish).toBeNull();
     expect((await h.request('GET', ApiPaths.episode('ep-nope'))).status).toBe(404);
+  });
+
+  it('reports which batches arrived, with the gaps so far', async () => {
+    const h = await fixedHarness();
+    const id = await create(h);
+    expect((await detail(h, id)).batches).toEqual({ received: 0, gaps: [], lastSeq: null });
+    const post = (seq: number) =>
+      h.request('POST', ApiPaths.episodeBatches(id), { seq, frames: [frame(seq)], events: [] });
+    await post(0);
+    await post(3);
+    await post(0);
+    expect((await detail(h, id)).batches).toEqual({ received: 2, gaps: [1, 2], lastSeq: 3 });
+    await post(2);
+    expect((await detail(h, id)).batches).toEqual({ received: 3, gaps: [1], lastSeq: 3 });
+  });
+
+  it('reports shirt-fold as complete: 12 batches received and no gaps', async () => {
+    const h = await fixedHarness();
+    const id = 'ep-synthetic-shirt-fold';
+    await cp(SHIRT_FOLD, join(h.dataDir, 'episodes', id), { recursive: true });
+    const linesIn = async (file: string) =>
+      ndjsonLines(await readFile(join(SHIRT_FOLD, file), 'utf8')).length;
+
+    const body = await detail(h, id);
+    expect(body.batches).toEqual({ received: 12, gaps: [], lastSeq: 11 });
+    expect(body.finish?.batches).toBe(body.batches?.received);
+    expect(body.summary).toMatchObject({
+      episodeId: id,
+      finished: true,
+      frameCount: await linesIn('frames.ndjson'),
+      eventCount: await linesIn('events.ndjson'),
+    });
+  });
+
+  it('leaves batches out when batches.json is missing or unreadable', async () => {
+    const h = await fixedHarness();
+    const id = await create(h);
+    const path = join(h.dataDir, 'episodes', id, 'batches.json');
+    const raw = async () => (await h.request('GET', ApiPaths.episode(id))).json();
+    await rm(path);
+    expect(await raw()).not.toHaveProperty('batches');
+    await writeFile(path, '{"received":');
+    expect(await raw()).not.toHaveProperty('batches');
+    expect(h.logger.lines.some((l) => l.startsWith(`warn Episode ${id}: unreadable batches`))).toBe(
+      true,
+    );
   });
 });
 
@@ -435,5 +626,226 @@ describe('GET /api/episodes/:id/{frames,events,objects}', () => {
   it('answers 404 for unknown episodes', async () => {
     const h = await fixedHarness();
     expect((await h.request('GET', ApiPaths.episodeFrames('ep-nope'))).status).toBe(404);
+  });
+
+  it('reads only the lines after ?from and says where to read next', async () => {
+    const h = await fixedHarness();
+    const id = await create(h);
+    const post = (seq: number, ts: number[]) =>
+      h.request('POST', ApiPaths.episodeBatches(id), {
+        seq,
+        frames: ts.map((t) => frame(t)),
+        events: [],
+      });
+    const read = (from?: number) => readFrom(h, ApiPaths.episodeFrames(id), from);
+
+    await post(0, [0, 10]);
+    const first = await read();
+    expect(first.lines).toEqual([frame(0), frame(10)]);
+    expect(first.next).toBe(Buffer.byteLength(await h.readData('episodes', id, 'frames.ndjson')));
+
+    await post(1, [20]);
+    const second = await read(first.next);
+    expect(second.lines).toEqual([frame(20)]);
+    expect(second.next).toBe(Buffer.byteLength(await h.readData('episodes', id, 'frames.ndjson')));
+
+    expect(await read(second.next)).toEqual({ lines: [], next: second.next });
+    expect(await read(second.next + 1000)).toEqual({ lines: [], next: second.next });
+  });
+
+  it('follows the events and objects channels with ?from too', async () => {
+    const h = await fixedHarness();
+    const id = await create(h);
+    const post = (seq: number, t: number) =>
+      h.request('POST', ApiPaths.episodeBatches(id), {
+        seq,
+        frames: [],
+        events: [entered(t, `s${seq}`, seq)],
+        objects: [objectTrack(t)],
+      });
+    await post(0, 0);
+    const events = await readFrom(h, ApiPaths.episodeEvents(id), 0);
+    const objects = await readFrom(h, ApiPaths.episodeObjects(id), 0);
+    expect(events).toEqual({
+      lines: [entered(0, 's0', 0)],
+      next: lineOf(entered(0, 's0', 0)).length,
+    });
+    expect(objects).toEqual({ lines: [objectTrack(0)], next: lineOf(objectTrack(0)).length });
+
+    await post(1, 40);
+    expect(await readFrom(h, ApiPaths.episodeEvents(id), events.next)).toEqual({
+      lines: [entered(40, 's1', 1)],
+      next: events.next + lineOf(entered(40, 's1', 1)).length,
+    });
+    expect(await readFrom(h, ApiPaths.episodeObjects(id), objects.next)).toEqual({
+      lines: [objectTrack(40)],
+      next: objects.next + lineOf(objectTrack(40)).length,
+    });
+  });
+
+  it('counts offsets in bytes, so multibyte text reads back whole', async () => {
+    const h = await fixedHarness();
+    const id = await create(h);
+    const first = { ...entered(0, 'a'), instruction: 'Falte das Hemd schön glatt: 折りたたむ 👕' };
+    const second = { ...entered(10, 'b', 1), instruction: 'Ärmel nach innen, ✓ fertig' };
+    await h.request('POST', ApiPaths.episodeBatches(id), { seq: 0, frames: [], events: [first] });
+    const one = await readFrom(h, ApiPaths.episodeEvents(id));
+    expect(one).toEqual({ lines: [first], next: Buffer.byteLength(lineOf(first)) });
+    expect(one.next).toBeGreaterThan(lineOf(first).length);
+
+    await h.request('POST', ApiPaths.episodeBatches(id), { seq: 1, frames: [], events: [second] });
+    expect(await readFrom(h, ApiPaths.episodeEvents(id), one.next)).toEqual({
+      lines: [second],
+      next: one.next + Buffer.byteLength(lineOf(second)),
+    });
+  });
+
+  it('answers a smaller x-next-from when the file shrank below from', async () => {
+    const h = await fixedHarness();
+    const id = await create(h);
+    const path = join(h.dataDir, 'episodes', id, 'frames.ndjson');
+    await h.request('POST', ApiPaths.episodeBatches(id), {
+      seq: 0,
+      frames: [frame(0), frame(10), frame(20)],
+      events: [],
+    });
+    const before = await readFrom(h, ApiPaths.episodeFrames(id));
+
+    // Replaced by a shorter copy while a viewer follows it: the smaller offset tells it to restart.
+    await truncate(path, lineOf(frame(0)).length);
+    const after = await readFrom(h, ApiPaths.episodeFrames(id), before.next);
+    expect(after).toEqual({ lines: [], next: lineOf(frame(0)).length });
+    expect(after.next).toBeLessThan(before.next);
+    expect(await readFrom(h, ApiPaths.episodeFrames(id), 0)).toEqual({
+      lines: [frame(0)],
+      next: after.next,
+    });
+  });
+
+  it('never serves a trailing partial line, and serves it whole once it is complete', async () => {
+    const h = await fixedHarness();
+    const id = await create(h);
+    const path = join(h.dataDir, 'episodes', id, 'frames.ndjson');
+    await h.request('POST', ApiPaths.episodeBatches(id), {
+      seq: 0,
+      frames: [frame(0), frame(10)],
+      events: [],
+    });
+    const whole = lineOf(frame(0)).length + lineOf(frame(10)).length;
+    const line = lineOf(frame(20));
+    // As if the process died partway through an append.
+    await appendFile(path, line.slice(0, 25));
+
+    expect(await readFrom(h, ApiPaths.episodeFrames(id))).toEqual({
+      lines: [frame(0), frame(10)],
+      next: whole,
+    });
+    expect(await readFrom(h, ApiPaths.episodeFrames(id), whole)).toEqual({
+      lines: [],
+      next: whole,
+    });
+    // The probe a viewer joining a long live episode sends to learn where the end is.
+    expect(await readFrom(h, ApiPaths.episodeFrames(id), Number.MAX_SAFE_INTEGER)).toEqual({
+      lines: [],
+      next: whole,
+    });
+
+    await appendFile(path, line.slice(25));
+    expect(await readFrom(h, ApiPaths.episodeFrames(id), whole)).toEqual({
+      lines: [frame(20)],
+      next: whole + line.length,
+    });
+  });
+
+  it('rejects a from that is not a byte offset', async () => {
+    const h = await fixedHarness();
+    const id = await create(h);
+    for (const from of ['-1', '1.5', 'abc', '']) {
+      const res = await h.request('GET', `${ApiPaths.episodeEvents(id)}?from=${from}`);
+      expect(res.status).toBe(400);
+      expect((await errorOf(res)).code).toBe('invalid_offset');
+    }
+  });
+});
+
+describe('the observations channel', () => {
+  it('appends batch observations to observations.ndjson, in order', async () => {
+    const h = await fixedHarness();
+    const id = await create(h);
+    const post = (seq: number, observations: unknown[]) =>
+      h.request('POST', ApiPaths.episodeBatches(id), { seq, frames: [], events: [], observations });
+    expect((await post(0, [observation(100), observation(133, 'predicted')])).status).toBe(200);
+    expect((await post(1, [observation(166, 'lost')])).status).toBe(200);
+    expect(ndjsonLines(await h.readData('episodes', id, 'observations.ndjson'))).toEqual([
+      observation(100),
+      observation(133, 'predicted'),
+      observation(166, 'lost'),
+    ]);
+  });
+
+  it('defaults observations to an empty list and rejects invalid ones', async () => {
+    const h = await fixedHarness();
+    const id = await create(h);
+    await h.request('POST', ApiPaths.episodeBatches(id), { seq: 0, frames: [], events: [] });
+    expect(await h.readData('episodes', id, 'observations.ndjson')).toBe('');
+
+    const res = await h.request('POST', ApiPaths.episodeBatches(id), {
+      seq: 1,
+      frames: [],
+      events: [],
+      observations: [{ ...observation(10), status: 'guessed' }],
+    });
+    expect(res.status).toBe(400);
+    expect((await errorOf(res)).message).toMatch(/observations\.0\.status/);
+    expect(await h.readData('episodes', id, 'observations.ndjson')).toBe('');
+  });
+
+  it('reads only the observations after ?from and says where to read next', async () => {
+    const h = await fixedHarness();
+    const id = await create(h);
+    const post = (seq: number, t: number) =>
+      h.request('POST', ApiPaths.episodeBatches(id), {
+        seq,
+        frames: [],
+        events: [],
+        observations: [observation(t)],
+      });
+    await post(0, 100);
+    const first = await readFrom(h, ApiPaths.episodeObservations(id));
+    expect(first).toEqual({ lines: [observation(100)], next: lineOf(observation(100)).length });
+
+    await post(1, 133);
+    expect(await readFrom(h, ApiPaths.episodeObservations(id), first.next)).toEqual({
+      lines: [observation(133)],
+      next: first.next + lineOf(observation(133)).length,
+    });
+    const res = await h.request('GET', ApiPaths.episodeObservations(id));
+    expect(res.headers.get('content-type')).toBe('application/x-ndjson');
+  });
+
+  it('reads an episode recorded before observations existed as empty, from any offset', async () => {
+    const h = await fixedHarness();
+    const id = 'ep-synthetic-shirt-fold';
+    await cp(SHIRT_FOLD, join(h.dataDir, 'episodes', id), { recursive: true });
+    expect(await readdir(join(h.dataDir, 'episodes', id))).not.toContain('observations.ndjson');
+
+    for (const from of [undefined, 0, 4096]) {
+      const res = await h.request(
+        'GET',
+        from === undefined
+          ? ApiPaths.episodeObservations(id)
+          : `${ApiPaths.episodeObservations(id)}?from=${from}`,
+      );
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('');
+      expect(res.headers.get('x-next-from')).toBe('0');
+    }
+    expect((await listed(h)).map((e) => e.episodeId)).toEqual([id]);
+    expect((await detail(h, id)).summary).toMatchObject({ episodeId: id, finished: true });
+  });
+
+  it('answers 404 for the observations of an unknown episode', async () => {
+    const h = await fixedHarness();
+    expect((await h.request('GET', ApiPaths.episodeObservations('ep-nope'))).status).toBe(404);
   });
 });

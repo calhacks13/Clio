@@ -1,0 +1,302 @@
+<?xml version="1.0"?>
+<!--
+  EXAMPLE ROBOT. clio_arm_6dof is made up for trying Clio's retargeting pipeline and viewer before a
+  real robot is chosen. It is not a model of any product and has never been built.
+
+  Two identical 6-DoF arms (about 0.6 m from the shoulder to the tool point) with parallel
+  grippers, mounted at table height 0.2 m behind the table's near edge, where the person sits.
+  The root link is the export robot frame at the table corner: x forward (away from the user),
+  y left, z up.
+
+  Each arm: shoulder pan (z), shoulder lift (y), elbow (y), wrist roll (z), wrist pitch (y) and
+  wrist rotate (z), then a fixed tool frame <side>_tcp between the fingertips (+z out of the
+  gripper, fingers open along x). All joints at 0 point the arm straight up. One prismatic finger
+  per gripper is actuated; the other mimics it.
+
+  The retargeting profile (profiles/clio-arm-6dof.json) places each base itself; the mounts below
+  match it so the file renders the same way on its own.
+-->
+<robot name="clio_arm_6dof">
+  <material name="clio_link"><color rgba="0.82 0.83 0.85 1"/></material>
+  <material name="clio_base"><color rgba="0.25 0.27 0.30 1"/></material>
+
+  <link name="table_corner"/>
+
+  <!-- left arm -->
+  <joint name="left_base_mount" type="fixed">
+    <parent link="table_corner"/>
+    <child link="left_base_link"/>
+    <origin xyz="-0.2 -0.3 0" rpy="0 0 0"/>
+  </joint>
+  <link name="left_base_link">
+    <visual>
+      <origin xyz="0 0 0.05" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.06" length="0.1"/></geometry>
+      <material name="clio_base"/>
+    </visual>
+  </link>
+  <joint name="left_shoulder_pan" type="revolute">
+    <parent link="left_base_link"/>
+    <child link="left_shoulder_link"/>
+    <origin xyz="0 0 0.1" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-2.97" upper="2.97" effort="30" velocity="2.5"/>
+  </joint>
+  <link name="left_shoulder_link">
+    <visual>
+      <origin xyz="0 0 0.03" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.05" length="0.06"/></geometry>
+      <material name="clio_link"/>
+    </visual>
+  </link>
+  <joint name="left_shoulder_lift" type="revolute">
+    <parent link="left_shoulder_link"/>
+    <child link="left_upper_arm_link"/>
+    <origin xyz="0 0 0.06" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.0" upper="2.0" effort="30" velocity="2.5"/>
+  </joint>
+  <link name="left_upper_arm_link">
+    <visual>
+      <origin xyz="0 0 0.125" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.04" length="0.25"/></geometry>
+      <material name="clio_link"/>
+    </visual>
+  </link>
+  <joint name="left_elbow" type="revolute">
+    <parent link="left_upper_arm_link"/>
+    <child link="left_forearm_link"/>
+    <origin xyz="0 0 0.25" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.6" upper="2.6" effort="20" velocity="3.0"/>
+  </joint>
+  <link name="left_forearm_link">
+    <visual>
+      <origin xyz="0 0 0.06" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.035" length="0.12"/></geometry>
+      <material name="clio_link"/>
+    </visual>
+  </link>
+  <joint name="left_wrist_roll" type="revolute">
+    <parent link="left_forearm_link"/>
+    <child link="left_wrist_1_link"/>
+    <origin xyz="0 0 0.12" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.28" upper="6.28" effort="10" velocity="3.5"/>
+  </joint>
+  <link name="left_wrist_1_link">
+    <visual>
+      <origin xyz="0 0 0.05" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.03" length="0.1"/></geometry>
+      <material name="clio_link"/>
+    </visual>
+  </link>
+  <joint name="left_wrist_pitch" type="revolute">
+    <parent link="left_wrist_1_link"/>
+    <child link="left_wrist_2_link"/>
+    <origin xyz="0 0 0.1" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.1" upper="2.1" effort="10" velocity="3.5"/>
+  </joint>
+  <link name="left_wrist_2_link">
+    <visual>
+      <origin xyz="0 0 0.025" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.028" length="0.05"/></geometry>
+      <material name="clio_link"/>
+    </visual>
+  </link>
+  <joint name="left_wrist_rotate" type="revolute">
+    <parent link="left_wrist_2_link"/>
+    <child link="left_flange"/>
+    <origin xyz="0 0 0.05" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.28" upper="6.28" effort="5" velocity="4.0"/>
+  </joint>
+  <link name="left_flange"/>
+  <joint name="left_gripper_mount" type="fixed">
+    <parent link="left_flange"/>
+    <child link="left_gripper_link"/>
+    <origin xyz="0 0 0.02" rpy="0 0 0"/>
+  </joint>
+  <link name="left_gripper_link">
+    <visual>
+      <origin xyz="0 0 0.0" rpy="0 0 0"/>
+      <geometry><box size="0.1 0.04 0.04"/></geometry>
+      <material name="clio_base"/>
+    </visual>
+  </link>
+  <joint name="left_tcp_joint" type="fixed">
+    <parent link="left_gripper_link"/>
+    <child link="left_tcp"/>
+    <origin xyz="0 0 0.09" rpy="0 0 0"/>
+  </joint>
+  <link name="left_tcp"/>
+  <joint name="left_finger_joint" type="prismatic">
+    <parent link="left_gripper_link"/>
+    <child link="left_finger_a_link"/>
+    <origin xyz="0 0 0.02" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="0" upper="0.04" effort="20" velocity="0.1"/>
+  </joint>
+  <link name="left_finger_a_link">
+    <visual>
+      <origin xyz="0.006 0 0.035" rpy="0 0 0"/>
+      <geometry><box size="0.012 0.02 0.07"/></geometry>
+      <material name="clio_link"/>
+    </visual>
+  </link>
+  <joint name="left_finger_mirror_joint" type="prismatic">
+    <parent link="left_gripper_link"/>
+    <child link="left_finger_b_link"/>
+    <origin xyz="0 0 0.02" rpy="0 0 0"/>
+    <axis xyz="-1 0 0"/>
+    <limit lower="0" upper="0.04" effort="20" velocity="0.1"/>
+    <mimic joint="left_finger_joint" multiplier="1" offset="0"/>
+  </joint>
+  <link name="left_finger_b_link">
+    <visual>
+      <origin xyz="-0.006 0 0.035" rpy="0 0 0"/>
+      <geometry><box size="0.012 0.02 0.07"/></geometry>
+      <material name="clio_link"/>
+    </visual>
+  </link>
+
+  <!-- right arm -->
+  <joint name="right_base_mount" type="fixed">
+    <parent link="table_corner"/>
+    <child link="right_base_link"/>
+    <origin xyz="-0.2 -0.5 0" rpy="0 0 0"/>
+  </joint>
+  <link name="right_base_link">
+    <visual>
+      <origin xyz="0 0 0.05" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.06" length="0.1"/></geometry>
+      <material name="clio_base"/>
+    </visual>
+  </link>
+  <joint name="right_shoulder_pan" type="revolute">
+    <parent link="right_base_link"/>
+    <child link="right_shoulder_link"/>
+    <origin xyz="0 0 0.1" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-2.97" upper="2.97" effort="30" velocity="2.5"/>
+  </joint>
+  <link name="right_shoulder_link">
+    <visual>
+      <origin xyz="0 0 0.03" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.05" length="0.06"/></geometry>
+      <material name="clio_link"/>
+    </visual>
+  </link>
+  <joint name="right_shoulder_lift" type="revolute">
+    <parent link="right_shoulder_link"/>
+    <child link="right_upper_arm_link"/>
+    <origin xyz="0 0 0.06" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.0" upper="2.0" effort="30" velocity="2.5"/>
+  </joint>
+  <link name="right_upper_arm_link">
+    <visual>
+      <origin xyz="0 0 0.125" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.04" length="0.25"/></geometry>
+      <material name="clio_link"/>
+    </visual>
+  </link>
+  <joint name="right_elbow" type="revolute">
+    <parent link="right_upper_arm_link"/>
+    <child link="right_forearm_link"/>
+    <origin xyz="0 0 0.25" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.6" upper="2.6" effort="20" velocity="3.0"/>
+  </joint>
+  <link name="right_forearm_link">
+    <visual>
+      <origin xyz="0 0 0.06" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.035" length="0.12"/></geometry>
+      <material name="clio_link"/>
+    </visual>
+  </link>
+  <joint name="right_wrist_roll" type="revolute">
+    <parent link="right_forearm_link"/>
+    <child link="right_wrist_1_link"/>
+    <origin xyz="0 0 0.12" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.28" upper="6.28" effort="10" velocity="3.5"/>
+  </joint>
+  <link name="right_wrist_1_link">
+    <visual>
+      <origin xyz="0 0 0.05" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.03" length="0.1"/></geometry>
+      <material name="clio_link"/>
+    </visual>
+  </link>
+  <joint name="right_wrist_pitch" type="revolute">
+    <parent link="right_wrist_1_link"/>
+    <child link="right_wrist_2_link"/>
+    <origin xyz="0 0 0.1" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.1" upper="2.1" effort="10" velocity="3.5"/>
+  </joint>
+  <link name="right_wrist_2_link">
+    <visual>
+      <origin xyz="0 0 0.025" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.028" length="0.05"/></geometry>
+      <material name="clio_link"/>
+    </visual>
+  </link>
+  <joint name="right_wrist_rotate" type="revolute">
+    <parent link="right_wrist_2_link"/>
+    <child link="right_flange"/>
+    <origin xyz="0 0 0.05" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.28" upper="6.28" effort="5" velocity="4.0"/>
+  </joint>
+  <link name="right_flange"/>
+  <joint name="right_gripper_mount" type="fixed">
+    <parent link="right_flange"/>
+    <child link="right_gripper_link"/>
+    <origin xyz="0 0 0.02" rpy="0 0 0"/>
+  </joint>
+  <link name="right_gripper_link">
+    <visual>
+      <origin xyz="0 0 0.0" rpy="0 0 0"/>
+      <geometry><box size="0.1 0.04 0.04"/></geometry>
+      <material name="clio_base"/>
+    </visual>
+  </link>
+  <joint name="right_tcp_joint" type="fixed">
+    <parent link="right_gripper_link"/>
+    <child link="right_tcp"/>
+    <origin xyz="0 0 0.09" rpy="0 0 0"/>
+  </joint>
+  <link name="right_tcp"/>
+  <joint name="right_finger_joint" type="prismatic">
+    <parent link="right_gripper_link"/>
+    <child link="right_finger_a_link"/>
+    <origin xyz="0 0 0.02" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="0" upper="0.04" effort="20" velocity="0.1"/>
+  </joint>
+  <link name="right_finger_a_link">
+    <visual>
+      <origin xyz="0.006 0 0.035" rpy="0 0 0"/>
+      <geometry><box size="0.012 0.02 0.07"/></geometry>
+      <material name="clio_link"/>
+    </visual>
+  </link>
+  <joint name="right_finger_mirror_joint" type="prismatic">
+    <parent link="right_gripper_link"/>
+    <child link="right_finger_b_link"/>
+    <origin xyz="0 0 0.02" rpy="0 0 0"/>
+    <axis xyz="-1 0 0"/>
+    <limit lower="0" upper="0.04" effort="20" velocity="0.1"/>
+    <mimic joint="right_finger_joint" multiplier="1" offset="0"/>
+  </joint>
+  <link name="right_finger_b_link">
+    <visual>
+      <origin xyz="-0.006 0 0.035" rpy="0 0 0"/>
+      <geometry><box size="0.012 0.02 0.07"/></geometry>
+      <material name="clio_link"/>
+    </visual>
+  </link>
+</robot>

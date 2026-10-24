@@ -1,11 +1,18 @@
 import { z } from 'zod';
 import { DemoClipSchema } from './clip';
 import {
+  CompileManifestSchema,
+  EnvironmentDocSchema,
+  RetargetDocSchema,
+  TracksDocSchema,
+} from './derived';
+import {
   EpisodeBatchSchema,
   EpisodeEventSchema,
   EpisodeFinishSchema,
   EpisodeMetaSchema,
   FrameRecordSchema,
+  ObjectObservationSchema,
   ObjectTrackRecordSchema,
 } from './episode';
 import { ProcedureSchema } from './procedure';
@@ -49,8 +56,38 @@ export function buildJsonSchemas(): Record<string, object> {
       ObjectTrackRecordSchema,
       'output',
     ),
+    exportSchema(
+      'object-observation.schema.json',
+      'Clio observations.ndjson line',
+      ObjectObservationSchema,
+      'output',
+    ),
     exportSchema('episode-batch.schema.json', 'Clio episode batch', EpisodeBatchSchema, 'output'),
     exportSchema('episode-finish.schema.json', 'Clio finish.json', EpisodeFinishSchema, 'output'),
     exportSchema('demo-clip.schema.json', 'Clio demo clip', DemoClipSchema, 'output'),
+    exportSchema(
+      'derived-manifest.schema.json',
+      'Clio compiled manifest.json',
+      CompileManifestSchema,
+      'output',
+    ),
+    exportSchema(
+      'derived-tracks.schema.json',
+      'Clio compiled tracks.json',
+      TracksDocSchema,
+      'output',
+    ),
+    exportSchema(
+      'derived-environment.schema.json',
+      'Clio compiled environment.json',
+      EnvironmentDocSchema,
+      'output',
+    ),
+    exportSchema(
+      'derived-retarget.schema.json',
+      'Clio compiled retarget-<profile>.json',
+      RetargetDocSchema,
+      'output',
+    ),
   ]);
 }

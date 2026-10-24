@@ -1,7 +1,8 @@
 """Synthetic Clio episodes for tests.
 
 `EpisodeBuilder` writes an episode directory (meta.json, frames.ndjson, events.ndjson, and
-optionally objects.ndjson, finish.json and media/) in the on-disk layout of docs/data-format.md.
+optionally objects.ndjson, observations.ndjson, finish.json, batches.json and media/) in the
+on-disk layout of docs/data-format.md.
 `test_synthetic_builder.py` validates its output against the real JSON Schemas in
 packages/protocol/schema with plain jsonschema, so the builder can't drift from the contract.
 
@@ -12,6 +13,7 @@ from clio_pipeline, so loader tests compare the package against an independent c
 from __future__ import annotations
 
 import copy
+import functools
 import json
 import math
 from pathlib import Path
@@ -237,13 +239,55 @@ def make_meta(episode_id: str, procedure: dict | None = PROCEDURE, objects=None)
     }
 
 
-def object_state(id_: str, position, *, orientation=None, confidence=0.9, source="marker") -> dict:
-    return {
+_UNSET = object()
+
+
+def object_state(
+    id_: str,
+    position,
+    *,
+    orientation=None,
+    confidence=0.9,
+    source="marker",
+    flags: int | None = None,
+    held_by=_UNSET,
+    observed_t: float | None = None,
+) -> dict:
+    """An ObjectState. `flags`, `held_by` (None writes null) and `observed_t` add the optional
+    `locationFlags`, `heldBy` and `observedT` fields ("object.flags" episodes)."""
+    state = {
         "id": id_,
         "position": list(position),
         "orientation": orientation,
         "confidence": confidence,
         "source": source,
+    }
+    if flags is not None:
+        state["locationFlags"] = flags
+    if held_by is not _UNSET:
+        state["heldBy"] = held_by
+    if observed_t is not None:
+        state["observedT"] = observed_t
+    return state
+
+
+def plane(
+    id_: str,
+    kind: str = "table",
+    *,
+    pose=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+    polygon=((0.0, 0.0), (0.8, 0.0), (0.8, -0.6), (0.0, -0.6)),
+    label: str | None = None,
+    orientation: str = "horizontal",
+) -> dict:
+    """An EnvironmentPlane for `environment.planes` events."""
+    return {
+        "id": id_,
+        "kind": kind,
+        "label": label if label is not None else kind,
+        "orientation": orientation,
+        "pose": list(pose),
+        "polygon": [list(point) for point in polygon],
     }
 
 
@@ -258,11 +302,19 @@ class EpisodeBuilder:
         self.frames: list[dict] = []
         self.events: list[dict] = []
         self.object_lines: list[dict] | None = None
+        self.observation_lines: list[dict] | None = None
         self.finish: dict | None = None
+        self.batches: dict | None = None  # batches.json: {"received": [seq...], "gaps": [...]}
         self.media: dict[str, bytes] = {}
 
     hand = staticmethod(hand)
     object_state = staticmethod(object_state)
+    plane = staticmethod(plane)
+
+    def features(self, *names: str) -> EpisodeBuilder:
+        """List optional recording features in meta.features ("object.flags", ...)."""
+        self.meta["features"] = list(names)
+        return self
 
     def frame(
         self,
@@ -318,6 +370,46 @@ class EpisodeBuilder:
         self.object_lines.append({"t": t, "objects": list(objects)})
         return self
 
+    def observation(
+        self,
+        t: float,
+        object_id: str,
+        *,
+        observed_t: float | None = None,
+        status: str = "measured",
+        role: str = "tracker",
+        source: str = "yoloe-26l-seg",
+        box=(0.4, 0.3, 0.5, 0.45),
+        score: float | None = 0.8,
+        seq: int | None = None,
+    ) -> EpisodeBuilder:
+        """One ObjectObservation line (observations.ndjson)."""
+        if self.observation_lines is None:
+            self.observation_lines = []
+        box = list(box) if box is not None else None
+        self.observation_lines.append(
+            {
+                "t": t,
+                "observedT": t if observed_t is None else observed_t,
+                "objectId": object_id,
+                "status": status,
+                "role": role,
+                "source": source,
+                "box": box,
+                "outline": None,
+                "point": [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2] if box else None,
+                "contact": [(box[0] + box[2]) / 2, box[3]] if box else None,
+                "score": score,
+                "frame": {"seq": seq, "width": 480, "height": 360} if seq is not None else None,
+                "trackId": "7" if role == "tracker" else None,
+            }
+        )
+        return self
+
+    def planes(self, t: float, *planes: dict) -> EpisodeBuilder:
+        """An `environment.planes` snapshot: every plane detected at `t`."""
+        return self.event(t, "environment.planes", planes=list(planes))
+
     def write(self) -> Path:
         self.dir.mkdir(parents=True, exist_ok=False)
         (self.dir / "meta.json").write_text(json.dumps(self.meta, indent=2) + "\n")
@@ -325,8 +417,12 @@ class EpisodeBuilder:
         _write_ndjson(self.dir / "events.ndjson", self.events)
         if self.object_lines is not None:
             _write_ndjson(self.dir / "objects.ndjson", self.object_lines)
+        if self.observation_lines is not None:
+            _write_ndjson(self.dir / "observations.ndjson", self.observation_lines)
         if self.finish is not None:
             (self.dir / "finish.json").write_text(json.dumps(self.finish) + "\n")
+        if self.batches is not None:
+            (self.dir / "batches.json").write_text(json.dumps(self.batches))
         for name, data in self.media.items():
             (self.dir / "media").mkdir(exist_ok=True)
             (self.dir / "media" / name).write_bytes(data)
@@ -432,6 +528,123 @@ def build_default(root: Path, episode_id: str = "ep-20261024-031502-test") -> Ep
     }
     b.media["egocentric.webm"] = b"\x1a\x45\xdf\xa3 not really a video"
     return b
+
+
+# --- an episode from a newer headset --------------------------------------------------------------
+#
+# The default frames, steps and events, recorded with every optional feature:
+# - meta.features: object.flags, object.grasp, object.observations, environment.planes
+# - syringe (not in meta.objects): detected at t = 200 in a frame taken at 150 (flags 10),
+#   marker-tracked with an orientation at 400 (flags 15), grasped by the right hand at 1600,
+#   carried every frame (flags 2, heldBy right), released at 2000 (heldBy null), lost at 2500
+#   (flags 0)
+# - 2D observations: measured at 200 (frame at 150) and 400, lost at 2500
+# - planes: a table and the floor at 0; at 1500 the table grows and the floor is gone
+# - finished as completed, every batch received (3 of 3)
+
+SYRINGE_CARRY = range(96, 120)  # frames 96..119: t = 1600 .. 1983.333
+
+
+def build_featured(root: Path, episode_id: str = "ep-20261024-031502-feat") -> EpisodeBuilder:
+    b = build_default(root, episode_id)
+    b.features("object.flags", "object.grasp", "object.observations", "environment.planes")
+    b.object_lines = None
+    b.track(
+        0.0,
+        *(
+            object_state(o["id"], o["position"], source="layout", confidence=1.0, flags=2)
+            for o in b.meta["objects"]
+        ),
+    )
+    syringe = functools.partial(object_state, "syringe", held_by=None)
+    at = [0.31, 0.02, -0.2]
+    b.track(200.0, syringe([0.3, 0.02, -0.2], source="detector", flags=10, observed_t=150.0))
+    b.track(400.0, syringe(at, orientation=[0.0, 0.0, 0.0, 1.0], confidence=0.95, flags=15))
+    b.event(1600.0, "object.grasped", objectId="syringe", hand="right", grip="pinch", position=at)
+    for k in SYRINGE_CARRY:
+        lifted = [0.31, round(0.02 + 0.0004 * (k - SYRINGE_CARRY[0]), 4), -0.2]
+        b.track(frame_time(k), syringe(lifted, source="pinch", flags=2, held_by="right"))
+    dropped = [0.31, 0.03, -0.2]
+    b.event(
+        2000.0,
+        "object.released",
+        objectId="syringe",
+        hand="right",
+        reason="opened",
+        position=dropped,
+    )
+    b.track(2000.0, syringe(dropped, source="pinch", flags=2))
+    b.track(2500.0, syringe(dropped, source="detector", confidence=0.2, flags=0))
+
+    b.observation(200.0, "syringe", observed_t=150.0, seq=4)
+    b.observation(400.0, "syringe", seq=12, score=0.9)
+    b.observation(2500.0, "syringe", status="lost", box=None, score=None, seq=75)
+    floor = plane(
+        "plane-2",
+        "floor",
+        pose=[0.4, -0.75, 0.5, 0.0, 0.0, 0.0, 1.0],
+        polygon=[[-2, -2], [2, -2], [2, 2], [-2, 2]],
+    )
+    b.planes(0.0, plane("plane-1"), floor)
+    grown = [[-0.1, 0.1], [1.0, 0.1], [1.0, -0.7], [-0.1, -0.7]]
+    b.planes(1500.0, plane("plane-1", polygon=grown))
+    b.events.sort(key=lambda e: e["t"])
+
+    b.finish = {
+        "durationMs": 2983.333,
+        "outcome": "completed",
+        "stepsCompleted": 3,
+        "stepsTotal": 3,
+        "batches": 3,
+    }
+    b.batches = {"received": [0, 1, 2], "gaps": []}
+    return b
+
+
+# --- an episode with a hole in its frames ---------------------------------------------------------
+#
+# Both hands and the head at 60 Hz from 0 to 1000 ms and again from 3000 to 4000 ms, with nothing
+# in between (the XR loop paused while the headset was off): every batch arrived and it finished as
+# completed, so only the hole is wrong with it. The hands reach forward and down within the example
+# arms' reach; the left wrist is at x = 0.25 before the hole and 0.30 after it, the head at x = 0.3
+# and then 0.9.
+
+FRAME_GAP = (1000.0, 3000.0)
+REACH_DOWN = (-0.4226, 0.0, 0.0, 0.9063)  # wrist turned 50 degrees about +x
+
+
+def build_frame_gap(root: Path, episode_id: str = "ep-20261024-031502-gap") -> EpisodeBuilder:
+    b = EpisodeBuilder(root, episode_id)
+    for start, left_x, head_x in ((0.0, 0.25, 0.3), (FRAME_GAP[1], 0.30, 0.9)):
+        for k in range(61):
+            b.frame(
+                round(start + k * 1000.0 / 60.0, 3),
+                head=[head_x, 0.45, 0.35, 0.0, 0.0, 0.0, 1.0],
+                left=hand((left_x, 0.22, -0.02), REACH_DOWN, pinch=0.05),
+                right=hand((0.53, 0.22, -0.02), REACH_DOWN, pinch=0.05),
+            )
+    b.event(0.0, "coach.status", state="ready")
+    b.finish = {
+        "durationMs": 4000.0,
+        "outcome": "completed",
+        "stepsCompleted": 0,
+        "stepsTotal": 0,
+        "batches": 4,
+    }
+    b.batches = {"received": [0, 1, 2, 3], "gaps": []}
+    return b
+
+
+@pytest.fixture
+def featured_episode_dir(tmp_path) -> Path:
+    """The default episode recorded with every optional feature (see `build_featured`)."""
+    return build_featured(tmp_path).write()
+
+
+@pytest.fixture
+def frame_gap_episode_dir(tmp_path) -> Path:
+    """An episode without frames from 1000 to 3000 ms (see `build_frame_gap`)."""
+    return build_frame_gap(tmp_path).write()
 
 
 @pytest.fixture

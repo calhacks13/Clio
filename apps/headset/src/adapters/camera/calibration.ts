@@ -21,13 +21,16 @@ import type { CameraModel } from '../../domain/world/camera-model';
 //
 // Without lens fields we fall back to the approximation Google's XR Blocks ships for Quest 3
 // (fx = fy ≈ 800 px at 1280 wide, ~2 cm up and 2.5 cm forward of the eye, pitched ~15° down).
-// Always validate on your headset (log `track.getSettings()`).
+// Quest Browser 154 reports no lens fields at all, and facingMode 'environment' opens "camera 2",
+// which is the RIGHT passthrough camera (covering the right of the visor darkens it), so the
+// fallback sits ~3.2 cm right of the head center instead of on it; outlines landed left before.
+// Always validate on your headset (log `track.getSettings()`); primary.html takes ?camX= etc.
 
 const DEG = Math.PI / 180;
 const R_X_180: Quat = quatFromAxisAngle([1, 0, 0], Math.PI);
 
 export const DEFAULT_HEAD_FROM_CAMERA: Pose = {
-  p: [0, 0.02, -0.025],
+  p: [0.032, 0.02, -0.025],
   q: quatFromAxisAngle([1, 0, 0], -15 * DEG),
 };
 

@@ -1,0 +1,1530 @@
+"use client";
+
+import {
+  LuBug,
+  LuFocus,
+  LuHand,
+  LuLayers,
+  LuChevronDown,
+  LuInfo,
+} from "react-icons/lu";
+import { useSearchParams } from "next/navigation";
+import { createPortal } from "react-dom";
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useMemo,
+  useCallback,
+} from "react";
+import { Canvas, useThree, useFrame } from "@react-three/fiber";
+import {
+  OrbitControls,
+  Grid,
+  Html,
+  Environment,
+  Lightformer,
+} from "@react-three/drei";
+import * as THREE from "three";
+import URDFLoader from "urdf-loader";
+import type { URDFRobot } from "urdf-loader";
+import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
+import { ColladaLoader } from "three/examples/jsm/loaders/ColladaLoader.js";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
+import { Line2 } from "three/examples/jsm/lines/Line2.js";
+import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
+import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
+import type { EpisodeData } from "@/app/[org]/[dataset]/[episode]/fetch-data";
+import { loadEpisodeFlatChartData } from "@/app/[org]/[dataset]/[episode]/fetch-data";
+import UrdfPlaybackBar from "@/components/urdf-playback-bar";
+import { CHART_CONFIG } from "@/utils/constants";
+import { getDatasetVersionAndInfo } from "@/utils/versionUtils";
+import type { DatasetMetadata } from "@/utils/parquetUtils";
+import { useTheme } from "@/utils/theme";
+import { matchG1Joint } from "@/lib/humanoid";
+import { defaultSceneForDataset } from "@/lib/scene-presets";
+import { robotDisplayMatrix, type SceneDocument } from "@/lib/scene";
+import {
+  SceneEditor,
+  SceneObjects,
+  useSceneWorkspace,
+} from "@/components/scene-workspace";
+
+const SERIES_DELIM = CHART_CONFIG.SERIES_NAME_DELIMITER;
+const DEG2RAD = Math.PI / 180;
+
+// Module-level geometry cache — survives component remounts (tab switches,
+// episode navigations). Avoids re-fetching and re-parsing STL files.
+const stlGeometryCache = new Map<string, THREE.BufferGeometry>();
+// In-flight promise cache — prevents duplicate simultaneous fetches
+const stlGeometryLoading = new Map<string, Promise<THREE.BufferGeometry>>();
+
+function loadStlGeometry(url: string): Promise<THREE.BufferGeometry> {
+  const cached = stlGeometryCache.get(url);
+  if (cached) return Promise.resolve(cached);
+  let loading = stlGeometryLoading.get(url);
+  if (!loading) {
+    loading = new STLLoader()
+      .loadAsync(url)
+      .then((geometry) => {
+        stlGeometryCache.set(url, geometry);
+        return geometry;
+      })
+      .finally(() => stlGeometryLoading.delete(url));
+    stlGeometryLoading.set(url, loading);
+  }
+  return loading;
+}
+
+/**
+ * Rebuilds every mesh with a MeshStandardMaterial bucketed into one of three archetypes (carbon-black,
+ * brushed metal, off-white paint) by the original base-colour lightness. `flatShading` is for the GLB
+ * meshes, which carry no normals.
+ */
+function applyOpenArmMaterials(root: THREE.Object3D, flatShading: boolean) {
+  root.traverse((child) => {
+    if (!(child instanceof THREE.Mesh) || !child.material) return;
+
+    const originals = Array.isArray(child.material)
+      ? child.material
+      : [child.material];
+
+    const rebuilt = originals.map((orig) => {
+      const srcColor =
+        (orig as THREE.MeshStandardMaterial).color ??
+        new THREE.Color("#c0c4cc");
+      const hsl = { h: 0, s: 0, l: 0 };
+      srcColor.getHSL(hsl);
+
+      // Archetype classification by original lightness.
+      let color: THREE.Color;
+      let metalness: number;
+      let roughness: number;
+      let envMapIntensity: number;
+      if (hsl.l < 0.3) {
+        // Carbon / anodised structural parts
+        color = new THREE.Color().setHSL(hsl.h, 0.02, 0.09);
+        metalness = 0.15;
+        roughness = 0.75;
+        envMapIntensity = 0.6;
+      } else if (hsl.l < 0.7) {
+        // Brushed metal joint collars / accents
+        color = new THREE.Color().setHSL(hsl.h, 0.04, 0.42);
+        metalness = 0.75;
+        roughness = 0.35;
+        envMapIntensity = 1.1;
+      } else {
+        // Off-white painted plates
+        color = new THREE.Color().setHSL(hsl.h, 0.03, 0.6);
+        metalness = 0.1;
+        roughness = 0.5;
+        envMapIntensity = 0.9;
+      }
+
+      const mat = new THREE.MeshStandardMaterial({
+        color,
+        metalness,
+        roughness,
+        envMapIntensity,
+        side: THREE.DoubleSide,
+        flatShading,
+      });
+      orig.dispose?.();
+      return mat;
+    });
+
+    child.material = Array.isArray(child.material) ? rebuilt : rebuilt[0];
+    child.castShadow = true;
+    child.receiveShadow = true;
+  });
+}
+
+/// One download and parse per DAE file per session: the OpenArm URDF references finger.dae 4 times
+/// and each arm link twice, and the viewer remounts on every visit to the 3D Replay tab.
+const daeSceneCache = new Map<string, Promise<THREE.Object3D>>();
+
+function loadDaeScene(url: string): Promise<THREE.Object3D> {
+  let loading = daeSceneCache.get(url);
+  if (!loading) {
+    loading = new ColladaLoader()
+      .loadAsync(url)
+      .then((collada) => {
+        // DAE (Collada) files — ColladaLoader yields whatever the .dae author
+        // baked in: flat MeshPhongMaterial/MeshBasicMaterial colors plus, in
+        // OpenArm's case, ~23 per-file PointLight/SpotLight nodes. The stray
+        // lights caused the scene to look pure-white everywhere regardless of
+        // our own lighting, and the flat materials looked cartoonish. We strip
+        // both and rebuild every mesh with a MeshStandardMaterial bucketed into
+        // one of three archetypes (carbon-black, brushed metal, off-white paint)
+        // based on the original base-color lightness.
+        if (url.includes("openarm")) {
+          const strayLights: THREE.Object3D[] = [];
+          collada.scene.traverse((child) => {
+            if (
+              (child as THREE.Light).isLight &&
+              !(child instanceof THREE.AmbientLight)
+            ) {
+              strayLights.push(child);
+            }
+          });
+          for (const l of strayLights) l.parent?.remove(l);
+
+          applyOpenArmMaterials(collada.scene, false);
+        }
+        return collada.scene;
+      })
+      .catch((err) => {
+        daeSceneCache.delete(url);
+        throw err;
+      });
+    daeSceneCache.set(url, loading);
+  }
+  return loading;
+}
+
+/// The bucket holds meshopt-compressed GLB copies of the SO-101 and OpenArm meshes, about 16x and 20x
+/// smaller than the STL/DAE originals. They carry no normals: the originals' are flat per face, and
+/// flatShading derives the same ones.
+const glbSceneCache = new Map<string, Promise<THREE.Object3D>>();
+
+function loadGlbScene(url: string): Promise<THREE.Object3D> {
+  let loading = glbSceneCache.get(url);
+  if (!loading) {
+    loading = new GLTFLoader()
+      .setMeshoptDecoder(MeshoptDecoder)
+      .loadAsync(url)
+      .then((gltf) => {
+        if (url.includes("openarm")) applyOpenArmMaterials(gltf.scene, true);
+        return gltf.scene;
+      })
+      .catch((err) => {
+        glbSceneCache.delete(url);
+        throw err;
+      });
+    glbSceneCache.set(url, loading);
+  }
+  return loading;
+}
+
+// URDFs + meshes are hosted in the Hub bucket at
+// https://huggingface.co/buckets/lerobot/robot-urdfs. URDFLoader resolves
+// relative mesh paths against the URDF's own URL, so the bucket layout
+// mirrors the upstream directory tree. Note: buckets don't have branches,
+// so the resolve URL has no "/main" segment.
+const URDF_BASE_URL =
+  process.env.NEXT_PUBLIC_URDF_BASE_URL ??
+  "https://huggingface.co/buckets/lerobot/robot-urdfs/resolve";
+
+const prefetchedUrdfs = new Set<string>();
+
+// The bucket resolve is a 302 with no Cache-Control, to a URL re-signed every second, so the
+// browser downloads the URDF again on every mount unless the text is kept here.
+const urdfTextCache = new Map<string, Promise<string>>();
+
+function loadUrdfText(url: string): Promise<string> {
+  let loading = urdfTextCache.get(url);
+  if (!loading) {
+    loading = fetch(url)
+      .then((res) => {
+        if (!res.ok)
+          throw new Error(`Failed to load URDF ${url} (HTTP ${res.status})`);
+        return res.text();
+      })
+      .catch((err) => {
+        urdfTextCache.delete(url);
+        throw err;
+      });
+    urdfTextCache.set(url, loading);
+  }
+  return loading;
+}
+
+/**
+ * Starts downloading a robot's visual meshes into the caches. The viewer only mounts once the episode
+ * data has loaded, and the meshes used to start downloading only then; calling this earlier overlaps
+ * the two.
+ */
+export function prefetchRobotModel(robotType: string | null) {
+  const { urdfUrl } = getRobotConfig(robotType);
+  if (prefetchedUrdfs.has(urdfUrl)) return;
+  prefetchedUrdfs.add(urdfUrl);
+  const base = THREE.LoaderUtils.extractUrlBase(urdfUrl);
+  loadUrdfText(urdfUrl)
+    .then((text) => {
+      const doc = new DOMParser().parseFromString(text, "application/xml");
+      for (const mesh of doc.querySelectorAll("visual mesh")) {
+        const filename = mesh.getAttribute("filename");
+        /// Same resolution URDFLoader applies to relative paths; package:// and DAE meshes are left to it.
+        if (!filename || filename.startsWith("package://")) continue;
+        const lower = filename.toLowerCase();
+        if (lower.endsWith(".glb"))
+          loadGlbScene(base + filename).catch(() => {});
+        else if (lower.endsWith(".stl"))
+          loadStlGeometry(base + filename).catch(() => {});
+      }
+    })
+    .catch(() => prefetchedUrdfs.delete(urdfUrl));
+}
+
+function getRobotConfig(robotType: string | null) {
+  const lower = (robotType ?? "").toLowerCase();
+  if (lower.includes("g1") || lower.includes("unitree")) {
+    return { urdfUrl: `${URDF_BASE_URL}/g1/g1_body29_hand14.urdf`, scale: 1 };
+  }
+  if (lower.includes("openarm")) {
+    return {
+      urdfUrl: `${URDF_BASE_URL}/openarm/openarm_bimanual_web.urdf`,
+      scale: 3,
+    };
+  }
+  return {
+    urdfUrl: `${URDF_BASE_URL}/so101/so101_new_calib_web.urdf`,
+    scale: 10,
+  };
+}
+
+// Detect unit: servo ticks (0-4096), degrees (>6.28), or radians
+function detectAndConvert(values: number[]): number[] {
+  if (values.length === 0) return values;
+  const max = Math.max(...values.map(Math.abs));
+  if (max > 360) return values.map((v) => ((v - 2048) / 2048) * Math.PI); // servo ticks
+  if (max > 6.3) return values.map((v) => v * DEG2RAD); // degrees
+  return values; // already radians
+}
+
+function groupColumnsByPrefix(keys: string[]): Record<string, string[]> {
+  const groups: Record<string, string[]> = {};
+  for (const key of keys) {
+    if (key === "timestamp") continue;
+    const parts = key.split(SERIES_DELIM);
+    const prefix = parts.length > 1 ? parts[0].trim() : "other";
+    if (!groups[prefix]) groups[prefix] = [];
+    groups[prefix].push(key);
+  }
+  return groups;
+}
+
+function autoMatchJoints(
+  urdfJointNames: string[],
+  columnKeys: string[],
+): Record<string, string> {
+  const mapping: Record<string, string> = {};
+  const suffixes = columnKeys.map((k) =>
+    (k.split(SERIES_DELIM).pop()?.trim() ?? k).toLowerCase(),
+  );
+
+  for (const jointName of urdfJointNames) {
+    const lower = jointName.toLowerCase();
+
+    // Exact match on column suffix
+    const exactIdx = suffixes.findIndex((s) => s === lower);
+    if (exactIdx >= 0) {
+      mapping[jointName] = columnKeys[exactIdx];
+      continue;
+    }
+
+    // G1 / Unitree SDK name match
+    const g1Index = matchG1Joint(jointName, suffixes);
+    if (g1Index >= 0) {
+      mapping[jointName] = columnKeys[g1Index];
+      continue;
+    }
+
+    // OpenArm: openarm_(left|right)_joint(\d+) → (left|right)_joint_(\d+)
+    const armMatch = lower.match(/^openarm_(left|right)_joint(\d+)$/);
+    if (armMatch) {
+      const pattern = `${armMatch[1]}_joint_${armMatch[2]}`;
+      const idx = suffixes.findIndex((s) => s.includes(pattern));
+      if (idx >= 0) {
+        mapping[jointName] = columnKeys[idx];
+        continue;
+      }
+    }
+
+    // OpenArm: openarm_(left|right)_finger_joint1 → (left|right)_gripper
+    const fingerMatch = lower.match(/^openarm_(left|right)_finger_joint1$/);
+    if (fingerMatch) {
+      const pattern = `${fingerMatch[1]}_gripper`;
+      const idx = suffixes.findIndex((s) => s.includes(pattern));
+      if (idx >= 0) {
+        mapping[jointName] = columnKeys[idx];
+        continue;
+      }
+    }
+
+    // finger_joint2 is a mimic joint — skip
+    if (lower.includes("finger_joint2")) continue;
+
+    // Generic fuzzy fallback
+    const fuzzy = columnKeys.find((k) => k.toLowerCase().includes(lower));
+    if (fuzzy) mapping[jointName] = fuzzy;
+  }
+  return mapping;
+}
+
+const SINGLE_ARM_TIP_NAMES = [
+  "gripper_frame_link",
+  "gripperframe",
+  "gripper_link",
+  "gripper",
+];
+const DUAL_ARM_TIP_NAMES = ["openarm_left_hand_tcp", "openarm_right_hand_tcp"];
+const G1_TIP_NAMES = ["left_hand_palm_link", "right_hand_palm_link"];
+const TRAIL_DURATION = 1.0;
+const TRAIL_COLORS = [new THREE.Color("#ff6600"), new THREE.Color("#00aaff")];
+const MAX_TRAIL_POINTS = 300;
+
+/**
+ * Frames the robot's world-space bounding box. URDFs can ship world→base offsets (SO-arm does) that
+ * put the robot far from origin, so a fixed camera pose crops the arm.
+ */
+function fitCameraToRobot(
+  robot: THREE.Object3D,
+  camera: THREE.Camera,
+  controls: unknown,
+  extra?: THREE.Object3D,
+  focusBounds?: THREE.Box3,
+) {
+  const bbox = focusBounds ?? new THREE.Box3().setFromObject(robot);
+  if (extra && !focusBounds) bbox.union(new THREE.Box3().setFromObject(extra));
+  if (bbox.isEmpty()) return;
+  const center = bbox.getCenter(new THREE.Vector3());
+  const sizeVec = bbox.getSize(new THREE.Vector3());
+  const maxDim = Math.max(sizeVec.x, sizeVec.y, sizeVec.z);
+  const fov = ((camera as THREE.PerspectiveCamera).fov ?? 45) * (Math.PI / 180);
+  const distance = (maxDim / 2 / Math.tan(fov / 2)) * 1.6;
+  const dir = new THREE.Vector3(1, 0.85, 1).normalize();
+  camera.position.copy(center).addScaledVector(dir, distance);
+  camera.lookAt(center);
+  (camera as THREE.PerspectiveCamera).updateProjectionMatrix?.();
+  const orbit = controls as { target?: THREE.Vector3; update?: () => void };
+  if (orbit?.target) {
+    orbit.target.copy(center);
+    orbit.update?.();
+  }
+}
+
+/** Frames to wait for joint values before fitting anyway (a robot with no mapped joints). */
+const MAX_FIT_WAIT_FRAMES = 30;
+
+// ─── Robot scene (imperative, inside Canvas) ───
+function RobotScene({
+  urdfUrl,
+  jointValues,
+  onJointsLoaded,
+  trailEnabled,
+  trailResetKey,
+  scale,
+  sceneDocument,
+  fitRequest,
+  fitTarget,
+}: {
+  urdfUrl: string;
+  jointValues: Record<string, number>;
+  onJointsLoaded: (names: string[]) => void;
+  trailEnabled: boolean;
+  trailResetKey: number;
+  scale: number;
+  sceneDocument: SceneDocument;
+  fitRequest: number;
+  fitTarget: "scene" | "hands";
+}) {
+  const { scene, controls, size, invalidate } = useThree();
+  const robotRef = useRef<URDFRobot | null>(null);
+  const tipLinksRef = useRef<THREE.Object3D[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  type TrailState = {
+    positions: Float32Array;
+    colors: Float32Array;
+    times: number[];
+    count: number;
+  };
+  const trailsRef = useRef<TrailState[]>([]);
+  const linesRef = useRef<Line2[]>([]);
+  const trailMatsRef = useRef<LineMaterial[]>([]);
+  const trailCountRef = useRef(0);
+  /// Set once every mesh is attached; the frame loop fits the camera on the first frame that has
+  /// the episode's pose applied. Fitting in manager.onLoad framed the URDF's zero pose instead
+  /// whenever the meshes were already cached, since the joint values arrive a render later.
+  const pendingFitRef = useRef(false);
+  const pendingFitFramesRef = useRef(0);
+  const framesSinceInputRef = useRef(0);
+  const placement = useMemo(
+    () => robotDisplayMatrix(sceneDocument, scale),
+    [sceneDocument, scale],
+  );
+  useEffect(() => {
+    pendingFitRef.current = true;
+    pendingFitFramesRef.current = 0;
+    invalidate();
+  }, [placement, fitRequest, fitTarget, size.width, size.height, invalidate]);
+
+  // Reset trails when episode changes
+  useEffect(() => {
+    for (const t of trailsRef.current) {
+      t.count = 0;
+      t.times = [];
+    }
+    for (const l of linesRef.current) l.visible = false;
+  }, [trailResetKey]);
+
+  /// useFrame applies these, so R3F can't tell they changed: request a frame and restart the trail
+  /// keep-alive in useFrame.
+  useEffect(() => {
+    framesSinceInputRef.current = 0;
+    invalidate();
+  }, [jointValues, trailEnabled, trailResetKey, invalidate]);
+
+  // Create/destroy trail Line2 objects when tip count changes
+  const ensureTrails = useCallback(
+    (count: number) => {
+      if (trailCountRef.current === count) return;
+      // Remove old
+      for (const l of linesRef.current) {
+        scene.remove(l);
+        l.geometry.dispose();
+      }
+      for (const m of trailMatsRef.current) m.dispose();
+      // Create new
+      const trails: TrailState[] = [];
+      const lines: Line2[] = [];
+      const mats: LineMaterial[] = [];
+      for (let i = 0; i < count; i++) {
+        trails.push({
+          positions: new Float32Array(MAX_TRAIL_POINTS * 3),
+          colors: new Float32Array(MAX_TRAIL_POINTS * 3),
+          times: [],
+          count: 0,
+        });
+        const mat = new LineMaterial({
+          color: 0xffffff,
+          linewidth: 4,
+          vertexColors: true,
+          transparent: true,
+          worldUnits: false,
+        });
+        mat.resolution.set(window.innerWidth, window.innerHeight);
+        mats.push(mat);
+        const line = new Line2(new LineGeometry(), mat);
+        line.frustumCulled = false;
+        line.visible = false;
+        lines.push(line);
+        scene.add(line);
+      }
+      trailsRef.current = trails;
+      linesRef.current = lines;
+      trailMatsRef.current = mats;
+      trailCountRef.current = count;
+    },
+    [scene],
+  );
+
+  useEffect(() => {
+    setError(null);
+    const isOpenArm = urdfUrl.includes("openarm");
+    const isG1 = urdfUrl.includes("g1");
+    const manager = new THREE.LoadingManager();
+    const loader = new URDFLoader(manager);
+    /// itemEnd fires after URDFLoader attaches the URDF or a mesh, so each one paints as it lands.
+    manager.onProgress = () => invalidate();
+    // URDFLoader (node_modules/urdf-loader/src/URDFLoader.js ~line 556) does
+    //   `if (obj instanceof THREE.Mesh) obj.material = material;`
+    // on every mesh we hand back — overwriting our PBR material with the
+    // URDF's <material rgba="...">-derived MeshPhongMaterial. Wrapping the
+    // returned mesh in a Group dodges that check (same way DAE's collada.scene
+    // already avoids it) so our carefully-tuned materials survive.
+    const wrapForUrdf = (obj: THREE.Object3D): THREE.Object3D => {
+      const group = new THREE.Group();
+      group.add(obj);
+      return group;
+    };
+    loader.loadMeshCb = (url, mgr, onLoad) => {
+      const makeMaterial = (flatShading: boolean) => {
+        // Defaults: neutral off-white plastic, matches OpenArm "light" archetype
+        let color = "#9ba1ab";
+        let metalness = 0.1;
+        let roughness = 0.5;
+        let side: THREE.Side = THREE.FrontSide;
+        if (isG1) {
+          const lower = url.toLowerCase();
+          const isWhitePart =
+            lower.includes("contour") ||
+            lower.includes("roll_link") ||
+            lower.includes("logo") ||
+            lower.includes("rubber") ||
+            lower.includes("constraint") ||
+            lower.includes("support");
+          color = isWhitePart ? "#9ca3af" : "#1f2937";
+          metalness = 0.25;
+          roughness = 0.6;
+        } else if (url.includes("sts3215")) {
+          // SO-arm / any STL servo housing — carbon-black archetype
+          color = "#171a20";
+          metalness = 0.15;
+          roughness = 0.75;
+        } else if (isOpenArm) {
+          color = url.includes("body_link0") ? "#3a3a4a" : "#f5f5f5";
+          metalness = 0.15;
+          roughness = 0.6;
+          side = THREE.DoubleSide;
+        }
+        return new THREE.MeshStandardMaterial({
+          color,
+          metalness,
+          roughness,
+          side,
+          flatShading,
+        });
+      };
+      const makeMesh = (geometry: THREE.BufferGeometry) =>
+        new THREE.Mesh(geometry, makeMaterial(false));
+      if (url.endsWith(".glb")) {
+        mgr.itemStart(url);
+        loadGlbScene(url)
+          .then((glbScene) => {
+            const obj = glbScene.clone();
+            if (!isOpenArm) {
+              obj.traverse((child) => {
+                if (child instanceof THREE.Mesh)
+                  child.material = makeMaterial(true);
+              });
+            }
+            onLoad(obj);
+          })
+          .catch((err) => onLoad(new THREE.Object3D(), err as Error))
+          .finally(() => mgr.itemEnd(url));
+        return;
+      }
+      if (url.endsWith(".dae")) {
+        /// URDFLoader re-parents and re-orients what it is handed, so it gets a clone (sharing
+        /// geometry and materials) and the cached scene stays intact.
+        mgr.itemStart(url);
+        loadDaeScene(url)
+          .then((daeScene) => onLoad(daeScene.clone()))
+          .catch((err) => onLoad(new THREE.Object3D(), err as Error))
+          .finally(() => mgr.itemEnd(url));
+        return;
+      }
+      // STL files — apply final PBR materials directly here. We used to do a
+      // post-load archetype rebuild in manager.onLoad, but STLLoader calls
+      // `manager.itemEnd` *before* our Promise resolves — so when the last
+      // STL completes, manager.onLoad fires synchronously, our traverse runs,
+      // and THEN URDFLoader's inner `group.add(obj)` + `obj.material = urdf`
+      // runs in a microtask. Last-batch meshes ended up gold/green because
+      // they were added to the robot after our rebuild passed.
+      //
+      // Fix: pick the archetype color here, wrap the mesh in a Group so
+      // URDFLoader won't override our material (its override only triggers
+      // for direct `THREE.Mesh` instances), and skip the onLoad rebuild.
+
+      /// Tracked on this manager even when the geometry is cached or a prefetch already started
+      /// the download: manager.onLoad (shadows, camera fit) only fires for tracked loads, and
+      /// with every mesh prefetched it would otherwise never fire.
+      mgr.itemStart(url);
+      loadStlGeometry(url)
+        .then((geometry) => onLoad(wrapForUrdf(makeMesh(geometry))))
+        .catch((err) => onLoad(new THREE.Object3D(), err as Error))
+        .finally(() => mgr.itemEnd(url));
+    };
+    // Materials are now set directly in loadMeshCb, so manager.onLoad only
+    // needs to (a) enable shadows, (b) auto-fit the camera. We defer the
+    // whole block one macrotask because STLLoader fires `manager.itemEnd`
+    // before the user callback runs, so if we worked synchronously here the
+    // last batch of meshes wouldn't yet be attached to the robot tree.
+    manager.onLoad = () => {
+      setTimeout(() => {
+        const robot = robotRef.current;
+        if (!robot) return;
+
+        robot.traverse((c) => {
+          c.castShadow = true;
+          if (!isOpenArm) c.receiveShadow = true;
+        });
+        pendingFitRef.current = true;
+        pendingFitFramesRef.current = 0;
+        invalidate();
+      }, 0);
+    };
+
+    loader.workingPath = THREE.LoaderUtils.extractUrlBase(urdfUrl);
+    let cancelled = false;
+    manager.itemStart(urdfUrl);
+    loadUrdfText(urdfUrl)
+      .then((text) => {
+        if (cancelled) return;
+        const robot = loader.parse(text);
+        robotRef.current = robot;
+        // Placement is applied by the frame loop from the explicit world/base transform.
+        robot.scale.set(scale, scale, scale);
+        scene.add(robot);
+
+        // Fallback center/frame if manager.onLoad was starved (no async
+        // tracked loads — can happen if meshes are all cached synchronously).
+        const bbox = new THREE.Box3().setFromObject(robot);
+        if (!bbox.isEmpty()) {
+          const center = bbox.getCenter(new THREE.Vector3());
+          const orbit = controls as unknown as {
+            target?: THREE.Vector3;
+            update?: () => void;
+          };
+          if (orbit?.target) {
+            orbit.target.copy(center);
+            orbit.update?.();
+          }
+        }
+
+        const tipNames = isG1
+          ? G1_TIP_NAMES
+          : isOpenArm
+            ? DUAL_ARM_TIP_NAMES
+            : SINGLE_ARM_TIP_NAMES;
+        const tips: THREE.Object3D[] = [];
+        for (const name of tipNames) {
+          if (robot.frames[name]) tips.push(robot.frames[name]);
+          if (!isOpenArm && !isG1 && tips.length === 1) break;
+        }
+        tipLinksRef.current = tips;
+        ensureTrails(tips.length);
+
+        const movable = Object.values(robot.joints)
+          .filter(
+            (j) =>
+              j.jointType === "revolute" ||
+              j.jointType === "continuous" ||
+              j.jointType === "prismatic",
+          )
+          .map((j) => j.name);
+        onJointsLoaded(movable);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("Error loading URDF:", err);
+        setError(String(err));
+      })
+      .finally(() => {
+        if (!cancelled) manager.itemEnd(urdfUrl);
+      });
+    return () => {
+      cancelled = true;
+      if (robotRef.current) {
+        scene.remove(robotRef.current);
+        robotRef.current = null;
+      }
+      tipLinksRef.current = [];
+    };
+  }, [urdfUrl, scale, scene, onJointsLoaded, ensureTrails, invalidate]);
+
+  const tipWorldPos = useMemo(() => new THREE.Vector3(), []);
+
+  useFrame((state) => {
+    const robot = robotRef.current;
+    if (!robot) return;
+
+    placement.decompose(robot.position, robot.quaternion, robot.scale);
+    for (const [name, value] of Object.entries(jointValues)) {
+      robot.setJointValue(name, value);
+    }
+    robot.updateMatrixWorld(true);
+
+    if (pendingFitRef.current) {
+      pendingFitFramesRef.current++;
+      if (
+        Object.keys(jointValues).length > 0 ||
+        pendingFitFramesRef.current > MAX_FIT_WAIT_FRAMES
+      ) {
+        pendingFitRef.current = false;
+        let focusBounds: THREE.Box3 | undefined;
+        if (fitTarget === "hands") {
+          const hands = G1_TIP_NAMES.map((name) => robot.frames[name]).filter(
+            Boolean,
+          );
+          if (hands.length) {
+            focusBounds = new THREE.Box3();
+            for (const hand of hands)
+              focusBounds.union(new THREE.Box3().setFromObject(hand));
+            if (focusBounds.isEmpty()) focusBounds = undefined;
+          }
+        }
+        fitCameraToRobot(
+          robot,
+          state.camera,
+          state.controls,
+          state.scene.getObjectByName("scene-objects"),
+          focusBounds,
+        );
+      }
+    }
+
+    /// The fit wait counts rendered frames and the trail appends a point per rendered frame: keep
+    /// rendering until the fit is done and for MAX_TRAIL_POINTS frames after the last change, so
+    /// the trail fades and collapses as it did when every display frame rendered.
+    if (
+      pendingFitRef.current ||
+      (trailEnabled && framesSinceInputRef.current++ < MAX_TRAIL_POINTS)
+    )
+      state.invalidate();
+
+    const tips = tipLinksRef.current;
+    if (!trailEnabled || tips.length === 0) {
+      for (const l of linesRef.current) l.visible = false;
+      return;
+    }
+
+    const now = performance.now() / 1000;
+    for (let ti = 0; ti < tips.length; ti++) {
+      const tip = tips[ti];
+      const trail = trailsRef.current[ti];
+      const line = linesRef.current[ti];
+      const mat = trailMatsRef.current[ti];
+      if (!trail || !line || !mat) continue;
+
+      mat.resolution.set(size.width, size.height);
+      tip.getWorldPosition(tipWorldPos);
+      const trailColor = TRAIL_COLORS[ti % TRAIL_COLORS.length];
+
+      if (trail.count < MAX_TRAIL_POINTS) {
+        trail.count++;
+      } else {
+        trail.positions.copyWithin(0, 3);
+        trail.colors.copyWithin(0, 3);
+        trail.times.shift();
+      }
+      const idx = trail.count - 1;
+      trail.positions[idx * 3] = tipWorldPos.x;
+      trail.positions[idx * 3 + 1] = tipWorldPos.y;
+      trail.positions[idx * 3 + 2] = tipWorldPos.z;
+      trail.times.push(now);
+
+      for (let i = 0; i < trail.count; i++) {
+        const t = Math.max(0, 1 - (now - trail.times[i]) / TRAIL_DURATION);
+        trail.colors[i * 3] = trailColor.r * t;
+        trail.colors[i * 3 + 1] = trailColor.g * t;
+        trail.colors[i * 3 + 2] = trailColor.b * t;
+      }
+
+      if (trail.count < 2) {
+        line.visible = false;
+        continue;
+      }
+      const geo = new LineGeometry();
+      geo.setPositions(
+        Array.from(trail.positions.subarray(0, trail.count * 3)),
+      );
+      geo.setColors(Array.from(trail.colors.subarray(0, trail.count * 3)));
+      line.geometry.dispose();
+      line.geometry = geo;
+      line.computeLineDistances();
+      line.visible = true;
+    }
+  });
+
+  // Loading state is rendered by the outer overlay (via urdfLoading) so we
+  // don't show two stacked spinners. The error state still surfaces inline
+  // since the overlay doesn't have an error path.
+  if (error)
+    return (
+      <Html center>
+        <span className="text-red-400">Failed to load URDF</span>
+      </Html>
+    );
+  return null;
+}
+
+// ─── Playback ticker ───
+function PlaybackDriver({
+  playing,
+  fps,
+  totalFrames,
+  frameRef,
+  setFrame,
+}: {
+  playing: boolean;
+  fps: number;
+  totalFrames: number;
+  frameRef: React.MutableRefObject<number>;
+  setFrame: React.Dispatch<React.SetStateAction<number>>;
+}) {
+  const elapsed = useRef(0);
+  const last = useRef(0);
+  useEffect(() => {
+    if (!playing) return;
+    let raf: number;
+    const tick = () => {
+      raf = requestAnimationFrame(tick);
+      const now = performance.now();
+      const dt = (now - last.current) / 1000;
+      last.current = now;
+      if (dt > 0 && dt < 0.5) {
+        elapsed.current += dt;
+        const fd = Math.floor(elapsed.current * fps);
+        if (fd > 0) {
+          elapsed.current -= fd / fps;
+          frameRef.current = (frameRef.current + fd) % totalFrames;
+          setFrame(frameRef.current);
+        }
+      }
+    };
+    last.current = performance.now();
+    elapsed.current = 0;
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing, fps, totalFrames, frameRef, setFrame]);
+  return null;
+}
+
+// IBL: procedural studio softboxes give mesh highlights somewhere to bounce.
+// Not preset="studio": drei downloads that 1.6 MB HDR from raw.githack.com and
+// suspends the canvas until it arrives. Module scope keeps the element's
+// identity across URDFViewer renders (one per playback frame): drei re-captures
+// the cube map and three re-runs PMREM whenever Environment's children change.
+const STUDIO_ENVIRONMENT = (
+  <Environment resolution={256} background={false}>
+    <Lightformer
+      form="rect"
+      intensity={5}
+      position={[0, 5, 0]}
+      rotation-x={Math.PI / 2}
+      scale={[10, 10, 1]}
+    />
+    <Lightformer
+      form="rect"
+      intensity={3}
+      position={[-5, 1.5, -1]}
+      rotation-y={Math.PI / 2}
+      scale={[10, 2, 1]}
+    />
+    <Lightformer
+      form="rect"
+      intensity={3}
+      position={[5, 1.5, -1]}
+      rotation-y={-Math.PI / 2}
+      scale={[10, 2, 1]}
+    />
+    <Lightformer
+      form="rect"
+      intensity={2.5}
+      position={[0, 1.5, 5]}
+      rotation-y={Math.PI}
+      scale={[10, 3, 1]}
+    />
+  </Environment>
+);
+
+// ═══════════════════════════════════════
+// ─── Main URDF Viewer ───
+// ═══════════════════════════════════════
+export default function URDFViewer({
+  data,
+  org,
+  dataset,
+  episodeChangerRef,
+  playToggleRef,
+  toolbarTarget,
+}: {
+  data: EpisodeData;
+  toolbarTarget: HTMLElement | null;
+  org?: string;
+  dataset?: string;
+  episodeChangerRef?: React.RefObject<((ep: number) => void) | undefined>;
+  playToggleRef?: React.RefObject<(() => void) | undefined>;
+}) {
+  const { datasetInfo } = data;
+  const fps = datasetInfo.fps || 30;
+  /// Three.js needs real colours, so the scene reads the theme instead of CSS variables.
+  const dark = useTheme() === "dark";
+  const robotConfig = useMemo(
+    () => getRobotConfig(datasetInfo.robot_type),
+    [datasetInfo.robot_type],
+  );
+  const { urdfUrl, scale } = robotConfig;
+  const sceneScope = `${org ?? "local"}/${dataset ?? "dataset"}`;
+  const defaultScene = useMemo(
+    () => defaultSceneForDataset(sceneScope, datasetInfo.robot_type),
+    [sceneScope, datasetInfo.robot_type],
+  );
+  const workspace = useSceneWorkspace(sceneScope, defaultScene);
+  const [showScene, setShowScene] = useState(false);
+  const searchParams = useSearchParams();
+  const [debug, setDebug] = useState(() => searchParams.get("debug") === "1");
+  const [fitRequest, setFitRequest] = useState(0);
+  const [fitTarget, setFitTarget] = useState<"scene" | "hands">("scene");
+  const isG1 = urdfUrl.includes("g1");
+  const isOpenArm = urdfUrl.includes("openarm");
+  // Keep Canvas camera props stable across toolbar and playback updates.
+  const cameraOptions = useMemo(
+    () => ({
+      position: (isG1
+        ? [1.5, 1.0, 1.5]
+        : isOpenArm
+          ? [0.95 * scale, 0.8 * scale, 0.95 * scale]
+          : [0.3 * scale, 0.25 * scale, 0.3 * scale]) as [
+        number,
+        number,
+        number,
+      ],
+      fov: 45,
+      near: 0.01,
+      far: 100,
+    }),
+    [isG1, isOpenArm, scale],
+  );
+  const repoId = org && dataset ? `${org}/${dataset}` : null;
+  const datasetInfoRef = useRef<{
+    version: string;
+    info: DatasetMetadata;
+  } | null>(null);
+
+  const ensureDatasetInfo = useCallback(async () => {
+    if (!repoId) return null;
+    if (datasetInfoRef.current) return datasetInfoRef.current;
+    const { version, info } = await getDatasetVersionAndInfo(repoId);
+    const payload = { version, info: info as unknown as DatasetMetadata };
+    datasetInfoRef.current = payload;
+    return payload;
+  }, [repoId]);
+
+  // Episode selection & chart data
+  const [selectedEpisode, setSelectedEpisode] = useState(data.episodeId);
+  const [chartData, setChartData] = useState(data.flatChartData);
+  const [episodeLoading, setEpisodeLoading] = useState(false);
+  const chartDataCache = useRef<Record<number, Record<string, number>[]>>({
+    [data.episodeId]: data.flatChartData,
+  });
+  /// A slower load for an earlier pick must not overwrite the episode picked since.
+  const latestEpisodeRef = useRef(data.episodeId);
+
+  const handleEpisodeChange = useCallback(
+    (epId: number) => {
+      latestEpisodeRef.current = epId;
+      setSelectedEpisode(epId);
+      setFrame(0);
+      frameRef.current = 0;
+      setPlaying(false);
+
+      if (chartDataCache.current[epId]) {
+        setChartData(chartDataCache.current[epId]);
+        setEpisodeLoading(false);
+        return;
+      }
+
+      if (!repoId) return;
+      setEpisodeLoading(true);
+      ensureDatasetInfo()
+        .then((payload) => {
+          if (!payload) return null;
+          return loadEpisodeFlatChartData(
+            repoId,
+            payload.version,
+            payload.info,
+            epId,
+          );
+        })
+        .then((result) => {
+          if (!result) return;
+          chartDataCache.current[epId] = result;
+          if (latestEpisodeRef.current === epId) setChartData(result);
+        })
+        .catch((err) => console.error("Failed to load episode:", err))
+        .finally(() => {
+          if (latestEpisodeRef.current === epId) setEpisodeLoading(false);
+        });
+    },
+    [ensureDatasetInfo, repoId],
+  );
+
+  useEffect(() => {
+    if (episodeChangerRef) episodeChangerRef.current = handleEpisodeChange;
+  }, [episodeChangerRef, handleEpisodeChange]);
+
+  const totalFrames = chartData.length;
+
+  // URDF joint names
+  const [urdfJointNames, setUrdfJointNames] = useState<string[]>([]);
+  const onJointsLoaded = useCallback(
+    (names: string[]) => setUrdfJointNames(names),
+    [],
+  );
+
+  // Feature groups
+  const columnGroups = useMemo(() => {
+    if (totalFrames === 0) return {};
+    return groupColumnsByPrefix(Object.keys(chartData[0]));
+  }, [chartData, totalFrames]);
+
+  const groupNames = useMemo(() => Object.keys(columnGroups), [columnGroups]);
+  const defaultGroup = useMemo(
+    () =>
+      groupNames.find((g) => g.toLowerCase().includes("state")) ??
+      groupNames.find((g) => g.toLowerCase().includes("action")) ??
+      groupNames[0] ??
+      "",
+    [groupNames],
+  );
+
+  const [selectedGroup, setSelectedGroup] = useState(defaultGroup);
+  useEffect(() => setSelectedGroup(defaultGroup), [defaultGroup]);
+  const selectedColumns = useMemo(
+    () => columnGroups[selectedGroup] ?? [],
+    [columnGroups, selectedGroup],
+  );
+
+  // Joint mapping
+  const autoMapping = useMemo(
+    () => autoMatchJoints(urdfJointNames, selectedColumns),
+    [urdfJointNames, selectedColumns],
+  );
+  const [mapping, setMapping] = useState<Record<string, string>>(autoMapping);
+  useEffect(() => setMapping(autoMapping), [autoMapping]);
+
+  // Trail
+  const [trailEnabled, setTrailEnabled] = useState(false);
+  const [showMapping, setShowMapping] = useState(false);
+
+  // Playback
+  const [frame, setFrame] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const frameRef = useRef(0);
+
+  const handleFrameChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const f = parseInt(e.target.value);
+      setFrame(f);
+      frameRef.current = f;
+    },
+    [],
+  );
+
+  // URDF meshes download async from the Hub bucket. Until joints are reported
+  // back from URDFLoader, playback/scrub inputs would drive an empty scene, so
+  // we gate interactions (and pause if already playing).
+  const urdfLoading = urdfJointNames.length === 0;
+
+  useEffect(() => {
+    if (urdfLoading) setPlaying(false);
+  }, [urdfLoading]);
+
+  const handlePlayPause = useCallback(() => {
+    if (urdfLoading) return;
+    setPlaying((prev) => {
+      if (!prev) frameRef.current = frame;
+      return !prev;
+    });
+  }, [frame, urdfLoading]);
+
+  useEffect(() => {
+    if (playToggleRef) playToggleRef.current = handlePlayPause;
+  }, [playToggleRef, handlePlayPause]);
+
+  // Filter out mimic joints (finger_joint2) from the UI list
+  const displayJointNames = useMemo(
+    () =>
+      urdfJointNames.filter((n) => !n.toLowerCase().includes("finger_joint2")),
+    [urdfJointNames],
+  );
+
+  // Auto-detect gripper column range for linear mapping to 0-0.044m
+  const gripperRanges = useMemo(() => {
+    const ranges: Record<string, { min: number; max: number }> = {};
+    for (const jn of urdfJointNames) {
+      if (!jn.toLowerCase().includes("finger_joint1")) continue;
+      const col = mapping[jn];
+      if (!col) continue;
+      let min = Infinity,
+        max = -Infinity;
+      for (const row of chartData) {
+        const v = row[col];
+        if (typeof v === "number") {
+          if (v < min) min = v;
+          if (v > max) max = v;
+        }
+      }
+      if (min < max) ranges[jn] = { min, max };
+    }
+    return ranges;
+  }, [chartData, mapping, urdfJointNames]);
+
+  // Compute joint values for current frame
+  const jointValues = useMemo(() => {
+    if (totalFrames === 0 || urdfJointNames.length === 0) return {};
+    const row = chartData[Math.min(frame, totalFrames - 1)];
+    const revoluteValues: number[] = [];
+    const revoluteNames: string[] = [];
+    const values: Record<string, number> = {};
+
+    for (const jn of urdfJointNames) {
+      if (jn.toLowerCase().includes("finger_joint2")) continue;
+      const col = mapping[jn];
+      if (!col || typeof row[col] !== "number") continue;
+      const raw = row[col];
+
+      if (jn.toLowerCase().includes("finger_joint1")) {
+        // Map gripper range → 0-0.044m using auto-detected min/max
+        const range = gripperRanges[jn];
+        if (range) {
+          const t = (raw - range.min) / (range.max - range.min);
+          values[jn] = t * 0.044;
+        } else {
+          values[jn] = (raw / 100) * 0.044; // fallback: assume 0-100
+        }
+      } else {
+        revoluteValues.push(raw);
+        revoluteNames.push(jn);
+      }
+    }
+
+    const converted = isG1 ? revoluteValues : detectAndConvert(revoluteValues);
+    revoluteNames.forEach((n, i) => {
+      values[n] = converted[i];
+    });
+
+    // Copy finger_joint1 → finger_joint2 (mimic joints)
+    for (const jn of urdfJointNames) {
+      if (jn.toLowerCase().includes("finger_joint2")) {
+        const j1 = jn.replace(/finger_joint2/, "finger_joint1");
+        if (values[j1] !== undefined) values[jn] = values[j1];
+      }
+    }
+    return values;
+  }, [
+    chartData,
+    frame,
+    gripperRanges,
+    mapping,
+    totalFrames,
+    urdfJointNames,
+    isG1,
+  ]);
+
+  const toolbar = (
+    <div className="replay-tools" aria-label="Replay tools">
+      <button
+        type="button"
+        onClick={() => {
+          setFitTarget("scene");
+          setFitRequest((v) => v + 1);
+        }}
+        className="btn"
+        title="Fit the entire scene in view"
+        aria-label="Fit view"
+      >
+        <LuFocus size={16} aria-hidden="true" />{" "}
+        <span className="tool-label">Fit view</span>
+      </button>
+      {isG1 && (
+        <button
+          type="button"
+          title="Focus camera on both hands"
+          aria-label="Hands"
+          aria-pressed={fitTarget === "hands"}
+          onClick={() => {
+            setFitTarget("hands");
+            setFitRequest((v) => v + 1);
+          }}
+          className={`btn ${fitTarget === "hands" ? "btn-active" : ""}`}
+        >
+          <LuHand size={16} aria-hidden="true" />{" "}
+          <span className="tool-label">Hands</span>
+        </button>
+      )}
+      <button
+        type="button"
+        aria-expanded={showScene}
+        aria-controls="scene-editor"
+        aria-label="Scene"
+        title="Edit scene objects"
+        onClick={() => setShowScene((v) => !v)}
+        className={`btn ${showScene ? "btn-active" : ""}`}
+      >
+        <LuLayers size={16} aria-hidden="true" />{" "}
+        <span className="tool-label">Scene</span>
+      </button>
+      <button
+        type="button"
+        aria-pressed={debug}
+        title="Show origin axes and joint diagnostics"
+        aria-label="Debug"
+        onClick={() => {
+          const next = !debug;
+          setDebug(next);
+          const params = new URLSearchParams(window.location.search);
+          if (next) params.set("debug", "1");
+          else params.delete("debug");
+          window.history.replaceState(
+            {},
+            "",
+            `${window.location.pathname}?${params}`,
+          );
+        }}
+        className={`btn ${debug ? "btn-active" : ""}`}
+      >
+        <LuBug size={16} aria-hidden="true" />{" "}
+        <span className="tool-label">Debug</span>
+      </button>
+    </div>
+  );
+
+  if (data.flatChartData.length === 0) {
+    return (
+      <div className="text-fg-muted p-8 text-center">
+        No trajectory data available.
+      </div>
+    );
+  }
+
+  return (
+    <div className="replay-workspace">
+      <h1 className="sr-only">Episode {selectedEpisode} replay</h1>
+      {toolbarTarget && createPortal(toolbar, toolbarTarget)}
+      <div className={`replay-stage ${showScene ? "has-editor" : ""}`}>
+        {/* 3D Viewport */}
+        <div className="replay-viewport">
+          {(episodeLoading || urdfLoading) && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-surface-2">
+              <span className="text-fg-muted text-sm">
+                {urdfLoading
+                  ? "Loading 3D model…"
+                  : `Loading episode ${selectedEpisode}…`}
+              </span>
+            </div>
+          )}
+          <Canvas
+            shadows
+            frameloop="demand"
+            camera={cameraOptions}
+            gl={{
+              toneMapping: THREE.ACESFilmicToneMapping,
+              toneMappingExposure: 0.9,
+            }}
+          >
+            <color attach="background" args={[dark ? "#14171d" : "#f4f6fa"]} />
+            {STUDIO_ENVIRONMENT}
+            {/* 3-point studio rig — key is the only shadow caster */}
+            <ambientLight intensity={0.12} />
+            <directionalLight
+              color="#fff2e3"
+              position={[3, 5, 3]}
+              intensity={1.0}
+              castShadow
+              shadow-mapSize-width={2048}
+              shadow-mapSize-height={2048}
+              shadow-camera-near={0.1}
+              shadow-camera-far={15}
+              shadow-camera-left={-3}
+              shadow-camera-right={3}
+              shadow-camera-top={3}
+              shadow-camera-bottom={-3}
+              shadow-bias={-0.0005}
+            />
+            <directionalLight
+              color="#bfd9ff"
+              position={[-4, 2, -2]}
+              intensity={0.25}
+            />
+            <directionalLight
+              color="#ffffff"
+              position={[0, 3, -4]}
+              intensity={0.4}
+            />
+            {/* Ground-shadow catcher — invisible plane receives key-light shadow */}
+            <mesh
+              rotation={[-Math.PI / 2, 0, 0]}
+              position={[0, 0.001, 0]}
+              receiveShadow
+            >
+              <planeGeometry args={[10, 10]} />
+              <shadowMaterial opacity={0.35} />
+            </mesh>
+            <RobotScene
+              urdfUrl={urdfUrl}
+              jointValues={jointValues}
+              onJointsLoaded={onJointsLoaded}
+              trailEnabled={trailEnabled}
+              trailResetKey={selectedEpisode}
+              scale={scale}
+              sceneDocument={workspace.doc}
+              fitRequest={fitRequest}
+              fitTarget={fitTarget}
+            />
+            <SceneObjects
+              doc={workspace.doc}
+              displayScale={scale}
+              axes={debug}
+            />
+            <Grid
+              args={[10 * scale, 10 * scale]}
+              cellSize={0.1 * scale}
+              cellThickness={0.5}
+              cellColor={dark ? "#252b35" : "#e0e6ee"}
+              sectionSize={scale}
+              sectionThickness={1}
+              sectionColor={dark ? "#303742" : "#cdd6e2"}
+              fadeDistance={10 * scale}
+              position={[0, 0, 0]}
+            />
+            <OrbitControls
+              makeDefault
+              target={isG1 ? [0, 0.5, 0] : [0, 0.8, 0]}
+            />
+            <PlaybackDriver
+              playing={playing}
+              fps={fps}
+              totalFrames={totalFrames}
+              frameRef={frameRef}
+              setFrame={setFrame}
+            />
+          </Canvas>
+          <p className="viewport-hint">
+            Drag to orbit{" "}
+            <span className="mx-2" aria-hidden="true">
+              /
+            </span>{" "}
+            Scroll to zoom
+          </p>
+        </div>
+
+        {showScene &&
+          (workspace.loaded ? (
+            <SceneEditor
+              key={sceneScope}
+              doc={workspace.doc}
+              setDoc={workspace.setDoc}
+              storageError={workspace.storageError}
+              scope={sceneScope}
+              defaults={defaultScene}
+            />
+          ) : (
+            <div
+              role="status"
+              className="p-4 bg-surface-1 text-fg-muted text-xs"
+            >
+              Loading scene…
+            </div>
+          ))}
+      </div>
+      {debug &&
+        (workspace.doc.note ||
+          (isG1 && displayJointNames.some((name) => !mapping[name]))) && (
+          <details className="scene-details">
+            <summary className="flex items-center gap-1.5">
+              <LuInfo size={13} aria-hidden="true" /> Scene details
+            </summary>
+            {workspace.doc.note && <p>{workspace.doc.note}</p>}
+            {isG1 && displayJointNames.some((name) => !mapping[name]) && (
+              <p>Unrecorded joints use the model reference pose.</p>
+            )}
+          </details>
+        )}
+      <div className="replay-transport space-y-3 shrink-0">
+        <UrdfPlaybackBar
+          frame={frame}
+          totalFrames={totalFrames}
+          fps={fps}
+          playing={playing}
+          onPlayPause={handlePlayPause}
+          trailEnabled={trailEnabled}
+          onTrailToggle={() => setTrailEnabled((v) => !v)}
+          onFrameChange={handleFrameChange}
+          disabled={urdfLoading}
+        />
+
+        {debug && (
+          <>
+            <button
+              onClick={() => setShowMapping((v) => !v)}
+              aria-expanded={showMapping}
+              className="flex items-center gap-1.5 text-xs text-fg-muted hover:text-fg transition-colors"
+            >
+              <LuChevronDown
+                size={14}
+                className={showMapping ? "rotate-180" : ""}
+                aria-hidden="true"
+              />
+              Joint mapping
+              <span className="text-fg-faint">
+                ({Object.keys(mapping).filter((k) => mapping[k]).length}/
+                {displayJointNames.length} mapped)
+              </span>
+            </button>
+
+            {showMapping && (
+              <div className="flex flex-col lg:flex-row gap-3 lg:gap-4 lg:items-start">
+                <div className="space-y-1 shrink-0">
+                  <label className="text-xs text-fg-muted">Data source</label>
+                  <div className="flex gap-1 flex-wrap">
+                    {groupNames.map((name) => (
+                      <button
+                        key={name}
+                        onClick={() => setSelectedGroup(name)}
+                        className={`btn ${selectedGroup === name ? "btn-active" : ""}`}
+                      >
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-x-auto max-h-48 overflow-y-auto">
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 bg-[var(--surface-1)]">
+                      <tr className="text-fg-faint">
+                        <th className="text-left font-normal px-1">
+                          URDF Joint
+                        </th>
+
+                        <th className="text-left font-normal px-1">
+                          Dataset Column
+                        </th>
+                        <th className="text-right font-normal px-1">Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {displayJointNames.map((jointName) => (
+                        <tr key={jointName} className="border-t border-line">
+                          <td className="px-1 py-0.5 text-fg-soft font-mono">
+                            {jointName}
+                          </td>
+
+                          <td className="px-1 py-0.5">
+                            <select
+                              aria-label={`Dataset column for ${jointName}`}
+                              value={mapping[jointName] ?? ""}
+                              onChange={(e) =>
+                                setMapping((m) => ({
+                                  ...m,
+                                  [jointName]: e.target.value,
+                                }))
+                              }
+                              className="bg-[var(--surface-0)] text-fg text-xs rounded px-1 py-0.5 border border-line w-full max-w-[200px]"
+                            >
+                              <option value="">-- unmapped --</option>
+                              {selectedColumns.map((col) => {
+                                const label =
+                                  col.split(SERIES_DELIM).pop() ?? col;
+                                return (
+                                  <option key={col} value={col}>
+                                    {label}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          </td>
+                          <td className="px-1 py-0.5 text-right tabular-nums text-fg-muted font-mono">
+                            {jointValues[jointName] !== undefined
+                              ? jointValues[jointName].toFixed(3)
+                              : "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

@@ -11,7 +11,7 @@ import { HAND_JOINTS, HandednessSchema, HandSampleSchema, JOINT_FIELDS } from '.
 import { ProcedureSchema } from './procedure';
 
 // An episode is one lesson run in one workspace frame. See docs/data-format.md for the on-disk
-// layout (meta.json, frames.ndjson, events.ndjson) and the meaning of every field.
+// layout (meta.json, frames.ndjson, events.ndjson, objects.ndjson) and the meaning of every field.
 
 export const EPISODE_SCHEMA_ID = 'clio.episode/1';
 
@@ -26,6 +26,71 @@ export const CalibrationMethodSchema = z.enum([
 /** How an object's position was obtained. */
 export const PlacementMethodSchema = z.enum(['layout', 'pinch', 'marker', 'detector', 'manual']);
 export const CoachKindSchema = z.enum(['gemini', 'scripted', 'none']);
+export const GripKindSchema = z.enum(['pinch', 'fist']);
+export const ReleaseReasonSchema = z.enum(['opened', 'hand_lost', 'plan_changed']);
+
+/**
+ * Optional recording features, listed in `meta.features` by episodes that use them. Older episodes
+ * list none; readers then derive what they need (see docs/data-format.md).
+ */
+export const EPISODE_FEATURE = {
+  /**
+   * Object states carry `locationFlags`, `heldBy` when the recorder knows the holder, and
+   * `observedT` when it differs from `t` and the position is valid.
+   */
+  objectFlags: 'object.flags',
+  /** Grasps and releases are recorded as `object.grasped` and `object.released` events. */
+  objectGrasp: 'object.grasp',
+  /** Batches carry `observations`: 2D object observations, stored as observations.ndjson. */
+  objectObservations: 'object.observations',
+  /** `environment.planes` events record the planes the headset detected (table, floor, walls). */
+  environmentPlanes: 'environment.planes',
+} as const;
+
+/** Where a passthrough camera model came from. */
+export const CameraModelSourceSchema = z.enum([
+  'lens-metadata',
+  'default',
+  'calibrated',
+  'override',
+]);
+
+/**
+ * The passthrough camera model 2D observations were lifted with, so they can be lifted again
+ * after the episode. Pixel units refer to the frame size the observations were made on.
+ */
+export const CameraModelSchema = z.object({
+  intrinsics: z.object({
+    width: z.number().int().positive(),
+    height: z.number().int().positive(),
+    fx: z.number().positive(),
+    fy: z.number().positive(),
+    cx: z.number(),
+    cy: z.number(),
+  }),
+  headFromCamera: Pose7Schema.describe('Camera pose in the head (viewer) frame'),
+  source: CameraModelSourceSchema,
+});
+
+/** What a detected surface is, from its WebXR semantic label. */
+export const SurfaceKindSchema = z.enum(['table', 'floor', 'wall', 'ceiling', 'couch', 'other']);
+
+export const EnvironmentPlaneSchema = z.object({
+  id: z
+    .string()
+    .describe('Stable within the episode; the headset numbers planes as it first sees them'),
+  kind: SurfaceKindSchema,
+  label: z.string().nullable().describe('The WebXR semanticLabel as reported, if any'),
+  orientation: z.enum(['horizontal', 'vertical']),
+  pose: Pose7Schema.describe(
+    'Plane pose, workspace frame: the polygon lies in its local x/z plane and +y is the normal',
+  ),
+  polygon: z
+    .array(z.tuple([z.number(), z.number()]))
+    .min(3)
+    .max(256)
+    .describe('Outline in plane-local [x, z] meters'),
+});
 
 export const PlacedObjectSchema = z.object({
   id: z.string(),
@@ -76,6 +141,13 @@ export const EpisodeMetaSchema = z.object({
     xrFeatures: z.array(z.string()),
   }),
   app: z.object({ version: z.string() }),
+  features: z
+    .array(z.string())
+    .optional()
+    .describe('Optional recording features used, e.g. "object.flags" and "object.grasp"'),
+  camera: CameraModelSchema.optional().describe(
+    'Passthrough camera model used to lift 2D observations; absent when unknown',
+  ),
 });
 
 /** What the headset sends; the server assigns `episodeId` and `createdAt`. */
@@ -91,20 +163,134 @@ export const FrameRecordSchema = z.object({
   right: HandSampleSchema.nullable(),
 });
 
-export const ObjectStateSchema = z.object({
-  id: z.string(),
-  position: Vec3Schema.describe('Reference point, workspace frame'),
-  orientation: QuatSchema.nullable().describe('Known only for marker-tracked objects'),
-  confidence: z.number().min(0).max(1),
-  source: PlacementMethodSchema,
-});
+/**
+ * Bits of `ObjectState.locationFlags`, as in OpenXR space locations and Capture v1. A valid value
+ * can be used; a tracked value was measured just now rather than carried over.
+ */
+export const LOCATION_FLAG = {
+  orientationValid: 1,
+  positionValid: 2,
+  orientationTracked: 4,
+  positionTracked: 8,
+} as const;
+
+const hasFlag = (flags: number, bit: number) => (flags & bit) !== 0;
+
+export const LocationFlagsSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(15)
+  .superRefine((flags, ctx) => {
+    const pairs = [
+      ['orientation', LOCATION_FLAG.orientationTracked, LOCATION_FLAG.orientationValid],
+      ['position', LOCATION_FLAG.positionTracked, LOCATION_FLAG.positionValid],
+    ] as const;
+    for (const [name, tracked, valid] of pairs) {
+      if (hasFlag(flags, tracked) && !hasFlag(flags, valid)) {
+        ctx.addIssue({ code: 'custom', message: `A tracked ${name} must also be valid` });
+      }
+    }
+  });
+
+export const ObjectStateSchema = z
+  .object({
+    id: z.string(),
+    position: Vec3Schema.describe(
+      'Reference point, workspace frame; the last valid estimate while the position is not valid',
+    ),
+    orientation: QuatSchema.nullable().describe('Known only for marker-tracked objects'),
+    confidence: z.number().min(0).max(1),
+    source: PlacementMethodSchema,
+    locationFlags: LocationFlagsSchema.optional().describe(
+      'Bits: 1 orientation valid, 2 position valid, 4 orientation tracked, 8 position tracked. Absent in older episodes: derive them from source',
+    ),
+    heldBy: HandednessSchema.nullable()
+      .optional()
+      .describe('The hand carrying it; null when not held'),
+    observedT: z
+      .number()
+      .optional()
+      .describe(
+        'ms since episode start when the estimate was measured; omitted within 1 ms of t, negative if before the episode started',
+      ),
+  })
+  .superRefine((state, ctx) => {
+    if (state.locationFlags === undefined) return;
+    const valid = hasFlag(state.locationFlags, LOCATION_FLAG.orientationValid);
+    if (valid !== (state.orientation !== null)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['orientation'],
+        message: valid
+          ? 'A valid orientation needs a value'
+          : 'An orientation needs the orientation-valid flag',
+      });
+    }
+  });
 
 export const ObjectTrackRecordSchema = z
   .object({
     t: z.number().nonnegative(),
     objects: z.array(ObjectStateSchema).describe('Every object whose estimate changed'),
   })
-  .describe('One tracker update (objects.ndjson line), typically 5–30 Hz');
+  .describe(
+    'One tracker update (objects.ndjson line): written when an estimate changes, and every XR frame while an object is held',
+  );
+
+/**
+ * What an object finder said about an object in one camera frame. measured: seen in that frame;
+ * predicted: carried forward by the tracker without being seen (coasting); lost: the tracker lost
+ * it; absent: the identifier says it is not in view; unknown: no answer about it yet.
+ */
+export const ObservationStatusSchema = z.enum([
+  'measured',
+  'predicted',
+  'lost',
+  'absent',
+  'unknown',
+]);
+/**
+ * tracker: follows the object in every frame (YOLOE-26 + ByteTrack); identifier: names or confirms
+ * it about once a second (jev); detector: a one-shot finder (Gemini).
+ */
+export const ObservationRoleSchema = z.enum(['tracker', 'identifier', 'detector']);
+
+export const ObjectObservationSchema = z
+  .object({
+    t: z.number().nonnegative().describe('ms since episode start when the answer arrived'),
+    observedT: z
+      .number()
+      .describe(
+        'ms since episode start when the camera frame was captured; negative if before the start',
+      ),
+    objectId: z.string(),
+    status: ObservationStatusSchema,
+    role: ObservationRoleSchema,
+    source: z.string().describe('The model as reported, e.g. "yoloe-26l-seg"'),
+    box: NormalizedBoxSchema.nullable(),
+    outline: NormalizedPolygonSchema.nullable(),
+    point: NormalizedPointSchema.nullable(),
+    contact: NormalizedPointSchema.nullable().describe(
+      "Middle of the mask's lowest edge, where the object meets the surface",
+    ),
+    score: z.number().nullable().describe('Score as reported; not a calibrated probability'),
+    frame: z
+      .object({
+        seq: z.number().int().nonnegative(),
+        width: z.number().int().positive(),
+        height: z.number().int().positive(),
+      })
+      .nullable()
+      .describe('The camera frame, when the transport identifies it'),
+    trackId: z
+      .string()
+      .nullable()
+      .describe("The tracker's own id: provenance only, it can change while following one object"),
+  })
+  .describe(
+    'One 2D object observation (observations.ndjson line), in normalized image coordinates',
+  );
 
 const event = <T extends string, S extends z.ZodRawShape>(type: T, shape: S) =>
   z.object({ t: z.number().nonnegative(), type: z.literal(type), ...shape });
@@ -160,6 +346,20 @@ export const EpisodeEventSchema = z.discriminatedUnion('type', [
     position: Vec3Schema,
     method: PlacementMethodSchema,
   }),
+  event('object.grasped', {
+    objectId: z.string(),
+    hand: HandednessSchema,
+    grip: GripKindSchema,
+    position: Vec3Schema.describe('Object reference point when grasped, workspace frame'),
+  }),
+  event('object.released', {
+    objectId: z.string(),
+    hand: HandednessSchema,
+    reason: ReleaseReasonSchema.describe(
+      'opened: the hand let go; hand_lost: hand tracking dropped out; plan_changed: a new plan was loaded',
+    ),
+    position: Vec3Schema.describe('Object reference point when released, workspace frame'),
+  }),
   event('coach.status', {
     state: z.enum(['connecting', 'ready', 'reconnecting', 'closed', 'error']),
     detail: z.string().optional(),
@@ -187,6 +387,12 @@ export const EpisodeEventSchema = z.discriminatedUnion('type', [
     phase: z.enum(['start', 'end']),
   }),
   event('media.started', { name: z.string(), mimeType: z.string() }),
+  event('environment.planes', {
+    planes: z
+      .array(EnvironmentPlaneSchema)
+      .max(128)
+      .describe('Every plane detected now: a full snapshot, not a list of changes'),
+  }),
   event('annotation', { label: z.string(), data: z.unknown().optional() }),
 ]);
 
@@ -200,6 +406,7 @@ export const EpisodeBatchSchema = z.object({
   frames: z.array(FrameRecordSchema),
   events: z.array(EpisodeEventSchema),
   objects: z.array(ObjectTrackRecordSchema).default([]),
+  observations: z.array(ObjectObservationSchema).default([]),
 });
 
 export const EpisodeOutcomeSchema = z.enum(['completed', 'aborted', 'interrupted']);
@@ -216,6 +423,16 @@ export type EpisodeMode = z.infer<typeof EpisodeModeSchema>;
 export type CalibrationMethod = z.infer<typeof CalibrationMethodSchema>;
 export type PlacementMethod = z.infer<typeof PlacementMethodSchema>;
 export type CoachKind = z.infer<typeof CoachKindSchema>;
+export type GripKind = z.infer<typeof GripKindSchema>;
+export type ReleaseReason = z.infer<typeof ReleaseReasonSchema>;
+export type EpisodeFeature = (typeof EPISODE_FEATURE)[keyof typeof EPISODE_FEATURE];
+export type CameraModelSource = z.infer<typeof CameraModelSourceSchema>;
+export type CameraModelRecord = z.infer<typeof CameraModelSchema>;
+export type SurfaceKind = z.infer<typeof SurfaceKindSchema>;
+export type EnvironmentPlane = z.infer<typeof EnvironmentPlaneSchema>;
+export type ObservationStatus = z.infer<typeof ObservationStatusSchema>;
+export type ObservationRole = z.infer<typeof ObservationRoleSchema>;
+export type ObjectObservation = z.infer<typeof ObjectObservationSchema>;
 export type PlacedObject = z.infer<typeof PlacedObjectSchema>;
 export type EpisodeMeta = z.infer<typeof EpisodeMetaSchema>;
 export type EpisodeCreate = z.infer<typeof EpisodeCreateSchema>;

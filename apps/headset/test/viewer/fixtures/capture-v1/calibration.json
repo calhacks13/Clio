@@ -1,0 +1,13 @@
+{
+  "kind": "calibration",
+  "source_basis": "other",
+  "T_world_source": {
+    "translation": [0, 0, 0],
+    "rotation": [0, 0, 0, 1]
+  },
+  "basis_conversion": {
+    "description": "Synthetic data already uses ROS coordinates; not Quest calibration.",
+    "matrix_row_major": [1, 0, 0, 0, 1, 0, 0, 0, 1]
+  },
+  "cameras": []
+}

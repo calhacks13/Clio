@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 import { defineConfig } from 'vite';
 
@@ -29,7 +30,30 @@ export default defineConfig({
     proxy: {
       '/api': { target: server, changeOrigin: true },
       '/gemini': { target: server, changeOrigin: true, ws: true },
+      // Live tracking stream for primary.html (tracker/TRACK.md).
+      '/track': {
+        target: process.env.CLIO_TRACKER_URL ?? 'http://127.0.0.1:8790',
+        changeOrigin: true,
+        ws: true,
+      },
     },
   },
-  build: { target: 'es2022', sourcemap: true },
+  build: {
+    target: 'es2022',
+    sourcemap: true,
+    // hello.html: bare WebXR smoke test. tracking.html: what the headset tracks (hands, surfaces,
+    // room mesh). viewer.html: laptop page that replays or follows a recorded episode live.
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        hello: fileURLToPath(new URL('./hello.html', import.meta.url)),
+        tracking: fileURLToPath(new URL('./tracking.html', import.meta.url)),
+        viewer: fileURLToPath(new URL('./viewer.html', import.meta.url)),
+        primary: fileURLToPath(new URL('./primary.html', import.meta.url)),
+        depth: fileURLToPath(new URL('./depth.html', import.meta.url)),
+        calibrate: fileURLToPath(new URL('./calibrate.html', import.meta.url)),
+        glowPreview: fileURLToPath(new URL('./glow-preview.html', import.meta.url)),
+      },
+    },
+  },
 });

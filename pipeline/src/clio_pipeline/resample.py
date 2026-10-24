@@ -12,13 +12,16 @@ from .segments import FrameLabels, frame_labels
 
 # Grid times within this many ms of a source frame count as hitting it exactly.
 EXACT_MS = 1e-6
+# Compiled tracks and retargeting never interpolate the head or hands across recorded frames
+# further apart than this (a lost batch, or the XR loop paused while the headset was off).
+MAX_FRAME_GAP_MS = 100.0
 
 
 @dataclass
 class Resampled:
     fps: float
     t: np.ndarray  # (M,) ms since episode start, uniform: t[0] + k * 1000 / fps
-    head: np.ndarray  # (M, 7)
+    head: np.ndarray  # (M, 7); NaN where not `head_valid`
     hands: np.ndarray  # (M, 2, 25, 8) float32; NaN where the hand is missing
     pinch: np.ndarray  # (M, 2) float32; NaN where the hand is missing
     tracked: np.ndarray  # (M, 2) bool
@@ -27,6 +30,8 @@ class Resampled:
     step_index: np.ndarray
     task: np.ndarray
     action_verb: np.ndarray
+    head_valid: np.ndarray  # (M,) bool: False inside a frame gap longer than `max_gap_ms`
+    max_gap_ms: float | None  # the longest gap between source frames interpolated; None: any
 
     def __len__(self) -> int:
         return len(self.t)
@@ -43,15 +48,26 @@ def uniform_times(t: np.ndarray, fps: float) -> np.ndarray:
 
 
 def resample_episode(
-    episode: Episode, fps: float = 30.0, labels: FrameLabels | None = None
+    episode: Episode,
+    fps: float = 30.0,
+    labels: FrameLabels | None = None,
+    *,
+    max_gap_ms: float | None = None,
 ) -> Resampled:
     """Positions and radii are interpolated linearly and quaternions by normalized lerp along the
     short arc. A hand counts as missing at a grid time if it is missing in either neighboring
-    source frame. Discrete labels (task, step) come from the nearest previous source frame."""
+    source frame. Discrete labels (task, step) come from the nearest previous source frame.
+
+    With `max_gap_ms`, a grid time between two source frames further apart than that is not
+    interpolated: both hands are missing there and the head is not valid (NaN). Without it,
+    every gap is bridged (the human_hands LeRobot export)."""
     grid = uniform_times(episode.t, fps)
     if labels is None:
         labels = frame_labels(episode)
     i, j, alpha, blend = _neighbors(episode.t, grid)
+    head_valid = np.ones(len(grid), dtype=bool)
+    if max_gap_ms is not None:
+        head_valid = ~(blend & (episode.t[j] - episode.t[i] > max_gap_ms))
 
     head = np.concatenate(
         [
@@ -60,7 +76,8 @@ def resample_episode(
         ],
         axis=-1,
     )
-    tracked = episode.tracked[i] & (episode.tracked[j] | ~blend[:, None])
+    head[~head_valid] = np.nan
+    tracked = episode.tracked[i] & (episode.tracked[j] | ~blend[:, None]) & head_valid[:, None]
     hands = np.concatenate(
         [
             _lerp(episode.hands[..., :3], i, j, alpha, blend),
@@ -84,6 +101,8 @@ def resample_episode(
         step_index=labels.step_index[i],
         task=labels.task[i],
         action_verb=labels.action_verb[i],
+        head_valid=head_valid,
+        max_gap_ms=None if max_gap_ms is None else float(max_gap_ms),
     )
 
 

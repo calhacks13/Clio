@@ -33,9 +33,13 @@ const procedure = parseProcedure({
 });
 
 function setup() {
-  const registry = new ObjectRegistry(new Emitter<AppEvents>());
+  const bus = new Emitter<AppEvents>();
+  const events: string[] = [];
+  bus.on('object.grasped', (e) => events.push(`grasped ${e.objectId} ${e.grip}`));
+  bus.on('object.released', (e) => events.push(`released ${e.objectId} ${e.reason}`));
+  const registry = new ObjectRegistry(bus);
   registry.load(procedure.objects, 0);
-  return { registry, grasp: new GraspTracker(registry) };
+  return { registry, grasp: new GraspTracker(registry), events };
 }
 
 const frameWith = (t: number, right: TrackedFrame['right']): TrackedFrame => ({
@@ -47,7 +51,7 @@ const frameWith = (t: number, right: TrackedFrame['right']): TrackedFrame => ({
 
 describe('GraspTracker', () => {
   it('picks up a movable object pinched near it, carries it, and lets go on release', () => {
-    const { registry, grasp } = setup();
+    const { registry, grasp, events } = setup();
     const atJug = pinchingHand([0.3, 0.1, -0.3]);
     grasp.onPinch(
       { hand: 'right', phase: 'start', point: [0.3, 0.1, -0.3], t: 10 },
@@ -65,6 +69,27 @@ describe('GraspTracker', () => {
     );
     expect(released).toEqual(['jug']);
     expect(registry.get('jug')?.heldBy).toBeNull();
+    expect(events).toEqual(['grasped jug pinch', 'released jug opened']);
+  });
+
+  it('lets go with reason hand_lost when the pinch ended because the hand was lost', () => {
+    const { registry, grasp, events } = setup();
+    const atJug = pinchingHand([0.3, 0.1, -0.3]);
+    grasp.onPinch(
+      { hand: 'right', phase: 'start', point: [0.3, 0.1, -0.3], t: 10 },
+      frameWith(10, atJug),
+    );
+    grasp.update(frameWith(20, null));
+    expect(registry.drainChanges().find((s) => s.id === 'jug')).toMatchObject({
+      locationFlags: 0,
+      heldBy: 'right',
+    });
+    const released = grasp.onPinch(
+      { hand: 'right', phase: 'end', point: [0.3, 0.1, -0.3], t: 200, dropout: true },
+      frameWith(200, null),
+    );
+    expect(released).toEqual(['jug']);
+    expect(events).toEqual(['grasped jug pinch', 'released jug hand_lost']);
   });
 
   it('never picks up fixed points', () => {
@@ -77,7 +102,7 @@ describe('GraspTracker', () => {
   });
 
   it('picks up with a closed fist around the object', () => {
-    const { registry, grasp } = setup();
+    const { registry, grasp, events } = setup();
     // Fingertips curled onto the palm, palm at the jug.
     const fist = makeHand(
       { wrist: [0.3, 0.1, -0.24], 'middle-finger-phalanx-proximal': [0.3, 0.1, -0.36] },
@@ -85,5 +110,6 @@ describe('GraspTracker', () => {
     );
     grasp.update(frameWith(10, fist));
     expect(registry.get('jug')?.heldBy).toBe('right');
+    expect(events).toEqual(['grasped jug fist']);
   });
 });

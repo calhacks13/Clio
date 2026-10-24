@@ -1,8 +1,11 @@
-import { type EpisodeCreate, HAND_LAYOUT } from '@clio/protocol';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { type EpisodeCreate, HAND_LAYOUT, LOCATION_FLAG, type ObjectState } from '@clio/protocol';
 import { describe, expect, it } from 'vitest';
 import { ManualClock } from '../../src/core/clock';
 import { Emitter } from '../../src/core/emitter';
 import type { AppEvents } from '../../src/domain/events';
+import { quantizeObject } from '../../src/domain/recording/quantize';
 import { EpisodeRecorder } from '../../src/domain/recording/recorder';
 import { MemoryEpisodeSink, SinkError } from '../../src/domain/recording/sink';
 import { EpisodeUploader } from '../../src/domain/recording/uploader';
@@ -155,6 +158,37 @@ describe('EpisodeRecorder', () => {
     ]);
   });
 
+  it('records location flags, the holding hand and a rebased observation time', async () => {
+    const { bus, recorder, sink } = setup();
+    recorder.start(meta, 1000);
+    const state = {
+      id: 'jug',
+      position: [0.3, 0, 0] as [number, number, number],
+      orientation: null,
+      confidence: 0.8,
+      source: 'detector' as const,
+      locationFlags: 10,
+      heldBy: null,
+    };
+    bus.emit('objects.updated', {
+      t: 2500,
+      objects: [
+        { ...state, observedT: 1180.123456 },
+        { ...state, id: 'cup', observedT: 2499.5, heldBy: 'left', locationFlags: 2 },
+      ],
+    });
+    await recorder.stop('completed', { stepsCompleted: 0, stepsTotal: 0 }, 2600);
+    expect(sink.only().batches.flatMap((b) => b.objects)).toEqual([
+      {
+        t: 1500,
+        objects: [
+          { ...state, observedT: 180.12 },
+          { ...state, id: 'cup', heldBy: 'left', locationFlags: 2 },
+        ],
+      },
+    ]);
+  });
+
   it('cuts a batch every N frames and numbers batches in order', async () => {
     const { recorder, sink } = setup(new MemoryEpisodeSink(), {
       batchFrames: 2,
@@ -179,6 +213,24 @@ describe('EpisodeRecorder', () => {
     bus.emit('annotation', { t: 1200, label: 'late' });
     expect(sink.only().batches.flatMap((b) => b.events)).toEqual([]);
     expect(recorder.recording).toBe(false);
+  });
+});
+
+describe('quantizeObject', () => {
+  const state = {
+    id: 'jug',
+    position: [0.1, 0.2, 0.3] as [number, number, number],
+    orientation: null,
+    confidence: 1,
+    source: 'layout' as const,
+  };
+
+  it('leaves out the optional fields of a legacy state', () => {
+    expect(quantizeObject(state, 1000, 1500)).toEqual(state);
+  });
+
+  it('keeps an observation time from before the episode as a negative time', () => {
+    expect(quantizeObject({ ...state, observedT: 400 }, 1000, 1500).observedT).toBe(-600);
   });
 });
 
@@ -279,5 +331,34 @@ describe('EpisodeUploader', () => {
     });
     expect(sink.only().batches.map((b) => b.seq)).toEqual([2, 3]);
     expect(dropped).toEqual(['batch 0: upload queue full', 'batch 1: upload queue full']);
+  });
+});
+
+describe('synthetic ph-syringe episode', () => {
+  const file = join(
+    import.meta.dirname,
+    '../../../../fixtures/episodes/synthetic-ph-syringe/objects.ndjson',
+  );
+  const records = readFileSync(file, 'utf8')
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .map((line) => JSON.parse(line) as { t: number; objects: ObjectState[] });
+
+  it('gives every object state its own time, so readers keep the tracking-lost state', () => {
+    // Readers place a state at `observedT ?? t` and drop a second state of an object at the same
+    // time, so these times must strictly increase per object.
+    const last = new Map<string, number>();
+    const lost: number[] = [];
+    for (const { t, objects } of records) {
+      for (const o of objects) {
+        const at = o.observedT ?? t;
+        expect(at, `${o.id} at line t ${t}`).toBeGreaterThan(last.get(o.id) ?? -Infinity);
+        last.set(o.id, at);
+        if (!((o.locationFlags ?? LOCATION_FLAG.positionValid) & LOCATION_FLAG.positionValid))
+          lost.push(at);
+      }
+    }
+    // The 300 ms hand dropout while the syringe is held.
+    expect(lost).toHaveLength(1);
   });
 });

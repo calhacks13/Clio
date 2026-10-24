@@ -1,5 +1,12 @@
 import { parseProcedure } from '@clio/protocol';
-import { type BufferGeometry, type Group, type Mesh, type MeshBasicMaterial, Vector3 } from 'three';
+import {
+  type BufferGeometry,
+  type Group,
+  type Mesh,
+  type MeshBasicMaterial,
+  type ShaderMaterial,
+  Vector3,
+} from 'three';
 import { describe, expect, it } from 'vitest';
 import type { PresentContext } from '../../src/adapters/render/presenter';
 import { OutlinesPresenter } from '../../src/adapters/render/presenters/outlines';
@@ -80,7 +87,9 @@ function context(
   };
 }
 
-type Drawn = Group & { children: Mesh<BufferGeometry, MeshBasicMaterial>[] };
+type Drawn = Group & {
+  children: [Mesh<BufferGeometry, MeshBasicMaterial>, Mesh<BufferGeometry, ShaderMaterial>];
+};
 const drawn = (presenter: OutlinesPresenter) => presenter.object.children as Drawn[];
 const facing = (group: Group) => new Vector3(0, 0, 1).applyQuaternion(group.quaternion);
 const cap = (outline: ObjectOutline, rank = 0, offset: Vec3 = [0, 0, 0]): OverlayOutline => ({
@@ -117,14 +126,32 @@ describe('OutlinesPresenter', () => {
     expect(position).toEqual([0.22, 0.05, -0.31]);
   });
 
-  it('traces a contour all the way round, and brackets the corners of a box', () => {
+  it('lights a contour without a stroke, and brackets the corners of a box', () => {
     const contour = new OutlinesPresenter();
     contour.update(context([cap(CONTOUR)], [estimate('cap', [0, 0, -1])], [0, 0, 0]));
-    expect(drawn(contour)[0]?.children[0]?.geometry.index?.count).toBe(5 * 6);
+    expect(drawn(contour)[0]?.children[0]?.visible).toBe(false);
 
     const box = new OutlinesPresenter();
     box.update(context([cap(BOX)], [estimate('cap', [0, 0, -1])], [0, 0, 0]));
     expect(drawn(box)[0]?.children[0]?.geometry.index?.count).toBe(4 * 2 * 6);
+    expect(drawn(box)[0]?.children[0]?.visible).toBe(true);
+  });
+
+  it('keeps region targets on their surface and updates the mode when the target kind changes', () => {
+    const presenter = new OutlinesPresenter();
+    const region = estimate('cap', [0, 0, -1]);
+    region.spec = { ...region.spec, kind: 'region' };
+    presenter.update(context([cap(CONTOUR)], [region], [0, 0, 0]));
+    const volume = drawn(presenter)[0]?.children[1];
+    if (!volume) throw new Error('Missing target highlight');
+    // A region's light stays on its measured surface: a shallow volume that barely spills.
+    expect(volume.material.uniforms.spill?.value).toBeLessThan(1);
+    expect(volume.material.uniforms.thickness?.value).toBeLessThanOrEqual(0.003);
+    const tool = { ...region, spec: { ...region.spec, kind: 'tool' as const } };
+    presenter.update(context([cap(CONTOUR)], [tool], [0, 0, 0]));
+    expect(volume.material.uniforms.spill?.value).toBe(1);
+    expect(volume.material.uniforms.thickness?.value).toBeGreaterThan(0.003);
+    presenter.dispose();
   });
 
   it('colors what to act on and where it goes apart', () => {

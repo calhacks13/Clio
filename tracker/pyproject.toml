@@ -1,0 +1,48 @@
+[project]
+name = "clio-tracker"
+version = "0.1.0"
+description = "Real-time object tracking for Clio: YOLOE-26's vision encoder plus ByteTrack, with jev naming the target about once a second."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    # The tracker reaches into YOLOE-26's head (one2one branch, SAVPE, Proto26), so the range is
+    # narrow; tests/test_vision.py checks the split graph against Ultralytics' own forward pass.
+    "ultralytics>=8.4.185,<8.5",
+    # ByteTrack's assignment solver; Ultralytics would otherwise pip-install it at runtime.
+    "lap>=0.5.12",
+    "numpy>=1.26",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "httpx>=0.28",
+    "pillow>=11",
+    # uvicorn's WebSocket support for /track.
+    "websockets>=13",
+]
+
+[project.optional-dependencies]
+# Apple Neural Engine: YOLOE-26L in ~25 ms a frame on an M5, against ~160 ms with PyTorch on MPS.
+coreml = ["coremltools>=9.0; sys_platform == 'darwin'"]
+
+[project.scripts]
+clio-tracker = "clio_tracker.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["uv_build>=0.10.3,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = ["model: loads the real YOLOE-26 weights (downloaded on first use)"]
+
+[tool.ruff]
+line-length = 100
+indent-width = 4
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "NPY"]

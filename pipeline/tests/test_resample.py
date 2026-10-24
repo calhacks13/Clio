@@ -114,3 +114,30 @@ def test_object_positions_before_the_first_sighting_use_the_first_sighting(new_e
 def test_rejects_a_non_positive_fps(episode_dir):
     with pytest.raises(ValueError, match="fps"):
         resample_episode(load_episode(episode_dir), fps=0)
+
+
+def _gap_episode(new_episode):
+    """Frames at 0, 50, 300 and 350 ms: a 250 ms hole between 50 and 300."""
+    b = new_episode()
+    for t in (0.0, 50.0, 300.0, 350.0):
+        b.frame(t, head=[t / 1000, 0.45, 0.35, 0, 0, 0, 1], left=b.hand((t / 1000, 0.08, -0.18)))
+    return load_episode(b.write())
+
+
+def test_with_a_max_gap_a_longer_frame_gap_is_not_interpolated(new_episode):
+    r = resample_episode(_gap_episode(new_episode), fps=40, max_gap_ms=100.0)
+
+    inside = (r.t > 50.0) & (r.t < 300.0)  # 75 .. 275 ms
+    assert r.head_valid.tolist() == (~inside).tolist() and r.max_gap_ms == 100.0
+    assert np.isnan(r.head[inside]).all() and not np.isnan(r.head[~inside]).any()
+    assert not r.tracked[inside].any() and r.tracked[~inside, 0].all()
+    assert np.isnan(r.hands[inside]).all() and np.isnan(r.pinch[inside]).all()
+    assert_allclose(r.hands[r.t == 25.0, 0, 0, 0], [0.025], atol=1e-6)  # a short gap still is
+
+
+def test_without_a_max_gap_every_frame_gap_is_interpolated(new_episode):
+    r = resample_episode(_gap_episode(new_episode), fps=40)
+
+    assert r.head_valid.all() and r.max_gap_ms is None
+    assert r.tracked[:, 0].all()
+    assert_allclose(r.head[r.t == 175.0, 0], [0.175], atol=1e-9)

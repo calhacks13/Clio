@@ -257,6 +257,21 @@ describe('POST /api/vision/locate', () => {
     expect(seen).toEqual([{ image: IMAGE, objects: OBJECTS }]);
   });
 
+  it("passes a tracking finder's session through and its refreshMs back", async () => {
+    const seen: unknown[] = [];
+    const locator: VisionLocator = {
+      async locate(request) {
+        seen.push(request);
+        return { model: 'yoloe-26l-seg+jev-1.14.0', detections: [], refreshMs: 50 };
+      },
+    };
+    const h = await harness({ locator });
+    const body = { image: IMAGE, objects: OBJECTS, session: 'headset-run-1' };
+    const res = await h.request('POST', ApiPaths.visionLocate, body);
+    expect(LocateResponseSchema.parse(await res.json()).refreshMs).toBe(50);
+    expect(seen).toEqual([body]);
+  });
+
   it('answers 502 when the vision call fails', async () => {
     const locator: VisionLocator = {
       locate: async () => {

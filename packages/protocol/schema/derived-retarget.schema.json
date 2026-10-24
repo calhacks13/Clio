@@ -1,0 +1,390 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "clio.derived/1"
+    },
+    "episodeId": {
+      "type": "string"
+    },
+    "frame": {
+      "type": "string",
+      "const": "workspace"
+    },
+    "fps": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "t": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "description": "Grid times, ms since episode start, one per frame"
+    },
+    "kind": {
+      "type": "string",
+      "const": "retarget"
+    },
+    "profile": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "robot": {
+          "type": "string",
+          "description": "The profile's display name for the robot"
+        },
+        "robotType": {
+          "type": "string",
+          "description": "LeRobot robot_type"
+        },
+        "urdfSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "example": {
+          "type": "boolean",
+          "description": "A made-up robot for trying the pipeline, not real hardware"
+        },
+        "orientationMode": {
+          "type": "string",
+          "enum": [
+            "full",
+            "approach_axis",
+            "position_only"
+          ],
+          "description": "What residualRotRad measures: the whole rotation, or the approach axis only"
+        },
+        "tolPosM": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "reachable needs residualPosM within this"
+        },
+        "tolRotRad": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "reachable needs residualRotRad within this, except in position_only mode"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "robot",
+        "robotType",
+        "urdfSha256",
+        "example",
+        "orientationMode",
+        "tolPosM",
+        "tolRotRad"
+      ],
+      "additionalProperties": false
+    },
+    "arms": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "hand": {
+            "type": "string",
+            "enum": [
+              "left",
+              "right"
+            ],
+            "description": "The human hand that drives this arm"
+          },
+          "joints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Actuated URDF joint names, in the order of q"
+          },
+          "q": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": "Joint values (rad, or m for prismatic joints); null where there was no target"
+          },
+          "gripper": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": "0 open to 1 closed, from the pinch aperture; 1 while the hand holds an object when grasps are recorded"
+          },
+          "target": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 7,
+                  "maxItems": 7,
+                  "description": "[px, py, pz, qx, qy, qz, qw]"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": "Tool target, W"
+          },
+          "achieved": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 7,
+                  "maxItems": 7,
+                  "description": "[px, py, pz, qx, qy, qz, qw]"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": "Tool pose the solution reaches, W"
+          },
+          "residualPosM": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "residualRotRad": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "reachable": {
+            "type": "array",
+            "items": {
+              "type": "boolean"
+            },
+            "description": "Solved within the profile tolerances; false also where there was no target"
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "prefixItems": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ],
+                    "items": false,
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "description": "[x, y, z] in meters"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": "The base origin, then every joint origin along the chain to the tool, W"
+          },
+          "baseInWorkspace": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "items": false,
+            "minItems": 7,
+            "maxItems": 7,
+            "description": "Robot base pose, W: an assumption from the profile"
+          }
+        },
+        "required": [
+          "hand",
+          "joints",
+          "q",
+          "gripper",
+          "target",
+          "achieved",
+          "residualPosM",
+          "residualRotRad",
+          "reachable",
+          "links",
+          "baseInWorkspace"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "reachableFraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Of the frames that had a target"
+        },
+        "targetFraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Frames that had a target (the hand was tracked)"
+        },
+        "meanResidualPosM": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "reachableFraction",
+        "targetFraction",
+        "meanResidualPosM"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema",
+    "episodeId",
+    "frame",
+    "fps",
+    "t",
+    "kind",
+    "profile",
+    "arms",
+    "summary"
+  ],
+  "additionalProperties": false,
+  "$id": "https://clio.dev/schema/derived-retarget.schema.json",
+  "title": "Clio compiled retarget-<profile>.json"
+}

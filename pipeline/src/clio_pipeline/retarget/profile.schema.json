@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clio.dev/schema/retarget-profile.schema.json",
+  "title": "Clio robot retargeting profile",
+  "type": "object",
+  "required": [
+    "id",
+    "version",
+    "name",
+    "robotType",
+    "example",
+    "urdf",
+    "arms",
+    "tcp",
+    "workspace",
+    "orientation",
+    "gripper",
+    "solver"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,80}$",
+      "description": "Names the compiled file retarget-<id>.json"
+    },
+    "version": { "type": "integer", "minimum": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "robotType": { "type": "string", "minLength": 1, "description": "LeRobot robot_type" },
+    "example": {
+      "type": "boolean",
+      "description": "A made-up robot for trying the pipeline, not real hardware"
+    },
+    "urdf": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "minLength": 1, "description": "Relative to this file" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "arms": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "required": ["hand", "baseLink", "tipLink", "base", "restPose"],
+        "additionalProperties": false,
+        "properties": {
+          "hand": { "enum": ["left", "right"], "description": "The human hand that drives it" },
+          "baseLink": { "type": "string", "minLength": 1 },
+          "tipLink": { "type": "string", "minLength": 1, "description": "The tool frame" },
+          "base": {
+            "type": "object",
+            "required": ["pose"],
+            "additionalProperties": false,
+            "properties": {
+              "pose": {
+                "$ref": "#/$defs/pose7",
+                "description": "baseLink in the export robot frame at the table corner (z up)"
+              }
+            }
+          },
+          "restPose": {
+            "type": "array",
+            "items": { "type": "number" },
+            "minItems": 1,
+            "description": "Actuated joint values, chain order; the first seed"
+          }
+        }
+      }
+    },
+    "tcp": {
+      "type": "object",
+      "required": ["target", "wristToTcp", "toolAlign"],
+      "additionalProperties": false,
+      "properties": {
+        "target": { "enum": ["wrist", "pinch_point", "palm"] },
+        "wristToTcp": {
+          "$ref": "#/$defs/pose7",
+          "description": "Offset from the target point to the tool, in WebXR wrist axes"
+        },
+        "toolAlign": {
+          "$ref": "#/$defs/quat",
+          "description": "Robot tool frame relative to the hand frame"
+        }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "required": ["scale", "pivot"],
+      "additionalProperties": false,
+      "properties": {
+        "scale": { "type": "number", "exclusiveMinimum": 0 },
+        "pivot": { "$ref": "#/$defs/vec3", "description": "Workspace frame W" }
+      }
+    },
+    "orientation": {
+      "type": "object",
+      "required": ["mode", "weight", "approachAxis"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "enum": ["full", "approach_axis", "position_only"] },
+        "weight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Meters of position error worth one radian of orientation error"
+        },
+        "approachAxis": { "$ref": "#/$defs/vec3", "description": "Tool frame axis" }
+      }
+    },
+    "gripper": {
+      "type": "object",
+      "required": ["pinchOpenM", "pinchClosedM"],
+      "additionalProperties": false,
+      "properties": {
+        "pinchOpenM": { "type": "number", "exclusiveMinimum": 0 },
+        "pinchClosedM": { "type": "number", "minimum": 0 }
+      }
+    },
+    "solver": {
+      "type": "object",
+      "required": ["damping", "maxIterations", "tolPosM", "tolRotRad"],
+      "additionalProperties": false,
+      "properties": {
+        "damping": { "type": "number", "exclusiveMinimum": 0 },
+        "maxIterations": { "type": "integer", "minimum": 1 },
+        "tolPosM": { "type": "number", "exclusiveMinimum": 0 },
+        "tolRotRad": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    }
+  },
+  "$defs": {
+    "vec3": {
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "quat": {
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 4,
+      "maxItems": 4,
+      "description": "[x, y, z, w]"
+    },
+    "pose7": {
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 7,
+      "maxItems": 7,
+      "description": "[px, py, pz, qx, qy, qz, qw]"
+    }
+  }
+}

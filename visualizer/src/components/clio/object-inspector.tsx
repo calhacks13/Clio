@@ -1,0 +1,96 @@
+"use client";
+
+import React from "react";
+import { inspectObject } from "@/lib/clio/lanes";
+import { drawnObjects, identityColor, themed } from "@/lib/clio/object-display";
+import type { Basis } from "@/lib/clio/types";
+import type { Capture } from "@clio-viewer/capture/model";
+import { useTheme } from "@/utils/theme";
+
+// One object at the viewed time: its newest update's source and estimate type,
+// how long ago it was (derived), measured confidence only when there is one,
+// held state and the newest detector answer. Inferred values are muted with a
+// dashed underline, as inferred marks are dashed in the lanes.
+
+const VALUE_CLASS: Record<Basis, string> = {
+  measured: "text-fg-soft",
+  derived: "text-fg-muted",
+  inferred:
+    "text-fg-muted underline decoration-dashed decoration-1 underline-offset-4",
+};
+
+export interface ObjectInspectorProps {
+  capture: Capture;
+  /** The object shown, or null for none. */
+  entityId: string | null;
+  tUs: number;
+  /** The episode records location flags, so a lost position can show. */
+  flagsRecorded: boolean;
+  className?: string;
+}
+
+export default function ObjectInspector({
+  capture,
+  entityId,
+  tUs,
+  flagsRecorded,
+  className = "",
+}: ObjectInspectorProps) {
+  const theme = useTheme();
+  const inspection = entityId
+    ? inspectObject(capture, entityId, tUs, { flagsRecorded })
+    : null;
+  if (!inspection) {
+    return (
+      <section
+        className={`text-sm text-fg-muted ${className}`}
+        aria-label="Object"
+      >
+        Select an object
+      </section>
+    );
+  }
+  const index = drawnObjects(capture).findIndex((e) => e.id === entityId);
+  return (
+    <section
+      className={`flex min-w-0 flex-col gap-3 ${className}`}
+      aria-label={`Object ${inspection.label}`}
+    >
+      <h3 className="flex min-w-0 items-center gap-2 text-sm font-semibold text-fg">
+        {index >= 0 && (
+          <span
+            className="h-2 w-2 shrink-0 rounded-full"
+            style={{ background: themed(identityColor(index), theme) }}
+            aria-hidden="true"
+          />
+        )}
+        <span className="truncate" title={inspection.label}>
+          {inspection.label}
+        </span>
+      </h3>
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-[13px]">
+        {inspection.rows.map((row) =>
+          row.label === null ? (
+            <dd
+              key={row.value}
+              className={`col-span-2 ${VALUE_CLASS[row.basis]}`}
+              title={row.title}
+            >
+              {row.value}
+            </dd>
+          ) : (
+            <React.Fragment key={row.label}>
+              <dt className="text-fg-faint">{row.label}</dt>
+              <dd
+                className={`min-w-0 truncate ${row.label === "Position" ? "whitespace-pre font-mono text-xs leading-5" : "tabular"} ${VALUE_CLASS[row.basis]}`}
+                title={row.title}
+              >
+                {row.value}
+              </dd>
+            </React.Fragment>
+          ),
+        )}
+      </dl>
+    </section>
+  );
+}

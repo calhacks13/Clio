@@ -1,34 +1,23 @@
-import {
-  BufferAttribute,
-  BufferGeometry,
-  DoubleSide,
-  Group,
-  Matrix4,
-  Mesh,
-  MeshBasicMaterial,
-  Vector3,
-} from 'three';
+import { Group, Matrix4, Vector3 } from 'three';
 import { add, invertPose, transformPoint } from '../../../core/math';
 import type { OverlayOutline } from '../../../domain/overlay/overlay-model';
 import { billboard, type ObjectOutline } from '../../../domain/world/outline';
+import { OBJECT_HIGHLIGHT_COLOR, type ObjectGlowMode, ObjectHighlight } from '../object-highlight';
 import type { PresentContext, Presenter } from '../presenter';
-import { cornerBrackets, mergeStrokes, type Stroke, strokePolyline } from '../stroke';
 
-// Outlines around the real objects the current step shows: the finder's contour, or corner
+// Glows over the real objects the current step shows: the finder's silhouette, or corner
 // brackets around its box. Each one hangs on a plane through the object's current estimate, so it
 // rides along when the object is carried and put down, and the plane turns toward the learner
 // every frame, so the outline stays around the object as they move.
 
 /** What to act on, then where it goes. */
-const RANK_COLORS = [0x4fe3ff, 0xffd23f] as const;
-const STROKE_M = 0.004;
-const BRACKET_SHARE = 0.3;
+const RANK_COLORS = [OBJECT_HIGHLIGHT_COLOR, 0xffd23f] as const;
 
 interface Drawn {
-  group: Group;
-  mesh: Mesh<BufferGeometry, MeshBasicMaterial>;
+  group: ObjectHighlight;
   /** The outline the mesh was built from (outlines are replaced, never mutated). */
   outline: ObjectOutline;
+  mode: ObjectGlowMode;
 }
 
 const basis = new Matrix4();
@@ -52,12 +41,13 @@ export class OutlinesPresenter implements Presenter {
       const plane = billboard(center, eye);
       if (!plane) continue;
       visible.add(item.objectId);
-      const { group, mesh } = this.draw(item);
+      const mode =
+        estimate.spec.kind === 'tool' || estimate.spec.kind === 'container' ? 'object' : 'surface';
+      const { group } = this.draw(item, mode);
       group.position.set(...center);
       basis.makeBasis(right.set(...plane.right), up.set(...plane.up), toEye.set(...plane.normal));
       group.quaternion.setFromRotationMatrix(basis);
-      mesh.material.color.setHex(RANK_COLORS[Math.min(item.rank, RANK_COLORS.length - 1)] ?? 0);
-      mesh.material.opacity = 0.8 + 0.15 * Math.sin(ctx.t / 250);
+      group.setColor(RANK_COLORS[Math.min(item.rank, RANK_COLORS.length - 1)] ?? 0);
     }
     const listed = new Set(ctx.snapshot.outlines.map((o) => o.objectId));
     for (const [id, drawn] of this.drawn) {
@@ -70,53 +60,26 @@ export class OutlinesPresenter implements Presenter {
     for (const [id, drawn] of this.drawn) this.remove(id, drawn);
   }
 
-  private draw(item: OverlayOutline): Drawn {
+  private draw(item: OverlayOutline, mode: ObjectGlowMode): Drawn {
     const existing = this.drawn.get(item.objectId);
-    if (existing?.outline === item.outline) return existing;
-    const geometry = toGeometry(strokeFor(item.outline));
+    if (existing?.outline === item.outline && existing.mode === mode) return existing;
     if (existing) {
-      existing.mesh.geometry.dispose();
-      existing.mesh.geometry = geometry;
+      existing.group.setOutline(item.outline, mode);
       existing.outline = item.outline;
+      existing.mode = mode;
       return existing;
     }
-    const material = new MeshBasicMaterial({
-      transparent: true,
-      depthWrite: false,
-      side: DoubleSide,
-    });
-    const mesh = new Mesh(geometry, material);
-    mesh.renderOrder = 10;
-    const group = new Group();
-    group.add(mesh);
+    const group = new ObjectHighlight();
+    group.setOutline(item.outline, mode);
     this.object.add(group);
-    const drawn = { group, mesh, outline: item.outline };
+    const drawn = { group, outline: item.outline, mode };
     this.drawn.set(item.objectId, drawn);
     return drawn;
   }
 
   private remove(id: string, drawn: Drawn): void {
     this.object.remove(drawn.group);
-    drawn.mesh.geometry.dispose();
-    drawn.mesh.material.dispose();
+    drawn.group.dispose();
     this.drawn.delete(id);
   }
-}
-
-function strokeFor(outline: ObjectOutline): Stroke {
-  if (outline.shape === 'contour') {
-    return strokePolyline(outline.points, { width: STROKE_M, closed: true, outside: true });
-  }
-  return mergeStrokes(
-    cornerBrackets(outline.points, BRACKET_SHARE).map((corner) =>
-      strokePolyline(corner, { width: STROKE_M, closed: false }),
-    ),
-  );
-}
-
-function toGeometry({ positions, indices }: Stroke): BufferGeometry {
-  const geometry = new BufferGeometry();
-  geometry.setAttribute('position', new BufferAttribute(positions, 3));
-  geometry.setIndex(new BufferAttribute(indices, 1));
-  return geometry;
 }

@@ -1,0 +1,1081 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Quest Capture v1 documents and JSONL records",
+  "description": "Structural validation only. See FORMAT.md for cross-file and semantic requirements.",
+  "oneOf": [
+    {
+      "$ref": "#/definitions/recording"
+    },
+    {
+      "$ref": "#/definitions/scene"
+    },
+    {
+      "$ref": "#/definitions/calibration"
+    },
+    {
+      "$ref": "#/definitions/poseSample"
+    },
+    {
+      "$ref": "#/definitions/handSample"
+    },
+    {
+      "$ref": "#/definitions/eventSample"
+    },
+    {
+      "$ref": "#/definitions/videoIndexSample"
+    }
+  ],
+  "definitions": {
+    "vec3": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "quat": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "path": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[\\\\:])[a-zA-Z0-9_./-]+$"
+    },
+    "pose": {
+      "type": "object",
+      "properties": {
+        "translation": {
+          "$ref": "#/definitions/vec3"
+        },
+        "rotation": {
+          "$ref": "#/definitions/quat"
+        },
+        "extensions": {
+          "type": "object"
+        }
+      },
+      "required": ["translation", "rotation"],
+      "additionalProperties": false
+    },
+    "sourceTime": {
+      "type": "object",
+      "properties": {
+        "clock_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "ticks_ns": {
+          "type": "string",
+          "pattern": "^-?[0-9]+$"
+        },
+        "extensions": {
+          "type": "object"
+        }
+      },
+      "required": ["clock_id", "ticks_ns"],
+      "additionalProperties": false
+    },
+    "location": {
+      "type": "object",
+      "properties": {
+        "translation": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/vec3"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rotation": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/quat"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "location_flags": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 15
+        },
+        "extensions": {
+          "type": "object"
+        }
+      },
+      "required": ["translation", "rotation", "location_flags"],
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "software_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1
+        },
+        "extensions": {
+          "type": "object"
+        }
+      },
+      "required": ["id", "provider", "software_version", "method"],
+      "additionalProperties": false
+    },
+    "clock": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "source_origin_ns": {
+          "type": "string",
+          "pattern": "^-?[0-9]+$"
+        },
+        "scale": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "offset_us": {
+          "type": "number"
+        },
+        "uncertainty_us": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1
+        },
+        "extensions": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "source_origin_ns",
+        "scale",
+        "offset_us",
+        "uncertainty_us",
+        "method"
+      ],
+      "additionalProperties": false
+    },
+    "file": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "$ref": "#/definitions/path"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "extensions": {
+          "type": "object"
+        }
+      },
+      "required": ["path", "bytes", "sha256"],
+      "additionalProperties": false
+    },
+    "stream": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "type": {
+          "enum": ["poses", "hands", "events", "video_index"]
+        },
+        "path": {
+          "$ref": "#/definitions/path"
+        },
+        "requested_hz": {
+          "anyOf": [
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observed_hz": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sample_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "extensions": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "path",
+        "requested_hz",
+        "observed_hz",
+        "sample_count"
+      ],
+      "additionalProperties": false
+    },
+    "entity": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "enum": ["object", "environment", "headset", "hand"]
+        },
+        "motion": {
+          "enum": ["static", "tracked"]
+        },
+        "geometry": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "enum": ["none"]
+                },
+                "extensions": {
+                  "type": "object"
+                }
+              },
+              "required": ["type"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "enum": ["box"]
+                },
+                "size": {
+                  "$ref": "#/definitions/vec3"
+                },
+                "color": {
+                  "type": "string",
+                  "pattern": "^#[a-fA-F0-9]{6}$"
+                },
+                "extensions": {
+                  "type": "object"
+                }
+              },
+              "required": ["type", "size", "color"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "enum": ["glb"]
+                },
+                "path": {
+                  "$ref": "#/definitions/path"
+                },
+                "extensions": {
+                  "type": "object"
+                }
+              },
+              "required": ["type", "path"],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "pose": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/pose"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "extensions": {
+          "type": "object"
+        }
+      },
+      "required": ["id", "name", "role", "motion", "geometry", "pose"],
+      "additionalProperties": false
+    },
+    "camera": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "frame_convention": {
+          "enum": ["optical-x-right-y-down-z-forward"]
+        },
+        "parent": {
+          "enum": ["headset"]
+        },
+        "T_parent_camera": {
+          "$ref": "#/definitions/pose"
+        },
+        "resolution": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "intrinsics": {
+          "type": "object",
+          "properties": {
+            "fx": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "fy": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "cx": {
+              "type": "number"
+            },
+            "cy": {
+              "type": "number"
+            },
+            "extensions": {
+              "type": "object"
+            }
+          },
+          "required": ["fx", "fy", "cx", "cy"],
+          "additionalProperties": false
+        },
+        "distortion_model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "distortion_coefficients": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "calibration_source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "extensions": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "frame_convention",
+        "parent",
+        "T_parent_camera",
+        "resolution",
+        "intrinsics",
+        "distortion_model",
+        "distortion_coefficients",
+        "calibration_source"
+      ],
+      "additionalProperties": false
+    },
+    "video": {
+      "type": "object",
+      "properties": {
+        "camera_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "path": {
+          "$ref": "#/definitions/path"
+        },
+        "index_stream_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "codec": {
+          "enum": ["h264"]
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "nominal_fps": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "image_rotation_cw_deg": {
+          "enum": [0, 90, 180, 270]
+        },
+        "mirrored": {
+          "type": "boolean"
+        },
+        "extensions": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "camera_id",
+        "path",
+        "index_stream_id",
+        "codec",
+        "width",
+        "height",
+        "nominal_fps",
+        "image_rotation_cw_deg",
+        "mirrored"
+      ],
+      "additionalProperties": false
+    },
+    "recording": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": ["recording"]
+        },
+        "format": {
+          "enum": ["quest-capture"]
+        },
+        "schema_version": {
+          "enum": [1]
+        },
+        "recording_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "status": {
+          "enum": ["complete", "recovered"]
+        },
+        "synthetic": {
+          "type": "boolean"
+        },
+        "task": {
+          "type": "string",
+          "minLength": 1
+        },
+        "device": {
+          "type": "object",
+          "properties": {
+            "model": {
+              "type": "string",
+              "minLength": 1
+            },
+            "os_version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "app_version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "extensions": {
+              "type": "object"
+            }
+          },
+          "required": ["model", "os_version", "app_version"],
+          "additionalProperties": false
+        },
+        "duration_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "coordinate_convention": {
+          "enum": ["ros-rep-103"]
+        },
+        "units": {
+          "enum": ["meters"]
+        },
+        "time_unit": {
+          "enum": ["microseconds"]
+        },
+        "scene": {
+          "$ref": "#/definitions/path"
+        },
+        "calibration": {
+          "$ref": "#/definitions/path"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/source"
+          }
+        },
+        "clocks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/clock"
+          }
+        },
+        "streams": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/stream"
+          }
+        },
+        "videos": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/video"
+          }
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/file"
+          }
+        },
+        "export_defaults": {
+          "type": "object",
+          "properties": {
+            "fps": {
+              "enum": [30, 60]
+            },
+            "profile": {
+              "enum": ["human-observations-v1"]
+            },
+            "include_objects": {
+              "type": "boolean"
+            },
+            "extensions": {
+              "type": "object"
+            }
+          },
+          "required": ["fps", "profile", "include_objects"],
+          "additionalProperties": false
+        },
+        "extensions": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "format",
+        "schema_version",
+        "recording_id",
+        "status",
+        "synthetic",
+        "task",
+        "device",
+        "duration_us",
+        "coordinate_convention",
+        "units",
+        "time_unit",
+        "scene",
+        "calibration",
+        "sources",
+        "clocks",
+        "streams",
+        "videos",
+        "files",
+        "export_defaults"
+      ],
+      "additionalProperties": false
+    },
+    "scene": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": ["scene"]
+        },
+        "world": {
+          "type": "object",
+          "properties": {
+            "origin_description": {
+              "type": "string",
+              "minLength": 1
+            },
+            "calibration_method": {
+              "type": "string",
+              "minLength": 1
+            },
+            "extensions": {
+              "type": "object"
+            }
+          },
+          "required": ["origin_description", "calibration_method"],
+          "additionalProperties": false
+        },
+        "entities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/entity"
+          }
+        },
+        "extensions": {
+          "type": "object"
+        }
+      },
+      "required": ["kind", "world", "entities"],
+      "additionalProperties": false
+    },
+    "calibration": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": ["calibration"]
+        },
+        "source_basis": {
+          "enum": ["openxr", "unity", "other"]
+        },
+        "T_world_source": {
+          "$ref": "#/definitions/pose"
+        },
+        "basis_conversion": {
+          "type": "object",
+          "properties": {
+            "description": {
+              "type": "string",
+              "minLength": 1
+            },
+            "matrix_row_major": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 9,
+              "maxItems": 9
+            },
+            "extensions": {
+              "type": "object"
+            }
+          },
+          "required": ["description", "matrix_row_major"],
+          "additionalProperties": false
+        },
+        "cameras": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/camera"
+          }
+        },
+        "extensions": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "source_basis",
+        "T_world_source",
+        "basis_conversion",
+        "cameras"
+      ],
+      "additionalProperties": false
+    },
+    "poseSample": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": ["pose"]
+        },
+        "t_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "source_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "source_time": {
+          "$ref": "#/definitions/sourceTime"
+        },
+        "available_t_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "estimate_type": {
+          "enum": [
+            "runtime_estimate",
+            "vision_estimate",
+            "predicted",
+            "manual",
+            "synthetic"
+          ]
+        },
+        "entity_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "frame": {
+          "enum": ["world"]
+        },
+        "location": {
+          "$ref": "#/definitions/location"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input_camera_frame": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "camera_id": {
+                  "type": "string",
+                  "pattern": "^[a-zA-Z0-9_-]+$"
+                },
+                "frame_index": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "extensions": {
+                  "type": "object"
+                },
+                "video_path": {
+                  "$ref": "#/definitions/path"
+                }
+              },
+              "required": ["camera_id", "frame_index", "video_path"],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "extensions": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "t_us",
+        "sequence",
+        "source_id",
+        "source_time",
+        "available_t_us",
+        "estimate_type",
+        "entity_id",
+        "frame",
+        "location",
+        "confidence",
+        "input_camera_frame"
+      ],
+      "additionalProperties": false
+    },
+    "joint": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "$ref": "#/definitions/location"
+        },
+        "radius_m": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "extensions": {
+          "type": "object"
+        }
+      },
+      "required": ["location", "radius_m"],
+      "additionalProperties": false
+    },
+    "handSample": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": ["hand"]
+        },
+        "t_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "source_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "source_time": {
+          "$ref": "#/definitions/sourceTime"
+        },
+        "available_t_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "estimate_type": {
+          "enum": [
+            "runtime_estimate",
+            "vision_estimate",
+            "predicted",
+            "manual",
+            "synthetic"
+          ]
+        },
+        "entity_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "handedness": {
+          "enum": ["left", "right"]
+        },
+        "frame": {
+          "enum": ["world"]
+        },
+        "joint_set": {
+          "enum": ["openxr-default-26"]
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "joints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/joint"
+          },
+          "minItems": 26,
+          "maxItems": 26
+        },
+        "extensions": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "t_us",
+        "sequence",
+        "source_id",
+        "source_time",
+        "available_t_us",
+        "estimate_type",
+        "entity_id",
+        "handedness",
+        "frame",
+        "joint_set",
+        "active",
+        "joints"
+      ],
+      "additionalProperties": false
+    },
+    "eventSample": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": ["event"]
+        },
+        "t_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "source_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "event": {
+          "enum": [
+            "grasp",
+            "release",
+            "tracking_lost",
+            "tracking_recovered",
+            "recenter",
+            "marker"
+          ]
+        },
+        "entity_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_-]+$"
+          }
+        },
+        "origin": {
+          "enum": ["inferred", "manual", "runtime", "synthetic"]
+        },
+        "details": {
+          "type": "object"
+        },
+        "extensions": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "t_us",
+        "sequence",
+        "source_id",
+        "event",
+        "entity_ids",
+        "origin",
+        "details"
+      ],
+      "additionalProperties": false
+    },
+    "videoIndexSample": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": ["video_frame"]
+        },
+        "t_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "source_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "source_time": {
+          "$ref": "#/definitions/sourceTime"
+        },
+        "available_t_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "camera_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "video_path": {
+          "$ref": "#/definitions/path"
+        },
+        "frame_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "pts_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "T_world_camera": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/pose"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exposure_us": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "extensions": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "t_us",
+        "sequence",
+        "source_id",
+        "source_time",
+        "available_t_us",
+        "camera_id",
+        "video_path",
+        "frame_index",
+        "pts_us",
+        "T_world_camera",
+        "exposure_us"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

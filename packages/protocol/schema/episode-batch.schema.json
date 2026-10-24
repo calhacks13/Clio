@@ -652,6 +652,122 @@
               },
               "type": {
                 "type": "string",
+                "const": "object.grasped"
+              },
+              "objectId": {
+                "type": "string"
+              },
+              "hand": {
+                "type": "string",
+                "enum": [
+                  "left",
+                  "right"
+                ]
+              },
+              "grip": {
+                "type": "string",
+                "enum": [
+                  "pinch",
+                  "fist"
+                ]
+              },
+              "position": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "items": false,
+                "minItems": 3,
+                "maxItems": 3,
+                "description": "Object reference point when grasped, workspace frame"
+              }
+            },
+            "required": [
+              "t",
+              "type",
+              "objectId",
+              "hand",
+              "grip",
+              "position"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "t": {
+                "type": "number",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "const": "object.released"
+              },
+              "objectId": {
+                "type": "string"
+              },
+              "hand": {
+                "type": "string",
+                "enum": [
+                  "left",
+                  "right"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "opened",
+                  "hand_lost",
+                  "plan_changed"
+                ],
+                "description": "opened: the hand let go; hand_lost: hand tracking dropped out; plan_changed: a new plan was loaded"
+              },
+              "position": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "items": false,
+                "minItems": 3,
+                "maxItems": 3,
+                "description": "Object reference point when released, workspace frame"
+              }
+            },
+            "required": [
+              "t",
+              "type",
+              "objectId",
+              "hand",
+              "reason",
+              "position"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "t": {
+                "type": "number",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
                 "const": "coach.status"
               },
               "state": {
@@ -870,6 +986,123 @@
               },
               "type": {
                 "type": "string",
+                "const": "environment.planes"
+              },
+              "planes": {
+                "maxItems": 128,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "Stable within the episode; the headset numbers planes as it first sees them"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "table",
+                        "floor",
+                        "wall",
+                        "ceiling",
+                        "couch",
+                        "other"
+                      ]
+                    },
+                    "label": {
+                      "description": "The WebXR semanticLabel as reported, if any",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "orientation": {
+                      "type": "string",
+                      "enum": [
+                        "horizontal",
+                        "vertical"
+                      ]
+                    },
+                    "pose": {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 7,
+                      "maxItems": 7,
+                      "description": "Plane pose, workspace frame: the polygon lies in its local x/z plane and +y is the normal"
+                    },
+                    "polygon": {
+                      "minItems": 3,
+                      "maxItems": 256,
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "prefixItems": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ],
+                        "items": false,
+                        "minItems": 2,
+                        "maxItems": 2
+                      },
+                      "description": "Outline in plane-local [x, z] meters"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "label",
+                    "orientation",
+                    "pose",
+                    "polygon"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "Every plane detected now: a full snapshot, not a list of changes"
+              }
+            },
+            "required": [
+              "t",
+              "type",
+              "planes"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "t": {
+                "type": "number",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
                 "const": "annotation"
               },
               "label": {
@@ -921,7 +1154,7 @@
                   "items": false,
                   "minItems": 3,
                   "maxItems": 3,
-                  "description": "Reference point, workspace frame"
+                  "description": "Reference point, workspace frame; the last valid estimate while the position is not valid"
                 },
                 "orientation": {
                   "anyOf": [
@@ -966,6 +1199,31 @@
                     "detector",
                     "manual"
                   ]
+                },
+                "locationFlags": {
+                  "description": "Bits: 1 orientation valid, 2 position valid, 4 orientation tracked, 8 position tracked. Absent in older episodes: derive them from source",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 15
+                },
+                "heldBy": {
+                  "description": "The hand carrying it; null when not held",
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "left",
+                        "right"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "observedT": {
+                  "description": "ms since episode start when the estimate was measured; omitted within 1 ms of t, negative if before the episode started",
+                  "type": "number"
                 }
               },
               "required": [
@@ -985,7 +1243,236 @@
           "objects"
         ],
         "additionalProperties": false,
-        "description": "One tracker update (objects.ndjson line), typically 5–30 Hz"
+        "description": "One tracker update (objects.ndjson line): written when an estimate changes, and every XR frame while an object is held"
+      }
+    },
+    "observations": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "t": {
+            "type": "number",
+            "minimum": 0,
+            "description": "ms since episode start when the answer arrived"
+          },
+          "observedT": {
+            "type": "number",
+            "description": "ms since episode start when the camera frame was captured; negative if before the start"
+          },
+          "objectId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "measured",
+              "predicted",
+              "lost",
+              "absent",
+              "unknown"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "tracker",
+              "identifier",
+              "detector"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "description": "The model as reported, e.g. \"yoloe-26l-seg\""
+          },
+          "box": {
+            "anyOf": [
+              {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                ],
+                "items": false,
+                "minItems": 4,
+                "maxItems": 4,
+                "description": "[x0, y0, x1, y1] in 0..1 of the image"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outline": {
+            "anyOf": [
+              {
+                "minItems": 3,
+                "maxItems": 512,
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "description": "[x, y] in 0..1 of the image; x right, y down"
+                },
+                "description": "Closed outline in 0..1 image coordinates"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "point": {
+            "anyOf": [
+              {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                ],
+                "items": false,
+                "minItems": 2,
+                "maxItems": 2,
+                "description": "[x, y] in 0..1 of the image; x right, y down"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "contact": {
+            "anyOf": [
+              {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                ],
+                "items": false,
+                "minItems": 2,
+                "maxItems": 2,
+                "description": "[x, y] in 0..1 of the image; x right, y down"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Middle of the mask's lowest edge, where the object meets the surface"
+          },
+          "score": {
+            "description": "Score as reported; not a calibrated probability",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "frame": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "seq": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "width": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "height": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "seq",
+                  "width",
+                  "height"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The camera frame, when the transport identifies it"
+          },
+          "trackId": {
+            "description": "The tracker's own id: provenance only, it can change while following one object",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "t",
+          "observedT",
+          "objectId",
+          "status",
+          "role",
+          "source",
+          "box",
+          "outline",
+          "point",
+          "contact",
+          "score",
+          "frame",
+          "trackId"
+        ],
+        "additionalProperties": false,
+        "description": "One 2D object observation (observations.ndjson line), in normalized image coordinates"
       }
     }
   },
@@ -993,7 +1480,8 @@
     "seq",
     "frames",
     "events",
-    "objects"
+    "objects",
+    "observations"
   ],
   "additionalProperties": false,
   "$id": "https://clio.dev/schema/episode-batch.schema.json",

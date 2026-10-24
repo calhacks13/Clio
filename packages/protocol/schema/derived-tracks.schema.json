@@ -1,0 +1,442 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "clio.derived/1"
+    },
+    "episodeId": {
+      "type": "string"
+    },
+    "frame": {
+      "type": "string",
+      "const": "workspace"
+    },
+    "fps": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "t": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "description": "Grid times, ms since episode start, one per frame"
+    },
+    "kind": {
+      "type": "string",
+      "const": "tracks"
+    },
+    "policy": {
+      "type": "object",
+      "properties": {
+        "maxInterpolateGapMs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Objects: never interpolated across a longer gap"
+        },
+        "staleMs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Objects: tracked only this long after a measurement"
+        },
+        "maxFrameGapMs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Head and wrists: null where the recorded frames around a grid time are further apart"
+        }
+      },
+      "required": [
+        "maxInterpolateGapMs",
+        "staleMs",
+        "maxFrameGapMs"
+      ],
+      "additionalProperties": false
+    },
+    "head": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "items": false,
+            "minItems": 7,
+            "maxItems": 7,
+            "description": "[px, py, pz, qx, qy, qz, qw]"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "hands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "hand": {
+            "type": "string",
+            "enum": [
+              "left",
+              "right"
+            ]
+          },
+          "wrist": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 7,
+                  "maxItems": 7,
+                  "description": "[px, py, pz, qx, qy, qz, qw]"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": "Wrist joint pose; null while untracked"
+          },
+          "pinch": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": "Thumb-to-index distance, m"
+          }
+        },
+        "required": [
+          "hand",
+          "wrist",
+          "pinch"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "Plan object kind (item, tool, container, point, region)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "radius": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "position": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 3,
+                  "maxItems": 3,
+                  "description": "[x, y, z] in meters"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": "Null where no valid estimate"
+          },
+          "orientation": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 4,
+                  "maxItems": 4,
+                  "description": "Unit quaternion [x, y, z, w]"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": "Null where the orientation is unknown"
+          },
+          "tracked": {
+            "type": "array",
+            "items": {
+              "type": "boolean"
+            },
+            "description": "The estimate in force was measured no longer than policy.staleMs ago"
+          },
+          "interpolated": {
+            "type": "array",
+            "items": {
+              "type": "boolean"
+            },
+            "description": "Bridged across a gap longer than policy.staleMs between two valid estimates; ordinary resampling between close estimates is not flagged"
+          },
+          "held": {
+            "type": "array",
+            "items": {
+              "type": "boolean"
+            },
+            "description": "Inside a held span, including carries whose hand is unknown"
+          },
+          "heldBy": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "left",
+                    "right"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": "The holding hand, when known"
+          },
+          "confidence": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": "Measured confidence (detector or marker); null for placeholders"
+          },
+          "source": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "layout",
+                    "pinch",
+                    "marker",
+                    "detector",
+                    "manual"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "heldSpans": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "hand": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "left",
+                        "right"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Null when a carry was inferred without a pinch"
+                },
+                "startT": {
+                  "type": "number"
+                },
+                "endT": {
+                  "description": "Null while still held at the end of the episode",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "origin": {
+                  "type": "string",
+                  "enum": [
+                    "recorded",
+                    "inferred"
+                  ],
+                  "description": "recorded: object.grasped/released events"
+                },
+                "grip": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "pinch",
+                        "fist"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "hand",
+                "startT",
+                "endT",
+                "origin",
+                "grip"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "kind",
+          "radius",
+          "hidden",
+          "position",
+          "orientation",
+          "tracked",
+          "interpolated",
+          "held",
+          "heldBy",
+          "confidence",
+          "source",
+          "heldSpans"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "episodeId",
+    "frame",
+    "fps",
+    "t",
+    "kind",
+    "policy",
+    "head",
+    "hands",
+    "objects"
+  ],
+  "additionalProperties": false,
+  "$id": "https://clio.dev/schema/derived-tracks.schema.json",
+  "title": "Clio compiled tracks.json"
+}

@@ -322,7 +322,8 @@ export function buildPlanJsonSchema(kind: PlanSchemaKind): JsonSchema {
             description: 'Every step in order, 3 to 10: id and instruction; the first is firstStep',
           }),
           objects: arr(cardObject, {
-            description: 'Only the objects the first step uses and the look-alikes it guards against',
+            description:
+              'Only the objects the first step uses and the look-alikes it guards against',
           }),
           sightings,
           warnings,

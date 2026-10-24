@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadConfig, REPO_ROOT } from '../src/config';
+import { DEFAULT_CORS_ORIGINS, loadConfig, REPO_ROOT } from '../src/config';
 
 describe('loadConfig', () => {
   it('uses defaults rooted at the repo, not the working directory', () => {
@@ -20,7 +20,14 @@ describe('loadConfig', () => {
       judgeModel: 'gemini-pro-latest',
       visionUrl: null,
       visionToken: null,
+      primaryFinderUrl: 'http://127.0.0.1:8790/locate',
       relayLog: false,
+      // Only the visualizer viewer on this laptop may call /api cross-origin.
+      corsOrigins: ['http://127.0.0.1:3001', 'http://localhost:3001'],
+      // Finished episodes compile with the repo's pipeline, retargeted onto the example arm.
+      compile: 'auto',
+      pipelineDir: '/repo/pipeline',
+      retargetProfiles: ['/repo/pipeline/src/clio_pipeline/retarget/profiles/clio-arm-6dof.json'],
     });
   });
 
@@ -35,6 +42,7 @@ describe('loadConfig', () => {
         GEMINI_SCENE_MODEL: '',
         GEMINI_JUDGE_MODEL: '',
         CLIO_DATA_DIR: '',
+        CLIO_CORS_ORIGINS: ' ',
       },
       '/repo',
     );
@@ -46,6 +54,7 @@ describe('loadConfig', () => {
     expect(config.sceneModel).toBe('gemini-robotics-er-2-preview');
     expect(config.judgeModel).toBe('gemini-pro-latest');
     expect(config.dataDir).toBe('/repo/data');
+    expect(config.corsOrigins).toEqual(DEFAULT_CORS_ORIGINS);
   });
 
   it('resolves relative directories against the repo root and keeps absolute ones', () => {
@@ -108,6 +117,54 @@ describe('loadConfig', () => {
     );
     expect(() => loadConfig({ CLIO_VISION_URL: 'localhost:8001' }, '/repo')).toThrow(
       /CLIO_VISION_URL/,
+    );
+  });
+
+  it('reads CORS origins as a comma-separated list of exact origins', () => {
+    expect(
+      loadConfig({ CLIO_CORS_ORIGINS: ' http://127.0.0.1:3002 , https://viewer.test,' }, '/repo')
+        .corsOrigins,
+    ).toEqual(['http://127.0.0.1:3002', 'https://viewer.test']);
+    // A browser's Origin header never has a path, a trailing slash or a default port.
+    for (const value of [
+      'localhost:3001',
+      'http://localhost:3001/',
+      'http://localhost:3001/clio',
+      'http://localhost:80',
+      'ws://localhost:3001',
+      'http://localhost:3001,not a url',
+      ',',
+    ]) {
+      expect(() => loadConfig({ CLIO_CORS_ORIGINS: value }, '/repo')).toThrow(/CLIO_CORS_ORIGINS/);
+    }
+  });
+
+  it('turns compiling off only with CLIO_COMPILE=off', () => {
+    expect(loadConfig({ CLIO_COMPILE: 'off' }, '/repo').compile).toBe('off');
+    expect(loadConfig({ CLIO_COMPILE: ' auto ' }, '/repo').compile).toBe('auto');
+    expect(loadConfig({ CLIO_COMPILE: '' }, '/repo').compile).toBe('auto');
+    expect(() => loadConfig({ CLIO_COMPILE: 'sometimes' }, '/repo')).toThrow(/CLIO_COMPILE/);
+  });
+
+  it('resolves the pipeline directory and retarget profiles against the repo root', () => {
+    const config = loadConfig(
+      {
+        CLIO_PIPELINE_DIR: 'tools/pipeline',
+        CLIO_RETARGET_PROFILES: ' robots/arm-a.json , /srv/robots/arm-b.json,',
+      },
+      '/repo',
+    );
+    expect(config.pipelineDir).toBe('/repo/tools/pipeline');
+    expect(config.retargetProfiles).toEqual(['/repo/robots/arm-a.json', '/srv/robots/arm-b.json']);
+  });
+
+  it('retargets onto no robot when CLIO_RETARGET_PROFILES is none', () => {
+    expect(loadConfig({ CLIO_RETARGET_PROFILES: 'none' }, '/repo').retargetProfiles).toEqual([]);
+    expect(loadConfig({ CLIO_RETARGET_PROFILES: ' ' }, '/repo').retargetProfiles).toEqual([
+      '/repo/pipeline/src/clio_pipeline/retarget/profiles/clio-arm-6dof.json',
+    ]);
+    expect(() => loadConfig({ CLIO_RETARGET_PROFILES: ',' }, '/repo')).toThrow(
+      /CLIO_RETARGET_PROFILES/,
     );
   });
 

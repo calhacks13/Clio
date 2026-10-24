@@ -3,7 +3,8 @@ import json
 import pytest
 from numpy.testing import assert_allclose
 
-from clio_pipeline.lerobot_export import STATE_NAMES, export_lerobot
+from clio_pipeline.lerobot_export import STATE_NAMES, export_lerobot, robot_state_names
+from clio_pipeline.retarget import DEFAULT_PROFILE, load_profile
 
 lerobot_dataset = pytest.importorskip("lerobot.datasets.lerobot_dataset")
 
@@ -125,3 +126,24 @@ def test_free_recording_without_procedure_exports_an_empty_task(new_episode, tmp
     ds = _load(tmp_path / "ds")
 
     assert [ds[k]["task"] for k in range(len(ds))] == [""] * 4
+
+
+def test_robot_profile_exports_the_retargeted_joint_trajectory(episode_dir, tmp_path):
+    profile = load_profile(DEFAULT_PROFILE)
+    export_lerobot([episode_dir], tmp_path / "robot", repo_id="clio/test", robot_profile=profile)
+
+    ds = _load(tmp_path / "robot")
+    info = json.loads((tmp_path / "robot" / "meta" / "info.json").read_text())
+
+    assert (info["robot_type"], ds.num_episodes, len(ds)) == ("clio_arm_6dof", 1, 90)
+    names = info["features"]["observation.state"]["names"]
+    assert names == robot_state_names(profile)
+    assert names[0] == "left_shoulder_pan" and names[-2:] == ["left_gripper", "right_gripper"]
+    assert info["features"]["action"]["names"] == names
+    item = ds[37]
+    assert tuple(item["observation.state"].shape) == (14,)
+    assert_allclose(item["observation.retarget.valid"].numpy(), [1.0, 0.0])
+    assert tuple(item["observation.retarget.residual_pos"].shape) == (2,)
+    assert_allclose(ds[36]["action"].numpy(), item["observation.state"].numpy())
+    sidecar = json.loads((tmp_path / "robot" / "meta" / "clio_episodes.jsonl").read_text())
+    assert sidecar["retarget"]["urdf_sha256"] == profile.urdf_sha256

@@ -5,7 +5,9 @@ import type {
   EpisodeMeta,
   FrameRecord,
   HandSample,
+  ObjectObservation,
   ObjectTrackRecord,
+  ObservationStatus,
   Pose7,
 } from '@clio/protocol';
 import { HAND_LAYOUT } from '@clio/protocol';
@@ -61,6 +63,25 @@ export function objectTrack(t: number): ObjectTrackRecord {
         source: 'detector',
       },
     ],
+  };
+}
+
+/** What a tracker saw of cup_a in the camera frame captured 40 ms before `t`. */
+export function observation(t: number, status: ObservationStatus = 'measured'): ObjectObservation {
+  return {
+    t,
+    observedT: t - 40,
+    objectId: 'cup_a',
+    status,
+    role: 'tracker',
+    source: 'yoloe-26l-seg',
+    box: [0.42, 0.51, 0.58, 0.73],
+    outline: null,
+    point: [0.5, 0.62],
+    contact: [0.5, 0.73],
+    score: 0.81,
+    frame: { seq: t, width: 1280, height: 960 },
+    trackId: '7',
   };
 }
 

@@ -1,0 +1,266 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "clio.derived/1"
+    },
+    "episodeId": {
+      "type": "string"
+    },
+    "frame": {
+      "type": "string",
+      "const": "workspace"
+    },
+    "kind": {
+      "type": "string",
+      "const": "environment"
+    },
+    "table": {
+      "type": "object",
+      "properties": {
+        "pose": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "items": false,
+          "minItems": 7,
+          "maxItems": 7,
+          "description": "Table surface, +y up: origin at the calibration corner (calibration, plan) or at a corner of the detected table plane (planes)"
+        },
+        "size": {
+          "anyOf": [
+            {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              ],
+              "items": false,
+              "minItems": 2,
+              "maxItems": 2
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "[along the pose's +x, along its -z] in m; null when unknown"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "calibration",
+            "plan",
+            "planes"
+          ]
+        }
+      },
+      "required": [
+        "pose",
+        "size",
+        "source"
+      ],
+      "additionalProperties": false
+    },
+    "floor": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "pose": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "items": false,
+              "minItems": 7,
+              "maxItems": 7,
+              "description": "The local-floor plane in W, +y up"
+            },
+            "tableHeightM": {
+              "description": "Table surface height above the floor: from a calibrated workspace or a detected table plane; null when only guessed",
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "pose",
+            "tableHeightM"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The floor of the WebXR local-floor space, from meta.space.worldFromWorkspace"
+    },
+    "planes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable within the episode; the headset numbers planes as it first sees them"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "table",
+              "floor",
+              "wall",
+              "ceiling",
+              "couch",
+              "other"
+            ]
+          },
+          "label": {
+            "description": "The WebXR semanticLabel as reported, if any",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "orientation": {
+            "type": "string",
+            "enum": [
+              "horizontal",
+              "vertical"
+            ]
+          },
+          "pose": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "items": false,
+            "minItems": 7,
+            "maxItems": 7,
+            "description": "Plane pose, workspace frame: the polygon lies in its local x/z plane and +y is the normal"
+          },
+          "polygon": {
+            "minItems": 3,
+            "maxItems": 256,
+            "type": "array",
+            "items": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "items": false,
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "description": "Outline in plane-local [x, z] meters"
+          },
+          "firstSeenT": {
+            "type": "number"
+          },
+          "lastSeenT": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "label",
+          "orientation",
+          "pose",
+          "polygon",
+          "firstSeenT",
+          "lastSeenT"
+        ],
+        "additionalProperties": false
+      },
+      "description": "Each detected plane as last reported; lastSeenT is when a snapshot first left it out, or the end of the episode"
+    }
+  },
+  "required": [
+    "schema",
+    "episodeId",
+    "frame",
+    "kind",
+    "table",
+    "floor",
+    "planes"
+  ],
+  "additionalProperties": false,
+  "$id": "https://clio.dev/schema/derived-environment.schema.json",
+  "title": "Clio compiled environment.json"
+}
