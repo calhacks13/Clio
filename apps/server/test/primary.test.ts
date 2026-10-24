@@ -183,6 +183,21 @@ describe('POST /api/vision/primary', () => {
     expect(without).not.toContain('last object');
   });
 
+  it('finds a known object again without asking Gemini', async () => {
+    const gemini = fakeGemini();
+    const finder = fakeFinder(json(FINDER_ANSWER));
+    const post = await setup(gemini, finder);
+    const known = { name: NAME, description: DESCRIPTION };
+    const answer = await primaryAnswer(await post({ image: IMAGE, known }));
+    expect(answer.name).toBe(NAME);
+    expect(answer.detection?.found).toBe(true);
+    expect(answer.timings.pickMs).toBe(0);
+    expect(gemini.calls).toEqual([]);
+    expect(finder.bodies).toEqual([
+      { image: IMAGE, objects: [{ id: 'primary', query: DESCRIPTION, phrase: NAME }] },
+    ]);
+  });
+
   it('keeps a name whose object the finder could not find, with no detection', async () => {
     const gemini = fakeGemini(PICKED);
     const post = await setup(

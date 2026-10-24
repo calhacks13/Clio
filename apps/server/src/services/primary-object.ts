@@ -10,7 +10,7 @@ import { alignDetections, type LocateAnswer, type VisionLocator } from './vision
 // object in a camera frame, then the object finder at CLIO_PRIMARY_FINDER_URL (tracker/: jev
 // confirms it, YOLOE-26 outlines and follows it) finds it. While that finder is down or failing,
 // Gemini's own locator boxes the object instead, so the headset draws corner brackets rather
-// than nothing.
+// than nothing. A request with `known` skips the naming and only finds that object again.
 
 /** The id the finder is asked about, and the id of the returned detection. */
 export const PRIMARY_ID = 'primary';
@@ -37,7 +37,8 @@ export interface PrimaryPicker {
   pick(request: PrimaryRequest, signal?: AbortSignal): Promise<PrimaryPick | null>;
 }
 
-export function primaryPrompt(previous?: { name: string }): string {
+export function primaryPrompt(previous?: { name: string }, focus?: 'object' | 'part'): string {
+  if (focus === 'part') return partPrompt(previous);
   return [
     'This is a camera frame from a headset; the wearer is working with something in front of ' +
       'them. Name the one object they are most likely working with, in this order: an object ' +
@@ -58,6 +59,37 @@ export function primaryPrompt(previous?: { name: string }): string {
       'words and purely visual: the color, shape and material of the object, and where it is ' +
       'in the frame. If there is no such object, set present to false and name and description ' +
       'to empty strings.',
+  ].join('\n');
+}
+
+/**
+ * The part variant: first find the object the wearer is working with (by the same rules), then
+ * name the one part of it a person would read, press, turn or grip, so the highlight shows a part
+ * inside the object (nutrition facts on a bottle, a mouse's scroll wheel, a laptop's power key).
+ */
+function partPrompt(previous?: { name: string }): string {
+  return [
+    'This is a camera frame from a headset; the wearer is working with something in front of ' +
+      'them. First find the object they are most likely working with: one held in or touched by ' +
+      'a hand, otherwise the hand-sized object closest to the center. Never furniture, fixtures, ' +
+      'people, hands, walls, the floor or the table surface.',
+    'Then name ONE clearly visible part of that object that a person would read, press, turn, ' +
+      'open or grip: for example the nutrition facts panel or the cap of a bottle, the scroll ' +
+      'wheel or left button of a mouse, the power key or trackpad of a laptop, the dial of a ' +
+      'device. Prefer a part large enough to see clearly and with a distinct boundary. Name the ' +
+      'part together with its object.',
+    ...(previous
+      ? [
+          `The last part named was ${JSON.stringify(previous.name)}. If it is still clearly in ` +
+            'view, return exactly that name.',
+        ]
+      : []),
+    '',
+    'name is a 2 to 6 word noun phrase naming the part and its object, such as "scroll wheel ' +
+      'of mouse" or "nutrition facts on bottle". description is 12 to 30 words and purely ' +
+      "visual: the part's color, shape, any printed text, where it sits on the object and where " +
+      'the object is in the frame. If no such part is visible, set present to false and name ' +
+      'and description to empty strings.',
   ].join('\n');
 }
 
@@ -83,7 +115,7 @@ const PickAnswerSchema = z.object({
 export function createGeminiPrimaryPicker(ai: GenerateContentApi, model: string): PrimaryPicker {
   return {
     model,
-    async pick({ image, previous }, signal) {
+    async pick({ image, previous, focus }, signal) {
       const response = await ai.models.generateContent({
         model,
         contents: [
@@ -91,7 +123,7 @@ export function createGeminiPrimaryPicker(ai: GenerateContentApi, model: string)
             role: 'user',
             parts: [
               { inlineData: { mimeType: image.mimeType, data: image.data } },
-              { text: primaryPrompt(previous) },
+              { text: primaryPrompt(previous, focus) },
             ],
           },
         ],
@@ -173,15 +205,18 @@ export function createPrimaryObjectFinder({
   return {
     async find(request, signal) {
       const pickStarted = now().getTime();
-      let pick: PrimaryPick | null;
-      try {
-        pick = await bounded('Gemini', geminiTimeoutMs, signal, (bound) =>
-          picker.pick(request, bound),
-        );
-      } catch (error) {
-        throw new Error(`Naming the main object failed: ${describeError(error)}`);
+      // `known`: the headset already has a name and only wants a fresh box, so no Gemini call.
+      let pick: PrimaryPick | null = request.known ?? null;
+      if (!pick) {
+        try {
+          pick = await bounded('Gemini', geminiTimeoutMs, signal, (bound) =>
+            picker.pick(request, bound),
+          );
+        } catch (error) {
+          throw new Error(`Naming the main object failed: ${describeError(error)}`);
+        }
       }
-      const pickMs = since(pickStarted);
+      const pickMs = request.known ? 0 : since(pickStarted);
       if (!pick) {
         return {
           name: null,
