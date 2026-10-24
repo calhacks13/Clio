@@ -47,7 +47,9 @@ function refsIn(schema: JsonSchema): string[] {
 const defs = (schema: JsonSchema) => schema.$defs as Record<string, JsonSchema>;
 const props = (schema: JsonSchema) => schema.properties as Record<string, JsonSchema>;
 
-describe.each(['plan', 'first', 'revision'] as const)('buildPlanJsonSchema(%s)', (kind) => {
+const KINDS = ['plan', 'first', 'revision', 'review', 'step', 'objects'] as const;
+
+describe.each(KINDS)('buildPlanJsonSchema(%s)', (kind) => {
   const schema = buildPlanJsonSchema(kind);
 
   it('uses only the JSON Schema keywords Gemini supports', () => {
@@ -73,7 +75,7 @@ describe.each(['plan', 'first', 'revision'] as const)('buildPlanJsonSchema(%s)',
   });
 
   it('has refs that resolve and never recurse', () => {
-    const { $defs: all, ...top } = schema as { $defs: Record<string, JsonSchema> };
+    const { $defs: all = {}, ...top } = schema as { $defs?: Record<string, JsonSchema> };
     for (const name of refsIn(top)) expect(Object.keys(all)).toContain(name);
     const visiting = new Set<string>();
     const visit = (name: string): void => {
@@ -85,7 +87,7 @@ describe.each(['plan', 'first', 'revision'] as const)('buildPlanJsonSchema(%s)',
     for (const name of Object.keys(all)) visit(name);
   });
 
-  it('offers every action verb', () => {
+  it.skipIf(kind === 'review' || kind === 'objects')('offers every action verb', () => {
     expect((props(defs(schema).action as JsonSchema).verb as { enum: string[] }).enum).toEqual(
       ACTION_VERB_NAMES,
     );
@@ -245,6 +247,32 @@ describe('plan, first stage and revision', () => {
     expect(mistakes).toMatchObject({ type: 'array', maxItems: 2 });
     expect((mistakes.items as JsonSchema).required).toEqual(['kind', 'message', 'object']);
     expect((props(step).doneWhen as JsonSchema).description).toContain('3 to 200 characters');
+  });
+
+  it('has a review read the scene before it writes the outline, then name new objects', () => {
+    const schema = buildPlanJsonSchema('review');
+    const fields = ['done', 'todo', 'control', 'outline', 'objects', 'summary'];
+    expect(Object.keys(props(schema))).toEqual(fields);
+    expect(schema.required).toEqual(fields);
+    const outline = props(schema).outline as JsonSchema;
+    expect(outline).toMatchObject({ type: 'array', maxItems: 9 });
+    expect((outline.items as JsonSchema).required).toEqual([
+      'id',
+      'instruction',
+      'doneWhen',
+      'uses',
+    ]);
+    const card = (props(schema).objects as JsonSchema).items as JsonSchema;
+    expect(card.required).toEqual(['id', 'label', 'phrase', 'look', 'moves']);
+  });
+
+  it('asks a step writer for one full step and its objects, and the objects call for objects', () => {
+    const step = buildPlanJsonSchema('step');
+    expect(Object.keys(props(step))).toEqual(['step', 'objects']);
+    expect(props(step).step).toEqual({ $ref: '#/$defs/step' });
+    const objects = buildPlanJsonSchema('objects');
+    expect(Object.keys(props(objects))).toEqual(['objects', 'warnings']);
+    expect(Object.keys(defs(objects))).toEqual(['object']);
   });
 
   it('asks a revision only for new objects, the remaining steps and warnings', () => {

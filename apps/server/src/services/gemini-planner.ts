@@ -3,7 +3,7 @@ import type { GenerateContentParameters } from '@google/genai';
 import { type GenerateContentApi, type Thinking, thinkingConfig } from './gemini';
 import { PLANNER_SYSTEM_INSTRUCTION, plannerContents } from './plan-prompt';
 import { buildPlanJsonSchema, type PlanSchemaKind } from './plan-schema';
-import type { Planner, PlannerRequest } from './planner';
+import type { Planner, PlannerRequest, RestPart } from './planner';
 import { STEP_CHECK_INSTRUCTION, stepCheckContents, stepCheckJsonSchema } from './step-check';
 
 /** A planner draft whose request sets no `timeoutMs`. */
@@ -19,6 +19,8 @@ export const STEP_CHECK_THINKING: Thinking = 'low';
 
 /** Thinking per stage, where null leaves the model its own default. */
 export type StageThinking = Record<PlanStage, Thinking | null>;
+/** Thinking per part of a stage rest written in parallel (plan-rest.ts). */
+export type PartThinking = Record<RestPart['kind'], Thinking | null>;
 
 /**
  * How hard the planner thinks at each stage, chosen by judged quality and latency on Robotics-ER 2
@@ -27,12 +29,21 @@ export type StageThinking = Record<PlanStage, Thinking | null>;
  */
 export const PLAN_THINKING: StageThinking = { full: 'low', first: 'minimal', rest: 'medium' };
 
+/**
+ * A parallel stage rest thinks where the lesson's shape is decided, in the one call that checks
+ * the outline; the calls that write each step from it think least, all at once. Measured on the
+ * bench (docs/coach-plan.md): the review at low and the steps at minimal met as many
+ * expectations as medium and low, and the plan was complete 8 s sooner.
+ */
+export const REST_PART_THINKING: PartThinking = { review: 'low', step: 'minimal', objects: 'low' };
+
 export interface GeminiPlannerOptions {
-  /** Overrides PLAN_THINKING, e.g. to compare levels on the bench. */
-  thinking?: Partial<StageThinking>;
+  /** Overrides PLAN_THINKING and REST_PART_THINKING, e.g. to compare levels on the bench. */
+  thinking?: Partial<StageThinking & PartThinking>;
 }
 
 function schemaKind(request: PlannerRequest): PlanSchemaKind {
+  if (request.part) return request.part.kind;
   if (request.revision) return 'revision';
   return request.stage === 'first' ? 'first' : 'plan';
 }
@@ -43,11 +54,15 @@ export function createGeminiPlanner(
   model: string,
   options: GeminiPlannerOptions = {},
 ): Planner {
-  const thinking: StageThinking = { ...PLAN_THINKING, ...options.thinking };
+  const thinking: StageThinking & PartThinking = {
+    ...PLAN_THINKING,
+    ...REST_PART_THINKING,
+    ...options.thinking,
+  };
   return {
     model,
     draft: (request) => {
-      const level = thinking[request.stage ?? 'full'];
+      const level = thinking[request.part?.kind ?? request.stage ?? 'full'];
       return generateJson(
         ai,
         {

@@ -1,12 +1,17 @@
 import {
+  actionObjectRefs,
+  checkObjectRefs,
   type ObjectSpec,
   ObjectSpecSchema,
   type PlanSighting,
   PROCEDURE_SCHEMA_ID,
   type Procedure,
+  SlugSchema,
   type Step,
+  safeParseProcedure,
 } from '@clio/protocol';
 import { isRecord, type Json } from './model-json';
+import type { RestLine, RestObject } from './planner';
 import { boxCenter, fromGeminiBox, fromGeminiPoint } from './vision';
 
 // Pure: turns the planner model's JSON into a procedure candidate for safeParseProcedure.
@@ -308,3 +313,252 @@ export function mergeRevision(
     sightings: [],
   };
 }
+
+// Stage rest in parallel (plan-rest.ts): the checked outline is read into lines and new object
+// cards, every line is written in full by its own call and checked on its own, and the parts
+// are merged here in the outline's order. A line whose writer failed stays an outline step.
+
+/** The checked outline: the steps to write, and the objects they need that are not declared. */
+export interface CheckedOutline {
+  lines: RestLine[];
+  /** New objects, as first-stage cards (id, label, phrase, look, moves). */
+  cards: Json[];
+  /** How the review read the scene: the parts done, the parts left, the control. */
+  reading: { done: string[]; todo: string[]; control: string };
+  /** The lesson's summary as it now goes, when the review wrote one. */
+  summary?: string;
+}
+
+const strings = (value: unknown): string[] =>
+  Array.isArray(value) ? value.map(trimmed).filter((v) => v !== '') : [];
+
+const isSlug = (value: unknown): value is string => SlugSchema.safeParse(value).success;
+
+/** "Add Base!" → "add-base", for an id the model wrote loosely. */
+function slug(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^[-_]+|[-_]+$/g, '')
+    .slice(0, 60);
+}
+
+/**
+ * The review's answer as lines to write and the new objects they use; an error when it has no
+ * outline to write. Loose ids become slugs, a line id the kept steps or an earlier line use gets
+ * a suffix, a new object that redeclares a known id is dropped, and `uses` keeps known ids only.
+ */
+export function readCheckedOutline(
+  output: unknown,
+  base: Procedure,
+  from: number,
+): { ok: true; outline: CheckedOutline } | { ok: false; error: string } {
+  const o = isRecord(output) ? output : {};
+  if (!Array.isArray(o.outline)) return { ok: false, error: 'The answer has no `outline` array' };
+  const known = new Set(base.objects.map((obj) => obj.id));
+  const cards: Json[] = [];
+  for (const card of Array.isArray(o.objects) ? o.objects : []) {
+    if (!isRecord(card) || typeof card.id !== 'string') continue;
+    const id = slug(card.id);
+    const look = trimmed(card.look);
+    if (!isSlug(id) || known.has(id) || !look) continue;
+    known.add(id);
+    cards.push({ ...card, id, label: trimmed(card.label) || id, look });
+  }
+  const taken = new Set(base.steps.slice(0, from).map((s) => s.id));
+  const lines: RestLine[] = [];
+  for (const raw of o.outline) {
+    if (!isRecord(raw)) continue;
+    const instruction = trimmed(raw.instruction);
+    if (!instruction) continue;
+    const given = typeof raw.id === 'string' ? slug(raw.id) : '';
+    const root = isSlug(given) ? given : `step-${from + lines.length + 1}`;
+    let id = root;
+    for (let n = 2; taken.has(id); n++) id = `${root}-${n}`;
+    taken.add(id);
+    const doneWhen = trimmed(raw.doneWhen);
+    const uses = Array.isArray(raw.uses)
+      ? [...new Set(raw.uses.filter((u): u is string => typeof u === 'string' && known.has(u)))]
+      : [];
+    lines.push({
+      id,
+      instruction: instruction.slice(0, 200),
+      ...(doneWhen.length >= 3 && doneWhen.length <= 200 ? { doneWhen } : {}),
+      uses,
+    });
+  }
+  if (o.outline.length && !lines.length) {
+    return { ok: false, error: 'No outline line has an instruction' };
+  }
+  const reading = { done: strings(o.done), todo: strings(o.todo), control: trimmed(o.control) };
+  const summary = trimmed(o.summary);
+  return { ok: true, outline: { lines, cards, reading, ...(summary ? { summary } : {}) } };
+}
+
+/** Every object a step writer may use: the plan's, then the checked outline's new ones. */
+export function restObjects(base: Procedure, outline: CheckedOutline): RestObject[] {
+  return [
+    ...base.objects.map((o) => ({
+      id: o.id,
+      label: o.label,
+      look: o.tracking?.query ?? o.description ?? o.label,
+    })),
+    ...outline.cards.map((c) => ({
+      id: String(c.id),
+      label: String(c.label),
+      look: String(c.look),
+    })),
+  ];
+}
+
+/** Which new objects each line declares in full: those no earlier line uses. */
+export function restDeclarations(outline: CheckedOutline): string[][] {
+  const fresh = new Set(outline.cards.map((c) => String(c.id)));
+  return outline.lines.map((line) =>
+    line.uses.filter((id) => {
+      if (!fresh.has(id)) return false;
+      fresh.delete(id);
+      return true;
+    }),
+  );
+}
+
+/**
+ * The objects a step writer's answer is checked against: the plan's, then the new ones, each in
+ * full where `declared` has it and as its card otherwise (under the card's id and label), then
+ * any other object `declared` adds.
+ */
+export function writerObjects(
+  objects: readonly unknown[],
+  outline: CheckedOutline,
+  declared: readonly unknown[],
+): unknown[] {
+  const known = new Set(objects.map((o) => (isRecord(o) ? o.id : undefined)));
+  const own = new Map<unknown, Json>();
+  for (const d of declared) if (isRecord(d) && !own.has(d.id)) own.set(d.id, d);
+  const fresh = outline.cards.map((card) => {
+    known.add(card.id);
+    const full = own.get(card.id);
+    return full ? detected({ ...full, id: card.id, label: card.label }) : cardObject(card);
+  });
+  const extra = [...own.values()].filter((d) => isSlug(d.id) && !known.has(d.id)).map(detected);
+  return [...objects, ...fresh, ...extra];
+}
+
+/** One step with the objects it may use, validated as a plan of its own. */
+export function checkStep(
+  step: unknown,
+  objects: readonly unknown[],
+  ctx: PlanContext,
+): { ok: true; step: Step } | { ok: false; error: string } {
+  const parsed = safeParseProcedure({
+    ...provenance(ctx),
+    title: 'One step',
+    summary: 'One step',
+    workspace: DEFAULT_WORKSPACE,
+    objects,
+    steps: [step],
+  });
+  if (!parsed.ok) return parsed;
+  const [checked] = parsed.procedure.steps;
+  return checked ? { ok: true, step: checked } : { ok: false, error: 'No step' };
+}
+
+/**
+ * A written step without two slips the card avoids by construction: a mistake that fires on an
+ * object the step itself uses (it would go off during the right action) and an action whose
+ * target is the object it acts on.
+ */
+export function tidyStep(step: Step): Step {
+  const own = new Set([...step.targets, ...step.show.map((item) => item.object)]);
+  if (step.action) own.add(step.action.object ?? '');
+  const mistakes = step.mistakes.filter((m) => !checkObjectRefs(m.when).some((id) => own.has(id)));
+  const action =
+    step.action?.target !== undefined && step.action.target === step.action.object
+      ? (({ target: _target, ...rest }) => rest)(step.action)
+      : step.action;
+  return { ...step, mistakes, ...(action ? { action } : {}) };
+}
+
+/** A step a writer wrote that passed its check, with the objects it declared in full. */
+export interface WrittenStep {
+  step: Step;
+  objects: Json[];
+}
+
+export interface ParallelRest {
+  outline: CheckedOutline;
+  /** Per line: the step its writer wrote, or null when that failed. */
+  written: readonly (WrittenStep | null)[];
+  /** The plan's objects written again in full; [] when that call failed. */
+  upgrades: readonly unknown[];
+  warnings: readonly string[];
+}
+
+function stepObjectRefs(step: Step): string[] {
+  return [
+    ...step.targets,
+    ...checkObjectRefs(step.success),
+    ...(step.action ? actionObjectRefs(step.action) : []),
+    ...step.show.map((item) => item.object),
+    ...step.mistakes.flatMap((m) => checkObjectRefs(m.when)),
+  ];
+}
+
+/**
+ * Stage rest from its parts, as mergeRevision builds it from one answer: the kept steps, then
+ * each line as its writer wrote it (or as an outline step), with the plan's objects upgraded
+ * from their full declarations and each new one from the first writer that declared it. A
+ * written step that does not fit the merged objects stays an outline step, and a new object no
+ * step uses is left out.
+ */
+export function mergeParallelRest(
+  base: Procedure,
+  from: number,
+  rest: ParallelRest,
+  ctx: PlanContext,
+): Candidate {
+  const { outline, written } = rest;
+  const full = new Map<string, Json>();
+  for (const o of rest.upgrades) {
+    if (isRecord(o) && typeof o.id === 'string' && !full.has(o.id)) full.set(o.id, o);
+  }
+  const upgradedBase = base.objects.map((obj) => {
+    const spec = full.get(obj.id);
+    return spec ? upgraded(obj, spec) : obj;
+  });
+  const objects = writerObjects(
+    upgradedBase,
+    outline,
+    written.flatMap((w) => w?.objects ?? []),
+  );
+  const kept = base.steps.slice(0, fromIndex(base, from));
+  const used = new Set(kept.flatMap(stepObjectRefs));
+  const steps = outline.lines.map((line, i) => {
+    const step = written[i]?.step;
+    const checked = step ? checkStep({ ...step, id: line.id }, objects, ctx) : null;
+    if (!checked?.ok)
+      return outlineStep({ id: line.id, instruction: line.instruction, doneWhen: line.doneWhen });
+    for (const id of stepObjectRefs(checked.step)) used.add(id);
+    return checked.step;
+  });
+  const baseIds = new Set(base.objects.map((o) => o.id));
+  return {
+    candidate: {
+      ...provenance(ctx),
+      title: base.title,
+      summary: outline.summary ?? base.summary,
+      domain: base.domain,
+      workspace: base.workspace,
+      objects: objects.filter(
+        (o) => isRecord(o) && typeof o.id === 'string' && (baseIds.has(o.id) || used.has(o.id)),
+      ),
+      steps: [...kept, ...uniqueStepIds(kept, steps)],
+      coach: base.coach,
+    },
+    warnings: [...rest.warnings],
+    sightings: [],
+  };
+}
+
+const fromIndex = (base: Procedure, from: number) => Math.min(from, base.steps.length);

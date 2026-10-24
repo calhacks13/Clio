@@ -15,7 +15,14 @@ import { limitBody, parseBody, safeId } from './request';
 // AI-generated lesson plans: written by the planner at runtime, stored in <data>/plans/. The
 // planner's model also checks single steps from camera views for the headset's step watcher.
 
-export function planRoutes({ planner, procedures, now, logger, limits }: ServerDeps): Hono {
+export function planRoutes({
+  planner,
+  planRest,
+  procedures,
+  now,
+  logger,
+  limits,
+}: ServerDeps): Hono {
   const app = new Hono();
 
   app.post('/api/plans', limitBody(limits.imageBytes), async (c) => {
@@ -23,7 +30,10 @@ export function planRoutes({ planner, procedures, now, logger, limits }: ServerD
     const body = await parseBody(c, PlanRequestSchema, 'plan request');
     if (body.revise) safeId(body.revise.planId, 'plan id');
     const started = now().getTime();
-    const plan = await generatePlan({ planner, procedures, now }, body);
+    const plan = await generatePlan(
+      { planner, procedures, now, ...(planRest ? { rest: planRest } : {}) },
+      body,
+    );
     const ms = Math.max(0, now().getTime() - started);
     const steps = plan.procedure.steps.length;
     const stage = body.stage === 'full' ? '' : ` (stage ${body.stage})`;

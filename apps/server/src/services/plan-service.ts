@@ -17,6 +17,7 @@ import {
   mergeRevision,
 } from './plan-build';
 import { goalIdCandidates, revisionIdCandidates, slugFromGoal } from './plan-ids';
+import { draftRestInParallel, type RestPartReport } from './plan-rest';
 import type { Planner, PlannerRequest } from './planner';
 
 // POST /api/plans: ask the planner, validate with the procedure schema, retry once with the
@@ -27,9 +28,14 @@ import type { Planner, PlannerRequest } from './planner';
 // A plan comes whole (stage full) or in two stages: stage first writes the first step as a short
 // card and the rest as an outline, so the lesson starts quickly; stage rest then writes the outline
 // in full as a revision of that plan, while the learner works on the first step, and fills in the
-// objects the card declared (docs/coach-plan.md).
+// objects the card declared (docs/coach-plan.md). Stage rest is checked and written in parallel
+// (plan-rest.ts), or in one call when that fails or `rest` says so.
 
 export type PlanRequestBody = z.output<typeof PlanRequestSchema>;
+
+/** How stage rest is written: in one call, or checked and then written in parallel. */
+export type RestMode = 'single' | 'parallel';
+export const DEFAULT_REST_MODE: RestMode = 'parallel';
 
 export interface PlanServiceDeps {
   planner: Planner;
@@ -37,6 +43,10 @@ export interface PlanServiceDeps {
   now: () => Date;
   /** The draft and its retry together; the planner bench may allow slow models more. */
   budgetMs?: number;
+  /** How stage rest is written (DEFAULT_REST_MODE); the bench compares them. */
+  rest?: RestMode;
+  /** Each part of a parallel stage rest as it ends. */
+  onRestPart?: (report: RestPartReport) => void;
 }
 
 /**
@@ -116,12 +126,21 @@ export async function generatePlan(
     createdAt,
     revisionOf: planId,
   };
-  const draft = await draftValidPlan(
-    planner,
-    { ...request, revision: { reason, base, fromStepIndex: from, skippedStepIds } },
-    timeLeft,
-    (output) => mergeRevision(base, output, from, ctx, { upgrade: stage === 'rest' }),
-  );
+  const revising = { ...request, revision: { reason, base, fromStepIndex: from, skippedStepIds } };
+  const parallel =
+    stage === 'rest' && (deps.rest ?? DEFAULT_REST_MODE) === 'parallel'
+      ? await draftRestInParallel(
+          { planner, now: deps.now, timeLeft, onPart: deps.onRestPart },
+          revising,
+          ctx,
+        )
+      : null;
+  const checked = parallel ? check(parallel) : null;
+  const draft = checked?.ok
+    ? checked
+    : await draftValidPlan(planner, revising, timeLeft, (output) =>
+        mergeRevision(base, output, from, ctx, { upgrade: stage === 'rest' }),
+      );
   const saved = await procedures.savePlan(draft.procedure, revisionIdCandidates(planId));
   return { planId: saved.id, procedure: saved, warnings: [...notes, ...draft.warnings] };
 }
@@ -133,7 +152,7 @@ async function draftValidPlan(
   build: (output: unknown) => Candidate,
 ): Promise<Drafted> {
   const first = await ask(planner, { ...request, timeoutMs: timeLeft() });
-  const checked = check(first, build);
+  const checked = checkText(first, build);
   if (checked.ok) return checked;
   const timeoutMs = timeLeft();
   if (timeoutMs < MIN_RETRY_MS) {
@@ -149,17 +168,19 @@ async function draftValidPlan(
     timeoutMs,
     retry: { previousText: first, errors: checked.error },
   });
-  const rechecked = check(second, build);
+  const rechecked = checkText(second, build);
   if (rechecked.ok) return rechecked;
   throw new ApiError(502, 'plan_invalid', 'The planner returned an invalid plan twice', {
     errors: rechecked.error,
   });
 }
 
-function check(text: string, build: (output: unknown) => Candidate): Checked {
+function checkText(text: string, build: (output: unknown) => Candidate): Checked {
   const json = parseModelJson(text);
-  if (!json.ok) return json;
-  const { candidate, ...beside } = build(json.value);
+  return json.ok ? check(build(json.value)) : json;
+}
+
+function check({ candidate, ...beside }: Candidate): Checked {
   const parsed = safeParseProcedure(candidate);
   return parsed.ok
     ? { ok: true, procedure: parsed.procedure, ...beside }

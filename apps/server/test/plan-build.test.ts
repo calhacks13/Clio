@@ -4,12 +4,28 @@ import { parseModelJson } from '../src/services/model-json';
 import {
   buildFirstStageCandidate,
   buildPlanCandidate,
+  type CheckedOutline,
   cardObject,
   cardStep,
+  checkStep,
+  mergeParallelRest,
   mergeRevision,
   type PlanContext,
+  readCheckedOutline,
+  restDeclarations,
+  restObjects,
+  tidyStep,
+  writerObjects,
 } from '../src/services/plan-build';
-import { modelFirstStage, modelPlan, modelRestStage, modelRevision } from './plan-fixtures';
+import {
+  modelFirstStage,
+  modelPlan,
+  modelRestObjects,
+  modelRestStage,
+  modelReview,
+  modelRevision,
+  modelWrittenStep,
+} from './plan-fixtures';
 
 const ctx: PlanContext = {
   id: 'refill-washer-fluid',
@@ -522,6 +538,206 @@ describe('mergeRevision', () => {
     it('ignores them without upgrade, as a revise_plan does', () => {
       const p = parsed(mergeRevision(first, modelRestStage(), 1, restCtx).candidate);
       expect(p.objects.slice(0, 2)).toEqual(first.objects);
+    });
+  });
+});
+
+describe('stage rest in parallel', () => {
+  const first = parsed(buildFirstStageCandidate(modelFirstStage(), ctx).candidate);
+  const restCtx: PlanContext = { ...ctx, id: 'refill-washer-fluid-r1', revisionOf: ctx.id };
+  const outline = (answer: unknown = modelReview()): CheckedOutline => {
+    const read = readCheckedOutline(answer, first, 1);
+    if (!read.ok) throw new Error(read.error);
+    return read.outline;
+  };
+  const written = (index: number) => {
+    const { step, objects } = modelWrittenStep(index);
+    const checked = checkStep(step, writerObjects(first.objects, outline(), objects), restCtx);
+    if (!checked.ok) throw new Error(checked.error);
+    return { step: checked.step, objects };
+  };
+
+  describe('readCheckedOutline', () => {
+    it('reads the lines, the new objects and how the review read the scene', () => {
+      const read = outline();
+      expect(read.lines.map((l) => [l.id, l.uses])).toEqual([
+        ['pour-fluid', ['fluid_jug', 'washer_cap']],
+        ['close-cap', ['washer_cap']],
+      ]);
+      expect(read.lines[0]?.doneWhen).toBe('The blue fluid reaches the top mark on the reservoir.');
+      expect(read.cards.map((c) => c.id)).toEqual(['fluid_jug']);
+      expect(read.reading.todo).toHaveLength(3);
+      expect(read.reading.control).toBe('');
+    });
+
+    it('makes loose ids slugs, keeps line ids unique, and keeps only known objects in uses', () => {
+      const read = outline({
+        outline: [
+          { id: 'Open Cap!', instruction: 'Open the cap again.', uses: ['washer_cap', 'ghost'] },
+          { id: 'pour', instruction: 'Pour.', doneWhen: 'ok', uses: [] },
+          { id: 'pour', instruction: 'Pour more.', uses: ['jug', 'jug'] },
+          { id: 'x', instruction: '  ' },
+        ],
+        objects: [
+          { id: 'Jug', label: 'jug', look: 'a blue jug' },
+          { id: 'washer_cap', label: 'cap', look: 'a cap declared already' },
+          { id: 'no_look', label: 'thing', look: '' },
+        ],
+      });
+      // open-cap is the step under way, so the review's line takes the next free id.
+      expect(read.lines.map((l) => [l.id, l.uses])).toEqual([
+        ['open-cap-2', ['washer_cap']],
+        ['pour', []],
+        ['pour-2', ['jug']],
+      ]);
+      expect(read.lines[1]).not.toHaveProperty('doneWhen');
+      expect(read.cards.map((c) => c.id)).toEqual(['jug']);
+    });
+
+    it('fails without an outline, or when no line has an instruction', () => {
+      expect(readCheckedOutline({ objects: [] }, first, 1).ok).toBe(false);
+      expect(readCheckedOutline({ outline: [{ id: 'a' }] }, first, 1).ok).toBe(false);
+      expect(readCheckedOutline({ outline: [] }, first, 1).ok).toBe(true);
+    });
+  });
+
+  it('gives the writers one table of objects, and each new object to the first line using it', () => {
+    expect(restObjects(first, outline()).map((o) => o.id)).toEqual([
+      'washer_cap',
+      'coolant_cap',
+      'fluid_jug',
+    ]);
+    const twice = modelReview();
+    twice.outline[1]?.uses.push('fluid_jug');
+    expect(restDeclarations(outline(twice))).toEqual([['fluid_jug'], []]);
+  });
+
+  it("checks a writer's step against the objects, its own declarations in full", () => {
+    const { step, objects } = modelWrittenStep(0);
+    const all = writerObjects(first.objects, outline(), objects);
+    expect(all.map((o) => (o as { id: string }).id)).toEqual([
+      'washer_cap',
+      'coolant_cap',
+      'fluid_jug',
+    ]);
+    expect((all[2] as { kind: string }).kind).toBe('container');
+    expect(checkStep(step, all, restCtx).ok).toBe(true);
+    const bad = checkStep({ ...step, targets: ['ghost'] }, all, restCtx);
+    expect(bad.ok ? '' : bad.error).toMatch(/Unknown object "ghost"/);
+  });
+
+  it('drops a mistake on an object the step uses, and an action that targets its own object', () => {
+    const { step } = written(0);
+    const tidy = tidyStep({
+      ...step,
+      action: { verb: 'place', object: 'fluid_jug', target: 'fluid_jug', hand: 'either' },
+      mistakes: [
+        ...step.mistakes,
+        {
+          kind: 'own_jug',
+          message: 'That is the jug.',
+          when: {
+            type: 'hand_near',
+            object: 'fluid_jug',
+            hand: 'either',
+            point: 'pinch',
+            radius: 0.06,
+            dwellMs: 700,
+          },
+          cooldownMs: 4000,
+        },
+        {
+          kind: 'wrong_cap',
+          message: 'That is the coolant cap.',
+          when: {
+            type: 'hand_near',
+            object: 'coolant_cap',
+            hand: 'either',
+            point: 'pinch',
+            radius: 0.06,
+            dwellMs: 700,
+          },
+          cooldownMs: 4000,
+        },
+      ],
+    });
+    expect(tidy.mistakes.map((m) => m.kind)).toEqual(['wrong_cap']);
+    expect(tidy.action).toEqual({ verb: 'place', object: 'fluid_jug', hand: 'either' });
+    expect(tidyStep(step)).toEqual(step);
+  });
+
+  describe('mergeParallelRest', () => {
+    const merge = (overrides: Partial<Parameters<typeof mergeParallelRest>[2]> = {}) =>
+      parsed(
+        mergeParallelRest(
+          first,
+          1,
+          {
+            outline: outline(),
+            written: [written(0), written(1)],
+            upgrades: modelRestObjects().objects,
+            warnings: modelRestObjects().warnings,
+            ...overrides,
+          },
+          restCtx,
+        ).candidate,
+      );
+
+    it('keeps the step under way and adds the written steps in the outline order', () => {
+      const p = merge();
+      expect(p.steps[0]).toEqual(first.steps[0]);
+      expect(p.steps.map((s) => s.id)).toEqual(['open-cap', 'pour-fluid', 'close-cap']);
+      expect(p.steps[1]?.action).toMatchObject({ verb: 'pour', object: 'fluid_jug' });
+      expect(p.origin).toMatchObject({ kind: 'generated', revisionOf: ctx.id });
+    });
+
+    it('upgrades the card objects and takes a new one from the writer that declared it', () => {
+      const p = merge();
+      expect(p.objects.map((o) => [o.id, o.label, o.kind, o.radius])).toEqual([
+        ['washer_cap', 'washer cap', 'item', 0.03],
+        ['coolant_cap', 'coolant cap', 'item', 0.03],
+        ['fluid_jug', 'fluid jug', 'container', 0.12],
+      ]);
+      expect(p.objects[0]?.placement).toEqual({
+        method: 'detect',
+        hint: 'front left of the engine bay',
+      });
+    });
+
+    it('keeps a line whose writer failed as an outline step, and its object as a card', () => {
+      const p = merge({ written: [null, written(1)], upgrades: [] });
+      expect(p.steps[1]).toMatchObject({
+        id: 'pour-fluid',
+        doneWhen: 'The blue fluid reaches the top mark on the reservoir.',
+        success: {
+          type: 'confirm',
+          prompt: 'The blue fluid reaches the top mark on the reservoir.',
+        },
+        show: [],
+      });
+      // No step uses the jug now, so it is left out; the card objects stay as they were.
+      expect(p.objects).toEqual(first.objects);
+    });
+
+    it('keeps a used new object as its card when no writer declared it', () => {
+      const pour = written(0);
+      const p = merge({ written: [{ ...pour, objects: [] }, written(1)] });
+      expect(p.objects[2]).toMatchObject({
+        id: 'fluid_jug',
+        kind: 'item',
+        tracking: { query: 'Blue plastic jug of washer fluid on the ground, right of the car' },
+      });
+    });
+
+    it("takes the review's summary of the lesson as it now goes", () => {
+      expect(merge().summary).toBe(first.summary);
+      const p = merge({ outline: { ...outline(), summary: 'Fill and close the reservoir.' } });
+      expect(p.summary).toBe('Fill and close the reservoir.');
+    });
+
+    it('writes no steps when the review ends the lesson after the step under way', () => {
+      const p = merge({ outline: outline({ outline: [], objects: [] }), written: [] });
+      expect(p.steps.map((s) => s.id)).toEqual(['open-cap']);
     });
   });
 });

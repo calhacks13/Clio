@@ -24,11 +24,47 @@ export interface PlannerRequest {
    * quickly. rest: write the outline steps of `revision.base` in full while the learner works.
    */
   stage?: PlanStage;
+  /** Stage rest written in parallel (plan-rest.ts): the part of it this call writes. */
+  part?: RestPart;
   /** The previous answer failed validation: show it and the errors, and ask for a fix. */
   retry?: { previousText: string; errors: string };
   /** How long this call may take: what is left of the request's budget. */
   timeoutMs?: number;
 }
+
+/** A line of the checked outline of a parallel stage rest: one step to write in full. */
+export interface RestLine {
+  id: string;
+  instruction: string;
+  doneWhen?: string;
+  /** The objects the step touches, shows or guards against. */
+  uses: string[];
+}
+
+/** An object as a step writer is shown it: declared already, or new in the checked outline. */
+export interface RestObject {
+  id: string;
+  label: string;
+  look: string;
+}
+
+/**
+ * review: check the outline of `revision.base` and say which new objects it needs. objects:
+ * write the base plan's objects in full. step: write `lines[index]` in full, declaring the
+ * objects in `declare`.
+ */
+export type RestPart =
+  | { kind: 'review' }
+  | { kind: 'objects' }
+  | {
+      kind: 'step';
+      index: number;
+      lines: RestLine[];
+      objects: RestObject[];
+      declare: string[];
+      /** How the review read the scene, so every step agrees with it. */
+      reading?: { done: string[]; control: string };
+    };
 
 export interface Planner {
   /** Recorded as origin.model on every plan it writes. */
