@@ -131,3 +131,19 @@ def test_object_update_without_orientation_clears_the_previous_one(new_episode, 
     assert [round(r["time"]) for r in rows] == [100, 200]
     assert rows[0]["Boxes3D:quaternions"] == [[0, 0, 0, 1]]
     assert rows[1]["Boxes3D:quaternions"] == []  # cleared, not left at the marker's value
+
+
+def test_current_step_reverts_to_the_title_when_the_procedure_is_aborted(new_episode, tmp_path):
+    b = new_episode()
+    for k in range(5):
+        b.frame(k * 100.0)
+    b.step_entered(100.0, "a", 0, "Do A.")
+    b.event(300.0, "procedure.aborted", reason="user quit")
+    recording = _read(save_rrd(load_episode(b.write()), tmp_path / "aborted.rrd"))
+
+    docs = [(round(r["time"]), r["TextDocument:text"][0]) for r in recording["/steps/current"]]
+    assert docs == [
+        (0, "Fold a T-shirt in two seconds"),
+        (100, "Step 0: Do A."),
+        (300, "Fold a T-shirt in two seconds"),
+    ]

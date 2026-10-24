@@ -117,3 +117,43 @@ def test_mistakes_are_listed_with_their_step(episode_dir):
             source="rule",
         ),
     ]
+
+
+def test_procedure_aborted_closes_the_open_step(new_episode):
+    # 8 frames, t = 0, 100, ..., 700. A runs [100, 300) and is completed; B is entered at 300 and
+    # still open when the procedure is aborted at 500, so B ends there and frames 500-700 are
+    # outside any step.
+    b = new_episode()
+    for k in range(8):
+        b.frame(k * 100.0)
+    b.step_entered(100.0, "a", 0, "Do A.")
+    b.step_completed(300.0, "a", 0, by="check", duration_ms=200.0)
+    b.step_entered(300.0, "b", 1, "Do B.")
+    b.event(500.0, "procedure.aborted", reason="user quit")
+    ep = load_episode(b.write())
+
+    segments = step_segments(ep)
+    labels = frame_labels(ep, segments)
+
+    assert [(s.step_id, s.start_t, s.end_t, s.completed_by) for s in segments] == [
+        ("a", 100.0, 300.0, "check"),
+        ("b", 300.0, 500.0, None),
+    ]
+    assert labels.step_index.tolist() == [-1, 0, 0, 1, 1, -1, -1, -1]
+    assert list(labels.task) == [TITLE, "Do A.", "Do A.", "Do B.", "Do B.", TITLE, TITLE, TITLE]
+
+
+def test_procedure_completed_closes_the_open_step(new_episode):
+    b = new_episode(procedure=None)
+    for k in range(5):
+        b.frame(k * 100.0)
+    b.step_entered(0.0, "a", 0, "Do A.")
+    b.event(200.0, "procedure.completed", durationMs=200.0)
+    ep = load_episode(b.write())
+
+    [segment] = step_segments(ep)
+    labels = frame_labels(ep, [segment])
+
+    assert (segment.end_t, segment.completed_by) == (200.0, None)
+    assert labels.step_index.tolist() == [0, 0, -1, -1, -1]
+    assert list(labels.task) == ["Do A.", "Do A.", "", "", ""]

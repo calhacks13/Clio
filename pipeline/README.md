@@ -53,8 +53,9 @@ labels = frame_labels(ep, segments)            # per frame: step_index (-1 outsi
 r = resample_episode(ep, fps=30)
 ```
 
-A step entered but never completed ends at the next `step.entered`, or at the last frame. Frames
-outside every step get the procedure title as their task (or `""` without a procedure).
+A step entered but never completed ends at the next `step.entered`, at `procedure.completed` or
+`procedure.aborted`, or at the last frame. Frames outside every step get the procedure title as
+their task (or `""` without a procedure).
 
 ## Rerun replay
 

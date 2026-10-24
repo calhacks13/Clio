@@ -195,7 +195,7 @@ def _log_steps(rec: rr.RecordingStream, episode: Episode) -> None:
     for s in step_segments(episode):
         rec.set_time(TIMELINE, duration=s.start_t / 1000.0)
         rec.log("steps/current", rr.TextDocument(f"Step {s.index}: {s.instruction}"))
-        if s.completed_by is not None:
+        if not s.runs_to_end:  # a next step starting at end_t is logged later, so it wins
             rec.set_time(TIMELINE, duration=s.end_t / 1000.0)
             rec.log("steps/current", rr.TextDocument(outside))
 

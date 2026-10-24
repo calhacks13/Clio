@@ -13,7 +13,7 @@ from .episode import Episode
 @dataclass(frozen=True)
 class Segment:
     """One run of a step. `start_t <= t < end_t`, except that a step still running when the
-    recording stops also covers the last frame (`end_t`)."""
+    recording stops (`runs_to_end`) also covers the last frame (`end_t`)."""
 
     step_id: str
     index: int  # the step's index in the procedure
@@ -24,6 +24,8 @@ class Segment:
     forced: bool  # completed before its success check passed
     targets: tuple[str, ...] = ()
     action: dict[str, Any] | None = field(default=None, hash=False)  # meta.plan step's action
+    # Still running when the recording stopped, so it ends at (and includes) the last frame.
+    runs_to_end: bool = field(default=False, compare=False)
 
     @property
     def duration_ms(self) -> float:
@@ -55,12 +57,12 @@ class FrameLabels:
 
 def step_segments(episode: Episode) -> list[Segment]:
     """Segments in time order. A step that is entered but never completed ends at the next
-    `step.entered`, or at the last frame."""
+    `step.entered`, at `procedure.completed` / `procedure.aborted`, or at the last frame."""
     actions = _plan_actions(episode)
     segments: list[Segment] = []
     active: dict[str, Any] | None = None
 
-    def close(end_t: float, completed: dict[str, Any] | None) -> None:
+    def close(end_t: float, completed: dict[str, Any] | None, runs_to_end: bool = False) -> None:
         assert active is not None
         segments.append(
             Segment(
@@ -73,6 +75,7 @@ def step_segments(episode: Episode) -> list[Segment]:
                 forced=bool(completed["forced"]) if completed else False,
                 targets=tuple(active.get("targets", ())),
                 action=actions.get(active["stepId"]),
+                runs_to_end=runs_to_end,
             )
         )
 
@@ -85,8 +88,12 @@ def step_segments(episode: Episode) -> list[Segment]:
             if active is not None and event["stepId"] == active["stepId"]:
                 close(event["t"], event)
                 active = None
+        elif event["type"] in ("procedure.completed", "procedure.aborted"):
+            if active is not None:
+                close(event["t"], None)
+                active = None
     if active is not None:
-        close(episode.t[-1] if episode.n_frames else active["t"], None)
+        close(episode.t[-1] if episode.n_frames else active["t"], None, runs_to_end=True)
     return segments
 
 
@@ -96,8 +103,7 @@ def frame_labels(episode: Episode, segments: list[Segment] | None = None) -> Fra
     t = episode.t
     segment = np.full(len(t), -1, dtype=np.int64)
     for k, s in enumerate(segments):
-        runs_to_end = k == len(segments) - 1 and s.completed_by is None
-        inside = (t >= s.start_t) & ((t <= s.end_t) if runs_to_end else (t < s.end_t))
+        inside = (t >= s.start_t) & ((t <= s.end_t) if s.runs_to_end else (t < s.end_t))
         segment[inside] = k
     outside_task = episode.procedure_title or ""
     tasks = np.array([s.instruction for s in segments] + [outside_task], dtype=object)
