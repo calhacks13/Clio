@@ -1,0 +1,239 @@
+/* The UI gallery: a development page in the headset's world (dark navy ground, one cyan light). */
+
+:root {
+  color-scheme: dark;
+  --ground: #070b14;
+  --raised: #0f1728;
+  --line: #1c2740;
+  --text: #e8eefc;
+  --muted: #8ea0c2;
+  --accent: #24d4ed;
+  --on-accent: #04222b;
+  --gutter: 2rem;
+  --bar: 3.5rem;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  scrollbar-color: #2a3a5c var(--ground);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-padding-top: calc(var(--bar) + 1rem);
+}
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--text);
+  line-height: 1.45;
+  caret-color: var(--accent);
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+a {
+  color: var(--accent);
+  text-underline-offset: 0.2em;
+}
+
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.bar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: var(--bar);
+  background: var(--ground);
+  border-bottom: 1px solid var(--line);
+}
+
+.bar-inner,
+main {
+  max-width: calc(1280px + 2 * var(--gutter));
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+
+.bar-inner {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 2.5rem;
+}
+
+.wordmark {
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.bar nav {
+  display: flex;
+  gap: 1.75rem;
+}
+
+.bar nav a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.bar nav a:hover {
+  color: var(--text);
+}
+
+main {
+  padding-bottom: 6rem;
+}
+
+section {
+  padding-top: 3.5rem;
+}
+
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1.25rem;
+  margin-bottom: 1.25rem;
+}
+
+h2 {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+h3 {
+  margin: 3rem 0 1rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+figure {
+  margin: 0;
+}
+
+figcaption {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-top: 0.6rem;
+}
+
+/* Launch page frames, scaled from their real size by --scale (launch-frames.ts). */
+
+.frames {
+  display: grid;
+  gap: 2.5rem;
+}
+
+.frames.phone {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2rem;
+}
+
+.frame-box {
+  width: calc(var(--w) * var(--scale) * 1px);
+  height: calc(var(--h) * var(--scale) * 1px);
+  overflow: hidden;
+  /* An outline takes no room, so a frame at 1:1 is exactly its real width. */
+  outline: 1px solid var(--line);
+}
+
+.frame-box iframe {
+  display: block;
+  width: calc(var(--w) * 1px);
+  height: calc(var(--h) * 1px);
+  border: 0;
+  transform: scale(var(--scale));
+  transform-origin: 0 0;
+}
+
+.frame figcaption {
+  width: calc(var(--w) * var(--scale) * 1px);
+}
+
+.dims {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Lesson panel cards (panel-cards.ts). */
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(26rem, 1fr));
+  gap: 2rem 1.5rem;
+}
+
+.card canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 2;
+  background: #15181d;
+}
+
+/* Other pages. */
+
+.pages {
+  margin: 0;
+  display: grid;
+  max-width: 64rem;
+}
+
+.pages > div {
+  display: grid;
+  grid-template-columns: minmax(14rem, 18rem) 1fr;
+  gap: 0.25rem 2rem;
+  padding: 0.85rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.pages > div:last-child {
+  border-bottom: 1px solid var(--line);
+}
+
+.pages dt {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.pages dd {
+  margin: 0;
+  color: var(--muted);
+}
+
+@media (max-width: 760px) {
+  :root {
+    --gutter: 1rem;
+  }
+
+  .bar-inner {
+    gap: 1.25rem;
+  }
+
+  .bar nav {
+    gap: 1rem;
+  }
+
+  .pages > div {
+    grid-template-columns: 1fr;
+  }
+}

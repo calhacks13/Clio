@@ -1,4 +1,5 @@
 ---
+
 version: 1
 slug: "src-app-boot-view-ts"
 primary_target: "src/app/boot-view.ts"

@@ -40,6 +40,9 @@ finder reports. `?showRefresh=1000` makes them follow faster while you test.
 To test the planner alone on hard scenes, open `http://localhost:5173/bench.html`
 ([planner-bench.md](planner-bench.md)).
 
+To see every UI in its states and iterate on it with hot reload, open
+`http://localhost:5173/gallery.html` (states are data in `apps/headset/src/gallery/states.ts`).
+
 ## 3. Quest 3
 
 1. **Developer mode:** in the Meta Horizon phone app, go to your headset → Developer Mode. This
