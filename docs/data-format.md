@@ -39,19 +39,20 @@ by creation time.
 
 ## `meta.json`: `EpisodeMeta`
 
-| Field                    | Meaning                                                                                        |
-| ------------------------ | ---------------------------------------------------------------------------------------------- |
-| `schema`                 | `"clio.episode/1"`                                                                             |
-| `episodeId`, `createdAt` | assigned by the server                                                                         |
-| `mode`                   | `learn` (a learner with a coach), `record_demo` (an expert recording ghost-hand demos), `free` |
-| `procedure`              | `{ id, version, title }`, or `null` for free recording                                         |
-| `operator.role`          | `learner`, `expert` or `collector`                                                             |
-| `clock`                  | `{ timeline: "performance.now", startEpochMs }`                                                |
-| `space`                  | `{ frame: "workspace", units: "m", upAxis: "+y", worldFromWorkspace, calibration, anchored }`  |
-| `hands`                  | `{ joints: [25 names], jointFields: [8 names] }`: self-describing layout for `frames.ndjson`   |
-| `objects`                | object placements at episode start: `{ id, label, position, radius, method }`                  |
-| `coach`                  | `{ kind: gemini \| scripted \| none, model?, transport? }`                                     |
-| `device`                 | `{ userAgent, emulated, xrFeatures }`                                                          |
+| Field                    | Meaning                                                                                                   |
+| ------------------------ | --------------------------------------------------------------------------------------------------------- |
+| `schema`                 | `"clio.episode/1"`                                                                                        |
+| `episodeId`, `createdAt` | assigned by the server                                                                                    |
+| `mode`                   | `learn` (a learner with a coach), `record_demo` (an expert recording ghost-hand demos), `free`            |
+| `procedure`              | `{ id, version, title }`, or `null` for free recording                                                    |
+| `plan`                   | the full Procedure used (optional). AI-generated plans exist nowhere else, so episodes are self-contained |
+| `operator.role`          | `learner`, `expert` or `collector`                                                                        |
+| `clock`                  | `{ timeline: "performance.now", startEpochMs }`                                                           |
+| `space`                  | `{ frame: "workspace", units: "m", upAxis: "+y", worldFromWorkspace, calibration, anchored }`             |
+| `hands`                  | `{ joints: [25 names], jointFields: [8 names] }`: self-describing layout for `frames.ndjson`              |
+| `objects`                | object placements at episode start: `{ id, label, position, radius, method }`                             |
+| `coach`                  | `{ kind: gemini \| scripted \| none, model?, transport? }`                                                |
+| `device`                 | `{ userAgent, emulated, xrFeatures }`                                                                     |
 
 ## `frames.ndjson`: `FrameRecord` (one per XR frame, 72–120 Hz)
 
