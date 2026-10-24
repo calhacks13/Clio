@@ -85,7 +85,7 @@ function setup(plan: Procedure = procedure) {
   const replan = (next: Procedure) => {
     current = next;
   };
-  return { bus, tracking, events, start, enter, highlight, replan };
+  return { bus, registry, tracking, events, start, enter, highlight, replan };
 }
 
 const ids = (tracking: LiveTracking) => tracking.objects.map((o) => o.id);
@@ -205,6 +205,43 @@ describe('LiveTracking', () => {
       ['rag', 'blue rag', 'Folded blue rag on the right'],
       ['cap', 'blue washer cap', 'The cap, now loose'],
     ]);
+  });
+
+  it('follows a highlighted object in the words a refined plan gives it, keeping its phrase', () => {
+    const { bus, registry, tracking, start, enter, highlight, replan } = setup();
+    start();
+    enter(OPEN);
+    highlight('jug', 'attention', 1000);
+    expect(tracking.get('jug')).toMatchObject({
+      phrase: 'fluid jug',
+      query: 'blue jug with a white label',
+    });
+    // Stage rest writes the jug again, and words the step that shows it differently.
+    const refined = lesson('washer', [
+      OPEN,
+      {
+        ...POUR,
+        show: [{ object: 'jug', phrase: 'washer fluid bottle', description: 'The bottle' }],
+      },
+    ]);
+    const jug = refined.objects.find((o) => o.id === 'jug');
+    if (!jug) throw new Error('fixture');
+    const written = { ...jug, tracking: { query: 'tall blue jug, cap on top', moves: true } };
+    registry.update(written, 1100);
+    replan({ ...refined, objects: refined.objects.map((o) => (o.id === 'jug' ? written : o)) });
+    bus.emit('plan.ready', {
+      t: 1100,
+      planId: 'washer-r1',
+      procedure: refined,
+      warnings: [],
+      revision: true,
+      stage: 'rest',
+    });
+    // The tracker keeps its track: same phrase, new query.
+    expect(tracking.get('jug')).toMatchObject({
+      phrase: 'fluid jug',
+      query: 'tall blue jug, cap on top',
+    });
   });
 
   it('follows nothing once the lesson ends', () => {

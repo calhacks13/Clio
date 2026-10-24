@@ -159,14 +159,21 @@ export class ObjectRegistry {
   add(spec: ObjectSpec, t: number): void {
     if (this.specs.has(spec.id)) return;
     this.specs.set(spec.id, spec);
-    if (spec.placement.method === 'layout') {
-      this.set(spec.id, {
-        position: [...spec.placement.position],
-        confidence: 1,
-        source: 'layout',
-        t,
-      });
-    }
+    this.placeAtLayout(spec, t);
+  }
+
+  /**
+   * A declared object written again (a plan's later stage fills in what its first stage wrote
+   * quickly: kind, size, words). Only the spec changes: where the object is, how valid that is,
+   * the hand holding it and a loss all stay. One with no position yet takes a layout spot the new
+   * spec gives it. Unknown objects are ignored; add() declares them.
+   */
+  update(spec: ObjectSpec, t: number): void {
+    if (!this.specs.has(spec.id)) return;
+    this.specs.set(spec.id, spec);
+    const est = this.estimates.get(spec.id);
+    if (est) this.estimates.set(spec.id, { ...est, spec });
+    else this.placeAtLayout(spec, t);
   }
 
   get(id: string): ObjectEstimate | undefined {
@@ -329,6 +336,16 @@ export class ObjectRegistry {
     }
     this.changed.clear();
     return out;
+  }
+
+  private placeAtLayout(spec: ObjectSpec, t: number): void {
+    if (spec.placement.method !== 'layout') return;
+    this.set(spec.id, {
+      position: [...spec.placement.position],
+      confidence: 1,
+      source: 'layout',
+      t,
+    });
   }
 
   private set(id: string, obs: Observation): void {

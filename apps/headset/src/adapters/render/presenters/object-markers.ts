@@ -21,9 +21,14 @@ interface Marker {
   ring: Mesh;
   label: Text;
   ringMaterial: MeshBasicMaterial;
+  /** The object size the ring and label were built for. */
+  radius: number;
 }
 
 const dotGeometry = new SphereGeometry(0.006, 12, 8);
+const ringGeometry = (radius: number) =>
+  new TorusGeometry(Math.max(0.02, radius * 1.3), 0.0035, 8, 48);
+const labelHeight = (radius: number) => Math.max(0.03, radius) + 0.02;
 const head = new Vector3();
 const here = new Vector3();
 
@@ -44,6 +49,8 @@ export class ObjectMarkersPresenter implements Presenter {
       if (est.spec.hidden && !ctx.debug) continue;
       seen.add(est.id);
       const marker = this.markers.get(est.id) ?? this.create(est.id, est.spec.radius);
+      // A plan's later stage can write the object's size again.
+      if (marker.radius !== est.spec.radius) this.resize(marker, est.spec.radius);
       marker.group.position.set(...est.position);
       setText(marker.label, est.spec.label);
 
@@ -86,17 +93,21 @@ export class ObjectMarkersPresenter implements Presenter {
       opacity: 0.9,
       depthWrite: false,
     });
-    const ring = new Mesh(
-      new TorusGeometry(Math.max(0.02, radius * 1.3), 0.0035, 8, 48),
-      ringMaterial,
-    );
+    const ring = new Mesh(ringGeometry(radius), ringMaterial);
     ring.rotation.x = -Math.PI / 2;
     const label = makeText({ size: 0.022, anchorX: 'center', anchorY: 'bottom' });
-    label.position.set(0, Math.max(0.03, radius) + 0.02, 0);
+    label.position.set(0, labelHeight(radius), 0);
     group.add(dot, ring, label);
     this.object.add(group);
-    const marker = { group, dot, ring, label, ringMaterial };
+    const marker = { group, dot, ring, label, ringMaterial, radius };
     this.markers.set(id, marker);
     return marker;
+  }
+
+  private resize(marker: Marker, radius: number): void {
+    marker.ring.geometry.dispose();
+    marker.ring.geometry = ringGeometry(radius);
+    marker.label.position.y = labelHeight(radius);
+    marker.radius = radius;
   }
 }

@@ -34,13 +34,13 @@ and setup is in [dev-setup.md](dev-setup.md).
 ┌───────────▼──────────────── Quest 3 · Quest Browser · WebXR immersive-ar ─────────────────────┐
 │ apps/headset                                                                                  │
 │                                                                                               │
-│  CoachSession ◄═══════► Gemini Live (voice, tools)            ┌───────── LessonController ───┐│
-│   │ start_lesson / revise_plan ────────────────────────────►  │ plan ─► locate ─► run ─► record│
-│   │ add_step / update_step / complete_step / add_material ─►  │   ▲        │        │         ││
-│   │ highlight / show_demo / flag_mistake ──────────────────►  │   │        │        │         ││
-│   │ look_closer (non-blocking) ─► smart model, /api/scene/ask │   │        │        │         ││
-│   │◄── [app] narrations, look_closer answers (in words) ◄─    │   │        ▼        ▼         ││
-│                                                               │ Planner  Grounder  ProcedureRunner
+│  CoachSession ◄═══════► Gemini Live (voice, tools)            ┌───────── LessonController ────┐│
+│   │ start_lesson / revise_plan ────────────────────────────►  │ plan ─► run ─► record         ││
+│   │ add_step / update_step / complete_step / add_material ─►  │   ▲      ├──────────► locate  ││
+│   │ highlight / show_demo / flag_mistake ──────────────────►  │   │      │                │   ││
+│   │ look_closer (non-blocking) ─► smart model, /api/scene/ask │   │      │                │   ││
+│   │◄── [app] narrations, look_closer answers (in words) ◄─    │   │      ▼                ▼   ││
+│                                                               │ Planner  ProcedureRunner Grounder
 │  Sensing ─► Workspace ─► Pinch/Grasp ─► ObjectRegistry ◄──────┴───────────────────────────────┘│
 │  (hands 90 Hz, head)       (held objects ride the wrist)   ▲ camera detections                 │
 │        ════════════════════ typed event bus · one clock ═══╪═════════════════════              │
@@ -109,9 +109,9 @@ Clio/
 │   │   ├── plan/             the coach's view of the plan: recital, step briefings
 │   │   ├── recording/        recorder, uploader (ordered, retrying), sinks
 │   │   ├── overlay/          presentation model
-│   │   └── session/          LessonController (plan → locate → run → record → revise),
-│   │                         step watcher, curated-lesson templates, Spotlight, closer look,
-│   │                         live tracking (what the tracker follows)
+│   │   └── session/          LessonController (plan → run and record, objects located
+│   │                         meanwhile → revise), step watcher, curated-lesson templates,
+│   │                         Spotlight, closer look, live tracking (what the tracker follows)
 │   ├── src/adapters/         xr, render, audio, camera, gemini, scripted, net
 │   ├── src/app/              config, boot page, ClioApp (composition root + frame pipeline),
 │   │                         LiveTracker (the /track stream, depth, live glow)
@@ -161,17 +161,21 @@ Once per XR frame:
 ```
  coach hears the goal ─► start_lesson(goal, template_id?)   [answers at once; coach keeps talking]
    ├─ draft:   a curated lesson (template_id), else camera snapshots + goal ─► POST /api/plans
-   │           {stage: first} ─► validated Procedure: step 1 in full, the rest an outline
+   │           {stage: first} ─► validated Procedure: step 1 as a short card, the rest an outline
    │           (+ warnings); slow (12 s)? the coach is told;
    │           failed or timed out (40 s)? the coach writes the steps with add_step
-   ├─ ready:   [app] "Plan ready." + the recital
-   ├─ refine:  at once, fresh snapshots ─► POST /api/plans {stage: rest, revise} ─► the outline
-   │           steps nobody started are replaced; [app] "Plan refined." + the recital
-   ├─ locate:  every unplaced object ─► Grounder (camera → /api/vision/locate → 3D) ─► registry
-   │           still missing? shown on the HUD; the scripted coach asks the learner to look or pinch
-   ├─ run:     ProcedureRunner + EpisodeRecorder (the episode embeds the full plan)
+   ├─ run:     as soon as the plan lands: ProcedureRunner + EpisodeRecorder (the episode embeds
+   │           the full plan); [app] "Plan ready." + the recital, then step 1's briefing at once
+   ├─ locate:  in the background, once the lesson has started: every unplaced object ─► Grounder
+   │           (camera → /api/vision/locate → 3D) ─► registry; still missing? shown on the HUD;
+   │           the scripted coach asks the learner to look or pinch
+   ├─ refine:  once the lesson has started, fresh snapshots ─► POST /api/plans {stage: rest,
+   │           revise} ─► the outline steps nobody started are replaced, and the card's objects
+   │           are filled in (kind, size, words; where they are and who holds them stay);
+   │           [app] "Plan refined." + the recital
    ├─ per step: briefing (in the tool result that moved the focus, else narrated) · show items found
-   │            and outlined (Spotlight, refreshed every few seconds) · demo auto-played
+   │            and outlined (Spotlight; followed live through /track objects mode while the
+   │            tracker runs, else looked at again every few seconds; §5.6) · demo auto-played
    ├─ edit:    add_step / update_step / complete_step / add_material ─► runner ─► plan.changed
    │           (recorded as plan.updated); each result repeats the plan
    ├─ watch:   step watcher: frames from the step's start and now + step, looks, mix-ups
@@ -181,10 +185,11 @@ Once per XR frame:
                              ─► runner.replacePlan (by step id)
 ```
 
-Curated procedures (`procedures/*.json`) skip planning and go straight to locate and run: the
-coach picks one with `template_id` (the system instruction lists them), or `?procedure=<id>`
-starts one. Only `start_lesson` adapts the lesson: on a workspace that isn't calibrated,
-`adaptTemplate()` has the camera look for its items instead of using the taped-mat positions.
+Curated procedures (`procedures/*.json`) skip planning: the coach picks one with `template_id`
+(the system instruction lists them), and it runs like a planned lesson, briefed at once while its
+objects are located; `?procedure=<id>` starts one, locating its objects first and then running it.
+Only `start_lesson` adapts the lesson: on a workspace that isn't calibrated, `adaptTemplate()` has
+the camera look for its items instead of using the taped-mat positions.
 `?procedure=<id>` runs it as written, and the coach hears "Plan ready" with the recital, as for any
 other lesson. They are also the golden demos and the planner's examples.
 
@@ -241,7 +246,8 @@ lesson's only use of the camera:
     ─► lift the point into 3D (registry) and the outline onto a camera-facing plane
     ─► object.detected (recorded label) + overlay.outline ─► OutlinesPresenter
  every ~3 s while the step runs: the show items again, never two looks at once, skipping
- objects in hand; answers for a step that is over are recorded but not drawn
+ objects in hand; answers for a step that is over are recorded but not drawn, and answers for
+ a lesson that is over are dropped
 ```
 
 Outlines hang on the object's current estimate, so they follow carried objects, and turn toward

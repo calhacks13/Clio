@@ -9,13 +9,16 @@ import type { Quat, Vec3 } from '../../core/math';
 
 // One shape for everything an object source says about an object in one camera frame, so the
 // recorder (and later the lesson) never cares which tracker produced it. Today's sources map onto
-// it like this; none of them is wired to it yet:
+// it like this. The lesson's live tracker (live-objects.ts, /track objects mode) and the synthetic
+// tracked-objects fixture (scripts/synth-episode.ts) record through it; the others are not wired
+// to it yet:
 //
-//   /track mask (YOLOE-26 + ByteTrack, role tracker): state tracking, coasting, lost, absent,
-//     unknown and idle become measured, predicted, lost, absent, unknown and unknown
-//     (TRACK_STATE_STATUS); outline, box, point and contact are the image geometry, `score` and
-//     `model` as reported, the mask's `t` is observedT, and position is the contact point lifted
-//     into 3D, when it was.
+//   /track mask or objects-mode detection (YOLOE-26 + ByteTrack, role tracker): state tracking,
+//     coasting, lost, absent, unknown and idle become measured, predicted, lost, absent, unknown
+//     and unknown (TRACK_STATE_STATUS; an objects-mode detection not found is lost unless its
+//     state says otherwise); outline, box, point and contact are the image geometry, `score` and
+//     `model` as reported, the answer's `t` (its frame's capture time) is observedT, and position
+//     is where the detection was placed in 3D, when it was.
 //   session /locate detection (role tracker for a tracking finder, else detector): found gives
 //     measured, not found absent; `confidence` is the score; observedT is the frame's capture time.
 //   object.detected answer (jev: role identifier; Gemini: detector): found ? measured : absent,

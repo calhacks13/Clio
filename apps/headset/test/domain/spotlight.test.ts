@@ -383,6 +383,21 @@ describe('Spotlight', () => {
     await Promise.all([look, again]);
   });
 
+  it("leaves an ended lesson's late answer out of the next lesson's labels", async () => {
+    const { spotlight, pause, of } = setup();
+    const resume = pause();
+    const old = spotlight.enterStep(OPEN);
+    spotlight.stop();
+    // The next lesson starts on its first step, and its own look answers as usual.
+    const next = spotlight.enterStep(POUR);
+    resume();
+    await Promise.all([old, next]);
+    expect(of('object.detected').map((e) => `${e.objectId}:${e.stepId}`)).toEqual([
+      'jug:pour',
+      'cap:pour',
+    ]);
+  });
+
   it('stops outlining and refreshing when the lesson ends', async () => {
     const { spotlight, clock, pause, of } = setup();
     const resume = pause();

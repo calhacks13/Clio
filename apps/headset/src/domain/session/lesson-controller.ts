@@ -577,7 +577,8 @@ export class LessonController {
             const procedure = adaptTemplate(template, calibrated);
             return { planId: template.id, procedure, warnings: [] };
           }
-          // The first step in full and the rest as an outline, so the lesson starts quickly.
+          // A short card for the first step and the rest as an outline, so the lesson starts
+          // quickly (stage rest writes them in full).
           const captured = clock.now();
           const { images, from } = await this.planFrames();
           const asked = clock.now();
@@ -682,7 +683,8 @@ export class LessonController {
   /**
    * Stage rest of a two-stage plan: while the lesson starts and the learner works on the first
    * step, the planner writes the outline steps in full from fresh camera views. They replace the
-   * outline steps nobody has started; the focused step and finished ones stay as they are. The
+   * outline steps nobody has started; the focused step and finished ones stay as they are. It also
+   * writes the card's objects again in full (kind, size, words), which replace the card's. The
    * refinement is dropped when the plan moved on without it: a new lesson, a re-plan, or the coach
    * changing the steps itself.
    */
@@ -730,7 +732,9 @@ export class LessonController {
     );
     const keep = new Set(kept.map((s) => s.id));
     const fresh = response.procedure.steps.slice(from).filter((s) => !keep.has(s.id));
-    const merged = this.mergeRevision(runner, kept, fresh, response);
+    // Only the card's objects: one the coach added meanwhile keeps its spec, as in a re-plan.
+    const card = new Set(draft.procedure.objects.map((o) => o.id));
+    const merged = this.mergeRevision(runner, kept, fresh, response, card);
     if (!merged.ok) {
       this.refineDropped(merged.error);
       return;
@@ -766,9 +770,13 @@ export class LessonController {
       stage?: 'rest';
     },
   ): void {
-    const { bus, clock } = this.deps;
+    const { bus, clock, registry } = this.deps;
     const t = clock.now();
-    for (const spec of procedure.objects) this.deps.registry.add(spec, t);
+    // An object written again keeps where it is and the hand holding it; only its spec changes.
+    for (const spec of procedure.objects) {
+      if (registry.spec(spec.id)) registry.update(spec, t);
+      else registry.add(spec, t);
+    }
     // One op, so a revision that leaves nothing to do records itself before the lesson finishes.
     this.op(() => {
       bus.emit('annotation', {
@@ -791,19 +799,22 @@ export class LessonController {
       });
       return { ok: true, result: null };
     });
-    this.track(this.locate(this.deps.registry.unplaced()));
+    this.track(this.locate(registry.unplaced()));
   }
 
   /**
    * A revision lands on the plan as it is now: the `kept` steps stay as they are, then the
    * planner's new steps replace all the others. A new step never takes an id the lesson used for
-   * something else, but may take the id of a step it replaces.
+   * something else, but may take the id of a step it replaces. The plan's objects stay, in order,
+   * and the response's new ones follow; the response's spec replaces a known object's only for the
+   * ids in `upgrade`.
    */
   private mergeRevision(
     runner: ProcedureRunner,
     kept: readonly Step[],
     fresh: readonly Step[],
     response: PlanResponse,
+    upgrade: ReadonlySet<string> = new Set(),
   ): { ok: true; procedure: Procedure } | { ok: false; error: string } {
     const { procedure } = runner.state;
     const keep = new Set(kept.map((s) => s.id));
@@ -815,8 +826,9 @@ export class LessonController {
       return id === s.id ? s : { ...s, id };
     });
     const known = new Set(procedure.objects.map((o) => o.id));
+    const written = new Map(response.procedure.objects.map((o) => [o.id, o]));
     const objects = [
-      ...procedure.objects,
+      ...procedure.objects.map((o) => (upgrade.has(o.id) ? (written.get(o.id) ?? o) : o)),
       ...response.procedure.objects.filter((o) => !known.has(o.id)),
     ];
     const r = safeParseProcedure({ ...procedure, objects, steps: [...kept, ...steps] });

@@ -1,6 +1,7 @@
 import {
   type CalibrationMethod,
   type CoachToolArgs,
+  ObjectSpecSchema,
   type PlanRequest,
   type PlanResponse,
   type Procedure,
@@ -8,6 +9,7 @@ import {
   type StepCheckRequest,
 } from '@clio/protocol';
 import { describe, expect, it, vi } from 'vitest';
+import { glowModeFor } from '../../src/adapters/render/presenters/outlines';
 import { ManualClock } from '../../src/core/clock';
 import { Emitter } from '../../src/core/emitter';
 import { Narrator } from '../../src/domain/coach/narrator';
@@ -598,6 +600,54 @@ describe('two-stage plans', () => {
     expect(entered).toEqual(['open', 'pour']);
   });
 
+  it("fills in the card's objects, keeping where they are and the hand holding them", async () => {
+    // Stage rest writes the jug again in full (a bigger container, in better words), lists the
+    // objects in its own order, and declares a rag the coach added meanwhile as its own.
+    const jug = ObjectSpecSchema.parse({
+      ...outlined.objects.find((o) => o.id === 'jug'),
+      kind: 'container',
+      radius: 0.12,
+      description: 'Blue washer fluid jug',
+      tracking: { query: 'blue jug with a white label', moves: true },
+    });
+    const upgraded: PlanResponse = {
+      ...rest,
+      procedure: parseProcedure({
+        ...rest.procedure,
+        objects: [...rest.procedure.objects].reverse().map((o) => (o.id === 'jug' ? jug : o)),
+      }),
+    };
+    const staged = stagedPlanner({ held: true });
+    const { bus, lesson, registry, tool } = setup({ planner: staged.planner });
+    const plans: Procedure[] = [];
+    bus.on('plan.ready', ({ procedure }) => plans.push(procedure));
+    const released: string[] = [];
+    bus.on('object.released', ({ objectId }) => released.push(objectId));
+    await tool('start_lesson', { goal: 'add wiper fluid' });
+    await vi.waitFor(() => expect(lesson.phase).toBe('lesson'));
+    await tool('add_material', { label: 'rag', look_for: 'grey cloth' });
+    registry.attach('jug', 'right', { p: [0.3, 0.1, -0.2], q: [0, 0, 0, 1] }, 1500);
+    staged.answer(upgraded);
+    await lesson.settled();
+    expect(lesson.procedure?.objects.map((o) => o.id)).toEqual(['cap', 'jug', 'tank', 'rag']);
+    expect(lesson.procedure?.objects[1]).toEqual(jug);
+    expect(plans.at(-1)?.objects[1]).toEqual(jug);
+    // The registry has the new spec, and nothing else about the jug changed: still in hand.
+    expect(registry.spec('jug')).toEqual(jug);
+    expect(registry.get('jug')).toMatchObject({
+      spec: jug,
+      position: [0.3, 0.1, -0.3],
+      heldBy: 'right',
+    });
+    expect(registry.heldBy('right')).toEqual(['jug']);
+    expect(released).toEqual([]);
+    // A whole container glows around itself now, not on the surface it marks.
+    const spec = registry.get('jug')?.spec;
+    expect(spec && glowModeFor(spec)).toBe('object');
+    // Only the card's objects are filled in: the coach's rag keeps its words.
+    expect(registry.spec('rag')?.tracking?.query).toBe('grey cloth');
+  });
+
   it('drops the rest when the coach changed the steps meanwhile, and says why', async () => {
     const staged = stagedPlanner({ held: true });
     const { lesson, tool, annotations } = setup({ planner: staged.planner });
@@ -913,6 +963,32 @@ describe('review regressions', () => {
     await lesson.settled();
     expect(announced).toEqual([undefined, 'Make tea']);
     expect(lesson.view().plan()?.goal).toBe('make tea');
+  });
+
+  it('keeps the objects the lesson declared when a re-plan writes them again', async () => {
+    const [cap] = plan.objects;
+    const { lesson, registry, tool, updates, begin } = setup({
+      planner: {
+        plan: async (req) => ({
+          planId: req.revise ? 'p-r1' : 'p',
+          procedure: req.revise
+            ? parseProcedure({
+                ...plan,
+                objects: plan.objects.map((o) =>
+                  o.id === 'cap' ? { ...o, label: 'red cap', kind: 'tool' } : o,
+                ),
+              })
+            : plan,
+          warnings: [],
+        }),
+      },
+    });
+    await begin();
+    await tool('revise_plan', { reason: 'different cap' });
+    await lesson.settled();
+    expect(updates().at(-1)?.op).toBe('revise');
+    expect(lesson.procedure?.objects[0]).toEqual(cap);
+    expect(registry.spec('cap')).toEqual(cap);
   });
 
   it('keeps a step finished during a re-plan as one done step', async () => {

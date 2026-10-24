@@ -7,8 +7,8 @@ import type { ObjectRegistry } from '../world/object-registry';
 
 // Spotlight: the lesson's use of the camera. It finds objects in the words of the moment (the
 // current step's show items, else the object's own description), records every answer as an
-// object.detected label, outlines what the current step shows, and keeps looking while the step
-// runs so the outlines follow the real objects.
+// object.detected label (unless the lesson that asked has ended), outlines what the current step
+// shows, and keeps looking while the step runs so the outlines follow the real objects.
 
 export interface SpotlightOptions {
   /**
@@ -41,6 +41,8 @@ export class Spotlight {
   private step: Step | null = null;
   /** Bumped on every step change, so answers for an older step are not outlined. */
   private generation = 0;
+  /** Bumped when a lesson ends, so its late answers are not recorded in the next one. */
+  private lesson = 0;
   private looking = 0;
   /** The look in flight for each object, which callers that join wait for instead of asking. */
   private readonly inFlight = new Map<string, Promise<void>>();
@@ -100,10 +102,14 @@ export class Spotlight {
     return requests.length > 0 ? this.find(requests) : null;
   }
 
-  /** The lesson ended: stop looking, and leave answers still in flight unoutlined and unjoined. */
+  /**
+   * The lesson ended: stop looking, and leave answers still in flight unoutlined, unjoined and
+   * unrecorded (their step ids belong to the lesson that ended).
+   */
   stop(): void {
     this.step = null;
     this.generation++;
+    this.lesson++;
     this.inFlight.clear();
   }
 
@@ -123,6 +129,7 @@ export class Spotlight {
   private async ask(grounder: Grounder, worded: readonly FindRequest[]): Promise<void> {
     const step = this.step;
     const generation = this.generation;
+    const lesson = this.lesson;
     this.looking++;
     let result: GroundingResult | null = null;
     try {
@@ -135,7 +142,9 @@ export class Spotlight {
       const wait = hint === undefined ? this.refreshMs : Math.min(this.refreshMs, hint);
       this.nextLookT = this.deps.clock.now() + wait;
     }
-    if (result?.ok) this.report(result, step, generation === this.generation);
+    if (result?.ok && lesson === this.lesson) {
+      this.report(result, step, generation === this.generation);
+    }
   }
 
   /** One request per object, worded the way the current step shows it when it does. */
