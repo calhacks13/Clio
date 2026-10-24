@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "convention": "ros-rep-103",
+  "units": "meters",
+  "frames": [
+    {
+      "id": "base_link",
+      "parent": "world",
+      "translation": [0, 0, 0],
+      "rotation": [0, 0, 0, 1]
+    }
+  ],
+  "objects": [
+    {
+      "id": "table",
+      "name": "Illustrative tabletop",
+      "frame": "world",
+      "translation": [0.15, 0, -0.015],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1],
+      "geometry": {
+        "type": "box",
+        "size": [0.65, 0.5, 0.03],
+        "color": "#8a735b"
+      }
+    },
+    {
+      "id": "brick",
+      "name": "Illustrative pink brick",
+      "frame": "world",
+      "translation": [0.18, -0.12, 0.012],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1],
+      "geometry": {
+        "type": "box",
+        "size": [0.032, 0.016, 0.024],
+        "color": "#e879a9"
+      }
+    },
+    {
+      "id": "bin-floor",
+      "name": "Illustrative bin floor",
+      "frame": "world",
+      "translation": [0.26, 0.1, 0.005],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1],
+      "geometry": {
+        "type": "box",
+        "size": [0.14, 0.1, 0.01],
+        "color": "#93a8b4"
+      }
+    },
+    {
+      "id": "bin-front",
+      "name": "Illustrative bin wall",
+      "frame": "world",
+      "translation": [0.33, 0.1, 0.035],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1],
+      "geometry": {
+        "type": "box",
+        "size": [0.006, 0.1, 0.07],
+        "color": "#93a8b4"
+      }
+    },
+    {
+      "id": "bin-back",
+      "name": "Illustrative bin wall",
+      "frame": "world",
+      "translation": [0.19, 0.1, 0.035],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1],
+      "geometry": {
+        "type": "box",
+        "size": [0.006, 0.1, 0.07],
+        "color": "#93a8b4"
+      }
+    },
+    {
+      "id": "bin-left",
+      "name": "Illustrative bin wall",
+      "frame": "world",
+      "translation": [0.26, 0.15, 0.035],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1],
+      "geometry": {
+        "type": "box",
+        "size": [0.14, 0.006, 0.07],
+        "color": "#93a8b4"
+      }
+    },
+    {
+      "id": "bin-right",
+      "name": "Illustrative bin wall",
+      "frame": "world",
+      "translation": [0.26, 0.05, 0.035],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1],
+      "geometry": {
+        "type": "box",
+        "size": [0.14, 0.006, 0.07],
+        "color": "#93a8b4"
+      }
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "kind": "scene",
+  "world": {
+    "origin_description": "Floor below center of synthetic worktable; X points across its depth.",
+    "calibration_method": "synthetic"
+  },
+  "entities": [
+    {
+      "id": "headset",
+      "name": "Headset",
+      "role": "headset",
+      "motion": "tracked",
+      "geometry": {
+        "type": "none"
+      },
+      "pose": null
+    },
+    {
+      "id": "left_hand",
+      "name": "Left hand",
+      "role": "hand",
+      "motion": "tracked",
+      "geometry": {
+        "type": "none"
+      },
+      "pose": null
+    },
+    {
+      "id": "right_hand",
+      "name": "Right hand",
+      "role": "hand",
+      "motion": "tracked",
+      "geometry": {
+        "type": "none"
+      },
+      "pose": null
+    },
+    {
+      "id": "table",
+      "name": "Tabletop",
+      "role": "environment",
+      "motion": "static",
+      "geometry": {
+        "type": "box",
+        "size": [0.7, 1, 0.025],
+        "color": "#cccccc"
+      },
+      "pose": {
+        "translation": [0.4, 0, 0.7375],
+        "rotation": [0, 0, 0, 1]
+      }
+    },
+    {
+      "id": "block",
+      "name": "Tracked block",
+      "role": "object",
+      "motion": "tracked",
+      "geometry": {
+        "type": "box",
+        "size": [0.05, 0.05, 0.05],
+        "color": "#dc5533"
+      },
+      "pose": null
+    }
+  ]
+}

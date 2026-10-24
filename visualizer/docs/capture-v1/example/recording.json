@@ -1,0 +1,110 @@
+{
+  "kind": "recording",
+  "format": "quest-capture",
+  "schema_version": 1,
+  "recording_id": "synthetic_block_lift_001",
+  "status": "complete",
+  "synthetic": true,
+  "task": "Synthetic format example: lift a block. Not measured training data.",
+  "device": {
+    "model": "synthetic",
+    "os_version": "none",
+    "app_version": "format-v1"
+  },
+  "duration_us": 100000,
+  "coordinate_convention": "ros-rep-103",
+  "units": "meters",
+  "time_unit": "microseconds",
+  "scene": "scene.json",
+  "calibration": "calibration.json",
+  "sources": [
+    {
+      "id": "synthetic",
+      "provider": "fixture-generator",
+      "software_version": "1",
+      "method": "synthetic coordinates; not anatomically realistic hands"
+    }
+  ],
+  "clocks": [
+    {
+      "id": "synthetic_clock",
+      "source_origin_ns": "0",
+      "scale": 1,
+      "offset_us": 0,
+      "uncertainty_us": 0,
+      "method": "synthetic identity"
+    }
+  ],
+  "streams": [
+    {
+      "id": "objects",
+      "type": "poses",
+      "path": "streams/objects.jsonl",
+      "requested_hz": 60,
+      "observed_hz": 60,
+      "sample_count": 6
+    },
+    {
+      "id": "headset",
+      "type": "poses",
+      "path": "streams/headset.jsonl",
+      "requested_hz": 60,
+      "observed_hz": 60,
+      "sample_count": 6
+    },
+    {
+      "id": "hands",
+      "type": "hands",
+      "path": "streams/hands.jsonl",
+      "requested_hz": 60,
+      "observed_hz": 60,
+      "sample_count": 12
+    },
+    {
+      "id": "events",
+      "type": "events",
+      "path": "streams/events.jsonl",
+      "requested_hz": null,
+      "observed_hz": null,
+      "sample_count": 1
+    }
+  ],
+  "videos": [],
+  "files": [
+    {
+      "path": "calibration.json",
+      "bytes": 329,
+      "sha256": "4dfb4fa5094d3c99f7d24155d487481b20a2a46973b2641aa0e7f8ad7be33aa1"
+    },
+    {
+      "path": "scene.json",
+      "bytes": 1328,
+      "sha256": "f71d537df045be9417496d1444d481b393c3e472070ea58a9a449895fef3fe5c"
+    },
+    {
+      "path": "streams/events.jsonl",
+      "bytes": 217,
+      "sha256": "d52785d5adb04ab60302c26d7954335afa3d6e565d75169c84562ec859438fc1"
+    },
+    {
+      "path": "streams/hands.jsonl",
+      "bytes": 40486,
+      "sha256": "bc3ab0c2105528f958206430b3b1cee44dece5c5c4103aa5fba72640976ee095"
+    },
+    {
+      "path": "streams/headset.jsonl",
+      "bytes": 2055,
+      "sha256": "d01a6a6117112f95deec66488300f4fbfd029b9514e527bb1bc73c065fa385c7"
+    },
+    {
+      "path": "streams/objects.jsonl",
+      "bytes": 2072,
+      "sha256": "84e11c9478e9c3bf82366a1ecb2e961ab85867c8ff4b9111955815b4908a719b"
+    }
+  ],
+  "export_defaults": {
+    "fps": 30,
+    "profile": "human-observations-v1",
+    "include_objects": false
+  }
+}

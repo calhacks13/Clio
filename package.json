@@ -20,7 +20,11 @@
     "gen:schema": "pnpm --filter @clio/protocol run gen:schema",
     "synth": "pnpm --filter @clio/headset run synth",
     "quest:reverse": "adb reverse tcp:5173 tcp:5173",
-    "check": "pnpm run lint && pnpm run typecheck && pnpm run test"
+    "check": "pnpm run lint && pnpm run typecheck && pnpm run test",
+    "visualizer:install": "bun install --cwd visualizer --frozen-lockfile && bun install --cwd visualizer/docs/capture-v1 --frozen-lockfile",
+    "visualizer:dev": "bun run --cwd visualizer dev --hostname 127.0.0.1 --port 3001",
+    "visualizer:check": "bun run --cwd visualizer validate",
+    "visualizer:build": "bun run --cwd visualizer build"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.2",
