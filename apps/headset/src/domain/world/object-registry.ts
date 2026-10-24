@@ -33,6 +33,17 @@ export interface ObjectEstimate {
   /** When this estimate was last measured (performance.now ms); for a detection, its frame time. */
   t: number;
   heldBy: Handedness | null;
+  /**
+   * False when the position was not measured on its frame (a tracker coasting, a reused depth or a
+   * surface guess, or where a hand let go): valid but never tracked. Absent means measured.
+   */
+  measured?: boolean;
+  /**
+   * When a live source lost the object (performance.now ms), until it is seen or held again. The
+   * position stays where the object was last seen, for the lesson and for grasping, but it is
+   * recorded with no valid flags.
+   */
+  lostAt?: number;
 }
 
 export interface Observation {
@@ -60,13 +71,14 @@ interface Grip {
 const MEASURED_SOURCES = new Set<PlacementMethod>(['detector', 'marker']);
 
 /**
- * How valid an estimate is (`LOCATION_FLAG` bits). Camera estimates are measured; layout, pinch and
- * manual placements and held objects are valid but carried over; a held object whose wrist is lost
- * has no valid pose at all. Orientation is measured only by markers.
+ * How valid an estimate is (`LOCATION_FLAG` bits). Camera estimates measured on their frame are
+ * tracked; camera estimates that were not, layout, pinch and manual placements and held objects are
+ * valid but carried over; a held object whose wrist is lost, and an object a live source lost, have
+ * no valid pose at all. Orientation is measured only by markers.
  */
 function locationFlags(est: ObjectEstimate, grip: Grip | undefined): number {
-  if (grip && !grip.wristTracked) return 0;
-  const measured = !grip && MEASURED_SOURCES.has(est.source);
+  if (grip ? !grip.wristTracked : est.lostAt !== undefined) return 0;
+  const measured = !grip && MEASURED_SOURCES.has(est.source) && est.measured !== false;
   let flags = LOCATION_FLAG.positionValid | (measured ? LOCATION_FLAG.positionTracked : 0);
   if (est.orientation) {
     flags |= LOCATION_FLAG.orientationValid;
@@ -103,9 +115,15 @@ export class ObjectRegistry {
       this.specs.set(spec.id, spec);
       const kept = previous.get(spec.id);
       if (kept) {
-        // A revised plan keeps what we already know about objects it still uses.
+        // A revised plan keeps what we already know about objects it still uses. One that was held
+        // is where the hand let go: not measured there.
         const wasHeld = kept.heldBy !== null;
-        this.estimates.set(spec.id, { ...kept, spec, heldBy: null, ...(wasHeld ? { t } : {}) });
+        this.estimates.set(spec.id, {
+          ...kept,
+          spec,
+          heldBy: null,
+          ...(wasHeld ? { t, measured: false } : {}),
+        });
         if (wasHeld) this.changed.add(spec.id);
       } else if (spec.placement.method === 'layout') {
         this.set(spec.id, {
@@ -170,15 +188,15 @@ export class ObjectRegistry {
 
   /**
    * Record an observation. Returns false when ignored: an unknown object, one that is held, an
-   * answer about a moment older than what we already know (a slow camera answer that arrives after
-   * the object was carried), or a camera guess about an object still at its measured layout
-   * position (taped spots are more precise than a lifted detection; once the object has been
-   * carried, the layout is stale).
+   * answer about a moment older than what we already know or than its loss (a slow camera answer
+   * that arrives after the object was carried), or a camera guess about an object still at its
+   * measured layout position (taped spots are more precise than a lifted detection; once the
+   * object has been carried, the layout is stale).
    */
   observe(id: string, obs: Observation): boolean {
     if (!this.specs.has(id) || this.grips.has(id)) return false;
     const est = this.estimates.get(id);
-    if (est && obs.t < est.t) return false;
+    if (est && (obs.t < est.t || (est.lostAt !== undefined && obs.t < est.lostAt))) return false;
     if (obs.source === 'detector' && est?.source === 'layout') return false;
     this.set(id, obs);
     return true;
@@ -195,17 +213,29 @@ export class ObjectRegistry {
       wristFromObject: composePose(invertPose(wrist), objectPose),
       wristTracked: true,
     });
-    this.estimates.set(id, { ...est, heldBy: hand, t });
+    const { lostAt: _found, ...held } = est;
+    this.estimates.set(id, { ...held, heldBy: hand, t });
     this.changed.add(id);
     this.bus.emit('object.grasped', { t, objectId: id, hand, grip, position: est.position });
     return true;
   }
 
   /**
-   * A live source lost the object: its last estimate stays where it was, but stops counting as
-   * located. Not yet implemented: the recording stream fills it in.
+   * A live source lost the object at `t` (the camera frame time of the answer that lost it). Its
+   * last camera estimate is recorded once as a state with no valid flags at the last position,
+   * until the object is observed or grasped again. The lesson keeps reading that position (checks,
+   * pinch targets, overlays), as it did before any source could report a loss, and the object does
+   * not become unplaced, so nothing re-finds it. Ignored for an object that is held (the hand owns
+   * it then), that was never placed or is already lost, that was not placed by a camera (a layout
+   * spot or a hand's release stays where it was), or whose estimate is newer than the loss.
    */
-  lose(_id: string, _t: number): void {}
+  lose(id: string, t: number): void {
+    const est = this.estimates.get(id);
+    if (!est || this.grips.has(id) || est.lostAt !== undefined || t < est.t) return;
+    if (!MEASURED_SOURCES.has(est.source)) return;
+    this.estimates.set(id, { ...est, lostAt: t });
+    this.changed.add(id);
+  }
 
   detach(id: string, t: number, reason: ReleaseReason = 'opened'): void {
     const grip = this.grips.get(id);
@@ -213,7 +243,8 @@ export class ObjectRegistry {
     this.grips.delete(id);
     const est = this.estimates.get(id);
     if (!est) return;
-    this.estimates.set(id, { ...est, heldBy: null, t });
+    // Where the hand let go is carried, not measured, even before the wrist ever moved it.
+    this.estimates.set(id, { ...est, heldBy: null, t, measured: false });
     this.changed.add(id);
     this.bus.emit('object.released', {
       t,
@@ -288,7 +319,8 @@ export class ObjectRegistry {
         id,
         position: est.position,
         orientation: flags & LOCATION_FLAG.orientationValid ? est.orientation : null,
-        confidence: est.confidence,
+        // A loss says nothing about where the object is now, as ObjectTrackRecorder records it.
+        confidence: est.lostAt === undefined ? est.confidence : 0,
         source: est.source,
         locationFlags: flags,
         heldBy: est.heldBy,
@@ -312,6 +344,7 @@ export class ObjectRegistry {
       source: obs.source,
       t: obs.t,
       heldBy: null,
+      ...(obs.measured === false ? { measured: false } : {}),
     });
     this.changed.add(id);
     if (!previous || previous.source !== obs.source) {

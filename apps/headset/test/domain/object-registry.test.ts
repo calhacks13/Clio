@@ -1,7 +1,7 @@
 import { parseProcedure } from '@clio/protocol';
 import { describe, expect, it } from 'vitest';
 import { Emitter } from '../../src/core/emitter';
-import { quatFromAxisAngle } from '../../src/core/math';
+import { quatFromAxisAngle, type Vec3 } from '../../src/core/math';
 import type { AppEvents } from '../../src/domain/events';
 import { ObjectRegistry } from '../../src/domain/world/object-registry';
 
@@ -298,6 +298,127 @@ describe('ObjectRegistry', () => {
     expect(times).toEqual([1500]);
     expect(registry.drainChanges()).toEqual([
       expect.objectContaining({ id: 'jug', observedT: 300 }),
+    ]);
+  });
+
+  it('records a camera position not measured on its frame as valid, never tracked', () => {
+    const { registry, registered } = setup();
+    registry.drainChanges();
+    const at = { position: [0.3, 0.1, -0.3] as Vec3, confidence: 0.6, source: 'detector' as const };
+    registry.observe('jug', { ...at, t: 1, measured: false });
+    expect(registry.drainChanges()).toEqual([
+      expect.objectContaining({ id: 'jug', locationFlags: 2, observedT: 1, confidence: 0.6 }),
+    ]);
+    registry.observe('jug', { ...at, t: 2, measured: true });
+    expect(registry.drainChanges()).toEqual([
+      expect.objectContaining({ locationFlags: 10, observedT: 2 }),
+    ]);
+    registry.observe('jug', { ...at, t: 3, measured: false });
+    expect(registry.drainChanges()).toEqual([expect.objectContaining({ locationFlags: 2 })]);
+    // Measured or not, it is the same camera placement: announced once.
+    expect(registered).toEqual(['cup:layout', 'zone:layout', 'jug:detector']);
+  });
+
+  it('records a loss once at the last position, and tracks again once the object is seen', () => {
+    const { registry } = setup();
+    const at = { position: [0.3, 0.1, -0.3] as Vec3, confidence: 0.8, source: 'detector' as const };
+    registry.observe('jug', { ...at, t: 10 });
+    registry.drainChanges();
+    registry.lose('jug', 20);
+    const [lost] = registry.drainChanges();
+    expect(lost).toEqual(
+      expect.objectContaining({
+        id: 'jug',
+        position: [0.3, 0.1, -0.3],
+        orientation: null,
+        confidence: 0,
+        locationFlags: 0,
+        heldBy: null,
+      }),
+    );
+    expect(lost).not.toHaveProperty('observedT');
+    registry.lose('jug', 30);
+    expect(registry.drainChanges()).toEqual([]);
+    // The lesson still knows where it was last seen; it is not unplaced, so nothing re-finds it.
+    expect(registry.position('jug')).toEqual([0.3, 0.1, -0.3]);
+    expect(registry.unplaced()).toEqual([]);
+    expect(registry.get('jug')?.lostAt).toBe(20);
+    // An answer about a frame from before the loss is stale; a later one tracks it again.
+    expect(registry.observe('jug', { ...at, position: [0.4, 0.1, -0.3], t: 15 })).toBe(false);
+    expect(registry.observe('jug', { ...at, position: [0.4, 0.1, -0.3], t: 40 })).toBe(true);
+    expect(registry.get('jug')?.lostAt).toBeUndefined();
+    expect(registry.drainChanges()).toEqual([
+      expect.objectContaining({ locationFlags: 10, confidence: 0.8, observedT: 40 }),
+    ]);
+  });
+
+  it('ignores a loss of a held object, of a layout or hand placement, or older than the estimate', () => {
+    const { registry } = setup();
+    registry.drainChanges();
+    // A layout spot is not where a camera put it.
+    registry.lose('cup', 5);
+    // Held: the hand owns the estimate, and a hand hiding the object is no loss.
+    registry.observe('jug', {
+      position: [0.3, 0.1, -0.3],
+      confidence: 1,
+      source: 'detector',
+      t: 0,
+    });
+    registry.attach('jug', 'right', { p: [0.3, 0.1, -0.2], q: [0, 0, 0, 1] }, 10);
+    registry.drainChanges();
+    registry.lose('jug', 11);
+    expect(registry.drainChanges()).toEqual([]);
+    // Released where the hand let go: carried, and the tracker losing sight of it changes nothing.
+    registry.updateHeld({ right: { p: [0.5, 0.1, -0.2], q: [0, 0, 0, 1] } }, 20);
+    registry.detach('jug', 30);
+    registry.drainChanges();
+    registry.lose('jug', 31);
+    expect(registry.drainChanges()).toEqual([]);
+    // Seen again at 40: a loss reported about frame 35 is older than that.
+    registry.observe('jug', {
+      position: [0.5, 0.1, -0.3],
+      confidence: 1,
+      source: 'detector',
+      t: 40,
+    });
+    registry.drainChanges();
+    registry.lose('jug', 35);
+    expect(registry.drainChanges()).toEqual([]);
+    expect(registry.get('jug')?.lostAt).toBeUndefined();
+  });
+
+  it('grasps a lost object at its last position and carries it, valid again', () => {
+    const { registry } = setup();
+    registry.observe('jug', {
+      position: [0.3, 0.1, -0.3],
+      confidence: 1,
+      source: 'detector',
+      t: 0,
+    });
+    registry.lose('jug', 5);
+    registry.drainChanges();
+    // Hands hide what they grab: the pinch still finds it where it was last seen.
+    expect(registry.nearest([0.31, 0.1, -0.3], 0.05)?.objectId).toBe('jug');
+    expect(registry.attach('jug', 'left', { p: [0.3, 0.1, -0.2], q: [0, 0, 0, 1] }, 6)).toBe(true);
+    expect(registry.get('jug')?.lostAt).toBeUndefined();
+    expect(registry.drainChanges()).toEqual([
+      expect.objectContaining({ locationFlags: 2, heldBy: 'left', confidence: 1, observedT: 6 }),
+    ]);
+  });
+
+  it('records where a hand let go as carried, even when the wrist never moved it', () => {
+    const { registry } = setup();
+    registry.drainChanges();
+    registry.observe('jug', {
+      position: [0.3, 0.1, -0.3],
+      confidence: 1,
+      source: 'detector',
+      t: 0,
+    });
+    registry.attach('jug', 'right', { p: [0.3, 0.1, -0.2], q: [0, 0, 0, 1] }, 1);
+    registry.detach('jug', 2);
+    expect(registry.drainChanges()).toEqual([
+      expect.objectContaining({ source: 'detector', locationFlags: 2, heldBy: null, observedT: 2 }),
     ]);
   });
 });

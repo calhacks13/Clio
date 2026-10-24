@@ -14,13 +14,14 @@ import type { Workspace } from '../world/workspace';
 // Records what object sources report (TrackedObjectSample) on the bus, for EpisodeRecorder to
 // write. The 2D part goes out as an `objects.observed` observation, unchanged (normalized image
 // coordinates). The 3D part, when asked for, goes out as an `objects.updated` state in the
-// workspace frame with honest location flags: a measured position is tracked, a predicted one
-// (a coasting tracker) is valid but never tracked, and a lost object keeps its last position with
-// no flags, once per loss. Like ObjectRegistry's, a state without a valid position has no
-// observedT: it says what is true when it is written. Nothing is invented: a sample without a
-// score, or with a non-finite number, gets no 3D state, and heldBy is left out (unknown) unless
-// the caller says who holds the object. In the lesson ObjectRegistry owns the 3D estimates, so
-// there only the observations are recorded.
+// workspace frame with honest location flags: a position measured on its frame is tracked; a
+// predicted one (a coasting tracker), or one not measured on that frame (a reused depth, a surface
+// guess), is valid but never tracked; and a lost object keeps its last position with no flags, once
+// per loss. Like ObjectRegistry's, a state without a valid position has no observedT: it says what
+// is true when it is written. Nothing is invented: a sample without a score, or with a non-finite
+// number, gets no 3D state, and heldBy is left out (unknown) unless the caller says who holds the
+// object. In the lesson ObjectRegistry owns the 3D estimates, so there only the observations are
+// recorded.
 
 export interface ObjectTrackRecorderDeps {
   bus: AppBus;
@@ -97,9 +98,13 @@ export class ObjectTrackRecorder {
           // Checked before the transform: normalizing would turn a NaN orientation into identity.
           if (!finite(sample.position) || !finite(sample.orientation ?? [])) return null;
           const measured = sample.status === 'measured';
+          // A box seen on this frame but placed at a reused depth or a surface guess: valid, not
+          // tracked. The orientation, when there is one, was measured with the box.
+          const positionTracked = measured && sample.positionMeasured !== false;
           const orientation = sample.orientation && toWorkspaceQuat(workspace, sample.orientation);
           const position = workspace.toWorkspacePoint(sample.position);
-          let flags = LOCATION_FLAG.positionValid | (measured ? LOCATION_FLAG.positionTracked : 0);
+          let flags =
+            LOCATION_FLAG.positionValid | (positionTracked ? LOCATION_FLAG.positionTracked : 0);
           if (orientation) {
             flags |= LOCATION_FLAG.orientationValid;
             if (measured) flags |= LOCATION_FLAG.orientationTracked;

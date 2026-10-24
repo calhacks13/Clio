@@ -160,6 +160,31 @@ describe('ObjectTrackRecorder', () => {
     ]);
   });
 
+  it('records a box seen on its frame but placed without a fresh depth as valid, not tracked', () => {
+    const { recorder, states } = setup();
+    recorder.record(sample({ positionMeasured: false }));
+    recorder.record(sample({ observedT: 1240, positionMeasured: true }));
+    recorder.record(sample({ observedT: 1290, positionMeasured: false, orientation: YAW }));
+    expect(states().map((s) => [s.locationFlags, s.source, s.observedT])).toEqual([
+      [LOCATION_FLAG.positionValid, 'detector', 1190],
+      [LOCATION_FLAG.positionValid | LOCATION_FLAG.positionTracked, 'detector', 1240],
+      // The orientation was measured with the box; only the position is a guess.
+      [
+        LOCATION_FLAG.positionValid |
+          LOCATION_FLAG.orientationValid |
+          LOCATION_FLAG.orientationTracked,
+        'marker',
+        1290,
+      ],
+    ]);
+  });
+
+  it('never upgrades a predicted sample that claims a measured position', () => {
+    const { recorder, states } = setup();
+    recorder.record(sample({ status: 'predicted', positionMeasured: true }));
+    expect(states().map((s) => s.locationFlags)).toEqual([LOCATION_FLAG.positionValid]);
+  });
+
   it('carries the last position over once while the tracker coasts without a 3D estimate', () => {
     const { recorder, states } = setup();
     recorder.record(sample());
