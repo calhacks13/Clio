@@ -169,6 +169,8 @@ function ending(
 export class WidgetBoard implements WidgetsView {
   /** Insertion order is the snapshot's order: oldest first. */
   private readonly widgets = new Map<string, Widget>();
+  /** Timers still running from a lesson that ended: shown, but no lesson is waiting on them. */
+  private readonly leftOver = new Set<string>();
   private seq = 0;
   private snap: WidgetSnapshot = NO_WIDGETS;
   private offs: (() => void)[] = [];
@@ -269,10 +271,10 @@ export class WidgetBoard implements WidgetsView {
     return summarise(this.snap.widgets, this.deps.clock.now());
   }
 
-  /** A timer is running. */
+  /** A timer this lesson started is running. */
   waiting(): boolean {
     for (const w of this.widgets.values()) {
-      if (w.kind === 'timer' && w.status === 'active') return true;
+      if (w.kind === 'timer' && w.status === 'active' && !this.leftOver.has(w.id)) return true;
     }
     return false;
   }
@@ -679,6 +681,8 @@ export class WidgetBoard implements WidgetsView {
   private lessonOver(t: number): void {
     for (const w of this.widgets.values()) {
       if (w.kind !== 'timer' || w.status !== 'active') this.remove(w, t, 'lesson', APP);
+      // It keeps counting down, but the next lesson's stuck nudge does not wait for it.
+      else this.leftOver.add(w.id);
     }
   }
 
@@ -809,6 +813,7 @@ export class WidgetBoard implements WidgetsView {
 
   private remove(w: Widget, t: number, reason: WidgetCloseReason, cause: Cause): void {
     this.widgets.delete(w.id);
+    this.leftOver.delete(w.id);
     this.publish();
     this.record(w, t, { op: 'close', reason, ...cause }, null);
   }

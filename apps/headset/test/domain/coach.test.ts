@@ -758,10 +758,9 @@ describe('CoachSession', () => {
     });
   });
 
-  it('connects with every coach tool and an instruction that holds the plan', async () => {
+  it('connects with every coach tool but the widgets (no board) and an instruction that holds the plan', async () => {
     const templates = [{ id: 'ph-indicator', title: 'pH indicator', summary: 'Acids and bases.' }];
     const { agent, mic } = await setup({ templates });
-    expect(agent.setup?.tools).toEqual(COACH_TOOL_NAMES);
     expect(agent.setup?.tools).toEqual([
       'start_lesson',
       'end_lesson',
@@ -774,13 +773,6 @@ describe('CoachSession', () => {
       'show_demo',
       'flag_mistake',
       'look_closer',
-      'show_timer',
-      'show_progress',
-      'show_checklist',
-      'show_choices',
-      'show_value',
-      'show_caution',
-      'clear_widget',
     ]);
     expect(agent.setup?.systemInstruction).toBe(
       buildSystemInstruction({
@@ -788,6 +780,7 @@ describe('CoachSession', () => {
         lessonNotes: 'Cup B is the base.',
         templates,
         plan: planView(),
+        widgets: false,
       }),
     );
     expect(agent.setup?.systemInstruction).toContain(recitePlan(planView()));

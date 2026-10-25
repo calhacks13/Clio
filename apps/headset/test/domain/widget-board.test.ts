@@ -1150,6 +1150,16 @@ describe('WidgetBoard lifecycle', () => {
       ]);
     }
 
+    // A timer from the lesson that ended holds back no nudge of the next one.
+    const carried = setup();
+    carried.tool.timer(GLUE);
+    expect(carried.board.waiting()).toBe(true);
+    carried.bus.emit('procedure.aborted', { t: 2000, reason: 'user' });
+    expect(carried.ids()).toEqual(['timer']);
+    expect(carried.board.waiting()).toBe(false);
+    carried.tool.timer({ seconds: 10, label: 'Tea' });
+    expect(carried.board.waiting()).toBe(true);
+
     const revision = setup();
     revision.tool.caution(HOT);
     revision.tool.progress(SCREWS);

@@ -53,7 +53,7 @@ export interface CoachSessionDeps {
   templates?: readonly TemplateSummary[];
   /** What the learner's widgets show (domain/widgets), or none with ?widgets=0. */
   widgets?: WidgetsView;
-  /** The tools the model is given. Default every coach tool. */
+  /** The tools the model is given. Default every coach tool, the widgets' only with `widgets`. */
   tools?: readonly CoachToolName[];
 }
 
@@ -292,8 +292,10 @@ export class CoachSession {
     });
   }
 
+  /** Every coach tool; the widgets' only with a board to show them. */
   private tools(): readonly CoachToolName[] {
-    return this.deps.tools ?? COACH_TOOL_NAMES;
+    if (this.deps.tools) return this.deps.tools;
+    return this.deps.widgets ? COACH_TOOL_NAMES : COACH_TOOL_NAMES.filter((n) => !isWidgetTool(n));
   }
 
   private planChanged(): void {
