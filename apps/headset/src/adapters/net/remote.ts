@@ -1,5 +1,7 @@
 import type {
   DemoClip,
+  FocusRequest,
+  FocusResponse,
   PlanRequest,
   PlanResponse,
   SceneAskRequest,
@@ -49,6 +51,22 @@ export class RemoteSceneAsker implements SceneAsker {
   constructor(private readonly api: ApiClient) {}
   ask(request: SceneAskRequest): Promise<SceneAskResponse> {
     return this.api.askScene(request);
+  }
+}
+
+/**
+ * The action focus's port (domain/session/action-focus.ts): Robotics-ER 2 boxes the step's objects
+ * and names the next thing to touch.
+ */
+export interface FocusFinder {
+  focus(request: FocusRequest): Promise<FocusResponse>;
+}
+
+/** Robotics-ER 2's action focus on one sharp frame (POST /api/vision/focus). */
+export class RemoteFocusFinder implements FocusFinder {
+  constructor(private readonly api: ApiClient) {}
+  focus(request: FocusRequest): Promise<FocusResponse> {
+    return this.api.focus(request);
   }
 }
 

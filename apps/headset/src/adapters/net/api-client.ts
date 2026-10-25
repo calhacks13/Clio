@@ -11,6 +11,9 @@ import {
   EpisodeCreateResponseSchema,
   type EpisodeFinish,
   EpisodeFinishResponseSchema,
+  type FocusRequest,
+  type FocusResponse,
+  FocusResponseSchema,
   type HealthResponse,
   HealthResponseSchema,
   type LocateRequest,
@@ -82,6 +85,11 @@ export class ApiClient {
 
   locate(request: LocateRequest): Promise<LocateResponse> {
     return this.request('POST', ApiPaths.visionLocate, request, LocateResponseSchema);
+  }
+
+  /** Robotics-ER 2's action focus on one sharp frame (503 without a Gemini key, 504 when slow). */
+  focus(request: FocusRequest): Promise<FocusResponse> {
+    return this.request('POST', ApiPaths.visionFocus, request, FocusResponseSchema);
   }
 
   askScene(request: SceneAskRequest): Promise<SceneAskResponse> {
