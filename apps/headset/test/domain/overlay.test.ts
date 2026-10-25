@@ -1,7 +1,7 @@
 import { parseProcedure } from '@clio/protocol';
 import { describe, expect, it } from 'vitest';
 import { Emitter } from '../../src/core/emitter';
-import type { AppEvents } from '../../src/domain/events';
+import type { AppEvents, HighlightStyle } from '../../src/domain/events';
 import { ACCENTS, HINT_OPACITY } from '../../src/domain/overlay/accents';
 import { OverlayModel } from '../../src/domain/overlay/overlay-model';
 import type { PlanView, StepStatus } from '../../src/domain/plan/recital';
@@ -502,5 +502,138 @@ describe('OverlayModel highlight accents', () => {
     bus.emit('overlay.highlight', { t: 7000, objectId: 'cap', style: 'warning', source: 'coach' });
     expect(accent(7100)).toEqual({ color: ACCENTS.stop, opacity: 1 });
     expect(accent(7700)).toEqual({ color: ACCENTS.act, opacity: 1 });
+  });
+});
+
+describe('OverlayModel lights what the live tracker would, for when it is down', () => {
+  const lit = parseProcedure({
+    schema: 'clio.procedure/1',
+    id: 'lit',
+    version: 1,
+    title: 'Refill',
+    summary: 'S',
+    workspace: { size: [1, 1] },
+    objects: [
+      { id: 'cap', label: 'cap', placement: { method: 'detect' } },
+      { id: 'jug', label: 'jug', placement: { method: 'detect' } },
+      { id: 'rag', label: 'rag', placement: { method: 'detect' } },
+    ],
+    steps: [
+      {
+        id: 'open',
+        instruction: 'Open the cap.',
+        targets: ['cap', 'rag'],
+        show: [{ object: 'cap', phrase: 'blue cap', description: 'Round blue cap' }],
+        success: { type: 'confirm' },
+      },
+      {
+        id: 'pour',
+        instruction: 'Pour.',
+        targets: ['cap'],
+        action: { verb: 'pour', object: 'jug', target: 'cap' },
+        success: { type: 'confirm' },
+      },
+    ],
+  });
+
+  function litSetup() {
+    const bus = new Emitter<AppEvents>();
+    const model = new OverlayModel(bus, {
+      procedure: () => lit,
+      label: (id) => id,
+      plan: () => null,
+    });
+    model.attach();
+    const enter = (stepId: string, t = 0) =>
+      bus.emit('step.entered', {
+        t,
+        stepId,
+        index: lit.steps.findIndex((s) => s.id === stepId),
+        instruction: 'x',
+        targets: lit.steps.find((s) => s.id === stepId)?.targets ?? [],
+      });
+    const answer = (stepId: string, actionId: string | null, t = 10) =>
+      bus.emit('focus.answered', {
+        t,
+        frameT: t - 5,
+        stepId,
+        detections: [],
+        action: null,
+        actionId,
+        model: 'er',
+        latencyMs: 5,
+      });
+    const highlight = (objectId: string, style: HighlightStyle, t: number) =>
+      bus.emit('overlay.highlight', { t, objectId, style, source: 'coach' });
+    const lights = (t: number) =>
+      model.snapshot(t).highlights.map((h) => [h.objectId, h.style, h.source]);
+    return { model, enter, answer, highlight, lights };
+  }
+
+  it("lights a step's show items, else its targets and then its action's objects", () => {
+    const { enter, lights } = litSetup();
+    // The rag is a target the step does not show: not lit, as the tracker would not light it.
+    enter('open');
+    expect(lights(1)).toEqual([['cap', 'target', 'auto']]);
+    enter('pour');
+    expect(lights(1)).toEqual([
+      ['cap', 'target', 'auto'],
+      ['jug', 'target', 'auto'],
+    ]);
+  });
+
+  it("lights the action focus's item for the rest of the step, until it names another", () => {
+    const { enter, answer, lights } = litSetup();
+    enter('open');
+    answer('open', 'rag');
+    expect(lights(60_000)).toEqual([
+      ['cap', 'target', 'auto'],
+      ['rag', 'target', 'auto'],
+    ]);
+    // Another step's answer, nothing to touch, an object the lesson lacks: no change.
+    answer('pour', 'jug');
+    answer('open', null);
+    answer('open', 'kettle');
+    answer('open', 'jug');
+    expect(lights(60_000)).toEqual([
+      ['cap', 'target', 'auto'],
+      ['jug', 'target', 'auto'],
+    ]);
+    // The step's own item stays lit when the focus moves past it.
+    answer('open', 'cap');
+    answer('open', 'rag');
+    expect(lights(60_000)).toEqual([
+      ['cap', 'target', 'auto'],
+      ['rag', 'target', 'auto'],
+    ]);
+    enter('pour');
+    expect(lights(60_000)).toEqual([
+      ['cap', 'target', 'auto'],
+      ['jug', 'target', 'auto'],
+    ]);
+  });
+
+  it("keeps the coach's target for the step, one at a time; a hint 5 s; a warning a pulse", () => {
+    const { enter, highlight, lights } = litSetup();
+    enter('open');
+    highlight('jug', 'target', 100);
+    highlight('rag', 'attention', 100);
+    expect(lights(60_000)).toEqual([
+      ['cap', 'target', 'auto'],
+      ['jug', 'target', 'coach'],
+    ]);
+    highlight('rag', 'target', 61_000);
+    highlight('jug', 'warning', 61_000);
+    expect(lights(61_100)).toEqual([
+      ['cap', 'target', 'auto'],
+      ['rag', 'target', 'coach'],
+      ['jug', 'warning', 'coach'],
+    ]);
+    expect(lights(61_600)).toEqual([
+      ['cap', 'target', 'auto'],
+      ['rag', 'target', 'coach'],
+    ]);
+    enter('pour');
+    expect(lights(61_700).filter(([, , source]) => source === 'coach')).toEqual([]);
   });
 });
