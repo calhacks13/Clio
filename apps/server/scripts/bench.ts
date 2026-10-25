@@ -86,6 +86,8 @@ interface Tally {
 interface Usage {
   calls: number;
   input: number;
+  /** Input tokens served from Gemini's implicit cache (a prefix it saw lately), billed less. */
+  cached: number;
   output: number;
   thoughts: number;
 }
@@ -95,7 +97,7 @@ interface Usage {
  * returns what was used since the last take. The judge plans with an unmetered client.
  */
 function metered(ai: GeminiClient): { ai: GeminiClient; take(): Usage } {
-  let used: Usage = { calls: 0, input: 0, output: 0, thoughts: 0 };
+  let used: Usage = { calls: 0, input: 0, cached: 0, output: 0, thoughts: 0 };
   const client: GeminiClient = {
     authTokens: ai.authTokens,
     models: {
@@ -107,12 +109,14 @@ function metered(ai: GeminiClient): { ai: GeminiClient; take(): Usage } {
           response as {
             usageMetadata?: {
               promptTokenCount?: number;
+              cachedContentTokenCount?: number;
               candidatesTokenCount?: number;
               thoughtsTokenCount?: number;
             };
           }
         ).usageMetadata;
         used.input += usage?.promptTokenCount ?? 0;
+        used.cached += usage?.cachedContentTokenCount ?? 0;
         used.output += usage?.candidatesTokenCount ?? 0;
         used.thoughts += usage?.thoughtsTokenCount ?? 0;
         return response;
@@ -123,7 +127,7 @@ function metered(ai: GeminiClient): { ai: GeminiClient; take(): Usage } {
     ai: client,
     take() {
       const taken = used;
-      used = { calls: 0, input: 0, output: 0, thoughts: 0 };
+      used = { calls: 0, input: 0, cached: 0, output: 0, thoughts: 0 };
       return taken;
     },
   };
@@ -291,7 +295,7 @@ async function main(): Promise<void> {
   console.log(
     '\nModel and scene: met, other issues the judge named, lesson starts and plan complete ' +
       '(median / p90), and per lesson the planner calls and tokens (median: input, output, ' +
-      'thoughts)',
+      'thoughts; cached input in brackets)',
   );
   for (const [key, t] of [...tallies, ...sceneTallies]) {
     const met = judging ? `${t.met}/${t.criteria}` : '-';
@@ -300,7 +304,8 @@ async function main(): Promise<void> {
       `  ${key.padEnd(width + 26)}  ${met.padStart(6)}  ${`${t.issues} issues`.padStart(9)}  ` +
         `${seconds(median(t.starts))} / ${seconds(quantile(t.starts, 0.9))}  ` +
         `${seconds(median(t.times))} / ${seconds(quantile(t.times, 0.9))}  ` +
-        `${per((u) => u.calls)} calls, ${per((u) => u.input)} in, ${per((u) => u.output)} out, ` +
+        `${per((u) => u.calls)} calls, ${per((u) => u.input)} in (${per((u) => u.cached)}), ` +
+        `${per((u) => u.output)} out, ` +
         `${per((u) => u.thoughts)} thoughts`,
     );
   }

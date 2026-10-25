@@ -276,8 +276,9 @@ By scene, before and now: fridge 15/15 and 10/10; photo pH 9/15 and 10/10; drawn
    Asking about look-alikes alone didn't help either. Try a real scene with a clear AAA, or a
    closer look (`look_closer`-style crop) at the candidates before the step that takes them.
 5. **Cost**: each call sends the views again, so a lesson reads about 23k input tokens instead
-   of 9.7k. One view for the step writers, or explicit caching of the views and the system
-   instruction across the parallel calls, would cut that; not measured.
+   of 9.7k. Gemini's implicit cache already served 6.4k of 30k in the one lesson metered for it
+   (the bench prints cached input in brackets). One view for the step writers, or explicit
+   caching of the views and the system instruction across the parallel calls, would cut more.
 6. **Drop `sightings` from stage 1** unless something uses them early (only the bench overlay
    does today): they are 18 to 22% of the card's characters at minimal (about 90 to 190 tokens,
    0.3 to 0.7 s).
