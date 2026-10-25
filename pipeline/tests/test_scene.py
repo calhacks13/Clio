@@ -8,6 +8,7 @@ import shutil
 from pathlib import Path
 
 import jsonschema
+import numpy as np
 import pytest
 
 from clio_pipeline import models as models_module
@@ -162,10 +163,11 @@ def test_a_models_failure_fails_its_stage_and_the_scene_is_still_written(data, m
 def test_objects_that_break_the_schema_or_miss_files_are_left_out(data, fake_models):
     episode, derived, scenes = _paths(data)
     fake_models["entries"] = [
-        model("cup"),
+        model("cup", size=[np.float32(0.08), np.float64(0.1), 0.08]),
         model("box", size=[0.1, 0.1]),
         model("lid"),
         "not a model",
+        model("spoon", size=[0.1, float("nan"), 0.1]),
     ]
     fake_models["unwritten"] = {"crop-lid-1.jpg"}
 
@@ -177,7 +179,9 @@ def test_objects_that_break_the_schema_or_miss_files_are_left_out(data, fake_mod
     assert stage["detail"].startswith("left out box: $.size: ")
     assert "left out lid: its crop-lid-1.jpg was not written" in stage["detail"]
     assert "left out #3: not an object (str)" in stage["detail"]
-    assert _schema_errors(result.scene) == []
+    assert "left out spoon: not strict JSON (" in stage["detail"]
+    assert result.scene["objects"][0]["size"] == pytest.approx([0.08, 0.1, 0.08])
+    assert _schema_errors(_read(result.out_dir / "scene.json")) == []
 
 
 @pytest.mark.parametrize("returned", [None, {"cup": 1}])

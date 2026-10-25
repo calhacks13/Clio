@@ -24,6 +24,7 @@ makes the scene stale. With `if_stale=True` an up-to-date scene is kept and noth
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 from collections.abc import Callable
@@ -44,7 +45,7 @@ from .builddir import (
     swap_in,
     utc_now,
 )
-from .derived_io import DERIVED_SCHEMA_ID, write_json
+from .derived_io import DERIVED_SCHEMA_ID, dump_json, write_json
 from .episode import load_episode
 from .keyframes import load_keyframes
 from .schema import SCENE_SCHEMA, SchemaSet, default_schemas, parse_json
@@ -194,7 +195,7 @@ def _valid_objects(
     scene: dict[str, Any], objects: list[Any], work: Path
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """The objects that fit scene.json (each checked in the scene as it stands) and whose files
-    the build wrote, and why each other one was left out."""
+    the build wrote, as plain JSON, and why each other one was left out."""
     try:
         schemas: SchemaSet | None = default_schemas()
     except FileNotFoundError:  # installed away from packages/protocol: files are still checked
@@ -202,25 +203,33 @@ def _valid_objects(
     kept, problems = [], []
     for k, obj in enumerate(objects):
         name = obj.get("id", f"#{k}") if isinstance(obj, dict) else f"#{k}"
-        problem = None
-        if not isinstance(obj, dict):
-            problem = f"not an object ({type(obj).__name__})"
-        elif schemas is not None and (
-            found := schemas.first_problem(SCENE_SCHEMA, {**scene, "objects": [obj]})
-        ):
-            path, message = found
-            problem = f"{path.replace('$.objects[0]', '$')}: {message}"
-        else:
-            missing = [f for f in _files_of(obj) if not (work / f).is_file()]
-            if missing:
-                problem = (
-                    f"its {', '.join(missing)} {'was' if len(missing) == 1 else 'were'} not written"
-                )
+        try:  # numpy values become plain ones; NaN and the like are refused
+            obj = json.loads(dump_json(obj))
+        except (TypeError, ValueError) as e:
+            problems.append(f"left out {name}: not strict JSON ({e})")
+            continue
+        problem = _object_problem(scene, obj, work, schemas)
         if problem is None:
             kept.append(obj)
         else:
             problems.append(f"left out {name}: {problem}")
     return kept, problems
+
+
+def _object_problem(
+    scene: dict[str, Any], obj: Any, work: Path, schemas: SchemaSet | None
+) -> str | None:
+    if not isinstance(obj, dict):
+        return f"not an object ({type(obj).__name__})"
+    if schemas is not None:
+        found = schemas.first_problem(SCENE_SCHEMA, {**scene, "objects": [obj]})
+        if found is not None:
+            path, message = found
+            return f"{path.replace('$.objects[0]', '$')}: {message}"
+    missing = [f for f in _files_of(obj) if not (work / f).is_file()]
+    if missing:
+        return f"its {', '.join(missing)} {'was' if len(missing) == 1 else 'were'} not written"
+    return None
 
 
 def _files_of(obj: dict[str, Any]) -> list[str]:
