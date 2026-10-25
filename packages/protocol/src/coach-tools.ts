@@ -30,6 +30,17 @@ export const COACH_TOOLS = {
         .describe('A curated lesson id from your instructions, e.g. "ph-indicator"'),
     }),
   },
+  end_lesson: {
+    description:
+      'End the lesson now without starting another: when the learner wants to stop, or says the ' +
+      'lesson is not what they want without saying what they do want. It also cancels a lesson ' +
+      'still being planned. Its steps and highlights go at once. Then ask in a few words what ' +
+      'they would like to do. When they name something else, call start_lesson instead: it ' +
+      'replaces the lesson.',
+    args: z.object({
+      reason: z.string().min(1).max(200).describe('Why, in a few words, e.g. "not what they want"'),
+    }),
+  },
   revise_plan: {
     description:
       'Re-plan every step that is not done yet when reality differs a lot from the plan: missing ' +

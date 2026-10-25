@@ -93,6 +93,7 @@ function handlers(log: string[] = []): ToolHandlers {
   };
   return {
     start_lesson: ok('start_lesson'),
+    end_lesson: ok('end_lesson'),
     revise_plan: ok('revise_plan'),
     add_step: ok('add_step'),
     update_step: ok('update_step'),
@@ -750,6 +751,7 @@ describe('CoachSession', () => {
     expect(agent.setup?.tools).toEqual(COACH_TOOL_NAMES);
     expect(agent.setup?.tools).toEqual([
       'start_lesson',
+      'end_lesson',
       'revise_plan',
       'add_step',
       'update_step',
@@ -1391,6 +1393,9 @@ describe('system prompt', () => {
       /Every time you ask them to\s+touch, move or operate something, call highlight on it \(style "target"\) in that same turn,\s+before you say it/,
     );
     expect(prompt).toMatch(/If it is not in the plan, give look_for/);
+    expect(prompt).toMatch(
+      /If they did not say what they want, call end_lesson and\s+ask in a few words/,
+    );
     expect(prompt).toContain('very brief: under 15 words per turn');
   });
 

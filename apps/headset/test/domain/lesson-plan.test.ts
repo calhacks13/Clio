@@ -19,6 +19,7 @@ import type { AppEvents } from '../../src/domain/events';
 import { OverlayModel } from '../../src/domain/overlay/overlay-model';
 import { EpisodeRecorder } from '../../src/domain/recording/recorder';
 import { MemoryEpisodeSink } from '../../src/domain/recording/sink';
+import { ActionFocus } from '../../src/domain/session/action-focus';
 import {
   type EpisodeContext,
   LessonController,
@@ -1642,6 +1643,91 @@ describe('the learner wants something else', () => {
     expect(first?.finish?.outcome).toBe('aborted');
     expect(next?.meta.procedure?.title).toBe('Make tea');
     expect(next?.finish).toBeNull();
+  });
+});
+
+describe('ending a lesson without another', () => {
+  it('ends the running lesson at once: its episode, its steps and every light', async () => {
+    const { bus, clock, lesson, registry, tool, result, sink, begin } = setup();
+    const tracking = new LiveTracking({ bus, registry, procedure: () => lesson.procedure });
+    tracking.attach();
+    const overlay = new OverlayModel(bus, lesson.view());
+    overlay.attach();
+    const looks: string[] = [];
+    const focus = new ActionFocus({
+      bus,
+      clock,
+      finder: {
+        focus: async (r) => {
+          looks.push(r.step.instruction);
+          return { detections: [], action: null, model: 'er', latencyMs: 1 };
+        },
+      },
+      frames: { grab: async () => ({ image: { mimeType: 'image/jpeg', data: 'AAAA' }, t: 0 }) },
+      anchors: { anchor: () => {} },
+      tracking,
+      view: lesson.view(),
+      lesson,
+    });
+    focus.attach();
+    await begin();
+    expect(tracking.objects.filter(isShown).map((o) => o.id)).toEqual(['cap']);
+    const aborted: string[] = [];
+    bus.on('procedure.aborted', ({ reason }) => aborted.push(reason));
+    expect(result(await tool('end_lesson', { reason: 'not what they want' }))).toEqual({
+      ended: 'add wiper fluid',
+    });
+    expect(aborted).toEqual(['not what they want']);
+    expect(lesson.procedure).toBeNull();
+    expect(lesson.view().plan()).toBeNull();
+    expect(result(await tool('show_demo', {}))).toEqual({ error: 'No lesson is running.' });
+    // The HUD asks what they want to do, not "Lesson complete!".
+    expect(lesson.phase).toBe('idle');
+    expect(tracking.objects).toEqual([]);
+    expect(overlay.snapshot(clock.now())).toMatchObject({
+      phase: 'idle',
+      title: null,
+      instruction: null,
+      highlights: [],
+    });
+    expect(focus.tick(clock.advance(10_000))).toBeNull();
+    expect(looks).toEqual([]);
+    await lesson.settled();
+    expect(sink.only().finish?.outcome).toBe('aborted');
+    // Another lesson starts as usual.
+    await begin();
+    expect(lesson.phase).toBe('lesson');
+  });
+
+  it('cancels a lesson being planned or written, and says so when there is none', async () => {
+    let answer: (r: PlanResponse) => void = () => {};
+    const held = setup({ planner: { plan: () => new Promise((r) => (answer = r)) } });
+    expect(held.result(await held.tool('end_lesson', { reason: 'stop' }))).toEqual({
+      ended: null,
+      note: 'No lesson was running.',
+    });
+    await held.tool('start_lesson', { goal: 'add wiper fluid' });
+    expect(held.result(await held.tool('end_lesson', { reason: 'stop' }))).toEqual({
+      ended: 'add wiper fluid',
+    });
+    expect(held.lesson.phase).toBe('idle');
+    answer({ planId: 'refill-fluid', procedure: plan, warnings: [] });
+    await held.lesson.settled();
+    expect(held.lesson.procedure).toBeNull();
+    expect(held.sink.episodes.size).toBe(0);
+
+    const writing = setup({
+      ...gemini,
+      planner: { plan: async () => Promise.reject(new Error('planner down')) },
+    });
+    await writing.tool('start_lesson', { goal: 'add wiper fluid' });
+    await writing.lesson.settled();
+    expect(writing.result(await writing.tool('end_lesson', { reason: 'stop' }))).toEqual({
+      ended: 'add wiper fluid',
+    });
+    expect(
+      writing.result(await writing.tool('add_step', { text: 'Open it.', done_when: 'it is open' })),
+    ).toEqual({ error: 'No lesson is running. Call start_lesson first.' });
   });
 });
 

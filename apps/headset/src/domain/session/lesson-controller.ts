@@ -391,6 +391,7 @@ export class LessonController {
     return {
       start_lesson: ({ goal, context, template_id }) =>
         this.startLesson(goal, context, template_id),
+      end_lesson: ({ reason }) => this.endLesson(reason),
       revise_plan: ({ reason }, { callId }) => this.revisePlan(reason, callId),
       add_step: (args, { callId }) =>
         this.op(() =>
@@ -421,10 +422,7 @@ export class LessonController {
       return { ok: true, result: { status, goal, already: true } };
     }
     // What it replaces, so the coach can say so.
-    const replaced =
-      (this.planning && !this.planning.revision ? this.planning.goal : null) ??
-      this.draft?.goal ??
-      (this.activeRunner() ? this.goal : null);
+    const replaced = this.lessonGoal();
     for (const abandon of this.abandons) abandon();
     const attempt = ++this.attempt;
     this.planning = {
@@ -584,18 +582,47 @@ export class LessonController {
       : { ok: false, error: r.error };
   }
 
+  /**
+   * The learner wants to stop, or the lesson is not what they want and they haven't said what is:
+   * it ends at once, without another. A lesson being planned or written is dropped, and one
+   * running is aborted, so its episode ends aborted and its steps and lights go; the HUD asks
+   * what they want to do. Answers what it ended, if anything.
+   */
+  endLesson(reason: string): ToolOutcome {
+    const ended = this.lessonGoal();
+    if (ended === null)
+      return { ok: true, result: { ended: null, note: 'No lesson was running.' } };
+    const runner = this.activeRunner();
+    this.abandonPlanning();
+    runner?.abort(reason.trim() || 'ended by the coach', this.deps.clock.now());
+    // Its plan must not stand in for a lesson any more (a demonstration, the view).
+    this.runner = null;
+    this.setPhase('idle');
+    return { ok: true, result: { ended } };
+  }
+
   async stop(reason: string): Promise<void> {
     // Give up on a plan in flight rather than waiting for it and starting a lesson nobody sees,
     // and on the rest of a plan still being written.
-    if (this.planning || this.draft || this.abandons.size > 0) {
-      this.planning = null;
-      this.draft = null;
-      this.attempt++;
-      for (const abandon of this.abandons) abandon();
-    }
+    this.abandonPlanning();
     if (this.runner?.state.status === 'running') this.runner.abort(reason, this.deps.clock.now());
     this.watcher?.stop();
     await this.settled();
+  }
+
+  /** The lesson on its way or under way, by its goal: being planned, being written, or running. */
+  private lessonGoal(): string | null {
+    if (this.planning && !this.planning.revision) return this.planning.goal;
+    return this.draft?.goal ?? (this.activeRunner() ? this.goal : null);
+  }
+
+  /** Gives up on planning in flight: a lesson being planned or written, a re-plan, the rest. */
+  private abandonPlanning(): void {
+    if (!this.planning && !this.draft && this.abandons.size === 0) return;
+    this.planning = null;
+    this.draft = null;
+    this.attempt++;
+    for (const abandon of this.abandons) abandon();
   }
 
   /** Resolves when background work (planning, grounding, recording uploads) has finished. */
