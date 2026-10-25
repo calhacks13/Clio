@@ -206,29 +206,6 @@ describe('LiveObjects', () => {
     expect(live.lit('jug')).toBe(false);
   });
 
-  it("draws the tracker's box with the outline, and says who placed the object and how sure", async () => {
-    const { live, clock } = setup();
-    live.handle(frame(41, 900, [detection('cap', { source: 'er', score: 0.8 })]));
-    await flush();
-    const [view] = live.views(clock.now);
-    expect(view).toMatchObject({ state: 'tracking', source: 'er', score: 0.8 });
-    const box = view?.placement.box;
-    if (!view || !box) throw new Error('no box');
-    // Four corners around the outline, on its plane, in the room.
-    expect(box.corners).toHaveLength(4);
-    expect(box.points).toHaveLength(4);
-    const ys = view.placement.outline.points.map(([, y]) => y);
-    expect(box.corners[0]?.[1]).toBeGreaterThanOrEqual(Math.max(...ys) - 1e-9);
-    expect(box.corners[3]?.[1]).toBeLessThanOrEqual(Math.min(...ys) + 1e-9);
-
-    // A tracker that omits the source, and a loss: the view keeps its last outline a moment,
-    // saying what the tracker says now.
-    live.handle(frame(42, 940, [detection('cap')]));
-    expect(live.views(clock.now)[0]).toMatchObject({ source: null, score: 0.9 });
-    live.handle(frame(43, 980, [lost('cap')]));
-    expect(live.views(clock.now)[0]).toMatchObject({ state: 'lost', source: null, score: null });
-  });
-
   it('draws the next detections at once at the remembered distance, as not measured', async () => {
     const { live, observe, samples, clock, table } = setup();
     live.handle(frame(1, 900, [detection('cap')]));

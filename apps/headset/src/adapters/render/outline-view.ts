@@ -111,11 +111,6 @@ export class PrimaryOutlineView {
     this.target = 0;
   }
 
-  /** Whether its name floats over the glow (off where a box's tag carries it, live-boxes.ts). */
-  set named(named: boolean) {
-    this.label.visible = named;
-  }
-
   /** Faded out completely (or never shown). */
   get dark(): boolean {
     return this.opacity === 0 && this.target === 0;

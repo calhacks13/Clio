@@ -8,15 +8,7 @@ import {
 } from './camera-model';
 import type { DepthHit, DepthSource } from './depth-source';
 import type { SurfaceRaycaster } from './grounding';
-import {
-  type Billboard,
-  billboard,
-  boxPolygon,
-  liftOutline,
-  type ObjectOutline,
-  outlinePoint,
-  type Point2,
-} from './outline';
+import { billboard, boxPolygon, liftOutline, type ObjectOutline, outlinePoint } from './outline';
 import { workspaceInFrontOf } from './workspace';
 
 // Where the main object is in the room. The camera saw it along rays from where it was at capture
@@ -36,8 +28,7 @@ import { workspaceInFrontOf } from './workspace';
 //   fixed    a set distance along the point's ray.
 // The outline goes on a plane through the object that faces the camera, every vertex on its own
 // camera ray, so from the camera (and from both eyes, now that the depth is right) it covers the
-// object. The finder's box goes on the same plane the same way, so it frames what the outline
-// covers.
+// object.
 
 /**
  * Hits lower than this (m above the floor; local-floor puts it at y = 0) are the floor, which
@@ -80,21 +71,6 @@ export interface ObjectDepth {
   kind: DepthKind;
 }
 
-/**
- * The finder's box on the outline's plane: the image's rectangle where the camera saw it, at the
- * object's distance. On the plane it is turned with the camera's roll, and only nearly a
- * rectangle off the camera's axis (the plane faces the camera, not the image).
- */
-export interface PlacedBox {
-  /**
-   * Its corners on the plane about the placement's center, in meters (x right, y up as seen from
-   * the camera): the image's top left, top right, bottom right and bottom left.
-   */
-  corners: Point2[];
-  /** World space: the same corners. */
-  points: Vec3[];
-}
-
 export interface Placement {
   /** World space: the object, and the center of its outline's plane. */
   center: Vec3;
@@ -105,8 +81,6 @@ export interface Placement {
   /** World space: the top center of the outline, where the name goes (just above). */
   label: Vec3;
   depth: DepthKind;
-  /** The finder's box on the same plane, when it gave one. */
-  box?: PlacedBox;
 }
 
 /**
@@ -285,51 +259,13 @@ export function placeOutline(
   if (!points2 || !plane) return null;
   const xs = points2.map(([x]) => x);
   const top = Math.max(...points2.map(([, y]) => y));
-  // Without an outline the box is the outline: lifted once.
-  const corners =
-    mask.box && (mask.outline ? liftBox(mask.box, model, head, depth.center) : points2);
   return {
     center: depth.center,
     outline: { points: points2, shape: mask.outline ? 'contour' : 'box' },
     points: points2.map((p) => outlinePoint(plane, depth.center, p)),
     label: outlinePoint(plane, depth.center, [(Math.min(...xs) + Math.max(...xs)) / 2, top]),
     depth: depth.kind,
-    ...(corners && { box: boxOnPlane(corners, plane, depth.center) }),
   };
-}
-
-/** A normalized box's corners on the plane through `center` that faces the camera. */
-function liftBox(
-  box: NonNullable<ObjectMask['box']>,
-  model: CameraModel,
-  head: Pose,
-  center: Readonly<Vec3>,
-): Point2[] | null {
-  return liftOutline(boxPolygon([...box]), model, head, center);
-}
-
-function boxOnPlane(corners: Point2[], plane: Billboard, center: Readonly<Vec3>): PlacedBox {
-  return {
-    corners: corners.map(([x, y]): Point2 => [x, y]),
-    points: corners.map((p) => outlinePoint(plane, center, p)),
-  };
-}
-
-/**
- * Another finder's box (one Robotics-ER 2 drew on the frame captured with the head at `head`) on
- * the plane through `center` that faces that frame's camera: the object's distance as the
- * tracker measured it, so it lands where the object's own box would. Null when a corner's ray
- * misses the plane.
- */
-export function placeBox(
-  box: NonNullable<ObjectMask['box']>,
-  head: Pose,
-  model: CameraModel,
-  center: Readonly<Vec3>,
-): PlacedBox | null {
-  const plane = billboard(center, composePose(head, model.headFromCamera).p);
-  const corners = plane && liftBox(box, model, head, center);
-  return plane && corners ? boxOnPlane(corners, plane, center) : null;
 }
 
 /**

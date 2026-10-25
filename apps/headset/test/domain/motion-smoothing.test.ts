@@ -27,24 +27,15 @@ const SQUARE: Point2[] = [
   [-0.05, 0.05],
 ];
 
-function placement(center: Vec3, points: Point2[] = SQUARE, box?: Point2[]): Placement {
+function placement(center: Vec3, points: Point2[] = SQUARE): Placement {
   return {
     center,
     outline: { points, shape: 'contour' },
     points: [],
     label: center,
     depth: 'contact',
-    ...(box && { box: { corners: box, points: [] } }),
   };
 }
-
-/** The square's box, `pad` m outside it, in the image's corner order (top left first). */
-const boxAround = (pad: number, dx = 0): Point2[] => [
-  [-0.05 - pad + dx, 0.05 + pad],
-  [0.05 + pad + dx, 0.05 + pad],
-  [0.05 + pad + dx, -0.05 - pad],
-  [-0.05 - pad + dx, -0.05 - pad],
-];
 
 /** A deterministic noise in [-1, 1]. */
 function noise(seed: number): number {
@@ -326,47 +317,6 @@ describe('OutlineMotion', () => {
     // An older frame arriving late changes nothing.
     twice.add({ key: 'cup', placement: placement([0.1, 0, -0.6]), t: 20, eye: EYE });
     expect(twice.at(40)?.placement.center).toEqual(b);
-  });
-
-  it("carries the finder's box with the outline, steadied like its shape", () => {
-    const motion = new OutlineMotion(options({ predictMs: 0 }));
-    let worst = 0;
-    for (let i = 0; i < 50; i++) {
-      const j = 0.004 * noise(i);
-      motion.add({
-        key: 'cup',
-        placement: placement([0, 0, -0.6], SQUARE, boxAround(0.01 + j)),
-        t: i * 40,
-        eye: EYE,
-      });
-      const frame = motion.at(i * 40);
-      if (!frame?.placement.box) throw new Error('no box');
-      const { corners, points } = frame.placement.box;
-      // About the drawn center, in the image's corner order, and in the room on the plane.
-      expectNear(points[0], [corners[0]?.[0] ?? 0, corners[0]?.[1] ?? 0, -0.6], 1e-6);
-      if (i >= 25) worst = Math.max(worst, Math.abs((corners[1]?.[0] ?? 0) - 0.06));
-    }
-    // Raw corners wander 4 mm.
-    expect(worst).toBeLessThan(0.0015);
-  });
-
-  it('drops the box when a placement comes without one, and takes the next as it is', () => {
-    const motion = new OutlineMotion(options({ predictMs: 0 }));
-    motion.add({
-      key: 'cup',
-      placement: placement([0, 0, -0.6], SQUARE, boxAround(0.01)),
-      t: 0,
-      eye: EYE,
-    });
-    motion.add({ key: 'cup', placement: placement([0, 0, -0.6]), t: 40, eye: EYE });
-    expect(motion.at(40)?.placement.box).toBeUndefined();
-    motion.add({
-      key: 'cup',
-      placement: placement([0, 0, -0.6], SQUARE, boxAround(0.03)),
-      t: 80,
-      eye: EYE,
-    });
-    expect(motion.at(80)?.placement.box?.corners[1]?.[0]).toBeCloseTo(0.08, 9);
   });
 
   it('turning the head moves nothing: the outline is smoothed in the room', () => {

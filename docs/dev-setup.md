@@ -171,19 +171,11 @@ offset, adjust `DEFAULT_HEAD_FROM_CAMERA`, or better, implement marker self-cali
 | `camera=0`                    | on                  | disable the passthrough camera (pinch to register objects)                              |
 | `autoDemo=0`                  | on                  | don't auto-play each step's demo                                                        |
 | `emulate=1`                   | auto on desktop dev | IWER Quest 3 emulator                                                                   |
-| `debug=1`                     | off                 | HUD, tracked-hand overlay, hidden zones, workspace outline; live boxes (below)          |
+| `debug=1`                     | off                 | HUD, tracked-hand overlay, hidden zones, workspace outline                              |
 | `live=0`                      | on                  | don't follow the lesson's objects with the tracker's `/track` (Spotlight looks instead) |
 | `focus=0`                     | on                  | no Robotics-ER 2 action focus (it needs the camera, the tracker and a Gemini key)       |
 | `voice=<name>`                |                     | Gemini prebuilt voice (e.g. `Kore`)                                                     |
 | `showRefresh=<ms>`            | `3000`              | how often to look again at what the step shows (0: only when the step starts)           |
-
-With the tracker running, every lit object shows its bounding box next to its glow: a thin
-rectangle with corner accents in the object's role color, and its name on a tag at the top left.
-With `debug=1` every followed object is boxed (fainter when the step doesn't light it), and each
-tag's second line says what the tracker last said of it: its state (`tracking`, `coasting`,
-`lost`, `unknown`), which finder placed it last (`jev`, `er`, or `–` before any) and its score.
-Robotics-ER's boxes from each action-focus answer show dashed for 1.5 s, tagged `ER` and its
-confidence, `· next` on the thing to touch next.
 
 ## 5. Data
 

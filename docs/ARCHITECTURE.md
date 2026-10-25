@@ -276,11 +276,8 @@ the tracker answers on `/track` (on by default; `?live=0` turns it off):
     ─► one detection per object per frame (box, outline, state, score, source: jev | er)
     ─► LiveObjects (domain/world), per object: head pose at the frame's time, the depth it last
        measured (DepthMemory) or a new measurement (depth sensing, then hit-test, then planes),
-       placeOutline (the outline and the box on one camera-facing plane), OutlineMotion (One
-       Euro, latency predicted away; the box rides on the outline's anchor)
-    ─► LiveHighlightsPresenter: the primary page's glow per lit object, depth-occluded
-    ─► LiveBoxesPresenter: each lit object's box with its name on a tag (?debug=1: every followed
-       object's, and what the tracker last said of it), occluded like the glow
+       placeOutline, OutlineMotion (One Euro, latency predicted away)
+    ─► LiveHighlightsPresenter: the primary page's glow per lit object, depth-occluded, named
     ─► registry.observe (detector, ~5 Hz, never while held; measured only when seen and measured
        on that frame) · registry.lose · TrackedObjectSample ─► observations.ndjson
  ActionFocus (below) ─► LiveTracker.anchor ─► {type: anchor, source: er} on /track
@@ -300,8 +297,7 @@ turns it off:
     ─► their words ─► LiveTracking.refine: what jev is told about the object from now on
     ─► the action item ─► lit for the rest of the step; one the plan lacks, seen surely, is
        declared by the lesson first (LessonController.declareObject, a material added by the app)
-    ─► focus.answered (the displays; ?debug=1: ER's boxes dashed for 1.5 s) · a focus.answered
-       annotation (the recording)
+    ─► focus.answered (the desk lab draws it) · a focus.answered annotation (the recording)
  an answer for a step or a lesson that is over is dropped; 3 failures in a row pause it for 30 s
 ```
 
@@ -313,17 +309,9 @@ tracker would, and the connection keeps retrying. The dependency is one way: the
 and the action focus say what to follow, and nothing the tracker or the action focus sees
 reaches the coach.
 
-A box is the tracker's `box` lifted like the outline: each corner on its camera ray (the head
-pose of its frame) at the object's measured distance, on the plane through the object that faces
-that frame's camera. It is drawn (`adapters/render/box-view.ts`) as a thin rectangle just outside
-the box with an L over each corner, in the object's role accent (`domain/overlay/accents.ts`),
-its widths kept as angles so it reads the same at arm's length and across the table, reshaped
-only when the box changes. Its lines depth-test against the hands' occluders and fade where the
-depth map has a real surface in front of the object, with the glow's own test
-(`glow/shader.ts`, `occlusionChunk`); the tag at its top left corner is drawn over everything,
-like the glow's name, which it replaces. An anchor for an object the set does not have yet (an
-action item the lesson has just declared) waits up to 2 s for the set that has it; without a
-tracker, or before the set is sent on a new connection, anchors are dropped.
+An anchor for an object the set does not have yet (an action item the lesson has just declared)
+waits up to 2 s for the set that has it; without a tracker, or before the set is sent on a new
+connection, anchors are dropped.
 
 Tracking is layered. Each layer covers the others' blind spots:
 

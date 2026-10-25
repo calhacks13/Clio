@@ -12,9 +12,7 @@ import type { PresentContext, Presenter } from '../presenter';
 // distance and where it is now, with its name above it. Real surfaces in front of an object hide
 // its light through the headset's depth map (one XrDepthOcclusion shared by every glow), and the
 // hands through their occluders. Colours and energy follow the shared step-role accents, with
-// coach styles applied by LiveTracking. An object that leaves the set fades out. An object whose
-// bounding box is drawn too (live-boxes.ts, which shares this occlusion) has its name on the box's
-// tag instead of over the glow.
+// coach styles applied by LiveTracking. An object that leaves the set fades out.
 
 export const WARNING_COLOR = ACCENTS.stop;
 
@@ -34,8 +32,6 @@ export interface LiveHighlight {
   mode: ObjectGlowMode;
   /** In the learner's hand. */
   held: boolean;
-  /** Its name is on its box's tag (live-boxes.ts), not over the glow. */
-  tagged?: boolean;
 }
 
 export interface LiveHighlightsOptions {
@@ -55,8 +51,7 @@ interface Drawn {
 
 export class LiveHighlightsPresenter implements Presenter {
   readonly object = new Group();
-  /** One for every glow, and for the boxes drawn next to them (live-boxes.ts). */
-  readonly occlusion: XrDepthOcclusion;
+  private readonly occlusion: XrDepthOcclusion;
   private readonly drawn = new Map<string, Drawn>();
   /** The object whose glow window.__occlusion.probe() measures. */
   private probed: string | null = null;
@@ -101,7 +96,6 @@ export class LiveHighlightsPresenter implements Presenter {
     } else {
       view.object.position.set(...h.placement.center);
     }
-    view.named = !h.tagged;
     view.setAccent(h.accent);
     if (h.style !== null && h.style !== drawn.style) view.ignite();
     view.pulse = h.style === 'warning';

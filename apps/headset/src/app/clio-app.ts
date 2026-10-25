@@ -172,7 +172,6 @@ export class ClioApp {
             frameWidth: o.config.frameWidth,
             hideHeld: !o.config.liveHeld,
             emulated: o.emulated,
-            debug: o.config.debug,
           })
         : null;
     this.lesson = new LessonController({
@@ -231,7 +230,7 @@ export class ClioApp {
       new InstructionPanelPresenter(() => this.lesson.confirmByUser('Done button')),
       new HudPresenter(),
       new CalibrationMarkerPresenter(),
-      ...(this.live ? [this.live.presenter, this.live.boxPresenter] : []),
+      ...(this.live ? [this.live.presenter] : []),
     ];
     for (const p of this.workspacePresenters) this.scene.workspaceRoot.add(p.object);
     for (const p of this.worldPresenters) this.scene.worldRoot.add(p.object);
