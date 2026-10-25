@@ -4,10 +4,10 @@ What a lesson leaves behind to look at, beside the measurements: the room the le
 and a model of every object they worked with, in the episode's workspace frame W. The room is what
 the Quest already knows; nothing is reconstructed from photos and nothing heavy runs on the laptop.
 
-| Part          | Comes from                                                                     | What it is       |
-| ------------- | ------------------------------------------------------------------------------ | ---------------- |
-| Room          | The Quest room scan (Space Setup), read by WebXR mesh detection: the room's global mesh and labelled furniture volumes | Measured, earlier |
-| Object models | A generator (primitive, Gemini CAD, or a command), scaled and placed by the measured size and track, from a few camera stills of the object | Generated |
+| Part          | Comes from                                                                                                                                  | What it is        |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| Room          | The Quest room scan (Space Setup), read by WebXR mesh detection: the room's global mesh and labelled furniture volumes                      | Measured, earlier |
+| Object models | A generator (primitive, Gemini CAD, or a command), scaled and placed by the measured size and track, from a few camera stills of the object | Generated         |
 
 Nothing here is an object measurement. Tracks, extents and fused shapes stay what
 [data-pipeline.md](data-pipeline.md) describes; a model is drawn where the track says and as big as
@@ -33,7 +33,6 @@ the measurements say, and its look is labelled generated.
 ## Raw episode additions (`clio.episode/1`, optional)
 
 Contracts: `packages/protocol/src/episode.ts`.
-
 - Feature `environment.meshes`: `environment.meshes` events `{media, meshes[]}`. Each is a full
   snapshot of `frame.detectedMeshes`: the room's global mesh and the furniture volumes, with id,
   kind (`SurfaceKind` from the semantic label), raw label, `global`, vertex and triangle counts.
@@ -67,7 +66,6 @@ not.
 
 Contracts: `packages/protocol/src/scene.ts`. `clio scene <episode dir>` reads the episode and its
 compile and writes `data/scenes/<id>/`:
-
 - `model-<id>.glb` per drawable object, origin at the bottom center of its bounds, +y up, meters;
   `crop-<id>-<n>.jpg` are the keyframe crops it was made from (the tracker's box on the same camera
   frame when there is one, otherwise the compiled position and size projected through the
@@ -77,7 +75,6 @@ compile and writes `data/scenes/<id>/`:
   hashes, options, stages with their status and detail, and how each model was made.
 
 Backends (`--models`, server `CLIO_SCENE_MODELS`):
-
 - `primitive` (default): a box or a cylinder from the measured size and the crops' color. Offline.
 - `gemini-cad`: Gemini (`$CLIO_CAD_MODEL`, default `gemini-pro-latest`, key `GEMINI_API_KEY`)
   receives the crops, the object's label and detector words and its measured size, and answers a

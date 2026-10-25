@@ -211,4 +211,8 @@ cd pipeline && uv run clio compile ../data/episodes --if-stale
 
 Server settings: `CLIO_COMPILE=off` disables automatic compiles. `CLIO_RETARGET_PROFILES` is a
 comma-separated list of profile files (`none` for no retargeting); the default is the bundled
-example arm.
+example arm. `CLIO_SCENE=off` disables the scene build that follows each compile (object models,
+[room-scene.md](room-scene.md)); builds are off whenever compiling is. `CLIO_SCENE_MODELS` picks
+how the models are made: `primitive` (the default, offline), `gemini-cad` (sends crops of each
+object to Google) or `command` (`CLIO_MODEL_COMMAND`). `CLIO_SCENE_TIMEOUT_MS` bounds one build
+(10 minutes by default).

@@ -1,4 +1,5 @@
 import type {
+  EpisodeEventType,
   FrameRecord,
   HandSample,
   NormalizedPoint,
@@ -51,6 +52,35 @@ export function quantizeDeep<T>(value: T): T {
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, quantizeDeep(v)])) as T;
   }
   return value;
+}
+
+/**
+ * Event fields that hold a time on the bus's performance.now() clock besides `t`, rebased with it:
+ * a keyframe's camera frame was captured before the event that records it.
+ */
+const EVENT_TIMES: Partial<Record<EpisodeEventType, readonly string[]>> = {
+  'scene.keyframe': ['capturedT'],
+};
+
+/**
+ * An event payload for events.ndjson: numbers at storage precision, `t` (and any other time, see
+ * EVENT_TIMES) rebased onto `startT` at 0.01 ms.
+ */
+export function quantizeEvent(
+  type: EpisodeEventType,
+  payload: { t: number },
+  startT: number,
+): Record<string, unknown> {
+  const event: Record<string, unknown> = {
+    ...quantizeDeep(payload),
+    type,
+    t: qTime(payload.t - startT),
+  };
+  for (const key of EVENT_TIMES[type] ?? []) {
+    const at = (payload as Record<string, unknown>)[key];
+    if (typeof at === 'number') event[key] = qTime(at - startT);
+  }
+  return event;
 }
 
 /**

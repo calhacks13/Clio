@@ -10,6 +10,7 @@ import {
 import { type CameraModelSource, cameraRecord } from '../adapters/camera/camera-meta';
 import { XrPlaneReader } from '../adapters/xr/environment';
 import { FrameSampler } from '../adapters/xr/frame-sampler';
+import { XrMeshReader } from '../adapters/xr/meshes';
 import { type Clock, performanceClock } from '../core/clock';
 import { Emitter } from '../core/emitter';
 import { type Pose7, poseToTuple, type Vec3 } from '../core/math';
@@ -20,6 +21,7 @@ import { EpisodeRecorder } from '../domain/recording/recorder';
 import type { EpisodeSink } from '../domain/recording/sink';
 import type { CameraModel } from '../domain/world/camera-model';
 import { type DetectedPlane, EnvironmentRecorder } from '../domain/world/environment';
+import { type DetectedMesh, RoomScanRecorder } from '../domain/world/room-scan';
 import { Workspace, workspaceInFrontOf } from '../domain/world/workspace';
 
 // Records a primary-demo session as an ordinary Clio episode (clio.episode/1, mode "free"), through
@@ -35,7 +37,9 @@ import { Workspace, workspaceInFrontOf } from '../domain/world/workspace';
 //            An outline at a made-up distance is not recorded
 //   events   object.registered on an object's first placement, object.detected for every answer
 //            that named something, an annotation "primary.target" whenever the named target
-//            changes, and environment.planes snapshots when the session detects planes
+//            changes, environment.planes snapshots when the session detects planes, and
+//            environment.meshes snapshots of the room scan when it detects meshes
+//   media    room-scan-<n>.glb, the geometry of each room scan snapshot (docs/room-scene.md)
 //   meta     the camera model outlines were placed with (meta.camera), when there is a camera
 //
 // Only the current target is recorded: placed() and lost() for any other name are ignored, so a
@@ -67,6 +71,8 @@ export interface PrimaryRecordingDeps {
   onDrop?: (why: string) => void;
   /** Reads the detected planes of an XR frame; default XrPlaneReader. */
   planes?: { read(frame: XRFrame, space: XRReferenceSpace): DetectedPlane[] };
+  /** Reads the room scan's meshes of an XR frame; default XrMeshReader. */
+  meshes?: { read(frame: XRFrame, space: XRReferenceSpace): DetectedMesh[] };
 }
 
 /** What the episode's meta says about the session. */
@@ -79,6 +85,8 @@ export interface PrimarySessionInfo {
   version: string;
   /** Whether planes are detected (and recorded); default: xrFeatures lists plane-detection. */
   planes?: boolean;
+  /** Whether the room scan is recorded; default: xrFeatures lists mesh-detection. */
+  meshes?: boolean;
   /** The camera model outlines are placed with (calibration applied), and where it came from. */
   camera?: { model: CameraModel; source: CameraModelSource } | null;
 }
@@ -110,11 +118,14 @@ export class PrimaryRecording {
   private readonly sampler = new FrameSampler();
   private readonly planes: NonNullable<PrimaryRecordingDeps['planes']>;
   private readonly environment: EnvironmentRecorder;
+  private readonly meshes: NonNullable<PrimaryRecordingDeps['meshes']>;
+  private readonly roomScan: RoomScanRecorder;
   /** Set by begin(); the episode starts on the next frame, which fixes the workspace. */
   private info: PrimarySessionInfo | null = null;
   private workspace: Workspace | null = null;
-  /** Whether this episode records planes. */
+  /** Whether this episode records planes, and the room scan. */
   private recordPlanes = false;
+  private recordMeshes = false;
   private readonly tracks = new Map<string, ObjectTrack>();
   /** The object the latest answer named. */
   private target: string | null = null;
@@ -134,6 +145,13 @@ export class PrimaryRecording {
     this.planes =
       deps.planes ??
       new XrPlaneReader((err) => deps.onDrop?.(`planes: plane detection failed (${String(err)})`));
+    this.roomScan = new RoomScanRecorder({
+      bus: this.bus,
+      attach: (name, glb) => this.recorder.attachMedia(name, glb),
+    });
+    this.meshes =
+      deps.meshes ??
+      new XrMeshReader((err) => deps.onDrop?.(`room scan: mesh detection failed (${String(err)})`));
   }
 
   get recording(): boolean {
@@ -156,12 +174,14 @@ export class PrimaryRecording {
     this.tracks.clear();
     this.target = null;
     this.recordPlanes = info.planes ?? info.xrFeatures.includes('plane-detection');
+    this.recordMeshes = info.meshes ?? info.xrFeatures.includes('mesh-detection');
     this.environment.reset();
+    this.roomScan.reset();
   }
 
   /**
-   * Every XR frame: samples the head and both hands (world space) and records them, and the
-   * detected planes when they changed.
+   * Every XR frame: samples the head and both hands (world space) and records them, the detected
+   * planes when they changed, and the room scan when a snapshot is due.
    */
   xrFrame(frame: XRFrame, space: XRReferenceSpace, t: number): void {
     if (!this.info && !this.recorder.recording) return;
@@ -169,6 +189,9 @@ export class PrimaryRecording {
     if (sampled) this.frame(sampled);
     if (this.recordPlanes && this.workspace && this.recorder.recording) {
       this.environment.update(t, this.planes.read(frame, space), this.workspace);
+    }
+    if (this.recordMeshes && this.workspace && this.recorder.recording && this.roomScan.wants(t)) {
+      this.roomScan.update(t, this.meshes.read(frame, space), this.workspace);
     }
   }
 
@@ -348,6 +371,7 @@ export class PrimaryRecording {
       features: [
         EPISODE_FEATURE.objectFlags,
         ...(this.recordPlanes ? [EPISODE_FEATURE.environmentPlanes] : []),
+        ...(this.recordMeshes ? [EPISODE_FEATURE.environmentMeshes] : []),
       ],
     };
   }

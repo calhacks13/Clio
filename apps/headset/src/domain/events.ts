@@ -17,7 +17,8 @@ import type { ObjectOutline } from './world/outline';
 
 // The headset's event bus. Recordable events are exactly the protocol's episode events (payload
 // plus an absolute `t` on the performance.now() timeline); the recorder rebases `t` to the episode
-// start. Internal events coordinate the app but are not part of the dataset.
+// start, and with it the other times a payload holds (a keyframe's `capturedT` is a bus time too,
+// quantize.ts). Internal events coordinate the app but are not part of the dataset.
 
 export type Timed<T> = T & { t: number };
 

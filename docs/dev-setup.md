@@ -106,6 +106,7 @@ offset, adjust `DEFAULT_HEAD_FROM_CAMERA`, or better, implement marker self-cali
 | `debug=1`                     | off                 | HUD, tracked-hand overlay, hidden zones, workspace outline                    |
 | `voice=<name>`                |                     | Gemini prebuilt voice (e.g. `Kore`)                                           |
 | `showRefresh=<ms>`            | `3000`              | how often to look again at what the step shows (0: only when the step starts) |
+| `scan=0`                      | on                  | keep no camera keyframes for the object models (room-scene.md)                |
 
 ## 5. Data
 

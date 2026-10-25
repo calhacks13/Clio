@@ -206,6 +206,61 @@ describe('EpisodeRecorder', () => {
     expect(episode.finish).toMatchObject({ outcome: 'completed', batches: 3, durationMs: 100 });
   });
 
+  it('records a keyframe with its capture time rebased onto the episode start, like t', async () => {
+    const dropped: string[] = [];
+    const { bus, recorder, sink } = setup(new MemoryEpisodeSink(), {
+      onDrop: (why: string) => dropped.push(why),
+    });
+    recorder.start(meta, 1000);
+    bus.emit('scene.keyframe', {
+      t: 1520.004,
+      media: 'keyframe-0001.jpg',
+      capturedT: 1470.123456,
+      pose: [0.123456, 1.4, 0.2, 0, 0, 0, 1],
+      width: 960,
+      height: 720,
+      intrinsics: { fx: 650.123456, fy: 650, cx: 480, cy: 360 },
+    });
+    bus.emit('scene.keyframe', {
+      t: 1600,
+      media: 'keyframe-0002.jpg',
+      capturedT: 990,
+      pose: [0, 1.4, 0.2, 0, 0, 0, 1],
+      width: 960,
+      height: 720,
+      intrinsics: { fx: 650, fy: 650, cx: 480, cy: 360 },
+    });
+    await recorder.stop('completed', { stepsCompleted: 0, stepsTotal: 0 }, 2000);
+    expect(dropped).toEqual([]);
+    const [first, early] = sink.only().batches.flatMap((b) => b.events);
+    expect(first).toEqual({
+      t: 520,
+      type: 'scene.keyframe',
+      media: 'keyframe-0001.jpg',
+      capturedT: 470.12,
+      pose: [0.1235, 1.4, 0.2, 0, 0, 0, 1],
+      width: 960,
+      height: 720,
+      intrinsics: { fx: 650.1235, fy: 650, cx: 480, cy: 360 },
+    });
+    // A frame captured just before the episode started keeps a negative capture time.
+    expect(early).toMatchObject({ t: 600, capturedT: -10 });
+  });
+
+  it('uploads attached media with the episode, and nothing while not recording', async () => {
+    const { recorder, sink } = setup();
+    recorder.attachMedia('room-scan-1.glb', new Blob(['before']));
+    recorder.start(meta, 1000);
+    recorder.attachMedia('room-scan-1.glb', new Blob(['glb'], { type: 'model/gltf-binary' }));
+    recorder.attachMedia('keyframe-0001.jpg', new Blob(['jpeg'], { type: 'image/jpeg' }));
+    await recorder.stop('completed', { stepsCompleted: 0, stepsTotal: 0 }, 1100);
+    recorder.attachMedia('keyframe-0002.jpg', new Blob(['after']));
+    const media = sink.only().media;
+    expect([...media.keys()]).toEqual(['room-scan-1.glb', 'keyframe-0001.jpg']);
+    expect(await media.get('room-scan-1.glb')?.text()).toBe('glb');
+    expect(media.get('keyframe-0001.jpg')?.type).toBe('image/jpeg');
+  });
+
   it('stops listening once the episode is over', async () => {
     const { bus, recorder, sink } = setup();
     recorder.start(meta, 1000);
@@ -331,6 +386,157 @@ describe('EpisodeUploader', () => {
     });
     expect(sink.only().batches.map((b) => b.seq)).toEqual([2, 3]);
     expect(dropped).toEqual(['batch 0: upload queue full', 'batch 1: upload queue full']);
+  });
+});
+
+describe('EpisodeUploader media', () => {
+  const finish = (batches: number) => ({
+    durationMs: 1,
+    outcome: 'completed' as const,
+    stepsCompleted: 0,
+    stepsTotal: 0,
+    batches,
+  });
+  const bytes = (n: number) => new Blob([new Uint8Array(n)]);
+  const settle = async () => {
+    for (let i = 0; i < 5; i++) await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  };
+
+  /** A memory sink that also logs every delivery in the order it happened. */
+  function loggingSink() {
+    const sink = new MemoryEpisodeSink();
+    const log: string[] = [];
+    const { create, append, putMedia, finish: done } = sink;
+    sink.create = async (m) => {
+      log.push('create');
+      return create.call(sink, m);
+    };
+    sink.append = async (id, batch) => {
+      log.push(`batch ${batch.seq}`);
+      return append.call(sink, id, batch);
+    };
+    sink.putMedia = async (id, name, body) => {
+      log.push(name);
+      return putMedia.call(sink, id, name, body);
+    };
+    sink.finish = async (id, f) => {
+      log.push('finish');
+      return done.call(sink, id, f);
+    };
+    return { sink, log };
+  }
+
+  it('uploads files in the queue, in order: after the create, between batches, before finish', async () => {
+    const { sink, log } = loggingSink();
+    const up = new EpisodeUploader(sink, meta, { sleep: noSleep });
+    up.push({ seq: 0, frames: [], events: [], objects: [] });
+    up.media('room-scan-1.glb', new Blob(['glb']));
+    up.push({ seq: 1, frames: [], events: [], objects: [] });
+    up.media('keyframe-0001.jpg', new Blob(['jpg']));
+    await up.finish(finish(2));
+    expect(log).toEqual([
+      'create',
+      'batch 0',
+      'room-scan-1.glb',
+      'batch 1',
+      'keyframe-0001.jpg',
+      'finish',
+    ]);
+    expect(up.queuedMediaBytes).toBe(0);
+  });
+
+  it('retries a file through transient failures and drops one the server refuses', async () => {
+    const sink = new MemoryEpisodeSink();
+    let failures = 2;
+    const putMedia = sink.putMedia.bind(sink);
+    sink.putMedia = async (id, name, body) => {
+      if (name === 'room-scan-1.glb' && failures-- > 0) throw new SinkError('Wi-Fi', true);
+      if (name === 'keyframe-0001.jpg') throw new SinkError('413 too large', false);
+      return putMedia(id, name, body);
+    };
+    const delays: number[] = [];
+    const dropped: string[] = [];
+    const up = new EpisodeUploader(sink, meta, {
+      sleep: async (ms) => void delays.push(ms),
+      onDrop: (why) => dropped.push(why),
+    });
+    up.media('room-scan-1.glb', new Blob(['glb']));
+    up.media('keyframe-0001.jpg', new Blob(['jpg']));
+    up.media('keyframe-0002.jpg', new Blob(['jpg']));
+    await up.finish(finish(0));
+    expect([...sink.only().media.keys()]).toEqual(['room-scan-1.glb', 'keyframe-0002.jpg']);
+    expect(delays).toEqual([500, 1000]);
+    expect(dropped).toEqual(['media keyframe-0001.jpg: 413 too large']);
+    expect(sink.only().finish).not.toBeNull();
+  });
+
+  it('drops the oldest queued keyframes beyond the byte cap, never a room scan or one in flight', async () => {
+    const sink = new MemoryEpisodeSink();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const putMedia = sink.putMedia.bind(sink);
+    sink.putMedia = async (id, name, body) => {
+      if (name === 'keyframe-0001.jpg') await gate; // the Wi-Fi stalls on the first file
+      return putMedia(id, name, body);
+    };
+    const dropped: string[] = [];
+    const up = new EpisodeUploader(sink, meta, {
+      sleep: noSleep,
+      maxMediaBytes: 150,
+      onDrop: (why) => dropped.push(why),
+    });
+    up.media('keyframe-0001.jpg', bytes(40));
+    await settle();
+    up.media('room-scan-1.glb', bytes(60));
+    up.media('keyframe-0002.jpg', bytes(40));
+    up.media('keyframe-0003.jpg', bytes(40)); // 180 bytes: keyframe 2 goes
+    expect(up.queuedMediaBytes).toBe(140);
+    up.media('room-scan-2.glb', bytes(60)); // 200: keyframe 3 goes, and nothing else can
+    expect(up.queuedMediaBytes).toBe(160);
+    release();
+    await up.finish(finish(0));
+    expect([...sink.only().media.keys()]).toEqual([
+      'keyframe-0001.jpg',
+      'room-scan-1.glb',
+      'room-scan-2.glb',
+    ]);
+    expect(dropped).toEqual([
+      'media keyframe-0002.jpg: upload queue full',
+      'media keyframe-0003.jpg: upload queue full',
+    ]);
+    expect(up.queuedMediaBytes).toBe(0);
+  });
+
+  it('refuses files once the finish is queued, and holds none for an episode never created', async () => {
+    const dropped: string[] = [];
+    const up = new EpisodeUploader(new MemoryEpisodeSink(), meta, {
+      sleep: noSleep,
+      onDrop: (why) => dropped.push(why),
+    });
+    const done = up.finish(finish(0));
+    up.media('keyframe-0001.jpg', bytes(4));
+    await done;
+    expect(dropped).toEqual(['media keyframe-0001.jpg: episode already finished']);
+
+    const refusing = new MemoryEpisodeSink();
+    refusing.create = async () => {
+      throw new SinkError('400: invalid meta', false);
+    };
+    const lost: string[] = [];
+    const never = new EpisodeUploader(refusing, meta, {
+      sleep: noSleep,
+      onDrop: (why) => lost.push(why),
+    });
+    never.media('room-scan-1.glb', bytes(4));
+    await settle();
+    never.media('room-scan-2.glb', bytes(4));
+    expect(lost).toEqual([
+      'episode create: 400: invalid meta',
+      'media room-scan-2.glb: no episode',
+    ]);
+    expect(never.queuedMediaBytes).toBe(0);
   });
 });
 

@@ -30,7 +30,8 @@ data/
 │   ├── observations.ndjson  one ObjectObservation per 2D object-finder answer (optional)
 │   ├── finish.json      EpisodeFinish: written when the headset finishes the episode
 │   ├── batches.json     server bookkeeping: {"received": [seq…], "gaps": [seq…]}
-│   └── media/<name>     optional uploads, e.g. egocentric.webm (see media.started events)
+│   └── media/<name>     optional uploads: room-scan-<n>.glb, keyframe-<nnnn>.jpg (see below),
+│                        egocentric.webm (see media.started events)
 ├── derived/<episodeId>/                compiled after the episode finishes; rebuildable (see below)
 ├── clips/<procedureId>/<stepId>.json   DemoClip: ghost-hand demos sliced from expert episodes
 └── plans/<planId>.json                 procedures written by the planner (and their revisions)
@@ -55,7 +56,7 @@ by creation time.
 | `objects`                | object placements at episode start: `{ id, label, position, radius, method }`                                                                                                                                                      |
 | `coach`                  | `{ kind: gemini \| scripted \| none, model?, transport? }`                                                                                                                                                                         |
 | `device`                 | `{ userAgent, emulated, xrFeatures }`                                                                                                                                                                                              |
-| `features`               | optional recording features in use: `"object.flags"`, `"object.grasp"`, `"object.observations"` and `"environment.planes"` (see [Optional fields](#optional-fields)). Absent in older episodes                                     |
+| `features`               | optional recording features in use, e.g. `"object.flags"`, `"environment.planes"` (see [Optional fields](#optional-fields) and [Room scan](#room-scan-and-keyframes)). Absent in older episodes                                    |
 | `camera`                 | optional passthrough camera model: `{ intrinsics: { width, height, fx, fy, cx, cy }, headFromCamera, source }`, so 2D observations can be lifted again offline. `source` is `lens-metadata`, `default`, `calibrated` or `override` |
 
 ## `frames.ndjson`: `FrameRecord` (one per XR frame, 72–120 Hz)
@@ -95,6 +96,8 @@ Every event has `t` and `type`.
 | `demo.playback`                             | `stepId, clipId, phase`                                                                                      | when ghost hands were on screen                                                                                                                                                                                                                                                                                                                       |
 | `media.started`                             | `name, mimeType`                                                                                             | aligns `media/<name>` with `t`                                                                                                                                                                                                                                                                                                                        |
 | `environment.planes`                        | `planes: [{ id, kind, label, orientation, pose, polygon }]`                                                  | every plane the headset detects (`"environment.planes"` feature): a full snapshot at the start and whenever a plane appears, disappears or changes, at most once a second. `pose` is in `W` with the polygon in its local x/z plane (+y is the normal). `kind` is `table`, `floor`, `wall`, `ceiling`, `couch` or `other`, from the raw WebXR `label` |
+| `environment.meshes`                        | `media, meshes: [{ id, kind, label, global, vertices, triangles }]`                                          | the Quest room scan (`"environment.meshes"` feature): a full snapshot of the detected meshes, their geometry in `media/<media>` ([below](#room-scan-and-keyframes))                                                                                                                                                                                   |
+| `scene.keyframe`                            | `media, capturedT, pose, width, height, intrinsics`                                                          | a passthrough camera still, `media/<media>`, with the camera's pose in `W` (`"scene.keyframes"` feature, [below](#room-scan-and-keyframes))                                                                                                                                                                                                           |
 | `annotation`                                | `label, data?`                                                                                               | free-form labels (an escape hatch, so you don't have to change the schema; see [Annotations](#annotations))                                                                                                                                                                                                                                           |
 
 ## `objects.ndjson`: `ObjectTrackRecord` (one per update that changed an estimate)
@@ -236,6 +239,34 @@ by any app that has a camera open (lessons, and the primary-object page):
   `lens-metadata` when the browser reported lens intrinsics, `default` for the Quest 3 guess (Quest
   Browser 154 reports no lens fields).
 
+## Room scan and keyframes
+
+Two optional additions for the rebuilt room and the object models ([room-scene.md](room-scene.md)
+is the design). Both put their files in `media/` through the upload queue, after the episode's
+create and before its finish; an event whose file never arrived is skipped by readers.
+
+`environment.meshes` (`"environment.meshes"` feature) records the Quest room scan, read through
+WebXR mesh detection: the room's global mesh (`global: true`, label `global mesh`) and a volume per
+labelled piece of furniture. Each event is a full snapshot, numbered from 1 per episode, and
+`media/room-scan-<n>.glb` holds its geometry: one root node per mesh named by its `id`, its
+translation and rotation the mesh pose in `W`, POSITION in mesh-local meters (float32, with
+min/max), uint32 triangle indices, and `extras: { kind, label, global }`. `kind` comes from the
+label as for planes. The headset records a snapshot as soon as there are meshes while recording,
+and again when a mesh appears, disappears or changes, at most every 10 s and 8 times an episode.
+It never records an empty one, waits up to 2 s for a mesh it cannot locate, and leaves out a mesh
+whose geometry is unusable (non-finite vertices, indices out of range).
+
+`scene.keyframe` (`"scene.keyframes"` feature) records a passthrough camera still for the object
+models, `media/keyframe-<nnnn>.jpg` (numbered from 1, at most 960 px wide). `capturedT` is when the
+camera frame was captured, on the same clock as an observation's `observedT` (can be negative).
+`pose` is the camera in `W` at `capturedT`: the head pose then `meta.camera.headFromCamera`, camera
+axes as WebXR (x right, y up, looking down -z). `width` and `height` are the stored image's, and
+`intrinsics` (`fx, fy, cx, cy`) are `meta.camera`'s scaled to it. The headset keeps a frame from a
+new viewpoint (20 cm or 12° from every earlier keyframe), with the head still (under 40°/s and
+0.5 m/s), that shows a placed object or the middle of the work area, at least 2 s after the last
+one and at most 40 an episode. `?scan=0` records none. The stills stay on the laptop like the rest
+of the episode.
+
 ## Annotations
 
 `annotation` events carry labels a new app needs without a new event type (an older server would
@@ -263,7 +294,11 @@ A change of what a tracker follows is an annotation for the same reason. The coa
    up by one. The headset sends batches one at a time and in order, retrying until each is
    acknowledged. The server appends in arrival order. A repeated `seq` returns
    `{ ok: true, duplicate: true }` and is not appended twice.
-3. `POST /api/episodes/:id/finish` with `EpisodeFinish`.
+3. `PUT /api/episodes/:id/media/:name` with a file's bytes (`room-scan-<n>.glb`,
+   `keyframe-<nnnn>.jpg`), in the same queue as the batches: in the order the headset made them,
+   retried the same way, a refused one dropped. While the server is unreachable the headset holds
+   up to 24 MiB of files, then drops the oldest keyframes waiting (never a room scan).
+4. `POST /api/episodes/:id/finish` with `EpisodeFinish`.
 
 Restart the server whenever the headset's protocol changes. A server on an older protocol silently
 drops fields it doesn't know and rejects batches containing new event types with 400; the headset
