@@ -310,9 +310,9 @@ describe('createGeminiPlanner', () => {
           '`done`, and it leaves any control untouched. outline[0] is the first step.',
         '- `objects`: only the objects the first step uses (its targets, what it shows and the ' +
           'look-alike it guards against). The later steps declare theirs when they are ' +
-          "written. An object's `look` is its tracking.query and the description its outline " +
-          'is found by, so it singles out that one thing (ONE THING, NEVER A KIND); its ' +
-          '`phrase` names its kind for the object finder.',
+          "written. An object's `phrase` and `look` are all the object finder gets: write " +
+          'them as SHOW says for `phrase` and `description`. The look becomes its ' +
+          'tracking.query.',
         '- `firstStep`: that first step as a card, with the same id as outline[0]. `show` ' +
           'lists object ids. Each mistake names the object it is made with, never one the ' +
           'step itself uses: Clio speaks its message when a hand lingers at that object. Clio ' +
@@ -407,11 +407,21 @@ describe('PLANNER_SYSTEM_INSTRUCTION', () => {
     'SHOW',
     'outlines in AR',
     'object finder',
-    '`phrase`: 2 to 5 words',
-    '`description`: one sentence of 15 to 35 words',
+    // jev gets the phrase as its subject and the description as everything else it knows, so
+    // the phrase is a concrete thing a detector finds and the description tells it apart.
+    '`phrase`: what the object finder looks for, 2 to 5 words',
+    'color or material, then a concrete noun',
+    '"blue plastic cap", "white yogurt bottle"',
+    "Name what stays true all lesson (a cup's own color, not its contents')",
+    'Never a position, a verb, or a word as bare as "item", "object" or "container"',
+    '`description`: one standalone sentence of 15 to 35 words',
+    'size next to a hand',
+    'next to large things that stay put and to its neighbors',
+    'enough to tell it from every look-alike in view',
+    'No actions, no mention of steps',
     'Too vague: "The washer fluid cap."',
     'on its own',
-    'which one it is among similar things',
+    'written as a show `description` is',
     // One particular thing, never a kind: an ordinal among look-alikes, anchored, places too.
     'ONE THING, NEVER A KIND',
     '"the second shelf from the top"',
@@ -422,7 +432,7 @@ describe('PLANNER_SYSTEM_INSTRUCTION', () => {
     '"the shelf inside the refrigerator", "black refrigerator door"',
     'The finder gets only this sentence',
     'it never replaces saying where in',
-    'as it looks at that point in the task',
+    'its state at that point in the task',
     '`doneWhen`: one sentence',
     'an end state a camera can confirm',
     '"the blue cap is off and lying on the fender"',

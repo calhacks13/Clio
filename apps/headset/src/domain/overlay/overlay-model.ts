@@ -5,11 +5,16 @@ import type { LessonView } from '../coach/ports';
 import type { AppBus, CoachVoice, HighlightStyle, LessonPhase } from '../events';
 import type { ObjectOutline } from '../world/outline';
 import { type Accent, roleAccent, styledAccent, WARNING_MS } from './accents';
+import { coachHighlightUntil, stepLights } from './lights';
 
 export type { CoachVoice };
 
 // The presentation model: what the AR layer should show, reduced from bus events. Presenters read
 // a snapshot each frame and never reach into domain objects themselves.
+//
+// Its highlights are what is lit while the live tracker is down (rings, and Spotlight's outlines
+// for show items), by the same rules as the tracker's lights (lights.ts, LiveTracking): what the
+// step lights by itself and the action focus's item for the step, then the coach's highlights.
 
 export interface OverlayHighlight {
   objectId: string;
@@ -60,8 +65,6 @@ export interface OverlaySnapshot {
   missing: string[];
 }
 
-/** How long a coach highlight shows (ms). */
-export const COACH_HIGHLIGHT_MS = 5000;
 const MISTAKE_MS = 4000;
 const SUCCESS_MS = 1200;
 const CAPTION_MS = 4000;
@@ -72,6 +75,10 @@ export class OverlayModel {
   private instruction: Omit<NonNullable<OverlaySnapshot['instruction']>, 'progress'> | null = null;
   private progress = 0;
   private highlights: OverlayHighlight[] = [];
+  /** The focused step, what it lights by itself, and the action focus's item for it. */
+  private stepId: string | null = null;
+  private stepLit: string[] = [];
+  private focusItem: string | null = null;
   private readonly outlines = new Map<string, StoredOutline>();
   private toast: (NonNullable<OverlaySnapshot['toast']> & { until: number }) | null = null;
   private demoStepId: string | null = null;
@@ -108,12 +115,27 @@ export class OverlayModel {
         };
         this.progress = 0;
         this.outlines.clear();
-        this.highlights = targets.map((objectId) => ({
-          objectId,
-          style: 'target' as const,
-          source: 'auto' as const,
-          until: null,
-        }));
+        const step = this.view.procedure()?.steps.find((s) => s.id === stepId);
+        this.stepId = stepId;
+        this.stepLit = step ? stepLights(step) : [...targets];
+        this.focusItem = null;
+        this.highlights = this.stepLit.map((objectId) => auto(objectId));
+      }),
+      // The action focus's next thing to touch is lit for the rest of the step, until it names
+      // another.
+      b.on('focus.answered', ({ stepId, actionId }) => {
+        if (stepId !== this.stepId || !actionId || actionId === this.focusItem) return;
+        if (!this.view.procedure()?.objects.some((o) => o.id === actionId)) return;
+        const previous = this.focusItem;
+        this.focusItem = actionId;
+        if (previous !== null && !this.stepLit.includes(previous)) {
+          this.highlights = this.highlights.filter(
+            (h) => !(h.objectId === previous && h.source === 'auto'),
+          );
+        }
+        if (!this.highlights.some((h) => h.objectId === actionId && h.source === 'auto')) {
+          this.highlights.push(auto(actionId));
+        }
       }),
       b.on('plan.changed', () => this.refreshInstruction()),
       b.on('step.completed', ({ t, by }) => {
@@ -129,13 +151,20 @@ export class OverlayModel {
         this.toast = { kind: 'mistake', text: message, until: t + MISTAKE_MS };
       }),
       b.on('overlay.highlight', ({ t, objectId, style, source }) => {
-        this.highlights = this.highlights.filter(
-          (h) => !(h.objectId === objectId && h.source === source),
-        );
-        // A warning is a pulse, never a steady red; a coach hint lasts a moment; a step target
-        // lasts the step.
+        // The coach's target is the one next thing to touch: a new one replaces it.
+        const replaced = (h: OverlayHighlight) =>
+          h.source === source &&
+          (h.objectId === objectId ||
+            (source === 'coach' && style === 'target' && h.style === style));
+        this.highlights = this.highlights.filter((h) => !replaced(h));
+        // A warning is a pulse, never a steady red; the coach's target lasts the step and its hint
+        // a moment (lights.ts); a step target lasts the step.
         const until =
-          style === 'warning' ? t + WARNING_MS : source === 'coach' ? t + COACH_HIGHLIGHT_MS : null;
+          source === 'coach'
+            ? coachHighlightUntil(style, t)
+            : style === 'warning'
+              ? t + WARNING_MS
+              : null;
         this.highlights.push({ objectId, style, source, until });
       }),
       b.on('overlay.outline', ({ objectId, outline, offset, rank, role, phrase }) => {
@@ -240,6 +269,9 @@ export class OverlayModel {
   private endLesson(): void {
     this.instruction = null;
     this.highlights = [];
+    this.stepId = null;
+    this.stepLit = [];
+    this.focusItem = null;
     this.outlines.clear();
     this.demoStepId = null;
     this.forgetLesson();
@@ -250,3 +282,11 @@ export class OverlayModel {
     this.missing = [];
   }
 }
+
+/** Lit by the lesson itself (the step, the action focus) for as long as the step lasts. */
+const auto = (objectId: string): OverlayHighlight => ({
+  objectId,
+  style: 'target',
+  source: 'auto',
+  until: null,
+});

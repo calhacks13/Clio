@@ -164,6 +164,13 @@ describe.each(['plan', 'revision'] as const)('buildPlanJsonSchema(%s) in full', 
     const item = show.items as JsonSchema;
     expect(Object.keys(props(item))).toEqual(['object', 'phrase', 'description']);
     expect(item.required).toEqual(['object', 'phrase', 'description']);
+    // The same words as a first stage card's, so an object's phrase reads the same everywhere.
+    const card = (buildPlanJsonSchema('first').properties as Record<string, JsonSchema>)
+      .objects as JsonSchema;
+    expect(props(item).phrase).toEqual(props(card.items as JsonSchema).phrase);
+    expect((props(item).description as JsonSchema).description).toContain(
+      'tells this one thing from every look-alike in view',
+    );
     // Gemini writes properties in schema order: it decides what to show right after the action.
     const order = Object.keys(props(step));
     expect(order.indexOf('show')).toBe(order.indexOf('action') + 1);
@@ -238,8 +245,14 @@ describe('plan, first stage and revision', () => {
     const card = objects.items as JsonSchema;
     expect(Object.keys(props(card))).toEqual(['id', 'label', 'phrase', 'look', 'moves']);
     expect(card.required).toEqual(['id', 'label', 'phrase', 'look', 'moves']);
-    expect((props(card).phrase as JsonSchema).description).toContain('2 to 5 words');
-    expect((props(card).phrase as JsonSchema).description).toContain('No colors, positions');
+    // The card's words are all jev gets: a concrete subject, and a look that tells it apart.
+    const phrase = (props(card).phrase as JsonSchema).description;
+    expect(phrase).toContain('2 to 5 words: color or material, then a concrete noun');
+    expect(phrase).toContain('never a position, a verb or a bare "item"');
+    const look = (props(card).look as JsonSchema).description;
+    expect(look).toContain('tells this one object from every look-alike in view');
+    expect(look).toContain('next to large things that stay put and its neighbors');
+    expect(look).toContain('No actions, no steps');
     expect(props(card).moves).toMatchObject({ type: 'boolean' });
 
     const step = props(schema).firstStep as JsonSchema;

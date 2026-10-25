@@ -213,6 +213,25 @@ describe('the coach edits the plan', () => {
     ).toBe('put-the-funnel-in');
   });
 
+  it('declares an object the action focus named, as the app, once, and only in a lesson', async () => {
+    const { lesson, registry, updates, begin } = setup();
+    const button = { label: 'red reset button', look: 'Small round red button, left of the cap' };
+    expect(lesson.declareObject(button)).toBeNull();
+    await begin();
+    expect(lesson.declareObject({ label: 'Blue cap.', look: 'a cap' })).toBe('cap');
+    expect(lesson.declareObject(button)).toBe('red-reset-button');
+    expect(lesson.declareObject({ ...button, label: 'Red reset button' })).toBe('red-reset-button');
+    expect(registry.spec('red-reset-button')).toMatchObject({
+      label: 'red reset button',
+      placement: { method: 'detect' },
+      tracking: { query: 'Small round red button, left of the cap', moves: true },
+    });
+    expect(updates().map((u) => [u.op, u.by])).toEqual([
+      ['start', 'planner'],
+      ['material', 'app'],
+    ]);
+  });
+
   it('completes any step, briefing the next one only when the focus moves', async () => {
     const { lesson, tool, result, begin } = setup();
     await begin();

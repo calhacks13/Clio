@@ -37,6 +37,15 @@ export function createGeminiClient(apiKey: string): GeminiClient {
   return new GoogleGenAI({ apiKey, vertexai: false });
 }
 
+/** A call that ran past its deadline, so a route can answer 504 rather than 502. */
+export class GeminiTimeoutError extends Error {
+  override name = 'GeminiTimeoutError';
+
+  constructor(readonly timeoutMs: number) {
+    super(`Gemini did not answer within ${Math.round(timeoutMs / 1000)} s`);
+  }
+}
+
 export type Thinking = 'minimal' | 'low' | 'medium' | 'high';
 
 const LEVELS: Record<Thinking, ThinkingLevel> = {

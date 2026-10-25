@@ -169,7 +169,7 @@ describe('LiveTracking', () => {
       ['cap', 1],
       ['rag', null],
     ]);
-    // A step that shows nothing lights nothing, but the recording covers the whole lesson.
+    // A step with nothing to do lights nothing, but the recording covers the whole lesson.
     enter(DONE);
     expect(tracking.objects.map(({ id, rank }) => [id, rank])).toEqual([
       ['cap', null],
@@ -320,15 +320,197 @@ describe('LiveTracking', () => {
     const { tracking, start, enter, highlight } = setup();
     start();
     enter(OPEN);
-    highlight('cap', 'target', 1000);
+    highlight('cap', 'attention', 1000);
     expect(ids(tracking)).toEqual(['cap', 'jug', 'rag']);
     expect(tracking.objects.filter(isShown)).toEqual([
-      expect.objectContaining({ id: 'cap', style: 'target' }),
+      expect.objectContaining({ id: 'cap', style: 'attention' }),
     ]);
     tracking.update(6000);
     expect(tracking.objects.filter(isShown)).toEqual([
       expect.objectContaining({ id: 'cap', style: null }),
     ]);
+  });
+
+  it("keeps the coach's target lit for the step, until another target replaces it", () => {
+    const { tracking, start, enter, highlight } = setup();
+    start();
+    enter(OPEN);
+    highlight('jug', 'target', 1000);
+    tracking.update(600_000);
+    expect(tracking.get('jug')).toMatchObject({ style: 'target', rank: null });
+    expect(shown(tracking)).toEqual(['cap', 'jug']);
+    // One next thing to touch: the new target takes over, a hint beside it does not.
+    highlight('rag', 'attention', 2000);
+    highlight('cap', 'target', 2000);
+    expect(tracking.objects.map(({ id, style }) => [id, style])).toEqual([
+      ['cap', 'target'],
+      ['rag', 'attention'],
+      ['jug', null],
+    ]);
+    enter(POUR);
+    expect(tracking.objects.filter((o) => o.style !== null)).toEqual([]);
+  });
+
+  it("lights a step's targets, then its action's objects, when it shows nothing", () => {
+    const plan = lesson(
+      'wipe',
+      [
+        {
+          id: 'top-up',
+          instruction: 'Top up the reservoir.',
+          targets: ['cap', 'rag'],
+          action: { verb: 'pour', object: 'jug', target: 'cap' },
+          success: { type: 'confirm' },
+        },
+        {
+          id: 'press',
+          instruction: 'Press the point.',
+          targets: ['dot'],
+          success: { type: 'confirm' },
+        },
+      ],
+      [
+        {
+          id: 'dot',
+          label: 'the dot',
+          kind: 'point',
+          placement: { method: 'layout', position: [0.1, 0, -0.1] },
+        },
+      ],
+    );
+    const { tracking, start, enter } = setup(plan);
+    start();
+    enter(plan.steps[0] as Step);
+    // In the plan's words for each, lit in order: where the jug pours is the destination, the
+    // jug is what to act on, and anything else takes its place's role.
+    expect(tracking.objects).toEqual([
+      {
+        id: 'cap',
+        phrase: 'washer cap',
+        query: 'washer cap',
+        rank: 0,
+        style: null,
+        accent: { color: ACCENTS.destination, opacity: 1 },
+      },
+      {
+        id: 'rag',
+        phrase: 'rag',
+        query: 'rag',
+        rank: 1,
+        style: null,
+        accent: { color: ACCENTS.destination, opacity: 1 },
+      },
+      {
+        id: 'jug',
+        phrase: 'fluid jug',
+        query: 'blue jug with a white label',
+        rank: 2,
+        style: null,
+        accent: { color: ACCENTS.act, opacity: 1 },
+      },
+    ]);
+    // A point has no look for the camera to find: nothing to light live.
+    enter(plan.steps[1] as Step);
+    expect(shown(tracking)).toEqual([]);
+  });
+
+  it("lights the action focus's item for the rest of the step, until it names another", () => {
+    const { bus, tracking, start, enter } = setup();
+    const answer = (stepId: string, actionId: string | null) =>
+      bus.emit('focus.answered', {
+        t: 2000,
+        frameT: 1900,
+        stepId,
+        detections: [],
+        action: null,
+        actionId,
+        model: 'er',
+        latencyMs: 100,
+      });
+    start();
+    enter(OPEN);
+    answer('open', 'rag');
+    expect(tracking.objects.map(({ id, rank, accent }) => [id, rank, accent.color])).toEqual([
+      ['cap', 0, ACCENTS.act],
+      ['rag', 1, ACCENTS.act],
+      ['jug', null, ACCENTS.act],
+    ]);
+    tracking.update(600_000);
+    expect(shown(tracking)).toEqual(['cap', 'rag']);
+    // Nothing to touch this time, an answer about another step, an object it never declared:
+    // the item stays.
+    answer('open', null);
+    answer('pour', 'jug');
+    answer('open', 'kettle');
+    expect(shown(tracking)).toEqual(['cap', 'rag']);
+    answer('open', 'jug');
+    expect(shown(tracking)).toEqual(['cap', 'jug']);
+    // Already shown: lit as the step shows it.
+    answer('open', 'cap');
+    expect(shown(tracking)).toEqual(['cap']);
+    enter(POUR);
+    answer('open', 'rag');
+    expect(shown(tracking)).toEqual(['jug', 'cap']);
+  });
+
+  it("follows an object in the action focus's words until the plan words it again", () => {
+    const { bus, registry, tracking, start, enter, replan } = setup();
+    start();
+    enter(OPEN);
+    tracking.refine('jug', '  Tall blue jug with a white label, right of the cap ');
+    tracking.refine('cap', 'Round blue cap at the front left of the engine bay');
+    tracking.refine('kettle', 'A kettle');
+    expect(tracking.objects.map(({ id, phrase, query }) => [id, phrase, query])).toEqual([
+      ['cap', 'blue washer cap', 'Round blue cap at the front left of the engine bay'],
+      ['jug', 'fluid jug', 'Tall blue jug with a white label, right of the cap'],
+      ['rag', 'rag', 'rag'],
+    ]);
+    // A new step shows the cap in its own words; the jug's words stay ER's while the plan's
+    // for it are still the ones they stood in for.
+    enter(DONE);
+    expect(tracking.get('cap')?.query).toBe('washer cap');
+    expect(tracking.get('jug')?.query).toBe('Tall blue jug with a white label, right of the cap');
+    // A revision words the jug again: the plan's words win.
+    const jug = procedure.objects.find((o) => o.id === 'jug');
+    if (!jug) throw new Error('fixture');
+    const written = { ...jug, tracking: { query: 'tall blue jug, cap on top', moves: true } };
+    registry.update(written, 1100);
+    replan({ ...procedure, objects: procedure.objects.map((o) => (o.id === 'jug' ? written : o)) });
+    bus.emit('plan.changed', { t: 1100, rev: 2, op: 'revise', stepId: null });
+    expect(tracking.get('jug')).toMatchObject({
+      phrase: 'fluid jug',
+      query: 'tall blue jug, cap on top',
+    });
+    // A lesson that ends takes its words with it.
+    tracking.refine('rag', 'Folded red rag');
+    bus.emit('procedure.aborted', { t: 2000, reason: 'new lesson' });
+    tracking.refine('rag', 'Folded red rag again');
+    start();
+    expect(tracking.get('rag')?.query).toBe('rag');
+  });
+
+  it('follows an object added to the plan at once', () => {
+    const { bus, registry, tracking, start, enter, replan } = setup();
+    start();
+    enter(OPEN);
+    const funnel = {
+      id: 'funnel',
+      label: 'funnel',
+      kind: 'item' as const,
+      radius: 0.03,
+      hidden: false,
+      placement: { method: 'detect' as const },
+      tracking: { query: 'small white funnel on the fender', moves: true },
+    };
+    registry.add(funnel, 1000);
+    replan({ ...procedure, objects: [...procedure.objects, funnel] });
+    bus.emit('plan.changed', { t: 1000, rev: 1, op: 'material', stepId: null });
+    expect(ids(tracking)).toEqual(['cap', 'jug', 'rag', 'funnel']);
+    expect(tracking.get('funnel')).toMatchObject({
+      phrase: 'funnel',
+      query: 'small white funnel on the fender',
+      rank: null,
+    });
   });
 
   it('ignores step highlights and unknown objects', () => {
