@@ -139,6 +139,14 @@ interface FirstStepTiming {
   planMs: number;
 }
 
+/** An object a model named that the plan lacks, in its words (LessonController.declareObject). */
+export interface DeclaredObject {
+  /** Its spoken name, e.g. "red reset button". */
+  label: string;
+  /** A standalone description of this one object, which the camera finds it by. */
+  look: string;
+}
+
 /** A lesson the coach writes itself, before its first step exists. */
 interface CoachDraft {
   goal: string;
@@ -183,6 +191,23 @@ function uniqueId(base: string, taken: ReadonlySet<string>): string {
   let id = base;
   for (let n = 2; taken.has(id); n++) id = `${base}-${n}`;
   return id;
+}
+
+/** An object declared during the lesson: something to find with the camera, which may move. */
+function newObject(
+  label: string,
+  look: string | undefined,
+  existing: readonly ObjectSpec[],
+): ObjectSpec {
+  return {
+    id: uniqueId(slugFrom(label, 'material'), new Set(existing.map((o) => o.id))),
+    label,
+    kind: 'item',
+    radius: 0.03,
+    hidden: false,
+    placement: { method: 'detect' },
+    tracking: { query: look?.trim() || label, moves: true },
+  };
 }
 
 const sameText = (a: string, b: string) =>
@@ -1039,34 +1064,53 @@ export class LessonController {
 
   private addMaterial(label: string, lookFor: string | undefined, callId: string): ToolOutcome {
     if (this.planning && !this.planning.revision) return this.planningError();
-    const { registry, clock } = this.deps;
     const runner = this.activeRunner();
     const draft = runner ? null : this.draft;
     if (!runner && !draft) {
       return { ok: false, error: 'No lesson is running. Call start_lesson first.' };
     }
-    const existing = runner ? registry.allSpecs() : (draft?.objects ?? []);
+    const existing = runner ? this.deps.registry.allSpecs() : (draft?.objects ?? []);
     const same = existing.find((o) => sameText(o.label, label));
     if (same) return this.planResult({ material_id: same.id, already: true }, this.focusId());
-    const spec: ObjectSpec = {
-      id: uniqueId(slugFrom(label, 'material'), new Set(existing.map((o) => o.id))),
-      label,
-      kind: 'item',
-      radius: 0.03,
-      hidden: false,
-      placement: { method: 'detect' },
-      tracking: { query: lookFor?.trim() || label, moves: true },
-    };
+    const spec = newObject(label, lookFor, existing);
     if (!runner) {
       draft?.objects.push(spec);
       return { ok: true, result: { material_id: spec.id } };
     }
-    const r = runner.addObject(spec);
+    const r = this.addObject(runner, spec);
     if (!r.ok) return r;
-    registry.add(spec, clock.now());
-    this.track(this.locate([spec.id]));
     this.changed('material', 'coach', { callId, materialId: spec.id });
     return this.planResult({ material_id: spec.id }, this.focusId());
+  }
+
+  /**
+   * An object a model named that the plan lacks: the action focus's next thing to touch
+   * (Robotics-ER 2). The lesson declares it in that model's words and follows it from now on, as
+   * it would an object the planner declared. Answers its id (the lesson's own when it already has
+   * an object by that name), or null when no lesson is running or one is being planned. Recorded
+   * as a plan change by the app; the coach hears of it only as one of the plan's materials.
+   */
+  declareObject({ label, look }: DeclaredObject): string | null {
+    if (this.planning && !this.planning.revision) return null;
+    const runner = this.activeRunner();
+    const name = label.trim();
+    if (!runner || !name) return null;
+    const existing = this.deps.registry.allSpecs();
+    const same = existing.find((o) => sameText(o.label, name));
+    if (same) return same.id;
+    const spec = newObject(name, look, existing);
+    if (!this.addObject(runner, spec).ok) return null;
+    this.changed('material', 'app', { materialId: spec.id, reason: 'the action focus named it' });
+    return spec.id;
+  }
+
+  /** Adds a declared object to the running lesson and looks for it. */
+  private addObject(runner: ProcedureRunner, spec: ObjectSpec): ToolOutcome {
+    const r = runner.addObject(spec);
+    if (!r.ok) return r;
+    this.deps.registry.add(spec, this.deps.clock.now());
+    this.track(this.locate([spec.id]));
+    return { ok: true, result: null };
   }
 
   /** A step the coach wrote: confirmed by the coach or learner, outlining the materials it uses. */
