@@ -11,6 +11,7 @@ import type {
 } from '@clio/protocol';
 import type { Clock } from '../../core/clock';
 import type { AppBus } from '../events';
+import { findWords } from '../world/find-words';
 
 // The coach's second pair of eyes. Gemini Live only takes a turn when the learner speaks, so a
 // step finished in silence would go unnoticed. While a step waits and nobody is talking, the
@@ -425,7 +426,7 @@ export function stepLooks(
   }
   for (const id of step.targets) {
     const spec = specs.get(id);
-    if (spec && !looks.has(id)) looks.set(id, spec.tracking?.query ?? spec.label);
+    if (spec && !looks.has(id)) looks.set(id, findWords(spec));
   }
   const described: StepCheckObject[] = [...looks]
     .filter(([id]) => specs.get(id)?.hidden !== true)

@@ -9,6 +9,7 @@ import type { Clock } from '../../core/clock';
 import type { LessonView } from '../coach/ports';
 import type { CoachOwnToolHandlers, ToolOutcome } from '../coach/toolbox';
 import type { AppBus } from '../events';
+import { findWords } from '../world/find-words';
 import type {
   CameraFrame,
   CameraFrameSource,
@@ -104,7 +105,7 @@ export class CloserLook {
     const specs = view.procedure()?.objects ?? [];
     const objects = plan.materials.slice(0, MAX_OBJECTS).map(({ id, label }): SceneObject => {
       const spec = specs.find((o) => o.id === id);
-      const look = spec?.tracking?.query ?? spec?.description;
+      const look = spec && (spec.tracking?.query ?? spec.description) ? findWords(spec) : undefined;
       return { id, label, ...(look ? { look: look.slice(0, MAX_TEXT) } : {}) };
     });
     return {

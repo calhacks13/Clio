@@ -1,6 +1,7 @@
 import type { Detection, LocateRequest } from '@clio/protocol';
 import type { Vec3 } from '../../core/math';
 import { type CameraModel, intersectPlaneY, liftDetection, type Ray } from './camera-model';
+import { findWords } from './find-words';
 import type { ObjectRegistry } from './object-registry';
 import { boxPolygon, liftOutline, type ObjectOutline } from './outline';
 import type { PoseHistory } from './pose-history';
@@ -217,7 +218,7 @@ export class ObjectGrounder implements Grounder {
       return [
         {
           id: r.id,
-          query: r.description ?? spec.tracking?.query ?? spec.label,
+          query: r.description ?? findWords(spec),
           phrase: r.phrase ?? spec.label,
         },
       ];

@@ -100,7 +100,10 @@ export const COACH_TOOLS = {
         .string()
         .max(200)
         .optional()
-        .describe('What it looks like, e.g. "small white plastic funnel on the fender"'),
+        .describe(
+          'What it looks like and exactly where, so a camera finds this one and nothing else, ' +
+            'e.g. "small white plastic funnel on the fender, left of the blue cap"',
+        ),
     }),
   },
   highlight: {

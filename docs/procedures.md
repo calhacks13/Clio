@@ -101,11 +101,14 @@ every few seconds, so the outlines follow objects that get moved. It skips objec
 learner's hand, because hand tracking already follows them.
 - `phrase`: 2 to 5 words naming the thing, like a label on a box. Detectors that take category
   prompts (SAM 3, Grounding DINO) use it.
-- `description`: one sentence of 12 to 30 words that finds the object in a single frame with no
-  other context. Say what it is, and give its color, material, shape and size, any text or symbols
-  on it, and where it is relative to its surroundings. Describe its state at that point in the
-  task ("the cap is off", "the cup is now pink"). If something similar is nearby, say what tells
-  them apart.
+- `description`: one sentence of 15 to 35 words that finds the object in a single frame with no
+  other context. It names one particular thing, never a kind: say what it is, its color,
+  material, shape and size, any text or symbols on it, which one it is among similar things
+  ("the second shelf from the top", "the leftmost of the three beakers", left and right as the
+  camera sees them), and where it is next to large things that stay put. Describe its state at
+  that point in the task ("the cap is off", "the cup is now pink"). A place a step uses (a shelf,
+  a drawer) is singled out the same way, in the instruction too. `tracking.query` follows the
+  same rule, because the finder gets only that sentence; `placement.hint` never replaces it.
 - At most 4 items, most important first. Every `object` must be declared.
 
 The planner writes `show` for every step. A step without it outlines nothing and only looks for

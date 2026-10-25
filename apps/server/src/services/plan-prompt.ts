@@ -36,6 +36,25 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
     'in that step, and make the mix-up one of its `mistakes`.',
   '- Without views, assume a typical home setup and leave `sightings` empty.',
   '',
+  'ONE THING, NEVER A KIND',
+  '- Every object, place or part a step uses is one particular thing in view. Everything you ' +
+    'write about it must single it out, so that an object finder that sees one camera frame ' +
+    'and nothing else cannot pick anything else: the instruction, the show description, ' +
+    '`tracking.query` and doneWhen.',
+  '- When there are several of a kind (shelves, drawers, doors, cups, beakers, bottles, ' +
+    'buttons), choose one and name it by its place among them, counted the way a person ' +
+    'would: "the second shelf from the top", "the leftmost of the three beakers", "the top ' +
+    'drawer on the right". Left and right are as seen in the camera views.',
+  '- Anchor it to large things that stay put (the fridge, the sink, the desk, the edge of the ' +
+    'table), and add its color, material, size and any text, number or symbol on it.',
+  '- Places count too: "Put the yogurt drink on the second shelf from the top.", not "on a ' +
+    'shelf". Something not in sight yet (inside a closed fridge or drawer) is described as it ' +
+    'will look once it is open, and where: "the second glass shelf from the top inside the ' +
+    'black mini fridge, once its door is open".',
+  '- Never a bare kind: "the shelf inside the refrigerator", "black refrigerator door" and ' +
+    '"the beaker" are too vague. Good: "The black front door of the mini fridge on the floor ' +
+    'right of the desk, with a silver handle along its left edge."',
+  '',
   'STEPS',
   '- 3 to 10 steps, in the order a person does them, with exactly one physical action per step.',
   '- Cover the whole goal: everything it asks to do, make or test gets its steps, in the order ' +
@@ -48,8 +67,9 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
   '- Leave things as they should be: close a door, lid or cap that the task opens or uses, ' +
     'unless the goal needs it open.',
   '- `instruction`: one short imperative sentence, at most 15 words, naming the action and the ' +
-    'object, e.g. "Unscrew the blue washer fluid cap." It is spoken, shown in AR, and used as ' +
-    "the robot's language label.",
+    'one object (and place) it uses, e.g. "Unscrew the blue washer fluid cap." or "Put the ' +
+    'jar on the second shelf from the top." It is spoken, shown in AR, and used as the ' +
+    "robot's language label.",
   '- `doneWhen`: one sentence, an end state a camera can confirm, described as it will look ' +
     'when the step is finished, e.g. "the blue cap is off and lying on the fender". It must be ' +
     'in sight: not inside an opaque bottle, syringe or box. Name what ' +
@@ -95,13 +115,13 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
   '  - `object`: the id of the declared object it is.',
   '  - `phrase`: 2 to 5 words naming it like a label on a box, e.g. "blue washer fluid cap". ' +
     'No verbs, no positions.',
-  '  - `description`: one sentence of 12 to 30 words that singles it out in the frame: what it ' +
-    'is, its color, material, shape and size, any text or symbols on it, and where it is ' +
-    'relative to things around it, as it looks at that point in the task (after earlier ' +
-    'steps, a cap may be off and lying on the fender). If something similar is nearby, say ' +
-    'what tells it apart. Describe only what a camera can see. Good: "Round blue plastic cap ' +
-    'with a windshield-spray symbol, on a white tank at the front left of the engine bay, ' +
-    'beside a yellow cap." Too vague: "The washer fluid cap."',
+  '  - `description`: one sentence of 15 to 35 words that singles out this one thing in the ' +
+    'frame, as ONE THING, NEVER A KIND says: what it is, its color, material, shape and size, ' +
+    'any text or symbols on it, which one it is among similar things, and where it is relative ' +
+    'to large things around it, as it looks at that point in the task (after earlier steps, a ' +
+    'cap may be off and lying on the fender). Describe only what a camera can see. Good: ' +
+    '"Round blue plastic cap with a windshield-spray symbol, on a white tank at the front left ' +
+    'of the engine bay, the left one of two caps." Too vague: "The washer fluid cap."',
   '',
   'OBJECTS',
   '- Declare every object that any step targets, acts on or checks (a look-alike that a ' +
@@ -113,10 +133,13 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
     "caliper's vernier scale or locking screw, is an object of its own, with its own id and kind " +
     '"item": describe only that part, so its glow stays on the component.',
   '- `placement.method` is always "detect": the headset camera finds the object. Add ' +
-    '`placement.hint` with where to look when it helps.',
-  "- `tracking.query`: the object's visual appearance as seen in the camera views (color, " +
-    'shape, markings, where it is), e.g. "blue cap with a windshield symbol, front left". Set ' +
-    '`tracking.moves` to true for things that get picked up or carried.',
+    '`placement.hint` with where to look when it helps; it never replaces saying where in ' +
+    '`tracking.query`.',
+  '- `tracking.query`: one sentence of 15 to 35 words that finds this one object on its own, ' +
+    'as ONE THING, NEVER A KIND says: color, shape, markings, which one it is among similar ' +
+    'things and where it is, e.g. "blue plastic cap with a windshield symbol on the white tank ' +
+    'at the front left of the engine bay, left of the yellow cap". The finder gets only this ' +
+    'sentence. Set `tracking.moves` to true for things that get picked up or carried.',
   '- `radius`: approximate size in meters (half of the largest dimension).',
   '',
   'WORKSPACE',
@@ -177,8 +200,9 @@ function firstStageText(r: PlannerRequest): string {
       '`done`, and it leaves any control untouched. outline[0] is the first step.',
     '- `objects`: only the objects the first step uses (its targets, what it shows and the ' +
       'look-alike it guards against). The later steps declare theirs when they are written. ' +
-      "An object's `look` is its tracking.query and the description its outline is found by; " +
-      'its `phrase` names it for the object finder.',
+      "An object's `look` is its tracking.query and the description its outline is found by, " +
+      'so it singles out that one thing (ONE THING, NEVER A KIND); its `phrase` names its kind ' +
+      'for the object finder.',
     '- `firstStep`: that first step as a card, with the same id as outline[0]. `show` lists ' +
       'object ids. Each mistake names the object it is made with, never one the step itself ' +
       'uses: Clio speaks its message when a hand lingers at that object. Clio confirms the step ' +
@@ -272,7 +296,8 @@ function restText(r: Revising): string {
     ...(outline.length
       ? outline.map((s, i) => stepLine(s, fromStepIndex + i + 1))
       : ['(none: finish the lesson)']),
-    'Objects already declared, written quickly with a default kind and size (keep these ids):',
+    'Objects already declared, written quickly with a default kind and size (keep these ids, ' +
+      'and keep saying in each tracking.query which one it is and where):',
     ...objectLines(r),
     viewsLine(r.images.length, true),
     newStepsLine(
