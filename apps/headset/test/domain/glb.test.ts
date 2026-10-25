@@ -103,4 +103,11 @@ describe('writeGlb', () => {
     expect(doc.meshes).toBeUndefined();
     expect(chunks).toHaveLength(1);
   });
+
+  it('writes no mesh for vertices without triangles, never an implied triangle list', () => {
+    const loose = { ...cube(), indices: new Uint32Array([0, 1]) };
+    const { doc } = parse(writeGlb([loose]));
+    expect(doc.nodes?.[0]?.mesh).toBeUndefined();
+    expect(doc.meshes).toBeUndefined();
+  });
 });

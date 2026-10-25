@@ -61,9 +61,11 @@ export function writeGlb(
     };
     if (node.extras) gl.extras = node.extras;
     const count = Math.floor(node.positions.length / 3);
-    if (count === 0) return gl;
-    const positions = node.positions.subarray(0, count * 3);
     const indices = node.indices.subarray(0, node.indices.length - (node.indices.length % 3));
+    // Without triangles there is nothing to draw: a primitive without indices would be read as a
+    // triangle list of its vertices, triangles the runtime never reported.
+    if (count === 0 || indices.length === 0) return gl;
+    const positions = node.positions.subarray(0, count * 3);
     const { min, max } = bounds(positions);
     accessors.push({
       bufferView: addView(positions, ARRAY_BUFFER),
@@ -77,15 +79,13 @@ export function writeGlb(
       attributes: { POSITION: accessors.length - 1 },
       mode: TRIANGLES,
     };
-    if (indices.length > 0) {
-      accessors.push({
-        bufferView: addView(indices, ELEMENT_ARRAY_BUFFER),
-        componentType: UNSIGNED_INT,
-        count: indices.length,
-        type: 'SCALAR',
-      });
-      primitive.indices = accessors.length - 1;
-    }
+    accessors.push({
+      bufferView: addView(indices, ELEMENT_ARRAY_BUFFER),
+      componentType: UNSIGNED_INT,
+      count: indices.length,
+      type: 'SCALAR',
+    });
+    primitive.indices = accessors.length - 1;
     gl.mesh = meshes.length;
     meshes.push({ name: node.name, primitives: [primitive] });
     return gl;
