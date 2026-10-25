@@ -6,7 +6,13 @@ import numpy as np
 import pytest
 
 from clio_tracker.config import ConfigError, load_settings
-from clio_tracker.segment import clean_mask, crop_mask, load_segmenter
+from clio_tracker.segment import (
+    candidate_bounds,
+    clean_mask,
+    crop_mask,
+    load_segmenter,
+    pick_candidate,
+)
 
 
 def paste(crop, width: int, height: int) -> np.ndarray:
@@ -107,6 +113,74 @@ def test_sam2_small_masks_a_bright_square():
     inside = full[150:330, 200:440].sum()
     outside = full.sum() - inside
     assert inside > 0.9 * inside_area and outside <= 0.05 * inside_area
+
+
+def test_candidate_bounds_are_the_masks_extent_in_pixel_edges():
+    rows = np.zeros((2, 10), bool)
+    cols = np.zeros((2, 12), bool)
+    rows[0, 2:5] = True  # the first mask covers rows 2..4 and columns 3..8
+    cols[0, 3:9] = True
+    assert candidate_bounds(rows, cols).tolist() == [[3, 2, 9, 5], [0, 0, 0, 0]]  # 2nd is empty
+
+
+def test_pick_candidate_prefers_the_mask_that_fills_the_prompt_box():
+    whole_box = np.array([90.0, 50.0, 510.0, 270.0])
+    part = [300.0, 180.0, 420.0, 240.0]
+    whole = [100.0, 60.0, 500.0, 260.0]
+    bounds = np.array([part, whole, whole])
+    # The model is surest of the part (0.99), but the box is around the whole object.
+    assert pick_candidate(np.array([0.99, 0.95, 0.60]), bounds, whole_box) == 1
+    # A box around the part gets the part, though the whole object is a candidate too.
+    part_box = np.array([295.0, 175.0, 425.0, 245.0])
+    assert pick_candidate(np.array([0.95, 0.60, 0.97]), bounds, part_box) == 0
+
+
+def test_pick_candidate_follows_the_model_when_the_bounds_agree():
+    box = np.array([100.0, 100.0, 300.0, 300.0])
+    bounds = np.array([[100.0, 100.0, 300.0, 300.0]] * 3)
+    assert pick_candidate(np.array([0.5, 0.9, 0.7]), bounds, box) == 1
+
+
+def test_pick_candidate_skips_an_empty_mask():
+    box = np.array([100.0, 100.0, 300.0, 300.0])
+    bounds = np.array(
+        [[0.0, 0.0, 0.0, 0.0], [110.0, 110.0, 290.0, 290.0], [100.0, 100.0, 300.0, 300.0]]
+    )
+    assert pick_candidate(np.array([0.99, 0.8, 0.5]), bounds, box) == 1
+
+
+def nested_rectangles() -> np.ndarray:
+    """A bright 400 x 200 rectangle (x 100..500, y 60..260) on a dark frame, with a grayer
+    120 x 60 rectangle inside it (x 300..420, y 180..240): a whole object and a part of it."""
+    rgb = np.full((480, 640, 3), 30, np.uint8)
+    rgb[60:260, 100:500] = 230
+    rgb[180:240, 300:420] = 120
+    return rgb
+
+
+@pytest.mark.model
+def test_sam2_small_takes_the_whole_object_for_a_loose_box_around_it():
+    pytest.importorskip("transformers")
+    seg = load_segmenter("sam2.1-small")
+    box = np.array([90.0, 50.0, 510.0, 270.0])  # 10 px loose on every side
+    crop = seg.mask_in_box(seg.encode(nested_rectangles()), box)
+    assert crop is not None
+    outer = paste(crop, 640, 480)[60:260, 100:500]
+    assert outer.mean() >= 0.85
+
+
+@pytest.mark.model
+def test_sam2_small_takes_the_part_for_a_box_around_the_part():
+    pytest.importorskip("transformers")
+    seg = load_segmenter("sam2.1-small")
+    box = np.array([290.0, 170.0, 430.0, 250.0])  # the inner rectangle, 10 px loose
+    crop = seg.mask_in_box(seg.encode(nested_rectangles()), box)
+    assert crop is not None
+    full = paste(crop, 640, 480)
+    assert full[180:240, 300:420].mean() >= 0.70
+    outer_area = 400 * 200
+    outside_part = full[60:260, 100:500].sum() - full[180:240, 300:420].sum()
+    assert outside_part <= 0.20 * outer_area
 
 
 def test_settings_segmenter_default_and_validation():

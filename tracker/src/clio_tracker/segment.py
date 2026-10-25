@@ -68,6 +68,32 @@ def clean_mask(logits: np.ndarray) -> np.ndarray:
     return np.where(opened > 0, INSIDE, -INSIDE).astype(np.float32)
 
 
+def candidate_bounds(rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
+    """(N, 4) bounding boxes (x1, y1, x2, y2) of N masks, in pixel edges, from which rows (N, H)
+    and columns (N, W) hold any mask pixel; an empty mask is (0, 0, 0, 0)."""
+    import numpy as np
+
+    bounds = np.zeros((len(rows), 4), np.float32)
+    for i, (hit_rows, hit_cols) in enumerate(zip(rows, cols, strict=True)):
+        ys, xs = np.flatnonzero(hit_rows), np.flatnonzero(hit_cols)
+        if ys.size and xs.size:
+            bounds[i] = (xs[0], ys[0], xs[-1] + 1, ys[-1] + 1)
+    return bounds
+
+
+def pick_candidate(scores: np.ndarray, bounds: np.ndarray, box: np.ndarray) -> int:
+    """Which of SAM's candidate masks to draw for a prompt box: the highest predicted IoU times
+    the IoU between the candidate's bounding box and the prompt box. On its own the predicted IoU
+    often prefers one clean piece of a loosely boxed object (a caliper's jaw), a different one on
+    each frame; a box around the whole object then gets the whole, and a box around a part the part.
+    """
+    import numpy as np
+
+    from .geometry import iou
+
+    return int(np.argmax(scores * iou(bounds, box)[:, 0]))
+
+
 def crop_mask(logits: np.ndarray, box: np.ndarray) -> MaskCrop | None:
     """Frame-sized mask logits cut to the box grown by 10%, cleaned, and shrunk to at most 256
     pixels on the longer side (each mask pixel is then `scale` >= 1 frame pixels).
@@ -166,13 +192,17 @@ class Sam2Segmenter:
                 input_boxes=prompt.to(self.device),
                 multimask_output=True,
             )
-            best = int(out.iou_scores[0, 0].argmax())
-            full = self.processor.post_process_masks(
-                [out.pred_masks[0, 0, best][None, None]],
-                [(enc.height, enc.width)],
-                binarize=False,
-            )[0]
-            logits = full[0, 0].float().cpu().numpy()
+            # All three candidates at frame size; only their extent and the winner reach the CPU.
+            candidates = self.processor.post_process_masks(
+                [out.pred_masks[0, 0][None]], [(enc.height, enc.width)], binarize=False
+            )[0][0]
+            inside = candidates > 0
+            bounds = candidate_bounds(
+                inside.any(dim=2).cpu().numpy(), inside.any(dim=1).cpu().numpy()
+            )
+            scores = out.iou_scores[0, 0].float().cpu().numpy()
+            best = pick_candidate(scores, bounds, np.array(prompt_box))
+            logits = candidates[best].float().cpu().numpy()
             if self.device == "mps":  # .cpu() has waited for the device; see encode
                 self._torch.mps.empty_cache()
         return crop_mask(logits, np.array([x1, y1, x2, y2]))

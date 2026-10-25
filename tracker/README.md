@@ -214,8 +214,8 @@ covering less than half of the track it would land on and lying inside it, is ne
 a track: it would end on the whole object, whose candidate is usually the only one there and
 whose look the part's resembles. The part is a box riding on the object holding it (followed as
 an object of its own: the candidate holding the part that best matches its own view), or on the
-camera's motion when nothing holds it; its outline is the holder's mask inside the part box, or
-the box as a rounded rectangle ([TRACK.md](TRACK.md#following-a-part)).
+camera's motion when nothing holds it; without a segmenter, its outline is the holder's mask
+inside the part box, or the box as a rounded rectangle ([TRACK.md](TRACK.md#following-a-part)).
 
 **YOLOE's outlines.** Without a segmenter the target's mask is its coefficients times the
 prototypes, cut to its box. Clio gets the largest piece's contour (at most 64 points), the point
@@ -227,15 +227,18 @@ comes from 32 coarse prototypes and is ragged as an outline; judged by eye on th
 benchmark, SAM 2.1 cuts an object out of its box more cleanly, but a call took 180 ms with Small and
 620 ms with Large on the M5 Pro's GPU, so it never runs on every frame. It cuts jev's box out on
 jev's frame, and again whenever the tracker doubts the mask it has, in a background thread (one call
-at a time, at least 150 ms apart; a new jev answer goes first). The follower carries the latest mask
-to every frame: optical-flow points inside it, started from where the camera's motion and the
-object's own last motion put them and kept by the same forward-backward check and RANSAC as the
-camera's, so the mask moves with the object itself and not only with the camera (a caliper's jaw
-slides along its scale, a name plate swings on its hinge). YOLOE and ByteTrack still decide which
-object it is. The follower's mask is what is drawn while it is sure of itself and its box agrees
-with ByteTrack's (IoU 0.3, or inside it as a part inside its whole); otherwise YOLOE's is, and after
-two frames of doubt SAM is asked again. A part gets a mask of its own the same way and reads
-`tracking`: it is measured, not predicted ([TRACK.md](TRACK.md#following-a-part)).
+at a time, at least 150 ms apart; a new jev answer goes first). Of SAM's three candidate masks for
+a box it keeps the one with the highest predicted IoU times the IoU between its bounding box and the
+box, so a box around a whole object gets the whole, not one clean piece of it, and a box around a
+part gets the part. The follower carries the latest mask to every frame: optical-flow points inside
+it, started from where the camera's motion and the object's own last motion put them and kept by the
+same forward-backward check and RANSAC as the camera's, so the mask moves with the object itself and
+not only with the camera (a caliper's jaw slides along its scale, a name plate swings on its hinge).
+YOLOE and ByteTrack still decide which object it is. The follower's mask is what is drawn while it
+is sure of itself and its box agrees with ByteTrack's (IoU 0.3, or inside it as a part inside its
+whole); otherwise YOLOE's is, and after two frames of doubt SAM is asked again. A part gets a mask
+of its own the same way and reads `tracking`: it is measured, not predicted
+([TRACK.md](TRACK.md#following-a-part)).
 
 **Steady outlines** (`smooth.py`). What is returned is filtered; what is tracked is not. The box
 goes through a One Euro filter (cutoff 1.5 Hz at rest, rising 4 Hz per box size a second of
