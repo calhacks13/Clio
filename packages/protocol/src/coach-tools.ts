@@ -109,14 +109,18 @@ export const COACH_TOOLS = {
   highlight: {
     description:
       'Visually emphasize one object for the user. Call it right before you mention an object. ' +
-      'Use style "warning" for an object they should not touch.',
+      'Each step already glows its objects by meaning: cyan for what to act on, yellow for where ' +
+      'it goes, green for a fill or stop level. Your highlight adds to that for a moment: ' +
+      '"attention" is a soft white hint on the object, "warning" is a brief red pulse for an ' +
+      'object they should not touch, "target" flares its own color.',
     args: z.object({
       object_id: z.string().min(1).describe('An object id from the procedure, e.g. "cup_a"'),
       style: z
         .enum(['target', 'attention', 'warning'])
         .default('target')
         .describe(
-          'target: next thing to touch. attention: pulse to draw the eye. warning: wrong object.',
+          'target: next thing to touch (its own color). attention: white hint to draw the eye. ' +
+            'warning: red pulse, wrong object.',
         ),
     }),
   },

@@ -244,9 +244,9 @@ describe('Spotlight', () => {
     await spotlight.enterStep(POUR);
     const at = { t: 1000, outline: OUTLINE, offset: [0, 0, 0] };
     expect(of('overlay.outline')).toEqual([
-      { ...at, objectId: 'cap', rank: 0, phrase: 'blue washer cap' },
-      { ...at, objectId: 'jug', rank: 0, phrase: 'fluid jug' },
-      { ...at, objectId: 'cap', rank: 1, phrase: 'open reservoir' },
+      { ...at, objectId: 'cap', rank: 0, role: 'act', phrase: 'blue washer cap' },
+      { ...at, objectId: 'jug', rank: 0, role: 'destination', phrase: 'fluid jug' },
+      { ...at, objectId: 'cap', rank: 1, role: 'destination', phrase: 'open reservoir' },
     ]);
   });
 

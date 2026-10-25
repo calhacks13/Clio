@@ -1,22 +1,20 @@
 import { Group, Vector3 } from 'three';
 import type { HighlightStyle } from '../../../domain/events';
+import { ACCENTS, type Accent } from '../../../domain/overlay/accents';
 import type { Placement } from '../../../domain/world/placement';
 import { installOcclusionDebug, type WindowFar, XrDepthOcclusion } from '../glow/depth-occlusion';
-import { OBJECT_HIGHLIGHT_COLOR, type ObjectGlowMode } from '../object-highlight';
+import type { ObjectGlowMode } from '../object-highlight';
 import { PrimaryOutlineView } from '../outline-view';
 import type { PresentContext, Presenter } from '../presenter';
-import { RANK_COLORS } from './outlines';
 
 // The glow around each object the tracker follows live (domain/world/live-objects.ts), in the
 // room's frame (worldRoot): the primary page's light, one per object, at the object's measured
 // distance and where it is now, with its name above it. Real surfaces in front of an object hide
 // its light through the headset's depth map (one XrDepthOcclusion shared by every glow), and the
-// hands through their occluders. Colours follow the step's show list (what to act on, then where
-// it goes, as OutlinesPresenter's) unless the coach highlights the object: a target is cyan, a
-// warning red, and attention flares and pulses in its own colour. An object that leaves the set
-// fades out.
+// hands through their occluders. Colours and energy follow the shared step-role accents, with
+// coach styles applied by LiveTracking. An object that leaves the set fades out.
 
-export const WARNING_COLOR = 0xff4d5e;
+export const WARNING_COLOR = ACCENTS.stop;
 
 export interface LiveHighlight {
   id: string;
@@ -29,6 +27,8 @@ export interface LiveHighlight {
   rank: number | null;
   /** The coach's highlight on it, while that lasts. */
   style: HighlightStyle | null;
+  /** The step role and coach style resolved by the presentation model. */
+  accent: Accent;
   mode: ObjectGlowMode;
   /** In the learner's hand. */
   held: boolean;
@@ -47,13 +47,6 @@ interface Drawn {
   label: string;
   mode: ObjectGlowMode;
   style: HighlightStyle | null;
-}
-
-/** The colour of an object's light: its rank's, unless the coach highlights it. */
-export function liveColor({ rank, style }: Pick<LiveHighlight, 'rank' | 'style'>): number {
-  if (style === 'warning') return WARNING_COLOR;
-  if (style === 'target' || rank === null) return OBJECT_HIGHLIGHT_COLOR;
-  return RANK_COLORS[Math.min(rank, RANK_COLORS.length - 1)] ?? OBJECT_HIGHLIGHT_COLOR;
 }
 
 export class LiveHighlightsPresenter implements Presenter {
@@ -103,9 +96,9 @@ export class LiveHighlightsPresenter implements Presenter {
     } else {
       view.object.position.set(...h.placement.center);
     }
-    view.setColor(liveColor(h));
-    if (h.style === 'attention' && drawn.style !== 'attention') view.ignite();
-    view.pulse = h.style === 'attention';
+    view.setAccent(h.accent);
+    if (h.style !== null && h.style !== drawn.style) view.ignite();
+    view.pulse = h.style === 'warning';
     drawn.style = h.style;
   }
 

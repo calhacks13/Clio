@@ -3,7 +3,7 @@ import { Group, Matrix4, Vector3 } from 'three';
 import { add, invertPose, transformPoint } from '../../../core/math';
 import type { OverlayOutline } from '../../../domain/overlay/overlay-model';
 import { billboard, type ObjectOutline } from '../../../domain/world/outline';
-import { OBJECT_HIGHLIGHT_COLOR, type ObjectGlowMode, ObjectHighlight } from '../object-highlight';
+import { type ObjectGlowMode, ObjectHighlight } from '../object-highlight';
 import type { PresentContext, Presenter } from '../presenter';
 
 // Glows over the real objects the current step shows: the finder's silhouette, or corner
@@ -12,9 +12,6 @@ import type { PresentContext, Presenter } from '../presenter';
 // every frame, so the outline stays around the object as they move. An object the tracker follows
 // live is drawn by LiveHighlightsPresenter instead while its live light is on; this stays the
 // fallback (the Gemini finder, a tracker that is down or has not found it yet).
-
-/** What to act on, then where it goes. */
-export const RANK_COLORS = [OBJECT_HIGHLIGHT_COLOR, 0xffd23f] as const;
 
 /** A whole tool or container glows around itself; anything else lights the surface it marks. */
 export const glowModeFor = (spec: Pick<ObjectSpec, 'kind'>): ObjectGlowMode =>
@@ -55,7 +52,8 @@ export class OutlinesPresenter implements Presenter {
       group.position.set(...center);
       basis.makeBasis(right.set(...plane.right), up.set(...plane.up), toEye.set(...plane.normal));
       group.quaternion.setFromRotationMatrix(basis);
-      group.setColor(RANK_COLORS[Math.min(item.rank, RANK_COLORS.length - 1)] ?? 0);
+      group.setColor(item.accent.color);
+      group.setOpacity(item.accent.opacity);
     }
     const listed = new Set(ctx.snapshot.outlines.map((o) => o.objectId));
     for (const [id, drawn] of this.drawn) {

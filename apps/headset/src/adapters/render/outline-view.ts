@@ -1,5 +1,6 @@
 import { Group, type Vector3 } from 'three';
 import type { Text } from 'troika-three-text';
+import { type Accent, WARNING_MS } from '../../domain/overlay/accents';
 import type { Placement } from '../../domain/world/placement';
 import {
   installOcclusionDebug,
@@ -16,7 +17,7 @@ import { makeText, setText } from './text';
 // plane through the object that turns toward the viewer every frame. Its name floats just above
 // the glow's bright edge. Each new mask reshapes the light in place; a newly found object (a new
 // name, or one back after being lost) fades in quickly with a brief flare; "nothing found" fades
-// it out. A pulse (a coach's "attention") breathes the light faster than its own slow breath.
+// it out. A warning pulse briefly dims and brightens the light in its stop accent.
 // Nothing is allocated per frame: the group turns with lookAt, whose basis (+z at the eye, x
 // level) is the outline's billboard. The light and its name keep the room's depth order: hands
 // hide them through their occluders (hand-occluders.ts), and real surfaces nearer than
@@ -29,7 +30,7 @@ const FADE_OUT_MS = 600;
 /** An object back after fading below this is found again: it flares like a new one. */
 const RELIGHT_BELOW = 0.35;
 /** One pulse (ms), and how far it dims the light. */
-const PULSE_MS = 700;
+const PULSE_MS = WARNING_MS;
 const PULSE_DEPTH = 0.35;
 
 /** troika fades the text's outline separately from its fill (missing from troika.d.ts). */
@@ -43,7 +44,8 @@ export class PrimaryOutlineView {
   private opacity = 0;
   private target = 0;
   private name: string | null = null;
-  /** Pulsing (a coach's attention). */
+  private accentOpacity = 1;
+  /** Pulsing (a brief coach warning). */
   pulse = false;
 
   /**
@@ -114,6 +116,11 @@ export class PrimaryOutlineView {
     this.highlight.setColor(color);
   }
 
+  setAccent({ color, opacity }: Accent): void {
+    this.setColor(color);
+    this.accentOpacity = opacity;
+  }
+
   /** Flare briefly, as for a newly found object. */
   ignite(): void {
     this.highlight.ignite();
@@ -138,7 +145,7 @@ export class PrimaryOutlineView {
     const pulse = this.pulse
       ? 1 - PULSE_DEPTH * (0.5 - 0.5 * Math.cos((2 * Math.PI * t) / PULSE_MS))
       : 1;
-    this.highlight.setOpacity(shown * pulse);
+    this.highlight.setOpacity(shown * pulse * this.accentOpacity);
     this.label.fillOpacity = shown;
     this.label.outlineOpacity = shown;
   }

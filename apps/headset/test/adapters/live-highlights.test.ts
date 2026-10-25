@@ -12,19 +12,15 @@ vi.mock('../../src/adapters/render/text', () => ({
   },
 }));
 
-import {
-  OBJECT_HIGHLIGHT_COLOR,
-  ObjectHighlight,
-} from '../../src/adapters/render/object-highlight';
+import { ObjectHighlight } from '../../src/adapters/render/object-highlight';
 import type { PresentContext } from '../../src/adapters/render/presenter';
 import {
   type LiveHighlight,
   LiveHighlightsPresenter,
-  liveColor,
   WARNING_COLOR,
 } from '../../src/adapters/render/presenters/live-highlights';
 import { ObjectMarkersPresenter } from '../../src/adapters/render/presenters/object-markers';
-import { RANK_COLORS } from '../../src/adapters/render/presenters/outlines';
+import { ACCENTS, HINT_OPACITY, styledAccent } from '../../src/domain/overlay/accents';
 import type { OverlaySnapshot } from '../../src/domain/overlay/overlay-model';
 import type { ObjectEstimate } from '../../src/domain/world/object-registry';
 import type { Placement } from '../../src/domain/world/placement';
@@ -50,6 +46,7 @@ const light = (id: string, extra: Partial<LiveHighlight> = {}): LiveHighlight =>
   label: id,
   rank: 0,
   style: null,
+  accent: styledAccent(ACCENTS.act, extra.style ?? null),
   mode: 'object',
   held: false,
   ...extra,
@@ -95,19 +92,42 @@ function setup(options: { hideHeld?: boolean } = {}) {
   return { presenter, show };
 }
 
-describe('liveColor', () => {
-  it("colours by the step's rank unless the coach highlights the object", () => {
-    expect(liveColor({ rank: 0, style: null })).toBe(RANK_COLORS[0]);
-    expect(liveColor({ rank: 1, style: null })).toBe(RANK_COLORS[1]);
-    expect(liveColor({ rank: 3, style: null })).toBe(RANK_COLORS[1]);
-    expect(liveColor({ rank: 1, style: 'target' })).toBe(OBJECT_HIGHLIGHT_COLOR);
-    expect(liveColor({ rank: 1, style: 'attention' })).toBe(RANK_COLORS[1]);
-    expect(liveColor({ rank: null, style: 'attention' })).toBe(OBJECT_HIGHLIGHT_COLOR);
-    expect(liveColor({ rank: 0, style: 'warning' })).toBe(WARNING_COLOR);
-  });
-});
-
 describe('LiveHighlightsPresenter', () => {
+  it('draws the resolved role accent instead of picking a color from list position', () => {
+    const setColor = vi.spyOn(ObjectHighlight.prototype, 'setColor');
+    const { presenter, show } = setup();
+    show([
+      light('container', { rank: 0, accent: { color: ACCENTS.destination, opacity: 1 } }),
+      light('tool', { rank: 2, accent: { color: ACCENTS.act, opacity: 1 } }),
+      light('level', { rank: 3, accent: { color: ACCENTS.level, opacity: 1 } }),
+    ]);
+    presenter.update(context(0, 1000));
+    const colors = new Map<unknown, number>();
+    setColor.mock.calls.forEach(([color], index) => {
+      colors.set(setColor.mock.contexts[index], color);
+    });
+    expect([...colors.values()]).toEqual([ACCENTS.destination, ACCENTS.act, ACCENTS.level]);
+    setColor.mockRestore();
+  });
+
+  it('keeps the hint color and reduced energy through subsequent fade updates', () => {
+    const setColor = vi.spyOn(ObjectHighlight.prototype, 'setColor');
+    const setOpacity = vi.spyOn(ObjectHighlight.prototype, 'setOpacity');
+    const { presenter, show } = setup();
+    show([light('cap', { style: 'attention' })]);
+    presenter.update(context(0, 1000));
+    expect(setColor).toHaveBeenLastCalledWith(ACCENTS.hint);
+    expect(setOpacity).toHaveBeenLastCalledWith(HINT_OPACITY);
+    presenter.update(context(200, 1000));
+    expect(setOpacity).toHaveBeenLastCalledWith(HINT_OPACITY);
+    show([light('cap')]);
+    presenter.update(context(6000, 1000));
+    expect(setColor).toHaveBeenLastCalledWith(ACCENTS.act);
+    expect(setOpacity).toHaveBeenLastCalledWith(1);
+    setColor.mockRestore();
+    setOpacity.mockRestore();
+  });
+
   it('draws one light per followed object, all sharing one depth occlusion', () => {
     const setOcclusion = vi.spyOn(ObjectHighlight.prototype, 'setOcclusion');
     const { presenter, show } = setup();

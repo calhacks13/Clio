@@ -467,7 +467,15 @@ describe('instruction panel placement', () => {
     ctx.objects = [object];
     const outline = rectMask([0, 0, 0], 0.3, 0.3).outline;
     ctx.snapshot.outlines = [
-      { objectId: object.id, outline, offset: [0.05, 0, 0], rank: 0, phrase: 'tool' },
+      {
+        objectId: object.id,
+        outline,
+        offset: [0.05, 0, 0],
+        rank: 0,
+        role: 'act',
+        accent: { color: 0x24d4ed, opacity: 1 },
+        phrase: 'tool',
+      },
     ];
     const center = transformPoint(ctx.worldFromWorkspace, add(object.position, [0.05, 0, 0]));
     // A workspace with yaw rotation still uses an upright billboard, matching the live view.
@@ -493,7 +501,17 @@ describe('instruction panel placement', () => {
     const outline = rectMask([0, 0, 0], 0.25, 0.22).outline;
     const offset: Vec3 = [0.04, 0, 0];
     ctx.objects = [object];
-    ctx.snapshot.outlines = [{ objectId: object.id, outline, offset, rank: 0, phrase: 'tool' }];
+    ctx.snapshot.outlines = [
+      {
+        objectId: object.id,
+        outline,
+        offset,
+        rank: 0,
+        role: 'act',
+        accent: { color: 0x24d4ed, opacity: 1 },
+        phrase: 'tool',
+      },
+    ];
     const mask = {
       ...rectMask(transformPoint(ctx.worldFromWorkspace, add(object.position, offset))),
       outline,

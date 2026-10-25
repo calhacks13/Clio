@@ -243,6 +243,7 @@ export class LiveTracker {
           label: spec.label,
           rank: object.rank,
           style: object.style,
+          accent: object.accent,
           mode: glowModeFor(spec),
           held: !!registry.get(view.id)?.heldBy,
         },

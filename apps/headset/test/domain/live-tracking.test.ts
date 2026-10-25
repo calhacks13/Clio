@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ManualClock } from '../../src/core/clock';
 import { Emitter } from '../../src/core/emitter';
 import type { AppEvents, HighlightStyle } from '../../src/domain/events';
+import { ACCENTS, HINT_OPACITY } from '../../src/domain/overlay/accents';
 import { isShown, LiveTracking, MAX_LIVE_OBJECTS } from '../../src/domain/session/live-tracking';
 import { Spotlight } from '../../src/domain/session/spotlight';
 import type { Grounder } from '../../src/domain/world/grounding';
@@ -93,6 +94,42 @@ const ids = (tracking: LiveTracking) => tracking.objects.map((o) => o.id);
 const shown = (tracking: LiveTracking) => tracking.objects.filter(isShown).map((o) => o.id);
 
 describe('LiveTracking', () => {
+  it('resolves explicit roles and part inheritance in show order, independent of detector order', () => {
+    const plan = lesson(
+      'roles',
+      [
+        {
+          id: 'roles',
+          instruction: 'Pour to the line.',
+          success: { type: 'confirm' },
+          show: [
+            { object: 'jug', phrase: 'jug', description: 'jug', role: 'destination' },
+            { object: 'rag', phrase: 'rim', description: 'rim', role: 'part' },
+            { object: 'cap', phrase: 'tool', description: 'tool', role: 'act' },
+            { object: 'line', phrase: 'line', description: 'line', role: 'level' },
+          ],
+        },
+      ],
+      [{ id: 'line', label: 'line', kind: 'region', placement: { method: 'detect' } }],
+    );
+    const { tracking, start, enter, highlight } = setup(plan);
+    start();
+    enter(plan.steps[0] as Step);
+    const accents = () => tracking.objects.map(({ id, accent }) => [id, accent]);
+    expect(accents()).toEqual([
+      ['jug', { color: ACCENTS.destination, opacity: 1 }],
+      ['rag', { color: ACCENTS.destination, opacity: 1 }],
+      ['cap', { color: ACCENTS.act, opacity: 1 }],
+      ['line', { color: ACCENTS.level, opacity: 1 }],
+    ]);
+    highlight('jug', 'target');
+    expect(tracking.get('jug')?.accent.color).toBe(ACCENTS.destination);
+    highlight('rag', 'attention');
+    expect(tracking.get('rag')?.accent).toEqual({ color: ACCENTS.hint, opacity: HINT_OPACITY });
+    tracking.update(6000);
+    expect(tracking.get('rag')?.accent.color).toBe(ACCENTS.destination);
+  });
+
   it("follows every declared object for the whole lesson, the step's show items first in their words", () => {
     const { tracking, start, enter } = setup();
     expect(tracking.objects).toEqual([]);
@@ -105,6 +142,7 @@ describe('LiveTracking', () => {
         query: 'Round blue cap, front left',
         rank: 0,
         style: null,
+        accent: { color: ACCENTS.act, opacity: 1 },
       },
       // The plan's other objects, in its order: the phrase a step will show them by, else the
       // label, and their own appearance as the words. Followed and recorded, never lit.
@@ -114,8 +152,16 @@ describe('LiveTracking', () => {
         query: 'blue jug with a white label',
         rank: null,
         style: null,
+        accent: { color: ACCENTS.act, opacity: 1 },
       },
-      { id: 'rag', phrase: 'rag', query: 'rag', rank: null, style: null },
+      {
+        id: 'rag',
+        phrase: 'rag',
+        query: 'rag',
+        rank: null,
+        style: null,
+        accent: { color: ACCENTS.act, opacity: 1 },
+      },
     ]);
     enter(POUR);
     expect(tracking.objects.map(({ id, rank }) => [id, rank])).toEqual([
@@ -212,6 +258,7 @@ describe('LiveTracking', () => {
       query: 'A silver vernier caliper lying open on the mat',
       rank: null,
       style: null,
+      accent: { color: ACCENTS.act, opacity: 1 },
     });
   });
 
@@ -232,7 +279,7 @@ describe('LiveTracking', () => {
     expect(tracking.get('cap')?.phrase).toBe('open reservoir');
   });
 
-  it('adds what the coach highlights for 5 s, with its style; the closer look is a coach highlight', () => {
+  it('keeps coach hints for 5 s and warning pulses for 600 ms while following every object', () => {
     const { tracking, start, enter, highlight } = setup();
     start();
     enter(OPEN);
@@ -246,16 +293,25 @@ describe('LiveTracking', () => {
         query: 'blue jug with a white label',
         rank: null,
         style: 'attention',
+        accent: { color: ACCENTS.hint, opacity: HINT_OPACITY },
       },
-      { id: 'rag', phrase: 'rag', query: 'rag', rank: null, style: 'warning' },
+      {
+        id: 'rag',
+        phrase: 'rag',
+        query: 'rag',
+        rank: null,
+        style: 'warning',
+        accent: { color: ACCENTS.stop, opacity: 1 },
+      },
     ]);
-    tracking.update(5999);
+    tracking.update(1799);
+    expect(shown(tracking)).toEqual(['cap', 'jug', 'rag']);
+    tracking.update(1800);
+    expect(shown(tracking)).toEqual(['cap', 'jug']);
     expect(ids(tracking)).toEqual(['cap', 'jug', 'rag']);
-    // A highlight that ran out leaves the object followed, unlit, after the lit ones.
+    tracking.update(5999);
+    expect(shown(tracking)).toEqual(['cap', 'jug']);
     tracking.update(6000);
-    expect(ids(tracking)).toEqual(['cap', 'rag', 'jug']);
-    expect(shown(tracking)).toEqual(['cap', 'rag']);
-    tracking.update(6200);
     expect(ids(tracking)).toEqual(['cap', 'jug', 'rag']);
     expect(shown(tracking)).toEqual(['cap']);
   });

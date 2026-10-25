@@ -3,6 +3,7 @@ import {
   EPISODE_EVENT_TYPES,
   type EpisodeEventPayload,
   type EpisodeEventType,
+  type HighlightRole,
   type ObjectObservation,
   type ObjectState,
   type PlanStage,
@@ -92,6 +93,8 @@ export interface InternalEvents {
     offset: Vec3;
     /** Its place in the step's show list: 0 is what to act on, then where it goes. */
     rank: number;
+    /** The glow's meaning, which picks its color (overlay/accents.ts). */
+    role: HighlightRole;
     phrase: string;
   }>;
   'coach.caption': Timed<{ role: 'user' | 'coach'; text: string; final: boolean }>;

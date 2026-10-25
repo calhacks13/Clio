@@ -2,6 +2,7 @@ import type { Step } from '@clio/protocol';
 import type { Clock } from '../../core/clock';
 import { sub } from '../../core/math';
 import type { AppBus } from '../events';
+import { inferRole } from '../overlay/accents';
 import type { FindRequest, Grounder, GroundingResult } from '../world/grounding';
 import type { ObjectRegistry } from '../world/object-registry';
 
@@ -201,6 +202,7 @@ export class Spotlight {
         outline: sighting.outline,
         offset: sub(sighting.position, estimate.position),
         rank,
+        role: item.role ?? inferRole(rank, registry.spec(item.object)?.kind),
         phrase: item.phrase,
       });
     }

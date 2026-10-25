@@ -1,5 +1,6 @@
 import type { ObjectSpec, Procedure, Step } from '@clio/protocol';
 import type { AppBus, HighlightStyle } from '../events';
+import { type Accent, inferRole, roleAccent, styledAccent, WARNING_MS } from '../overlay/accents';
 import { COACH_HIGHLIGHT_MS } from '../overlay/overlay-model';
 import { findWords } from '../world/find-words';
 import type { ObjectRegistry } from '../world/object-registry';
@@ -32,6 +33,8 @@ export interface LiveObject {
   rank: number | null;
   /** The coach's highlight on it, while that lasts. */
   style: HighlightStyle | null;
+  /** Resolved in show order, shared with the fallback outline renderer. */
+  accent: Accent;
 }
 
 /** Whether a followed object's light is on: the step shows it or the coach highlights it. */
@@ -85,7 +88,10 @@ export class LiveTracking {
       bus.on('overlay.highlight', ({ t, objectId, style, source }) => {
         if (source !== 'coach' || !this.deps.registry.spec(objectId)) return;
         this.highlights.delete(objectId);
-        this.highlights.set(objectId, { style, until: t + COACH_HIGHLIGHT_MS });
+        this.highlights.set(objectId, {
+          style,
+          until: t + (style === 'warning' ? WARNING_MS : COACH_HIGHLIGHT_MS),
+        });
         this.rebuild();
       }),
       // A revision that keeps the focus (stage rest) may write an object's words again: the query
@@ -144,19 +150,26 @@ export class LiveTracking {
         list.push(object);
       }
     };
+    let previous: number | null = null;
     for (const [rank, item] of this.shown.entries()) {
+      const role = item.role ?? inferRole(rank, this.deps.registry.spec(item.object)?.kind);
+      const base = roleAccent(role, previous);
+      previous = base;
+      const style = this.highlights.get(item.object)?.style ?? null;
       add({
         id: item.object,
         phrase: this.phraseFor(item.object, item.phrase),
         query: item.description,
         rank,
-        style: this.highlights.get(item.object)?.style ?? null,
+        style,
+        accent: styledAccent(base, style),
       });
     }
     for (const [id, { style }] of this.highlights) {
       const spec = this.deps.registry.spec(id);
       if (!spec) continue;
-      add({ ...this.followed(spec), style });
+      const followed = this.followed(spec);
+      add({ ...followed, style, accent: styledAccent(followed.accent.color, style) });
     }
     if (this.active) {
       for (const spec of this.deps.procedure()?.objects ?? []) {
@@ -174,6 +187,7 @@ export class LiveTracking {
       query: findWords(spec),
       rank: null,
       style: null,
+      accent: styledAccent(roleAccent(inferRole(0, spec.kind), null), null),
     };
   }
 
