@@ -37,11 +37,14 @@ the object's own pixels. While the follower is confident and its box agrees with
 returned, also on a frame YOLOE missed, against the predicted box while the target coasts;
 ByteTrack and the appearance still decide which object it is, and a jev answer that changes the
 target drops the old one's mask. jev's keyframe replaces the follower's mask even when a
-refresh of a newer frame landed meanwhile. Otherwise the outline is YOLOE's, as without a
-segmenter, and
-after two frames of doubt, or while there is no mask yet, the tracker asks for the object to be
-cut out again (`wants_refresh`): around the follower's box, or ByteTrack's when the follower is
-sure of itself but elsewhere (`refresh_box`).
+refresh of a newer frame landed meanwhile. A textureless object gives the follower no corners
+to be sure of: its mask, carried by the camera's motion alone, is returned while it agrees all
+the same, and those frames count as doubt. Otherwise the outline is YOLOE's, as without a
+segmenter, and after two frames of doubt, or while there is no mask yet, the tracker asks for
+the object to be cut out again (`wants_refresh`): around the follower's box, or ByteTrack's when
+the follower is sure of itself but elsewhere, or unsure of itself (only the camera carried it)
+while ByteTrack sees the target, unless the follower's box lies inside ByteTrack's
+(`refresh_box`).
 """
 
 from __future__ import annotations
@@ -108,6 +111,7 @@ class TrackerParams:
     part_fill: float = 0.3  # the parent's mask must fill this share of the part box to be used
     part_hold_s: float = 6.0  # a part with no parent in sight is carried this long after jev
     part_jump_iou: float = 0.7  # the parent's box against its last, carried by the camera
+    part_carried_iou: float = 0.5  # a textureless part's carried mask against the ridden box
     smooth: SmoothParams = field(default_factory=SmoothParams)
     follow: FollowParams = field(default_factory=FollowParams)
     # The follower's box against ByteTrack's: below this it is doubted, unless it lies
@@ -191,6 +195,7 @@ class ObjectTracker:
         self._tracked: np.ndarray | None = None  # the target's tracked box on the last frame
         self._follow_doubt = 0  # consecutive frames the follower could not stand for it
         self._disagrees = False  # on the last frame: sure of itself, but away from ByteTrack's box
+        self._sighted_now = False  # ByteTrack had the target on the last frame (not coasting)
 
     # --- prompt ----------------------------------------------------------------------------
 
@@ -222,9 +227,14 @@ class ObjectTracker:
     def refresh_box(self) -> np.ndarray | None:
         """The box to prompt the segmenter with: the follower's on the last frame, else the
         tracked box. When the follower was sure of itself but disagreed with ByteTrack, it is
-        on another object: the tracked box, so the new mask is of the one ByteTrack holds."""
-        f = self._followed
-        box = f.box if f is not None and not self._disagrees else self._tracked
+        on another object: the tracked box, so the new mask is of the one ByteTrack holds. When
+        it was unsure, only the camera's motion carried its box, so if the object moved it is
+        the old spot: the tracked box too while ByteTrack sighted the target on that frame,
+        unless the follower's box lies `part_inside` inside it (a part inside its whole)."""
+        f, tracked = self._followed, self._tracked
+        box = f.box if f is not None and not self._disagrees else tracked
+        if f is not None and not f.confident and self._sighted_now and tracked is not None:
+            box = f.box if _within(f.box, tracked) >= self.params.part_inside else tracked
         return None if box is None else box.copy()
 
     # --- per frame -------------------------------------------------------------------------
@@ -244,7 +254,7 @@ class ObjectTracker:
         self._tick_fps(t)
         self._moved(camera)
         self._followed = self._tracked = None
-        self._disagrees = False
+        self._disagrees = self._sighted_now = False
         if self.follower is not None and gray is not None:
             self._followed = self.follower.step(seq, gray, camera, t)
         prompt = self.prompt
@@ -356,6 +366,7 @@ class ObjectTracker:
             self.target_by,
         )
         self._tracked = box.copy()
+        self._sighted_now = True
         return Sighting(
             True, shown, shape, confidence, "tracking", tid, measured.copy(), crop, source
         )
@@ -375,11 +386,13 @@ class ObjectTracker:
         self._tracked = box.copy()
         confidence = round(fresh.confidence * (1 - 0.5 * age / window), 3)
         followed = self._follows(box)
-        if followed is not None:  # YOLOE missed it, but its own pixels were followed
+        if followed is not None:  # YOLOE missed it, but the follower carried its mask
             measured, crop = followed.box, followed.crop
             shown, shape = self._smooth.sighted(t, measured, crop, fresh.size)
+            # Its own pixels were followed: measured. Carried by the camera alone: predicted.
+            state = "tracking" if followed.confident else "coasting"
             return Sighting(
-                True, shown, shape, confidence, "tracking", tid, measured.copy(), crop, "follower"
+                True, shown, shape, confidence, state, tid, measured.copy(), crop, "follower"
             )
         shown, shape = self._smooth.coasting(t, box, fresh.size)
         return Sighting(True, shown, shape, confidence, "coasting", tid, box.copy(), source="yoloe")
@@ -389,8 +402,9 @@ class ObjectTracker:
         agreeing with ByteTrack's box for it (`tracked`, predicted while it coasts): overlapping
         it by `follow_agree_iou`, or lying `part_inside` inside it with at least `_match`'s IoU
         floor, as a part inside its whole (in objects mode a part is followed as an object, and
-        ByteTrack's track may be the whole). A frame on which it answers but may not counts as
-        one of doubt."""
+        ByteTrack's track may be the whole). Also a sparse one (a textureless object, its mask
+        carried by the camera alone) that agrees. A frame on which it answers but is not
+        confident and agreeing counts as one of doubt, so a sparse mask keeps being cut again."""
         f = self._followed
         if f is None:
             return None
@@ -402,7 +416,7 @@ class ObjectTracker:
         self._disagrees = f.confident and not agrees
         trusted = f.confident and agrees
         self._follow_doubt = 0 if trusted else self._follow_doubt + 1
-        return f if trusted else None
+        return f if trusted or (f.sparse and agrees) else None
 
     def _rescue(
         self,

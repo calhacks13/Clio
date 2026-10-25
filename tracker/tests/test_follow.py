@@ -123,6 +123,25 @@ def test_camera_motion_alone_carries_when_patch_is_textureless():
         np.testing.assert_allclose(out.box, truth, atol=1e-3)
 
 
+def test_only_a_region_without_corners_is_sparse():
+    # sparse: unsure only for want of texture, so the camera's motion carries it; a textured
+    # region whose points stopped agreeing (here: covered on frame 2) is unsure, not sparse
+    camera = np.array([[1.0, 0, 3], [0, 1.0, 0]])
+    flat, textured = scene(4, pan=(3, 0), flat=True), scene(4, pan=(3, 0))
+    covered = textured[2][1]
+    x1, y1, x2, y2 = (round(float(v)) for v in covered)
+    textured[2][0][y1:y2, x1:x2] = 128
+    outs = {}
+    for name, frames in (("flat", flat), ("textured", textured)):
+        f = RegionFollower()
+        f.set_reference(0, filled(frames[0][1]))
+        outs[name] = [f.step(seq, gray, camera, seq / 25) for seq, (gray, _) in enumerate(frames)]
+    assert [out.sparse for out in outs["flat"]] == [False, True, True, True]  # seeded on frame 1
+    assert not any(out.confident for out in outs["flat"])
+    assert [out.confident for out in outs["textured"]] == [False, True, False, False]
+    assert not any(out.sparse for out in outs["textured"])
+
+
 @pytest.mark.parametrize("carried_by", ["camera", "own motion"])
 def test_reference_on_older_frame_is_carried_to_now(carried_by):
     if carried_by == "camera":  # no reference until frame 10: only the camera's pan is logged

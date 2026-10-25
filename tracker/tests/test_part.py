@@ -619,6 +619,27 @@ def test_jevs_keyframe_moves_the_part_box_to_its_mask_and_a_refresh_does_not(vis
     np.testing.assert_allclose(run.tracker.box, carried.box)  # once; then it rides as before
 
 
+def test_a_textureless_part_is_outlined_by_its_mask_carried_by_the_camera(vision):
+    """A flat part gives the follower no corners. While its mask, carried by the camera alone,
+    agrees with the ridden part box (IoU 0.5), it is drawn at that box; such frames are doubt,
+    so the segmenter keeps cutting the part out again. Once the parent's motion takes the part
+    box away from it, the parent's mask is drawn again."""
+    run = PartRun(vision, RegionFollower())  # the gray frames are flat
+    run.frame(*SCENE)
+    run.jev(1, DOOR, mask=followed((455, 255, 585, 465)).crop)  # SAM's cut, inside jev's box
+    for k in range(1, 5):
+        s = run.frame(*SCENE)
+        assert s.found and s.state == "tracking" and s.source == "follower"
+        assert s.crop is run.tracker._followed.crop
+        np.testing.assert_array_equal(s.measured, DOOR)  # the ridden box
+        assert run.tracker.wants_refresh == (k >= 2)
+    for dx in (20, 40, 60):  # the parent moves; the camera does not
+        s = run.frame(Thing(shifted(WHOLE, dx), A), Thing(OTHER, B))
+    np.testing.assert_allclose(s.measured, shifted(DOOR, 60), atol=1e-3)
+    assert s.found and s.source == "yoloe" and s.crop is not run.tracker._followed.crop
+    assert run.tracker.wants_refresh
+
+
 def test_each_part_sighting_says_what_drew_its_outline(vision):
     follower = FakeFollower()
     run = locked_part(vision, follower)

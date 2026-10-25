@@ -30,17 +30,20 @@ pixels. While the follower is confident, its box is the part box and its mask th
 where the parent's motion would never take it (a door swinging out of the fridge's box, a jaw
 sliding off the caliper's). It is measured, not predicted: "tracking", also while the parent
 coasts or none is in sight, with the parent's confidence while it is in sight, else a flat 0.5.
-The parent is still followed on every frame, since it is what finds the whole object again.
-Otherwise the part rides, coasts and is outlined as above, and after two frames of doubt, or
-while there is no mask yet, it asks to be cut out again (`wants_refresh`): around the follower's
-box when the follower is unsure, else the part box (`refresh_box`). An answer from jev that puts
-the part box more than its own size away (another part), or says the part is not in view, drops
-the old part's mask. Another part is told on jev's own frame, against the part box the tracker
-had then: the part may have moved on its own since. An answer about the same part while the
-follower is confident leaves the part box on the follower's: jev's box is loose and from an
-older frame. The keyframe cut from it then re-anchors the mask through the follower's log of
-motion, also over a refresh of a newer frame, and puts the part box where that mask is carried
-to, sure follower or not: jev's correction wins. A refresh's mask only re-anchors the follower.
+The parent is still followed on every frame, since it is what finds the whole object again. A
+textureless part gives the follower no corners to be sure of: its mask, carried by the camera
+alone, is the outline at the ridden part box while the two overlap by IoU 0.5, as the parent's
+mask would be. Otherwise the part rides, coasts and is outlined as above. After two frames of
+doubt (a textureless part's included), or while there is no mask yet, it asks to be cut out
+again (`wants_refresh`): around the follower's box when the follower is unsure, else the part
+box (`refresh_box`). An answer from jev that puts the part box more than its own size away
+(another part), or says the part is not in view, drops the old part's mask. Another part is
+told on jev's own frame, against the part box the tracker had then: the part may have moved on
+its own since. An answer about the same part while the follower is confident leaves the part
+box on the follower's: jev's box is loose and from an older frame. The keyframe cut from it then
+re-anchors the mask through the follower's log of motion, also over a refresh of a newer frame,
+and puts the part box where that mask is carried to, sure follower or not: jev's correction
+wins. A refresh's mask only re-anchors the follower.
 """
 
 from __future__ import annotations
@@ -333,6 +336,18 @@ class PartTracker:
                 assert parent is not None
                 confidence, track_id = parent.confidence, parent.track_id
             return Sighting(True, shown, shape, confidence, "tracking", track_id, box.copy(), crop,
+                            "follower")  # fmt: skip
+        if f is not None and f.sparse and float(iou(f.box, box)[0, 0]) >= p.part_carried_iou:
+            # A textureless part: its mask, carried by the camera alone, agrees with the ridden
+            # part box, so it is drawn there (a frame of doubt all the same: it is cut again).
+            crop = f.crop
+            shown, shape = self._smooth.sighted(t, box, crop, size)
+            if held:
+                assert parent is not None
+                return Sighting(True, shown, shape, parent.confidence, parent.state,
+                                parent.track_id, box.copy(), crop, "follower")  # fmt: skip
+            confidence = round(0.5 * (1 - 0.5 * age / p.part_hold_s), 3)
+            return Sighting(True, shown, shape, confidence, "coasting", None, box.copy(), crop,
                             "follower")  # fmt: skip
         if held:
             assert parent is not None

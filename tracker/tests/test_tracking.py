@@ -645,6 +645,43 @@ def test_refreshed_older_than_reference_is_ignored(vision):
     assert follower.reference_seq == run.seq
 
 
+def test_an_unsure_follower_off_the_tracked_box_refreshes_around_bytetracks(vision):
+    """While the follower is unsure, only the camera's motion has carried its box: if the
+    object moved, that is the old spot. The refresh is prompted with ByteTrack's box, sighted
+    on this frame, unless the follower's box lies inside it (a part of it, in objects mode)."""
+    follower = FakeFollower()
+    run = locked_following(vision, follower)
+    for _ in range(2):
+        follower.answers.append(followed(at(140), confident=False))  # left behind, off the cup
+        run.frame(Thing(at(100), A), Thing(at(500), B))
+    assert run.tracker.wants_refresh
+    np.testing.assert_array_equal(run.tracker.refresh_box, at(100))
+    inside = followed((120, 330, 200, 430), confident=False)
+    follower.answers.append(inside)
+    run.frame(Thing(at(100), A), Thing(at(500), B))
+    np.testing.assert_array_equal(run.tracker.refresh_box, inside.box)
+
+
+def test_a_textureless_object_is_outlined_by_its_mask_carried_by_the_camera(vision):
+    """A flat object (a white door) gives the follower no corners, so it is never sure of
+    itself. While its mask, carried by the camera's motion alone, agrees with ByteTrack's box,
+    that mask is the outline; each such frame still counts as doubt, so the segmenter keeps
+    cutting it out again. Once the object moves on its own, away from it, YOLOE's is drawn."""
+    run = FollowRun(vision, RegionFollower())  # the gray frames are flat
+    run.frame(Thing(at(100), A), Thing(at(500), B))
+    run.jev(1, at(100), mask=followed((104, 304, 216, 456)).crop)  # SAM's cut, inside the box
+    for k in range(1, 6):
+        s = run.frame(Thing(at(100 + 6 * k), A), Thing(at(500 + 6 * k), B), camera=pan(6))
+        assert s.found and s.state == "tracking" and s.source == "follower"
+        assert not yoloe_crop(s)
+        np.testing.assert_allclose(s.measured, (104 + 6 * k, 304, 216 + 6 * k, 456), atol=1e-3)
+        assert run.tracker.wants_refresh == (k >= 2)
+    for x in (170, 210, 250):  # it slides on its own; the camera is still
+        s = run.frame(Thing(at(x), A), Thing(at(530), B), camera=pan(0))
+    assert s.found and yoloe_crop(s) and s.source == "yoloe"
+    assert run.tracker.wants_refresh
+
+
 def test_jevs_keyframe_replaces_a_refresh_of_a_newer_frame(vision):
     """jev confirms the object about a frame from before a refresh that has landed since (the
     refresh may have cut the wrong thing): its keyframe, cut on jev's older frame, still takes

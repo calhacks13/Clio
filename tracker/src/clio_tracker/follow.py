@@ -25,7 +25,9 @@ when a refresh of a newer frame landed while jev answered. When the
 points can't be trusted (too few survive, too few agree, the region is leaving the view) the
 follower says so and carries the mask by the camera's motion alone. It seeds no new points
 until a new mask arrives, so it never settles on the background a mask has slid onto; the
-tracker asks the segmenter for that new mask.
+tracker asks the segmenter for that new mask. A region whose mask holds too few corners to
+follow at all (a white door) is `sparse`: unsure only for want of texture, in view, carried by
+the camera's motion; the tracker may still draw that mask while it agrees with what YOLOE sees.
 """
 
 from __future__ import annotations
@@ -72,6 +74,9 @@ class Followed:
     inliers: int
     ratio: float
     confident: bool
+    # Unsure only because the mask held too few corners to follow when last seeded, and in
+    # view: carried by the camera's motion alone, with no points that disagreed.
+    sparse: bool = False
 
 
 @dataclass
@@ -81,6 +86,7 @@ class _Region:
     t: np.ndarray  # reference-crop pixels to the last frame's pixels, 2x3
     points: np.ndarray | None = None  # on the last frame, tracked pixels; None: seed first
     age: int = 0  # steps since the points were seeded
+    sparse: bool = False  # the last seeding found fewer than `min_inliers` corners
 
 
 class RegionFollower:
@@ -171,7 +177,9 @@ class RegionFollower:
         elif measured:
             region.points = NO_POINTS  # in doubt: no new points until a new mask
             self._own = None
-        return self._followed(region, inliers, ratio, confident)
+        box = _bounds(region.t, region.corners)
+        sparse = not confident and region.sparse and self._in_view(box) >= p.in_view
+        return self._followed(region, inliers, ratio, confident, sparse)
 
     def _shrink(self, gray: np.ndarray) -> np.ndarray:
         """`gray` at tracking size, as an array of the follower's own: the scaled-down frame is a
@@ -204,7 +212,10 @@ class RegionFollower:
         starts from `guess` (frame pixels) both ways, so the check back still has to find what
         the guess missed on its own."""
         p = self.params
-        points = region.points if region.points is not None else self._seed(region, prev)
+        points = region.points
+        if points is None:
+            points = self._seed(region, prev)
+            region.sparse = len(points) < p.min_inliers
         if len(points) < p.min_inliers:
             return None, 0, 0.0, NO_POINTS
         ahead = guess.copy()
@@ -240,7 +251,9 @@ class RegionFollower:
         down = max(0.0, min(box[3], h) - max(box[1], 0))
         return across * down / max(float((box[2] - box[0]) * (box[3] - box[1])), 1e-9)
 
-    def _followed(self, region: _Region, inliers: int, ratio: float, confident: bool) -> Followed:
+    def _followed(
+        self, region: _Region, inliers: int, ratio: float, confident: bool, sparse: bool
+    ) -> Followed:
         """The reference mask warped onto a crop over its bounds on the last frame, the crop's
         longer side at most `crop_side` pixels (and no finer than the frame's)."""
         box = _bounds(region.t, region.corners)
@@ -249,7 +262,8 @@ class RegionFollower:
         size = (max(1, math.ceil(w / scale - 1e-6)), max(1, math.ceil(h / scale - 1e-6)))
         origin = (float(box[0]), float(box[1]))
         logits = _paint(region.crop, region.t, origin, scale, size)
-        return Followed(box, MaskCrop(logits, origin, scale), inliers, ratio, confident)
+        crop = MaskCrop(logits, origin, scale)
+        return Followed(box, crop, inliers, ratio, confident, sparse)
 
 
 def _estimate(
