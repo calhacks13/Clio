@@ -37,7 +37,8 @@ own and are left out of `parts`, which stays comparable with earlier runs.
 
 `--segmenter` (`auto`, `none` or a SAM 2.1 size; `run` also takes `fake`, a segmenter that fills
 each box, for tests) gives the tracker a segmenter and a refresher as `/track` has them, and has
-the look outlined by the segmenter instead of YOLOE. A `--baseline` copy gets neither.
+the look outlined by the segmenter, and by YOLOE where it cuts nothing. A `--baseline` copy
+gets neither.
 
 `--baseline DIR` loads another copy of the package (a directory holding a `clio_tracker`
 package, e.g. `git archive HEAD tracker/src | tar -x -C /tmp/base`) and runs it on the same
@@ -372,6 +373,9 @@ class _CountedSegmenter:
         self.calls += 1
         return self._segmenter.mask_in_box(enc, box)
 
+    def __getattr__(self, name):
+        return getattr(self._segmenter, name)
+
 
 class _FakeSegmenter:
     """Stands in for SAM 2.1 (`--segmenter fake`): every box is its own mask, filled, at one
@@ -459,7 +463,8 @@ def _target(
     seq: Sequence, asked: int, box: np.ndarray | None, vision, segmenter=None
 ) -> list[float] | None:
     """What the page sends: jev's box outlined as Clio's /locate does it. By the segmenter when
-    there is one (its mask's box, jev's own when it cuts nothing), else by YOLOE (finder.py)."""
+    there is one (its mask's box); by YOLOE (finder.py) when there is none or it cuts nothing;
+    jev's own box when YOLOE has nothing either."""
     if box is None:
         return None
     key = (seq.scene.name, asked, segmenter.name if segmenter is not None else None)
@@ -468,11 +473,11 @@ def _target(
             cv2.imdecode(np.frombuffer(seq.frames[asked].jpeg, np.uint8), cv2.IMREAD_COLOR),
             cv2.COLOR_BGR2RGB,
         )
+        b = None
         if segmenter is not None:
             crop = segmenter.mask_in_box(segmenter.encode(rgb), box)
-            cut = None if crop is None else _mask_box(crop)
-            b = box if cut is None else cut
-        else:
+            b = None if crop is None else _mask_box(crop)
+        if b is None:
             outlined = vision.outline_in_box(vision.encode(rgb), box)
             b = outlined[0] if outlined is not None and outlined[1].outline else box
         _finder_cache[key] = [float(v) for v in np.asarray(b) / [OUT_W, OUT_H, OUT_W, OUT_H]]

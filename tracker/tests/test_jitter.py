@@ -311,6 +311,15 @@ class EmptySegmenter(HalfSegmenter):
         return None
 
 
+class OutsideSegmenter(HalfSegmenter):
+    """A mask with nothing inside it."""
+
+    name = "outside"
+
+    def mask_in_box(self, enc, box):
+        return MaskCrop(np.full((8, 8), -10.0, np.float32), (0.0, 0.0), 1.0)
+
+
 def test_the_look_is_outlined_by_the_segmenter_when_one_is_loaded(monkeypatch):
     monkeypatch.setattr(jitter, "_finder_cache", {})
     seq = _two_seconds()
@@ -319,10 +328,43 @@ def test_the_look_is_outlined_by_the_segmenter_when_one_is_loaded(monkeypatch):
     sent = jitter._target(seq, 0, box, None, HalfSegmenter())  # YOLOE (None here) is not asked
     expected = np.array([x1, y1, (x1 + x2) / 2, y1 + int(y2 - y1)]) / ([OUT_W, OUT_H] * 2)
     assert sent == pytest.approx(expected, abs=1.5 / OUT_W)
-    # Nothing cut out of the box: jev's own box goes on.
-    assert jitter._target(seq, 0, box, None, EmptySegmenter()) == pytest.approx(
-        box / [OUT_W, OUT_H, OUT_W, OUT_H], abs=1e-6
-    )
+
+
+@pytest.mark.parametrize("segmenter", [EmptySegmenter(), OutsideSegmenter()])
+def test_a_segmenter_that_cuts_nothing_leaves_the_look_to_yoloe(monkeypatch, segmenter):
+    # As /locate does: SAM has nothing in jev's box, so YOLOE outlines it.
+    monkeypatch.setattr(jitter, "_finder_cache", {})
+    seq = _two_seconds()
+    _, _, jev_box = seq.looks[0]
+    yoloe_box = tuple(float(v) for v in jev_box + 3)
+    vision = FakeVision()
+    vision.scenes.append([Thing(yoloe_box, appearance(1))])
+    sent = jitter._target(seq, 0, jev_box, vision, segmenter)
+    assert sent == pytest.approx(np.array(yoloe_box) / [OUT_W, OUT_H, OUT_W, OUT_H], abs=1e-6)
+    assert sent != pytest.approx(jev_box / [OUT_W, OUT_H, OUT_W, OUT_H], abs=1e-6)
+
+
+@pytest.mark.parametrize("segmenter", [EmptySegmenter(), OutsideSegmenter()])
+def test_the_look_keeps_jevs_box_when_neither_segmenter_nor_yoloe_find_it(monkeypatch, segmenter):
+    monkeypatch.setattr(jitter, "_finder_cache", {})
+    seq = _two_seconds()
+    _, _, jev_box = seq.looks[0]
+    vision = FakeVision()
+    vision.scenes.append([])  # YOLOE sees nothing
+    sent = jitter._target(seq, 0, jev_box, vision, segmenter)
+    assert sent == pytest.approx(jev_box / [OUT_W, OUT_H, OUT_W, OUT_H], abs=1e-6)
+
+
+def test_the_counting_wrapper_counts_calls_and_forwards_the_rest():
+    inner = HalfSegmenter()
+    inner.device = "cpu"  # something a tracker might read off its segmenter
+    counted = jitter._CountedSegmenter(inner)
+    rgb = np.zeros((OUT_H, OUT_W, 3), np.uint8)
+    box = np.array([10.0, 10.0, 50.0, 40.0])
+    for _ in range(3):
+        counted.mask_in_box(counted.encode(rgb), box)
+    assert counted.calls == 3 and counted.name == "half" and counted.device == "cpu"
+    assert not hasattr(counted, "nothing_like_this")  # no attribute is made up
 
 
 def test_the_fake_segmenter_fills_the_box_and_none_is_no_segmenter():
