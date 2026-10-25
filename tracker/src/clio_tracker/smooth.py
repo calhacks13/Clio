@@ -66,6 +66,17 @@ class Stabilizer:
     def reset(self) -> None:
         self._s = None
 
+    @property
+    def velocity(self) -> np.ndarray:
+        """How fast the box moves on its own (the camera's motion taken out), as filtered for the
+        cutoff: the rate of change of (cx, cy, w, h) in box sizes a second. 0 before any box."""
+        return np.zeros(4) if self._s is None else self._s.speed.copy()
+
+    @property
+    def speed(self) -> float:
+        """`velocity`'s length: the centre and the size together."""
+        return float(np.linalg.norm(self.velocity))
+
     def moved(self, camera: np.ndarray | None) -> None:
         """The camera moved by this 2x3 transform since the last frame: carry everything along."""
         if self._s is None or camera is None:

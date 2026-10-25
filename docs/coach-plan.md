@@ -22,8 +22,9 @@ This document is the design. [ARCHITECTURE.md](ARCHITECTURE.md) is the map, and
 The coach keeps a step list as notes to itself, but the notes live in the app, not in Gemini Live's
 context:
 - **Context doesn't last.** The adapter compresses the context from 25k tokens to 12k by dropping
-  the oldest turns. Camera frames and the microphone fill it in minutes, so a plan the coach wrote
-  early is gone. A reconnect brings back only the system instruction.
+  the oldest turns. Speech fills it in minutes, about 32 tokens a second from either voice (Live
+  keeps only the newest camera frame), so a plan the coach wrote early is gone. A reconnect brings
+  back only the system instruction.
 - **The app needs the list anyway.** The HUD shows the current step, outlines follow it, ghost hands
   demonstrate it, and every frame of the dataset is labeled with it.
 
@@ -59,10 +60,28 @@ recital and in the recorded snapshots, not in the `Procedure`.
 
 ### Starting, and changing course
 
-The voice starts lessons itself. When the learner says or shows what they are about to do (a
-streaky wiper, a jug of washer fluid in hand at an open hood), it infers the goal and calls
-`start_lesson` at once, saying in one short sentence what it starts. It asks one short question
-only when there is no plausible goal.
+The voice starts lessons itself. While no lesson is running (none yet, or the last one is over),
+whatever the learner says or shows starts one, questions included: it infers the goal and calls
+`start_lesson` in that turn, saying in one short sentence what it starts. A question becomes a
+lesson on its answer, done with their hands ("How do bike gears work?" is "shift through the gears
+on the bike"), not a spoken answer or a `look_closer`, which is for questions during a lesson.
+When they name nothing to do, it starts a curated lesson or one with what it sees. Only a bare
+greeting, "yes" or "um" gets one short question back.
+
+The thinking voice still answers in words now and then, and when it does start a lesson it often
+says so, ends its turn and calls `start_lesson` one to four seconds later. So when the learner has
+spoken (aloud, or typed in the desk lab) with no lesson running or being planned
+(`LessonView.phase()` is `idle` or `done`), and the voice has then been quiet for 6 s without
+calling `start_lesson` or `end_lesson`, `CoachSession` tells it once, as an `[app]` message
+(`start_nudge`), to start one from what they said, or to ask what they want if they only greeted
+or thanked it.
+
+Measured on gemini-3.8-live-extended-thinking with ten spoken questions, twice each, no lesson
+running and no camera frame: the earlier wording ("ask one short question only when there is no
+plausible goal") started a lesson in 4 of 20 and otherwise answered in words or called
+`look_closer`; with the nudge it got to 17 of 20, mostly after a spoken answer and about 15 s
+late. The wording above started one in 18 of 20 by itself, and in 19 of 20 with the nudge. The
+miss was "Is it okay to mix bleach and vinegar?", which got a warning instead of a lesson.
 
 A new `start_lesson` replaces whatever came before, at once: a lesson being planned (its plan is
 dropped when it lands), one the coach is writing, or the one running. The running one is aborted
@@ -142,9 +161,18 @@ with a note.
    declare only what is in view and never point at what isn't; write done-when states that name
    how the right object looks, never actions ("cup C has turned green", not "baking soda is
    added"), so a look-alike can't pass them; make a look-alike mix-up (the milk beside the yogurt
-   drink) one of the step's `mistakes`; and start `warnings` with a checklist of hazards in view
+   drink) one of the step's `mistakes`; show one object per step, the whole thing a camera can
+   pick out on its own (the mini fridge), and name any part of it (the door, its handle, a shelf,
+   the freezer compartment) in the instruction, done-when and show description, never as an
+   object of its own; and start `warnings` with a checklist of hazards in view
    (sharp, hot, electrical, glass, chemicals, machinery), each named by how it looks and where it
    is, because hazard labels alone are unreliable.
+
+   Parts went into the words because the tracker can't follow them. On the user's dark mini
+   fridge, jev boxed the door panel alone on 6 of 8 open-door frames and flipped to the freezer
+   compartment or the whole opening on the others, and each flip moved the glow to another
+   track. Finding the fridge first and then the door in a crop of it did worse (4 of 8), and
+   Robotics-ER worse still (1 of 8).
 
    Thinking per stage (`PLAN_THINKING` in `gemini-planner.ts`, and `REST_PART_THINKING` for the
    parts of stage rest) was picked with `pnpm bench` ([planner-bench.md](planner-bench.md)) on
@@ -244,6 +272,15 @@ with a note.
 A lesson picked on the boot page (`?procedure=<id>`) skips `start_lesson`, but the coach still
 hears "Plan ready" with the recital.
 
+The coach speaks first, because Gemini Live says nothing until it is spoken to. Without a lesson
+picked on the boot page, `CoachSession.welcome()` asks it to greet the learner and ask what they
+want to do. With a goal typed there, the app starts that lesson itself, and the coach greets them
+while the plan is written and is told not to call a tool. The prompt has it call `start_lesson` in
+the same turn it hears a task, without asking about supplies first (the planner sees the camera),
+and never teach without a plan. On gemini-3.8-live with spoken turns, "Can you help me make a cup of
+tea?" got a question about supplies and then spoken steps with no plan in one of two runs before
+this change, and `start_lesson` in eight of eight after it.
+
 After 12 s without a plan, the coach is told planning is slow, so it can keep the learner company.
 
 ## The coach's tools
@@ -283,8 +320,12 @@ changes or another `target` replaces it; `attention` lasts 5 s and `warning` is 
 `look_for` during a lesson, an `object_id` the plan doesn't have is added as a material (under that
 id when it is a free, valid one) and lit, and the result gives its `material_id` and `added: true`;
 without `look_for`, an unknown id is an error that lists the lesson's objects. A coach's `look_for`,
-here and in `add_material`, describes one particular instance: color, material, shape, size,
-markings and where it is relative to its neighbors. When it leaves out what the thing is, the app
+here and in `add_material`, describes one particular instance in at most 30 words: what it is and
+its color, then always both where it is in the camera picture ("at the bottom right") and
+relative to other things in view ("the bottom one of the three chargers", "left of the laptop").
+Robotics-ER's descriptions for the action
+focus follow the same rule, and are renewed every few seconds as the view changes. When it leaves
+out what the thing is, the app
 puts the name in front ("funnel, white plastic, on the fender"), so the words jev and the outlines
 go by stand alone.
 
@@ -345,7 +386,9 @@ objects at all lights nothing until the action focus names one.
    that ends with "[app] Reconnected." plus the recital.
 4. **One gate for narrations.** Every message to the model interrupts what it's saying, so
    `CoachSession` holds narrations while the coach is speaking or calling tools, or the learner is
-   talking, and merges what piled up into one message. A hold ends after 6 s at most while the
+   talking, and merges what piled up into one message. An urgent narration, what the app saw that
+   the learner may be waiting on (a step it completed, something done wrong, a hazard), waits only
+   for the coach: a learner saying "I did it" is often why. A hold ends after 6 s at most while the
    connection is up. A briefing for a step that lost focus while it waited is dropped, and so is
    a briefing that arrives together with "Plan revised", whose recital already has the new step.
 5. **Cancelled calls.** When the learner barges in and Gemini cancels a tool call that already
@@ -361,17 +404,45 @@ thinking. Each part runs on its own and never makes the voice wait:
 | Work                   | How the voice starts it       | How the result reaches the voice                    |
 | ---------------------- | ----------------------------- | --------------------------------------------------- |
 | a plan, a revised plan | `start_lesson`, `revise_plan` | an `[app]` narration ("Plan ready", "Plan revised") |
-| is the step done?      | nothing: the step watcher     | an `[app]` narration ("Step watcher: … looks done") |
+| is the step done?      | nothing: the step watcher     | the app completes it; "Done: …" and the next step   |
 | a closer look          | `look_closer(question)`       | the call's result, which it says when it is idle    |
 | what to touch next     | nothing: the action focus     | never: it feeds the learner's view and the data     |
 
-Narrations go through the gate above, so they never cut the learner off. Nothing the smart model
-returns is spoken by anyone but the voice.
+Narrations go through the gate above, so they never cut the coach off, and only urgent ones go out
+while the learner talks. Nothing the smart model returns is spoken by anyone but the voice.
 
-**A closer look.** The voice's frames are small and blurry, and it is confident anyway: asked "is
-it safe to work here?" over a table with a large knife on it, it said yes. Its instructions open
-with the rule that safety, which-is-which, where, what-went-wrong and how-to-hold questions go to
-`look_closer`. It says "Let me take a closer look", calls the tool, and keeps listening. The
+**The voice's frames.** The coach session sends the voice one frame every 4 s, 1024 px wide at JPEG
+quality 0.8 (the planner's size), at Live's `MEDIA_RESOLUTION_HIGH`. Until October 2026 they were
+640 px at quality 0.7 and `LOW`. `apps/server/scripts/live-frames.ts` sends a frame the way the
+headset does and asks the voice detail questions about it. On view 1 of the bench's fridge scene,
+leaving out one question that two jars fit:
+
+| frames                       | media resolution | tokens a frame | right answers |
+| ---------------------------- | ---------------- | -------------- | ------------- |
+| 640 px, quality 0.7 (before) | low              | 266            | 79/99 (80%)   |
+| 640 px, quality 0.7          | medium           | 266            | 26/33 (79%)   |
+| 640 px, quality 0.7          | high             | 540            | 31/33 (94%)   |
+| 1024 px, quality 0.8         | low              | 266            | 87/99 (88%)   |
+| 1024 px, quality 0.8 (now)   | high             | 540            | 97/99 (98%)   |
+
+Medium is the same as low for video frames. At low it called the white ketchup cap red (6 of 9
+times at 640 px, 3 of 9 at 1024), and at 640 px it said there was a knife, or that it couldn't
+tell, 4 times in 15; at 1024 px, never. The first words came about 650 to 700 ms (median) after
+each question at every setting, and 660 to 850 ms with 60 frames sent first. Live keeps only the
+newest frame in its context: the frames' share of the prompt stayed at one frame's tokens over 60
+frames, and over 11 sent while the learner spoke, while speech added about 32 tokens a second. So
+sharper frames don't fill the context faster, and compression stays at 25k. The headset encodes
+the frame synchronously, about 17 ms at 640x480 on the Quest; at 1024 px that is not measured on
+the headset yet. To measure again, from `apps/server`, with the view scaled to the width to try:
+
+```bash
+npx tsx --env-file-if-exists=../../.env scripts/live-frames.ts view-1.jpg --resolution high --repeat 3
+```
+
+**A closer look.** The voice is confident about what it sees even when it is wrong: asked "is it
+safe to work here?" over a table with a large knife on it (with the old 640 px frames at low), it
+said yes. Its instructions open with the rule that safety, which-is-which, where, what-went-wrong
+and how-to-hold questions go to `look_closer`. It says "Let me take a closer look", calls the tool, and keeps listening. The
 headset takes a fresh 1024 px frame and sends it to `POST /api/scene/ask` with the question, the
 goal, the focused step and the materials. The smart model answers through structured output with
 minimal thinking:
@@ -410,11 +481,12 @@ a declared object reaches it only as one of the plan's materials.
 
 A step is done when one of these says so:
 
-| Who             | How                                                             | `by`    |
-| --------------- | --------------------------------------------------------------- | ------- |
-| the coach       | `complete_step` on any step, from what it saw or heard          | `coach` |
-| the learner     | the Done button, on the focused step                            | `user`  |
-| a trusted check | the step's success check passes using only trusted data (below) | `check` |
+| Who              | How                                                             | `by`    |
+| ---------------- | --------------------------------------------------------------- | ------- |
+| the coach        | `complete_step` on any step, from what it saw or heard          | `coach` |
+| the learner      | the Done button, on the focused step                            | `user`  |
+| a trusted check  | the step's success check passes using only trusted data (below) | `check` |
+| the step watcher | two `done` answers in a row on the focused step (above)         | `check` |
 
 **The step watcher** is the coach's second pair of eyes. Gemini Live only takes a turn when the
 learner speaks; camera frames never prompt it. So a step finished in silence would go unnoticed.
@@ -457,15 +529,22 @@ cases minimal was as right as low on done, not done and wrong, but it filled in 
 ("cup A is still purple") and once took the dropper for the knife and called that step done, so
 a quick look only notices; it never confirms.
 
-Two answers in a row must agree before the coach hears anything, and the second is always a
-careful one. Two `done`s: the coach gets the frame and the criteria it saw met ("[app] Step
-watcher: … looks done: cup B's liquid is blue-green; cup C's liquid is still purple"), and
-decides; the watcher then leaves the step alone for 20 s. Two answers that say the learner did
-something else: the coach gets the frame, what went wrong and the criteria not met with what was
-seen ("Not met: cup C's liquid is still purple (saw: blue-green)"), and decides whether to correct
-them (once per 20 s a step). The watcher suggests; it never completes a step. After 3 failures in
-a row it pauses for 30 s. Every answer is recorded, with its progress, what went wrong, the
-criteria and the deciding object's point.
+Two answers in a row must agree before anything comes of them, and the second is always a careful
+one. Two `done`s on the focused step: the lesson completes it (`by: check`, recorded as a plan
+change by the app with what the watcher saw as its reason), and the coach gets the frame and
+"[app] Done: … (measured by the app)" with the next step's briefing, without waiting for the
+learner to stop talking. Two answers that say the learner did something else: the coach gets the
+frame, what went wrong and the criteria not met with what was seen ("Not met: cup C's liquid is
+still purple (saw: blue-green)"), and decides whether to correct them (once per 20 s a step).
+After 3 failures in a row it pauses for 30 s. Every answer is recorded, with its progress, what
+went wrong, the criteria and the deciding object's point.
+
+The watcher used to only suggest a done, for the voice to judge from its own frames. In two
+headset lessons on 2026-10-25 (7 steps) its done came first every time it came (5 steps) and was
+right every time, and the voice completed the step 4.2 to 13.6 s later (10.5 s median): it ignored
+the suggestion and repeated the step until the learner said "I did it" twice, and the suggestion
+waited up to 6 s while the learner talked. So the app completes the step; the voice can still
+complete a step itself, from what it sees or hears.
 
 Measured on the planner bench's 30 hard watcher tests ([planner-bench.md](planner-bench.md)),
 directional: the old watcher (low, no criteria) passed 87 of 90 looks, the careful look now 30 of
@@ -514,7 +593,9 @@ trusted positions, and the coach hears only:
 It never hears positions, distances, pinches, detections, missing or registered objects, or whether
 an object has been found. It is told only what the learner can see: whether a highlight or a
 demonstration is showing, so it doesn't point at an outline that isn't there. `highlight` answers
-`shown: false` while the object has no position yet. Under local authority (the scripted coach, no
+`shown: false` while the object has no position yet or a live source has lost it from view, with
+a note that the call worked and the light comes by itself once it is in view: an answer that it
+could not be shown had the coach tell the learner it could not highlight it. Under local authority (the scripted coach, no
 coach, `record_demo`, or a Gemini connection that is down), checks see everything, as on main. A
 Gemini coach isn't told rule mistakes then, because those rules saw untrusted positions.
 
@@ -578,7 +659,7 @@ changing it.
 | ------------------------------- | -------------------------------------------------------------------------- |
 | Planner slow                    | after 12 s the coach is told, so it can keep the learner company           |
 | Planner fails or times out      | the coach writes the steps with `add_step`                                 |
-| Step watcher down or not set up | no suggestions; the coach and the Done button still complete steps         |
+| Step watcher down or not set up | nothing completes steps by sight; the coach and the Done button still do   |
 | Closer look slow or failing     | after 8 s the voice is told there was no closer look, and asks the learner |
 | Action focus failing            | the step's own lights stay; after 3 failures in a row it pauses for 30 s   |
 | Connection drops during a look  | the answer goes to the next connection as an `[app]` narration             |

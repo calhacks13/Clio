@@ -544,14 +544,17 @@ def test_a_disagreeing_jev_answer_is_ignored_while_the_anchor_holds_and_applies_
     assert after["source"] == "jev" and after["box"][0] == pytest.approx(CUP[0] / 960, abs=0.02)
 
 
-def test_an_agreeing_jev_answer_applies_while_the_anchor_holds(lookalikes):
+def test_an_agreeing_jev_answer_keeps_the_anchors_box_while_it_holds(lookalikes, caplog):
     b = {"cup": (0.9, norm_box(b_on(5)))}  # jev's box on frame 5: cup B
     anchored = on_a_then_er_says_b(lookalikes, b)
     slide(lookalikes, 5, dt=1.0)
-    agreed = slide(lookalikes, 6)
+    with caplog.at_level(logging.INFO, logger="clio_tracker"):
+        agreed = slide(lookalikes, 6)
     assert len(lookalikes.jev.calls) == 2
-    assert agreed["source"] == "jev" and agreed["track"] == anchored["track"]
+    # Still ER's placement on the same track: jev's box, which takes in neighbors, is not applied.
+    assert agreed["source"] == "er" and agreed["track"] == anchored["track"]
     assert agreed["box"][0] == pytest.approx(b_on(6)[0] / 960, abs=0.02)
+    assert any("its box kept" in r.getMessage() for r in caplog.records)
 
 
 def test_jev_saying_absent_does_not_lose_an_anchored_object_while_it_holds(lookalikes, caplog):
@@ -583,7 +586,8 @@ def test_an_anchors_words_are_what_jev_is_told_next_and_the_track_goes_on(lesson
     play(lesson, 3, dt=1.1)
     assert lesson.jev.calls[-1] == [Query("cup", words, "blue cup")]  # the phrase stays
     (later,) = play(lesson, 4)["detections"]
-    assert later["source"] == "jev" and later["track"] == before["track"]
+    # jev agrees, within the anchor's 6 s: the anchor's placement stands, on the same track.
+    assert later["source"] == "er" and later["track"] == before["track"]
 
 
 def test_an_object_jev_has_not_placed_is_placed_from_its_anchor_at_once(lesson):
@@ -737,9 +741,7 @@ def test_the_summary_line_says_how_often_the_follower_drew_and_what_the_segmente
         now[0] = 7.0
         with_segmenter.add(["lost"], 20.0, [None], refresher)
     lines = [r.getMessage() for r in caplog.records]
-    assert lines[0].endswith(
-        "(tracking 6); follower 75%, segmenter: 2 calls, 210 ms, 1 empty"
-    )
+    assert lines[0].endswith("(tracking 6); follower 75%, segmenter: 2 calls, 210 ms, 1 empty")
     assert lines[1].endswith("(tracking 6)")  # without a segmenter, as before
     assert lines[2].endswith("(lost 1); follower 0%, segmenter: 0 calls, 0 ms, 0 empty")
 

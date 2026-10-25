@@ -110,8 +110,13 @@ export class PassthroughCamera implements CameraFrameSource, CoachFrameSource, P
     return { source: this.video, width, height, t: this.lastFrameT || performance.now() };
   }
 
+  /**
+   * The voice's frame every few seconds, as sharp as the planner's: Gemini Live answers detail
+   * questions better from 1024 px than from 640 (gemini-live-agent.ts). The Quest encodes it
+   * synchronously, 10 to 20 ms at 640x480; at this size it is not measured on the headset yet.
+   */
   async snapshot(): Promise<string | null> {
-    return this.encode(640, 0.7);
+    return this.encode(1024, 0.8);
   }
 
   /**

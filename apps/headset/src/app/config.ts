@@ -41,6 +41,17 @@ export interface AppConfig {
    * names the next thing to touch (needs the camera, the live tracker and a Gemini key).
    */
   focus: boolean;
+  /**
+   * The action focus's boxes anchor the tracker (0: jev alone places the objects; ER still lights
+   * the next thing to touch and its words still reach jev).
+   */
+  anchors: boolean;
+  /**
+   * A closer look places and highlights what Robotics-ER points out (0: it answers in words only).
+   */
+  lookBoxes: boolean;
+  /** A test: frame each live object's box with corner brackets instead of glowing its outline. */
+  boxes: boolean;
 }
 
 const DEFAULTS: AppConfig = {
@@ -62,6 +73,9 @@ const DEFAULTS: AppConfig = {
   frameWidth: null,
   liveHeld: true,
   focus: true,
+  anchors: true,
+  lookBoxes: true,
+  boxes: false,
 };
 
 function oneOf<T extends string>(value: string | null, allowed: readonly T[], fallback: T): T {
@@ -108,5 +122,8 @@ export function readConfig(search: string): AppConfig {
     frameWidth: whole(q.get('frame')),
     liveHeld: flag(q.get('liveHeld'), DEFAULTS.liveHeld),
     focus: flag(q.get('focus'), DEFAULTS.focus),
+    anchors: flag(q.get('anchors'), DEFAULTS.anchors),
+    lookBoxes: flag(q.get('lookBoxes'), DEFAULTS.lookBoxes),
+    boxes: flag(q.get('boxes'), DEFAULTS.boxes),
   };
 }

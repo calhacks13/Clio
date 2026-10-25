@@ -94,11 +94,14 @@ function setup({
   lesson = true,
   camera = true,
   frame = FRAME as CameraFrame | null,
+  places = true,
 }: {
   reply?: () => Promise<SceneAskResponse>;
   lesson?: boolean;
   camera?: boolean;
   frame?: CameraFrame | null;
+  /** Whether what it points out is placed (?lookBoxes=0 leaves the placer out). */
+  places?: boolean;
 } = {}) {
   const bus = new Emitter<AppEvents>();
   const seen: { type: string; payload: Record<string, unknown> }[] = [];
@@ -142,7 +145,7 @@ function setup({
     view,
     bus,
     clock: new ManualClock(1600),
-    placer: grounder,
+    placer: places ? grounder : null,
   });
   const call = (question: string) => look.handlers().look_closer({ question }, { callId: 'c1' });
   return { call, asked, widths, seen, registry };
@@ -218,6 +221,20 @@ describe('CloserLook', () => {
         },
       },
     ]);
+  });
+
+  it('answers in words only without a placer: nothing it points out is placed or lit', async () => {
+    const { call, seen, registry } = setup({ places: false });
+    const outcome = await call('Which cup is still empty?');
+    expect(outcome).toEqual({
+      ok: true,
+      result: { answer: 'Cup C, the one on the right, is still empty.' },
+    });
+    expect(registry.get('cup_c')).toBeUndefined();
+    const types = seen.map((e) => e.type);
+    expect(types).not.toContain('overlay.highlight');
+    expect(types).not.toContain('object.detected');
+    expect(types).toContain('annotation');
   });
 
   it('passes a hazard on to the coach in words', async () => {

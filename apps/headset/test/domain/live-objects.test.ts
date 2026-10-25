@@ -87,7 +87,15 @@ const objects = parseProcedure({
 
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-function setup({ head = LOOKING_DOWN, depth = true }: { head?: Pose; depth?: boolean } = {}) {
+function setup({
+  head = LOOKING_DOWN,
+  depth = true,
+  boxes = false,
+}: {
+  head?: Pose;
+  depth?: boolean;
+  boxes?: boolean;
+} = {}) {
   const bus = new Emitter<AppEvents>();
   const registry = new ObjectRegistry(bus);
   registry.load(objects, 0);
@@ -110,6 +118,7 @@ function setup({ head = LOOKING_DOWN, depth = true }: { head?: Pose; depth?: boo
     workspace: () => workspace,
     now: () => clock.now,
     record: (sample) => samples.push(sample),
+    options: { boxes },
   });
   live.follow(['cap', 'jug']);
   return { live, registry, observe, lose, samples, clock, table, workspace };
@@ -204,6 +213,22 @@ describe('LiveObjects', () => {
     expect(view?.id).toBe('cap');
     expect(live.lit('cap')).toBe(true);
     expect(live.lit('jug')).toBe(false);
+  });
+
+  it('frames the box instead of the outline with ?boxes=1, and records the outline all the same', async () => {
+    const outlined = setup();
+    outlined.live.handle(frame(41, 900, [detection('cap')]));
+    await flush();
+    expect(outlined.live.views(1000)[0]?.placement.outline.shape).toBe('contour');
+
+    const boxed = setup({ boxes: true });
+    boxed.live.handle(frame(41, 900, [detection('cap')]));
+    await flush();
+    const [view] = boxed.live.views(1000);
+    expect(view?.placement.outline.shape).toBe('box');
+    expect(view?.placement.outline.points).toHaveLength(4);
+    expect(boxed.observe).toHaveBeenCalledTimes(1);
+    expect(boxed.samples[0]?.image?.outline).toEqual(detection('cap').outline);
   });
 
   it('draws the next detections at once at the remembered distance, as not measured', async () => {

@@ -197,9 +197,10 @@ export class ProcedureRunner {
 
   /**
    * Complete a step, the focused one by default. Any todo or skipped step can be completed; a step
-   * that isn't focused never had its check evaluated, so its completion is labeled forced.
+   * that isn't focused never had its check evaluated, so its completion is labeled forced. `check`
+   * is the app having seen it done (the step watcher): it confirms nothing for the step's check.
    */
-  complete(stepId: string | null, by: Decider, t: number): CompleteResult {
+  complete(stepId: string | null, by: Decider | 'check', t: number): CompleteResult {
     if (this.status !== 'running') return notRunning;
     const step = stepId === null ? this.focused() : this.find(stepId);
     if (!step) return { ok: false, error: this.unknownStep(stepId ?? '') };
@@ -211,7 +212,7 @@ export class ProcedureRunner {
       this.finish(step, by, true, t);
       return { ok: true, forced: true, already: false };
     }
-    this.confirm(by);
+    if (by !== 'check') this.confirm(by);
     const frame = { ...(this.lastFrame ?? emptyFrame(t)), t };
     const trust = this.lastTrust;
     this.success?.update(this.context(trust ? { ...frame, objects: trust.positions } : frame));

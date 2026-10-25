@@ -39,6 +39,8 @@ const BRIEFING_TOOLS: ReadonlySet<string> = new Set<CoachToolName>([
 
 export class Narrator {
   private pendingDone: string | null = null;
+  /** The app completed the last step (the step watcher saw it): its news is urgent. */
+  private appDone = false;
   private lastPinchT = Number.NEGATIVE_INFINITY;
   /** Ids of the briefing tool calls running now. */
   private readonly briefingCalls = new Set<string>();
@@ -114,27 +116,24 @@ export class Narrator {
       b.on('step.completed', ({ stepId, by }) => {
         // A tool call's result already says what it completed.
         this.pendingDone = this.briefingCalls.size > 0 ? null : `Done: ${stepId} (${DONE_BY[by]}).`;
+        this.appDone = by === 'check';
       }),
       b.on('step.entered', ({ t, stepId, instruction }) => {
         const done = this.pendingDone ? `${this.pendingDone} ` : '';
+        const urgent = this.appDone;
         this.pendingDone = null;
+        this.appDone = false;
         // The coach moved the focus itself: the tool result carries the briefing.
         if (this.briefingCalls.size > 0) return;
         const plan = this.view.plan();
         const brief = plan ? briefStep(plan, stepId) : `Now: "${instruction}"`;
-        this.say(t, 'step', `${done}${brief} Tell them what to do in under 15 words.`, true, {
-          instruction,
-          stepId,
-        });
-      }),
-      b.on('step.looks_done', ({ t, stepId, observation, criteria }) => {
-        const met = criteria?.length ? `: ${seenList(criteria)}.` : ` (${observation}).`;
         this.say(
           t,
-          'looks_done',
-          `Step watcher: "${this.instructionOf(stepId)}" looks done${met} If you agree from what you see, call complete_step with step_id "${stepId}" and evidence "seen"; if not, carry on without mentioning it.`,
+          'step',
+          `${done}${brief} Tell them what to do in under 15 words.`,
           true,
-          { stepId },
+          { instruction, stepId },
+          urgent,
         );
       }),
       b.on('step.looks_wrong', ({ t, stepId, wrong, observation, criteria }) => {
@@ -146,6 +145,7 @@ export class Narrator {
           `Step watcher: on "${this.instructionOf(stepId)}" they seem to have done something else: ${wrong}${why} If you see it too, tell them in a few words what to do instead; if not, carry on without mentioning it.`,
           true,
           { stepId },
+          true,
         );
       }),
       b.on('step.hazard', ({ t, stepId, hazard }) => {
@@ -155,6 +155,7 @@ export class Narrator {
           `Step watcher: a possible hazard near their hands: ${hazard}. If you see it too, warn them in a few words; if not, carry on without mentioning it.`,
           true,
           { stepId },
+          true,
         );
       }),
       b.on('step.stuck', ({ t, stepId, elapsedMs }) => {
@@ -170,12 +171,16 @@ export class Narrator {
         );
       }),
       b.on('procedure.completed', ({ t, durationMs }) => {
+        const urgent = this.appDone;
         this.pendingDone = null;
+        this.appDone = false;
         this.say(
           t,
           'complete',
           `Lesson complete in ${Math.round(durationMs / 1000)} s. Congratulate them in one short sentence and ask what they want to learn next.`,
           true,
+          undefined,
+          urgent,
         );
       }),
       b.on('mistake.detected', ({ t, kind, message, source }) => {
@@ -260,18 +265,23 @@ export class Narrator {
     body: string,
     reply: boolean,
     data?: Record<string, string>,
+    urgent = false,
   ): void {
-    this.sink({ kind, text: `[app] ${body}`, reply, ...(data ? { data } : {}) }, t);
+    this.sink(
+      {
+        kind,
+        text: `[app] ${body}`,
+        reply,
+        ...(data ? { data } : {}),
+        ...(urgent ? { urgent } : {}),
+      },
+      t,
+    );
   }
 }
 
 /** The watcher's criteria are short sentences; in a narration they read as one list. */
 const clause = (text: string) => text.trim().replace(/[.;]+$/, '');
-
-/** What the watcher saw met: "cup B is blue-green; cup C is still purple". */
-function seenList(criteria: readonly StepCheckCriterion[]): string {
-  return criteria.map((c) => clause(c.text)).join('; ');
-}
 
 /** What is not met and what the watcher saw instead, at most three. */
 function unmetList(criteria: readonly StepCheckCriterion[]): string {

@@ -22,12 +22,15 @@ describe('readConfig', () => {
       frameWidth: null,
       liveHeld: true,
       focus: true,
+      anchors: true,
+      lookBoxes: true,
+      boxes: false,
     });
   });
 
   it('reads options from the URL', () => {
     const c = readConfig(
-      '?coach=scripted&mode=record_demo&procedure=shirt-fold&goal=fold%20a%20shirt&debug=1&emulate=1&calibrate=1&camera=0&autoDemo=0&voice=Kore&transport=direct&showRefresh=5000&table=off&live=0&tracker=8791&frame=640&liveHeld=0&focus=0',
+      '?coach=scripted&mode=record_demo&procedure=shirt-fold&goal=fold%20a%20shirt&debug=1&emulate=1&calibrate=1&camera=0&autoDemo=0&voice=Kore&transport=direct&showRefresh=5000&table=off&live=0&tracker=8791&frame=640&liveHeld=0&focus=0&anchors=0&lookBoxes=0&boxes=1',
     );
     expect(c).toEqual({
       coach: 'scripted',
@@ -48,6 +51,9 @@ describe('readConfig', () => {
       frameWidth: 640,
       liveHeld: false,
       focus: false,
+      anchors: false,
+      lookBoxes: false,
+      boxes: true,
     });
   });
 

@@ -230,6 +230,7 @@ export function marchRay(
       point,
       normal: surfaceNormal(view, lookup, point, ray.direction, pixels),
       distance: hit,
+      sensed: true,
     };
   }
   return null;

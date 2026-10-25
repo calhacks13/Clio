@@ -31,10 +31,10 @@ import { findWords } from '../world/find-words';
 // that finds something starts the next one at once, and only a careful answer can confirm it.
 // Answers count in the order their looks started.
 //
-// When the step looks done, or the learner seems to have done something else, a few answers in a
-// row, the coach is told and decides; the watcher never completes a step. It sees only the
-// camera, never the tracker. Every answer is recorded as a `step.watch` annotation, and the
-// criteria as `step.criteria`.
+// When the step looks done a few answers in a row, the lesson completes it (step.looks_done) and
+// the coach hears it done; when the learner seems to have done something else, the coach is told
+// and decides. It sees only the camera, never the tracker. Every answer is recorded as a
+// `step.watch` annotation, and the criteria as `step.criteria`.
 
 /** Port: judges one step from camera views (the server's /api/plans/check). */
 export interface StepChecker {
@@ -66,7 +66,7 @@ export interface StepWatcherOptions {
   quietMs?: number;
   /** Frames from when the step gained focus, sent with every look at it (0 sends none). */
   beforeFrames?: number;
-  /** Answers in a row that must say "done" (or "did something else") before the coach hears it. */
+  /** Answers in a row that must say "done" (or "did something else") before anything comes of it. */
   confirmations?: number;
   /** Don't tell the coach the same thing about a step again for this long (ms). */
   repeatMs?: number;

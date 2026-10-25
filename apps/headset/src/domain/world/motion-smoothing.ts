@@ -18,6 +18,17 @@ import type { DepthKind, Placement } from './placement';
 //   velocity counts only as far as it stands out from its noise, so a still object stays put.
 // - A loss is held: the last outline stays (its prediction coasting to a stop) for `holdMs`, and
 //   only then fades, so a few missed frames don't blink it.
+// - A new sample moves that place a little; the light doesn't step there. It goes on where it was
+//   heading, and the difference is taken out evenly over `glideMs`, about the time to the next
+//   sample, so steady motion gets no extra lag and the light moves the same amount every frame
+//   (a fade that takes most of the gap at once steps at the tracker's ~27 Hz, which reads as
+//   stutter). A new object, a snap or a restart jumps.
+//
+// The defaults were tuned in a simulation of this path (an object slid by hand, answers 80 ms
+// late at 27 Hz, drawn at 72 Hz, seen from the left eye): a light that starts late, as one with a
+// still cutoff of 0.3 Hz and a slow velocity estimate does, then flies past the stop on 120 ms of
+// prediction, reads as far fewer frames a second than it has. Prediction is held to 60 ms: each
+// further 30 ms starts the light ~10 ms sooner but carries it twice as far past a stop.
 
 export interface MotionSmoothingOptions {
   /** Sideways anchor: cutoff while still (Hz). Lower is steadier and laggier. */
@@ -46,28 +57,31 @@ export interface MotionSmoothingOptions {
   snapM: number;
   /** No sample for this long (ms) starts over at the next one. */
   resetAfterMs: number;
+  /** A new sample's jump in the drawn anchor is taken out evenly over this long (ms); 0: none. */
+  glideMs: number;
 }
 
 export const DEFAULT_MOTION_OPTIONS: Readonly<MotionSmoothingOptions> = Object.freeze({
-  minCutoff: 0.3,
-  beta: 30,
-  dCutoff: 1.5,
+  minCutoff: 0.6,
+  beta: 20,
+  dCutoff: 4,
   depthMinCutoff: 0.2,
-  depthBeta: 10,
+  depthBeta: 6,
   shapeMinCutoff: 1.0,
   shapeBeta: 20,
   points: 64,
-  predictMs: 120,
+  predictMs: 60,
   maxSpeed: 1.0,
   holdMs: 400,
   snapM: 0.25,
   resetAfterMs: 1000,
+  glideMs: 50,
 });
 
 /**
  * ?smooth=0 turns smoothing off (null); ?minCutoff=, ?beta=, ?dCutoff=, ?depthMinCutoff=,
- * ?depthBeta=, ?shapeMinCutoff=, ?shapeBeta=, ?points=, ?predictMs=, ?maxSpeed=, ?holdMs=, ?snapM=
- * and ?resetAfterMs= replace the defaults. A value that isn't a non-negative number is ignored.
+ * ?depthBeta=, ?shapeMinCutoff=, ?shapeBeta=, ?points=, ?predictMs=, ?maxSpeed=, ?holdMs=, ?snapM=,
+ * ?resetAfterMs= and ?glideMs= replace the defaults. A value that isn't a non-negative number is ignored.
  */
 export function motionOptionsFromParams(params: URLSearchParams): MotionSmoothingOptions | null {
   if (params.get('smooth') === '0') return null;
@@ -316,6 +330,22 @@ export class OutlineMotion {
   private before: Track | null = null;
   private lostAt: number | null = null;
   private version = 0;
+  /** Bumped when the track starts over (new, snapped, after a loss): the glide jumps then. */
+  private restarts = 0;
+  /**
+   * The anchor last drawn: where, how fast the filtered one was moving, for which sample and when
+   * (ms); and the gap the last sample opened between where the light was heading and its new
+   * place, with when it started closing.
+   */
+  private drawn: {
+    restart: number;
+    version: number;
+    center: Vec3;
+    rate: Vec3;
+    t: number;
+    gap: Vec3;
+    gapT: number;
+  } | null = null;
   private snaps = 0;
   private last: { leadMs: number; gain: number; speed: number } = { leadMs: 0, gain: 0, speed: 0 };
 
@@ -358,6 +388,7 @@ export class OutlineMotion {
     this.version++;
     if (fresh || snapped) {
       this.before = null;
+      this.restarts++;
       this.track = this.start(sample);
       return;
     }
@@ -374,6 +405,7 @@ export class OutlineMotion {
   reset(): void {
     this.track = null;
     this.before = null;
+    this.drawn = null;
     this.lostAt = null;
     this.last = { leadMs: 0, gain: 0, speed: 0 };
   }
@@ -406,7 +438,9 @@ export class OutlineMotion {
       along,
       (gainRadial * leadRadial) / 1000,
     );
-    const center = madd(track.center, offset, 1);
+    // How fast the predicted place moves meanwhile (m/s): the trusted part of the velocity.
+    const rate = madd(scale(across, gainLateral), along, gainRadial);
+    const center = this.glide(madd(track.center, offset, 1), rate, now);
     this.last = { leadMs: leadLateral, gain: gainLateral, speed: length(across) };
     return {
       placement: placementAt(center, track),
@@ -429,6 +463,35 @@ export class OutlineMotion {
       shapeCutoffHz: t ? round(t.cutoffShape, 2) : null,
       snaps: this.snaps,
     };
+  }
+
+  /**
+   * Where to draw the anchor whose filtered, predicted place is `target`, moving at `rate`: there,
+   * plus what is left of the gap between where the light was heading and the new place when a
+   * sample moved it. The gap closes evenly, from the frame before the sample, over `glideMs`.
+   */
+  private glide(target: Vec3, rate: Vec3, now: number): Vec3 {
+    const { glideMs, resetAfterMs } = this.options;
+    const last = this.drawn;
+    let gap: Vec3 = [0, 0, 0];
+    let gapT = now;
+    let left = 0;
+    if (glideMs > 0 && last && last.restart === this.restarts && now - last.t < resetAfterMs) {
+      const dt = now - last.t;
+      if (dt <= 0) return last.center;
+      if (last.version === this.version) {
+        gap = last.gap;
+        gapT = last.gapT;
+      } else {
+        // A new sample: the light carries on along its way, and the gap to the new place closes.
+        gap = sub(madd(last.center, last.rate, dt / 1000), target);
+        gapT = last.t;
+      }
+      left = Math.max(0, 1 - (now - gapT) / glideMs);
+    }
+    const center = madd(target, gap, left);
+    this.drawn = { restart: this.restarts, version: this.version, center, rate, t: now, gap, gapT };
+    return center;
   }
 
   private faded(now: number): boolean {

@@ -126,6 +126,10 @@ To run it beside another Clio on the default ports, give each part its own:
    (your key's quota), to the LAN. Use your own hotspot, not open venue Wi-Fi. By default both the
    dev server and the API server listen on loopback only.
 5. **Mirror for judges:** `scrcpy` (USB, works offline). Use `--crop` to show one eye.
+6. **Room scan:** without Quest's room setup (Space Setup) a session detects no floor, walls or
+   tables, hit-test finds nothing and objects are placed on a guessed table. If no plane shows up
+   1.5 s after entering AR, Clio asks Quest to run room setup (`initiateRoomCapture`,
+   `adapters/xr/room-scan.ts`) and the lesson starts once it ends.
 
 ### Camera permission workaround
 
@@ -174,6 +178,9 @@ offset, adjust `DEFAULT_HEAD_FROM_CAMERA`, or better, implement marker self-cali
 | `debug=1`                     | off                 | HUD, tracked-hand overlay, hidden zones, workspace outline                              |
 | `live=0`                      | on                  | don't follow the lesson's objects with the tracker's `/track` (Spotlight looks instead) |
 | `focus=0`                     | on                  | no Robotics-ER 2 action focus (it needs the camera, the tracker and a Gemini key)       |
+| `anchors=0`                   | on                  | ER's boxes never anchor the tracker: jev places objects alone, told ER's words          |
+| `lookBoxes=0`                 | on                  | a closer look answers in words only: nothing ER points out is placed or lit             |
+| `boxes=1`                     | off                 | a test: each live object's box in corner brackets, under jev's words, instead of a glow |
 | `voice=<name>`                |                     | Gemini prebuilt voice (e.g. `Kore`)                                                     |
 | `showRefresh=<ms>`            | `3000`              | how often to look again at what the step shows (0: only when the step starts)           |
 

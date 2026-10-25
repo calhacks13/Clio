@@ -206,6 +206,56 @@ describe('OutlineMotion', () => {
     expect(width).toBeCloseTo(0.16, 2);
   });
 
+  it("glides a sample's jump out evenly over glideMs instead of stepping the light there", () => {
+    // Held still at its filtered place, then a sample that moves it (no prediction, no smoothing
+    // of its own, so the jump is the sample's).
+    const { glideMs } = DEFAULT_MOTION_OPTIONS;
+    const motion = new OutlineMotion(options({ predictMs: 0, minCutoff: 1000, beta: 0 }));
+    motion.add({ key: 'cup', placement: placement([0, 0, -0.6]), t: 0, eye: [0, 0, 0] });
+    expect(motion.at(10)?.placement.center[0]).toBeCloseTo(0, 9);
+    motion.add({ key: 'cup', placement: placement([0.02, 0, -0.6]), t: 14, eye: [0, 0, 0] });
+    // The gap closes from the frame before the sample (10 ms), by the same amount each frame.
+    const x = (now: number) => motion.at(now)?.placement.center[0] ?? Number.NaN;
+    const frames: number[] = [];
+    for (let now = 24; now <= 400; now += 14) frames.push(now);
+    const drawn = frames.map(x);
+    const end = drawn[drawn.length - 1] as number;
+    expect(end).toBeCloseTo(0.02, 3);
+    const each = end * (14 / glideMs);
+    expect(drawn[0]).toBeCloseTo(each, 9);
+    for (let i = 1; i < frames.length; i++) {
+      const at = drawn[i] as number;
+      const before = drawn[i - 1] as number;
+      expect(at).toBeGreaterThanOrEqual(before);
+      if ((frames[i] as number) <= 10 + glideMs) expect(at - before).toBeCloseTo(each, 9);
+      // Closed once glideMs has passed.
+      else expect(at).toBeCloseTo(end, 9);
+    }
+    // Asked twice for the same frame, it draws the same place.
+    expect(x(400)).toBe(end);
+  });
+
+  it('jumps to a new object, a snap or a restart instead of gliding there', () => {
+    const motion = new OutlineMotion(options({ predictMs: 0 }));
+    motion.add({ key: 'cup', placement: placement([0, 0, -0.6]), t: 0, eye: [0, 0, 0] });
+    motion.at(10);
+    // Farther than snapM: another object, or a depth fix.
+    motion.add({ key: 'cup', placement: placement([0.5, 0, -0.6]), t: 14, eye: [0, 0, 0] });
+    expect(motion.at(24)?.placement.center[0]).toBeCloseTo(0.5, 6);
+    motion.add({ key: 'jug', placement: placement([-0.1, 0, -0.6]), t: 28, eye: [0, 0, 0] });
+    expect(motion.at(38)?.placement.center[0]).toBeCloseTo(-0.1, 6);
+  });
+
+  it('draws without a glide when glideMs is 0', () => {
+    const motion = new OutlineMotion(
+      options({ predictMs: 0, minCutoff: 1000, beta: 0, glideMs: 0 }),
+    );
+    motion.add({ key: 'cup', placement: placement([0, 0, -0.6]), t: 0, eye: [0, 0, 0] });
+    motion.at(10);
+    motion.add({ key: 'cup', placement: placement([0.02, 0, -0.6]), t: 14, eye: [0, 0, 0] });
+    expect(motion.at(24)?.placement.center[0]).toBeCloseTo(0.02, 3);
+  });
+
   it('draws a moving outline where the object is now, not where its frame saw it', () => {
     const motion = new OutlineMotion(options());
     const speed = 0.4; // m/s along +x
@@ -223,9 +273,33 @@ describe('OutlineMotion', () => {
       lead = motion.stats.leadMs;
     }
     // Without prediction it would trail by the 90 ms of latency plus the filter's lag: > 36 mm.
-    expect(error).toBeLessThan(0.012);
+    // Prediction is capped at 60 ms, so a third of the latency is left (it stops cleanly, below).
+    expect(error).toBeLessThan(0.022);
     expect(lead).toBeLessThanOrEqual(DEFAULT_MOTION_OPTIONS.predictMs);
     expect(motion.stats.predictGain).toBeGreaterThan(0.9);
+  });
+
+  it('starts soon after a still object moves and stops without flying past it', () => {
+    // Still for a second, slid 24 cm at 0.4 m/s across the view, then still: a sample every
+    // 40 ms, each drawn 90 ms after its frame, at 72 Hz.
+    const motion = new OutlineMotion(options());
+    const xAt = (t: number) => 0.4 * Math.min(0.6, Math.max(0, (t - 1000) / 1000));
+    let past = 0;
+    let started = Number.NaN;
+    let next = 0;
+    for (let now = 90; now < 3000; now += 14) {
+      for (; next <= now - 90; next += 40) {
+        motion.add({ key: 'cup', placement: placement([xAt(next), 0, -0.6]), t: next, eye: EYE });
+      }
+      const x = motion.at(now)?.placement.center[0] ?? Number.NaN;
+      if (now > 1600) past = Math.max(past, x - 0.24);
+      if (Number.isNaN(started) && x > 0.048) started = now;
+    }
+    // A fifth of the way: the object is there at 1120 ms; 90 ms of it is the frames' latency.
+    // (A still cutoff of 0.3 Hz, a 1.5 Hz velocity filter and 120 ms of prediction: 146 ms
+    // after it, and 27 mm past the stop.)
+    expect(started - 1120).toBeLessThan(140);
+    expect(past).toBeLessThan(0.012);
   });
 
   it('caps the extrapolation in time and speed', () => {

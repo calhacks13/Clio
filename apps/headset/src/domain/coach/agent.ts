@@ -25,6 +25,11 @@ export interface Narration {
   reply: boolean;
   /** Structured fields, for agents that don't read prose (the scripted coach). */
   data?: Record<string, string>;
+  /**
+   * What the app saw that the learner may be waiting on (a step done, something done wrong, a
+   * hazard): it doesn't wait for the learner to stop talking.
+   */
+  urgent?: boolean;
 }
 
 export type AgentState = 'connecting' | 'ready' | 'reconnecting' | 'closed' | 'error';

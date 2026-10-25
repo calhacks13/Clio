@@ -21,9 +21,10 @@ import { workspaceInFrontOf } from './workspace';
 //            point's ray lands on that same surface, the object is lying flat (it is not in the
 //            scene mesh, and the table shows under its middle): its middle is there. If the point's
 //            ray stops nearer, the object is in front of that surface: its middle is that hit.
-//   point    hit-test along the ray through the mask's inner point lands on something within reach
+//   point    the ray through the mask's inner point meets the depth map (depth sensing sees the
+//            object itself, at any distance), or hit-test along it lands on something within reach
 //            and no farther than the planes below it (the object itself in the scene mesh). A small
-//            object usually isn't in the mesh, so a far hit is the wall or shelf behind it.
+//            object usually isn't in the mesh, so a far hit-test hit is the wall or shelf behind it.
 //   surface  the contact ray meets a detected plane, else the level plane a table would be on.
 //   fixed    a set distance along the point's ray.
 // The outline goes on a plane through the object that faces the camera, every vertex on its own
@@ -198,7 +199,10 @@ export function depthFromHits(
     }
     return { center: standing, kind: 'contact' };
   }
-  if (aboveFloor(point) && point.distance <= reach) return { center: point.point, kind: 'point' };
+  // The depth map sees the object itself at any distance; the room mesh's far hits are behind it.
+  if (aboveFloor(point) && (point.sensed || point.distance <= reach)) {
+    return { center: point.point, kind: 'point' };
+  }
   return null;
 }
 

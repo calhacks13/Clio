@@ -8,7 +8,7 @@ import type { CameraModel } from '../domain/world/camera-model';
 import type { CameraFrame, CameraFrameSource } from '../domain/world/grounding';
 
 // The laptop's camera standing in for the headset's passthrough camera, in every role the headset
-// gives it: the tracker's stream (frame()), the voice's small frame every few seconds (snapshot()),
+// gives it: the tracker's stream (frame()), the voice's frame every few seconds (snapshot()),
 // the planner's and the step watcher's sharp frames (snapshots()), the finder's and the closer
 // look's frame (capture()) and Robotics-ER's frame (grab()). It plays in the page's own <video>, so
 // what is drawn over the picture is what the models were sent. Opening and picking a camera are
@@ -17,8 +17,8 @@ import type { CameraFrame, CameraFrameSource } from '../domain/world/grounding';
 const log = createLogger('desk-camera');
 
 /** The voice's frames: like the headset's (PassthroughCamera.snapshot). */
-const VOICE_WIDTH = 640;
-const VOICE_QUALITY = 0.7;
+const VOICE_WIDTH = 1024;
+const VOICE_QUALITY = 0.8;
 /** One-shot finder frames: like the headset's (PassthroughCamera.capture). */
 const CAPTURE_WIDTH = 960;
 const CAPTURE_QUALITY = 0.8;

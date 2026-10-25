@@ -56,7 +56,7 @@ which the HTML-only hierarchy detector does not resolve.
 
 ## Tracked object light
 
-The headset is an AR task surface. Preserve labels, placement, hand skeletons and HUD. The
+The headset is an AR task surface. Preserve labels, placement, tracked hand skeletons and HUD. The
 visual reference is Desktop `Jev fun/experiments/edgetam/preview/index.html`: saturated cyan
 emission, soft light falloff and readable real material. The user rejected flat segmentation
 fills and stacked contour bands, and then asked for the object itself to look like it is
@@ -167,3 +167,22 @@ an optional target amount; the overlay model turns role, coach style and source 
 from this table; the outlines presenter reads that accent; the level band is cut from the
 tracker's mask in the renderer. The tracker (`tracker/`) sends geometry only and knows nothing
 about color.
+
+## Demonstration hands and movement
+
+Demonstrations use solid off-white (`#f2f6fa`) gloves with a filled, softly rounded palm,
+continuous fingers and a cyan cuff. Articulation still follows the original 25-joint clip;
+the glove is illustrative geometry, never a new measurement. The tracking/debug skeleton stays
+separate. Use opaque, depth-tested surfaces so overlapping fingers read as one hand.
+
+Movement is a thick cyan (`#24d4ed`) three-dimensional tube (up to 12mm across) with a broad
+arrowhead, a start bead and a yellow (`#ffd23f`) destination ring. The whole route remains
+visible. Two small off-white chevrons travel along it every 1.7s to explain direction; they
+never move the destination or flash. Turning follows the specified axis and direction; presses
+point down to their contact point; wiping shows both directions. Size the cue down for short
+motions. Reduced motion fixes the chevrons in place while retaining the complete path.
+
+Reuse geometry during frames and release it when a demonstration changes. The gallery's
+Demonstrations section uses the real synthesizer and presenters, with orbit, pause and hand
+visibility controls for checking the movement from different angles without a headset.
+`gallery.html?demo=1` opens that preview alone.

@@ -47,6 +47,14 @@ const PHRASE =
   'What the object finder looks for, 2 to 5 words: color or material, then a concrete noun, ' +
   'e.g. "blue plastic cap". What stays true all lesson; never a position, a verb or a bare ' +
   '"item", "object" or "container"';
+/** The rest of what the object finder is told: checkable against the one picture it sees. */
+const FINDER_WORDS =
+  'One short standalone sentence of at most 30 words: what it is and its color (text, markings ' +
+  'or state when they tell it apart), then, always, both where it is in the camera picture ' +
+  '("at the bottom right", "closest to the camera") and where it is relative to other things ' +
+  'in view: its place among look-alikes ("the bottom one of the three chargers") or next to a ' +
+  'nearby object ("left of the laptop"). Never just a name, never a part of something else. ' +
+  'No actions';
 const HAND_POINTS = ['pinch', 'index_tip', 'thumb_tip', 'palm', 'wrist'];
 const objectId = str('An object id declared in objects');
 const radius = num(0.01, 0.5, 'Meters from the object that count as near');
@@ -155,11 +163,7 @@ const DEFS: Record<string, JsonSchema> = {
       ),
       tracking: obj(
         {
-          query: str(
-            'One standalone sentence of 15 to 35 words that tells this one object from every ' +
-              'look-alike: color, material, shape, size, markings, state, and where it is next ' +
-              'to things that stay put and its neighbors',
-          ),
+          query: str(FINDER_WORDS),
           moves: bool('true if it gets picked up and carried during the task'),
         },
         ['query', 'moves'],
@@ -184,16 +188,11 @@ const DEFS: Record<string, JsonSchema> = {
           {
             object: objectId,
             phrase: str(PHRASE),
-            description: str(
-              'One standalone sentence of 15 to 35 words that tells this one thing from every ' +
-                'look-alike in view: what it is, color, material, shape, size, markings, its ' +
-                'state at this point in the task, and where it is next to things that stay put ' +
-                'and its neighbors. No actions',
-            ),
+            description: str(FINDER_WORDS),
           },
           ['object', 'phrase', 'description'],
         ),
-        { max: 3, description: 'What Clio outlines in AR during this step, most important first' },
+        { max: 1, description: 'The one whole object Clio outlines in AR during this step' },
       ),
       success: ref('check'),
       mistakes: arr(
@@ -259,12 +258,7 @@ const cardObject = obj(
     id: str('Lowercase slug, e.g. "yogurt_drink"'),
     label: str('Short spoken name, 1 to 3 words'),
     phrase: str(PHRASE),
-    look: str(
-      'One standalone sentence of 15 to 35 words that tells this one object from every ' +
-        'look-alike in view: what it is, color, material, shape, size next to a hand, markings ' +
-        'or text, state, and where it is next to large things that stay put and its neighbors ' +
-        '(e.g. the leftmost of three). No actions, no steps',
-    ),
+    look: str(FINDER_WORDS),
     moves: bool('true if it gets picked up and carried during the task'),
   },
   ['id', 'label', 'phrase', 'look', 'moves'],
@@ -280,7 +274,7 @@ const cardStep = obj(
     ),
     targets: arr(str(), { description: 'Ids of the objects this step touches or looks at' }),
     action: ref('action'),
-    show: arr(objectId, { max: 3, description: 'Objects to outline in AR, most important first' }),
+    show: arr(objectId, { max: 1, description: 'The one whole object to outline in AR' }),
     mistakes: arr(
       obj(
         {

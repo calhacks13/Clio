@@ -269,6 +269,35 @@ describe('createActionFocus', () => {
     detach?.();
     live.stop();
   });
+
+  it('leaves placing objects to jev when its boxes are turned off, and still tells jev its words', async () => {
+    const { w, bus, clock, live, socket, asked } = await wiring({ anchors: false });
+    const focus = createActionFocus(w);
+    const detach = focus?.attach();
+    bus.emit('step.entered', {
+      t: clock.now(),
+      stepId: 'open',
+      index: 0,
+      instruction: 'Open the cap.',
+      targets: ['cap'],
+    });
+    await focus?.tick(clock.now());
+    expect(asked).toHaveLength(1);
+    expect(socket.messages.filter((m) => m.type === 'anchor')).toEqual([]);
+    live.perceive({} as XRFrame, clock.now());
+    expect(socket.messages.at(-1)).toEqual({
+      type: 'objects',
+      objects: [
+        {
+          id: 'cap',
+          phrase: 'blue washer cap',
+          query: 'Round blue plastic cap with a yellow ring, front left',
+        },
+      ],
+    });
+    detach?.();
+    live.stop();
+  });
 });
 
 describe('ClioApp', () => {
@@ -287,6 +316,36 @@ describe('ClioApp', () => {
   });
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('has the coach speak first, greeting them while a typed goal is planned', async () => {
+    const kickoff = async (o: { procedure: object | null; goal: string | null }) => {
+      const calls: string[] = [];
+      const app = {
+        o,
+        startCoach: async () => {
+          calls.push('coach');
+        },
+        coach: { welcome: (goal: string | null) => calls.push(`welcome ${goal}`) },
+        lesson: {
+          run: async () => {
+            calls.push('run');
+          },
+          startLesson: (goal: string) => calls.push(`plan ${goal}`),
+        },
+      };
+      const proto = ClioApp.prototype as unknown as { kickoff(this: unknown): Promise<void> };
+      await proto.kickoff.call(app);
+      return calls;
+    };
+    expect(await kickoff({ procedure: null, goal: null })).toEqual(['coach', 'welcome null']);
+    expect(await kickoff({ procedure: null, goal: 'refill the washer' })).toEqual([
+      'coach',
+      'welcome refill the washer',
+      'plan refill the washer',
+    ]);
+    // A saved lesson briefs its first step at once.
+    expect(await kickoff({ procedure: {}, goal: null })).toEqual(['coach', 'run']);
   });
 
   it('stops streaming to the tracker as the session ends, not once the lesson has settled', async () => {

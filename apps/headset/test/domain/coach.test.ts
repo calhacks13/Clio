@@ -13,7 +13,7 @@ import {
   CoachToolbox,
   type ToolHandlers,
 } from '../../src/domain/coach/toolbox';
-import { type AppEvents, isRecordable } from '../../src/domain/events';
+import { type AppEvents, isRecordable, type LessonPhase } from '../../src/domain/events';
 import { briefStep, type PlanView, recitePlan } from '../../src/domain/plan/recital';
 import type { TemplateSummary } from '../../src/domain/session/templates';
 import { FakeAgent } from '../support/fake-agent';
@@ -370,15 +370,41 @@ describe('Narrator', () => {
     ]);
   });
 
-  it("passes on the step watcher's suggestion for the coach to judge", () => {
+  it('says nothing of a step that looks done: the lesson completes it, and the briefing says so', () => {
     const { b, out } = setup();
     b.emit('step.looks_done', { t: 0, stepId: 'acid', observation: 'cup A is pink', image: null });
-    expect(out[0]).toMatchObject({ kind: 'looks_done', reply: true, data: { stepId: 'acid' } });
-    expect(out[0]?.text).toContain(
-      '[app] Step watcher: "Add vinegar to cup A." looks done (cup A is pink).',
-    );
-    expect(out[0]?.text).toContain('call complete_step with step_id "acid" and evidence "seen"');
-    expect(out[0]?.text).toContain('carry on without mentioning it');
+    expect(out).toEqual([]);
+  });
+
+  it('marks what the app saw as urgent: a step it completed, something done wrong, a hazard', () => {
+    const { b, out } = setup();
+    const done = (by: 'check' | 'coach') =>
+      b.emit('step.completed', {
+        t: 0,
+        stepId: 'acid',
+        index: 0,
+        by,
+        forced: false,
+        durationMs: 1,
+      });
+    done('check');
+    entered(b, 'look', 'Check the color.');
+    done('coach');
+    entered(b, 'look', 'Check the color.');
+    b.emit('step.looks_wrong', { t: 0, stepId: 'acid', wrong: 'w', observation: 'o', image: null });
+    b.emit('step.hazard', { t: 0, stepId: 'acid', hazard: 'knife', image: null });
+    b.emit('step.stuck', { t: 0, stepId: 'acid', elapsedMs: 15_000 });
+    done('check');
+    b.emit('procedure.completed', { t: 0, durationMs: 1 });
+    expect(out.map((n) => `${n.kind}:${n.urgent === true}`)).toEqual([
+      'step:true',
+      'step:false',
+      'looks_wrong:true',
+      'hazard:true',
+      'stuck:false',
+      'complete:true',
+    ]);
+    expect(out[0]?.text.startsWith('[app] Done: acid (measured by the app).')).toBe(true);
   });
 
   it('tells the coach in words when the step watcher sees the learner do something else', () => {
@@ -396,25 +422,9 @@ describe('Narrator', () => {
         text: '[app] Step watcher: on "Add vinegar to cup A." they seem to have done something else: poured vinegar into cup B, not cup A (cup B is turning pink). If you see it too, tell them in a few words what to do instead; if not, carry on without mentioning it.',
         reply: true,
         data: { stepId: 'acid' },
+        urgent: true,
       },
     ]);
-  });
-
-  it('says which criteria the watcher saw met when a step looks done', () => {
-    const { b, out } = setup();
-    b.emit('step.looks_done', {
-      t: 0,
-      stepId: 'acid',
-      observation: 'cup A is pink',
-      image: null,
-      criteria: [
-        { text: "Cup A's liquid is pink.", met: 'yes', seen: 'pink' },
-        { text: 'Cups B and C are still purple', met: 'yes' },
-      ],
-    });
-    expect(out[0]?.text).toBe(
-      '[app] Step watcher: "Add vinegar to cup A." looks done: Cup A\'s liquid is pink; Cups B and C are still purple. If you agree from what you see, call complete_step with step_id "acid" and evidence "seen"; if not, carry on without mentioning it.',
-    );
   });
 
   it('says which criteria are not met, and what the watcher saw, when something went wrong', () => {
@@ -445,6 +455,7 @@ describe('Narrator', () => {
         text: '[app] Step watcher: a possible hazard near their hands: kitchen knife by cup A. If you see it too, warn them in a few words; if not, carry on without mentioning it.',
         reply: true,
         data: { stepId: 'acid' },
+        urgent: true,
       },
     ]);
   });
@@ -571,7 +582,7 @@ describe('Narrator', () => {
     b.emit('step.looks_done', { t: 0, stepId: 'look', observation: 'o', image: null });
     b.emit('step.stuck', { t: 0, stepId: 'acid', elapsedMs: 1 });
     b.emit('procedure.completed', { t: 0, durationMs: 1 });
-    expect(out).toHaveLength(9);
+    expect(out).toHaveLength(8);
     for (const n of out) expect(n.text).not.toMatch(SYMBOLS);
   });
 });
@@ -580,6 +591,7 @@ describe('CoachSession', () => {
   interface SetupOptions {
     kind?: CoachKind;
     plan?: () => PlanView | null;
+    phase?: () => LessonPhase;
     templates?: readonly TemplateSummary[];
     tools?: Partial<AvailableToolHandlers>;
   }
@@ -587,6 +599,7 @@ describe('CoachSession', () => {
   async function setup({
     kind = 'gemini',
     plan = () => planView(),
+    phase,
     templates,
     tools,
   }: SetupOptions = {}) {
@@ -603,7 +616,7 @@ describe('CoachSession', () => {
       toolbox: new CoachToolbox({ ...handlers(), ...tools }, b, clock),
       bus: b,
       clock,
-      view: lessonView(plan),
+      view: { ...lessonView(plan), ...(phase ? { phase } : {}) },
       voice: {
         play: (pcm) => played.push(`pcm:${pcm.length}`),
         say: (text) => played.push(`say:${text}`),
@@ -913,6 +926,29 @@ describe('CoachSession', () => {
     expect(agent.narrations).toHaveLength(2);
   });
 
+  it('sends what the app saw while the learner is still talking, but not over the coach', async () => {
+    const { agent, b, session, clock } = await setup({ plan: () => planView({ focusId: 'look' }) });
+    agent.events.emit('transcript', { role: 'user', text: 'I did it', final: false });
+    b.emit('step.completed', {
+      t: clock.now(),
+      stepId: 'acid',
+      index: 0,
+      by: 'check',
+      forced: false,
+      durationMs: 5,
+    });
+    entered(b, 'look', 'Check the color.', clock.now());
+    await settle();
+    expect(agent.narrations.map((n) => n.kind)).toEqual(['step']);
+    speak(agent);
+    b.emit('step.hazard', { t: clock.now(), stepId: 'look', hazard: 'knife', image: null });
+    session.tick(clock.advance(100));
+    expect(agent.narrations).toHaveLength(1);
+    agent.events.emit('turnComplete', {});
+    session.tick(clock.advance(100));
+    expect(agent.narrations.map((n) => n.kind)).toEqual(['step', 'hazard']);
+  });
+
   it('gives other coaches every narration at once, even while they speak', async () => {
     const { agent, b, clock } = await setup({ kind: 'scripted' });
     speak(agent);
@@ -941,21 +977,21 @@ describe('CoachSession', () => {
   it('lets a revised plan stand in for the briefing that came with it, and puts it first', async () => {
     let plan = planView();
     const { agent, b, seen, clock } = await setup({ plan: () => plan });
-    b.emit('step.looks_done', { t: clock.now(), stepId: 'acid', observation: 'pink', image: null });
+    b.emit('step.stuck', { t: clock.now(), stepId: 'acid', elapsedMs: 15_000 });
     plan = planView({ rev: 2, focusId: 'look' });
     entered(b, 'look', 'Check the color.');
     b.emit('plan.ready', { t: clock.now(), planId: 'p', procedure, warnings: [], revision: true });
     await settle();
     expect(agent.narrations).toHaveLength(1);
-    expect(agent.narrations[0]).toMatchObject({ kind: 'looks_done', reply: true });
+    expect(agent.narrations[0]).toMatchObject({ kind: 'stuck', reply: true });
     const text = agent.narrations[0]?.text ?? '';
     expect(text.startsWith(`[app] Plan revised. ${recitePlan(plan)}`)).toBe(true);
-    expect(text).toContain('[app] Step watcher:');
+    expect(text).toContain('[app] They have been on this step for 15 s.');
     expect(text).not.toContain('Tell them what to do in under 15 words.');
     expect(recorded(seen).map((p) => p.kind ?? p.label)).toEqual([
       'coach.narration_dropped',
       'plan_revised',
-      'looks_done',
+      'stuck',
     ]);
     expect(recorded(seen)[0]).toEqual({
       t: 0,
@@ -1084,6 +1120,154 @@ describe('CoachSession', () => {
     stuck(scripted.b, 0);
     expect(recorded(scripted.seen)).toEqual([
       { t: 250, kind: 'stuck', text: scripted.agent.narrations[0]?.text },
+    ]);
+  });
+
+  describe('with no lesson running', () => {
+    const nudge =
+      '[app] No lesson is running, so what they just said starts one: call start_lesson now with a goal made from it, done with their hands, and say in one short sentence what you are starting. If they only greeted or thanked you, ask in a few words what they want to do instead.';
+    /** The learner asks something, and the coach answers in words. */
+    const answered = (agent: FakeAgent) => {
+      agent.events.emit('transcript', { role: 'user', text: 'How does a French', final: false });
+      speak(agent);
+      agent.events.emit('transcript', {
+        role: 'user',
+        text: 'How does a French press work?',
+        final: true,
+      });
+      agent.events.emit('turnComplete', {});
+    };
+
+    it('tells a coach that answered in words and went quiet to start a lesson, once', async () => {
+      for (const phase of ['idle', 'done'] as const) {
+        const { agent, seen, session, clock } = await setup({
+          plan: () => null,
+          phase: () => phase,
+        });
+        answered(agent);
+        session.tick(clock.advance(5999));
+        await settle();
+        expect(agent.narrations).toEqual([]);
+        session.tick(clock.advance(1));
+        await settle();
+        expect(agent.narrations).toEqual([{ kind: 'start_nudge', text: nudge, reply: true }]);
+        expect(narrated(seen)).toEqual([nudge]);
+        session.tick(clock.advance(20_000));
+        await settle();
+        expect(agent.narrations).toHaveLength(1);
+      }
+    });
+
+    it('waits while either of them is still talking', async () => {
+      const { agent, session, clock } = await setup({ plan: () => null, phase: () => 'idle' });
+      answered(agent);
+      session.tick(clock.advance(4000));
+      speak(agent);
+      agent.events.emit('turnComplete', {});
+      session.tick(clock.advance(4000));
+      agent.events.emit('transcript', { role: 'user', text: 'I mean', final: false });
+      session.tick(clock.advance(5999));
+      await settle();
+      expect(agent.narrations).toEqual([]);
+      session.tick(clock.advance(1));
+      await settle();
+      expect(agent.narrations.map((n) => n.kind)).toEqual(['start_nudge']);
+    });
+
+    it('counts a typed learner turn', async () => {
+      const { agent, b, session, clock } = await setup({ plan: () => null, phase: () => 'idle' });
+      b.emit('transcript', {
+        t: clock.now(),
+        role: 'user',
+        text: 'Why is my plant drooping?',
+        final: true,
+      });
+      session.tick(clock.advance(6000));
+      await settle();
+      expect(agent.narrations.map((n) => n.kind)).toEqual(['start_nudge']);
+    });
+
+    it('leaves a coach alone that starts or ends a lesson, even late, and a running lesson', async () => {
+      const calls = [
+        { id: 'c1', name: 'start_lesson', args: { goal: 'brew coffee' } },
+        { id: 'c1', name: 'end_lesson', args: { reason: 'not what they want' } },
+      ];
+      for (const call of calls) {
+        const { agent, session, clock } = await setup({ plan: () => null, phase: () => 'idle' });
+        answered(agent);
+        session.tick(clock.advance(3000));
+        agent.events.emit('toolCalls', { calls: [call] });
+        agent.events.emit('turnComplete', {});
+        session.tick(clock.advance(30_000));
+        await settle();
+        expect(agent.narrations).toEqual([]);
+      }
+
+      for (const phase of ['planning', 'locating', 'lesson'] as const) {
+        const { agent, session, clock } = await setup({ phase: () => phase });
+        answered(agent);
+        session.tick(clock.advance(30_000));
+        await settle();
+        expect(agent.narrations).toEqual([]);
+      }
+
+      // A lesson that starts some other way meanwhile.
+      let phase: LessonPhase = 'idle';
+      const started = await setup({ plan: () => null, phase: () => phase });
+      answered(started.agent);
+      phase = 'planning';
+      started.session.tick(started.clock.advance(3000));
+      phase = 'done';
+      started.session.tick(started.clock.advance(30_000));
+      await settle();
+      expect(started.agent.narrations).toEqual([]);
+    });
+
+    it('stays out of it until the learner speaks, and without a lesson phase or a Gemini coach', async () => {
+      const quiet = await setup({ plan: () => null, phase: () => 'idle' });
+      quiet.session.welcome(null);
+      speak(quiet.agent);
+      quiet.agent.events.emit('turnComplete', {});
+      quiet.session.tick(quiet.clock.advance(30_000));
+      await settle();
+      expect(quiet.agent.narrations.map((n) => n.kind)).toEqual(['welcome']);
+
+      const unknown = await setup({ plan: () => null });
+      answered(unknown.agent);
+      unknown.session.tick(unknown.clock.advance(30_000));
+      await settle();
+      expect(unknown.agent.narrations).toEqual([]);
+
+      const scripted = await setup({ kind: 'scripted', plan: () => null, phase: () => 'idle' });
+      answered(scripted.agent);
+      scripted.session.tick(scripted.clock.advance(30_000));
+      await settle();
+      expect(scripted.agent.narrations).toEqual([]);
+    });
+  });
+
+  it('speaks first: asks what they want to do, or greets them while their goal is planned', async () => {
+    const idle = await setup({ plan: () => null });
+    idle.session.welcome(null);
+    await settle();
+    expect(idle.agent.narrations).toEqual([
+      {
+        kind: 'welcome',
+        text: '[app] They just put the headset on and no lesson is running. Greet them in one short sentence and ask what they want to do.',
+        reply: true,
+      },
+    ]);
+    expect(narrated(idle.seen)).toEqual([idle.agent.narrations[0]?.text]);
+
+    const planning = await setup({ plan: () => null });
+    planning.session.welcome('refill the washer fluid');
+    await settle();
+    expect(planning.agent.narrations).toEqual([
+      {
+        kind: 'welcome',
+        text: '[app] They just put the headset on to: refill the washer fluid. The app has already started that lesson, and its plan arrives as an [app] message. Greet them in one short sentence; give no steps yet and call no tool.',
+        reply: true,
+      },
     ]);
   });
 
@@ -1309,7 +1493,7 @@ describe('CoachSession', () => {
     });
   });
 
-  it('shows the coach the frame the step watcher judged by before its suggestion', async () => {
+  it('shows the coach the frame the step watcher judged by, before what it says of it', async () => {
     const { agent, b, clock } = await setup();
     const order: string[] = [];
     const push = agent.pushImage.bind(agent);
@@ -1334,13 +1518,8 @@ describe('CoachSession', () => {
       image: 'j2',
     });
     await settle();
-    expect(order).toEqual([
-      'image:j1',
-      'narration:looks_done',
-      'narration:looks_done',
-      'image:j2',
-      'narration:looks_wrong',
-    ]);
+    // A done says nothing itself: the lesson completes the step and the briefing follows.
+    expect(order).toEqual(['image:j1', 'image:j2', 'narration:looks_wrong']);
   });
 });
 
@@ -1417,18 +1596,34 @@ describe('system prompt', () => {
     expect(prompt).not.toMatch(SYMBOLS);
   });
 
-  it('starts lessons from what it hears and sees, takes "no" at once and lights what to touch', () => {
+  it('starts a lesson from whatever it hears with none running, questions included', () => {
     const prompt = buildSystemInstruction({});
-    expect(prompt).toMatch(/infer the goal and call start_lesson\s+at once/);
     expect(prompt).toMatch(
-      /Don't interview them: ask one short question only when there is no plausible goal/,
+      /While no lesson is running \(none yet, or the last one is over\),\s+whatever the learner says or shows starts one, questions included: infer the goal and call\s+start_lesson in that same turn/,
     );
+    expect(prompt).toMatch(/A question becomes a lesson on its answer, done with their\s+hands/);
+    expect(prompt).toMatch(
+      /Don't answer it in words, don't call look_closer\s+instead and don't interview them: the lesson answers it/,
+    );
+    expect(prompt).toMatch(/When they name nothing to do,\s+start a curated lesson below or one/);
+    expect(prompt).toMatch(/Only a bare greeting, "yes" or\s+"um" gets one short question back/);
+    // A closer look is for questions during a lesson; with none running a question starts one.
+    expect(prompt).toMatch(
+      /During a\s+lesson, whenever the learner asks whether something is safe/,
+    );
+  });
+
+  it('takes "no" at once and lights what to touch', () => {
+    const prompt = buildSystemInstruction({});
     expect(prompt).toMatch(/"that's not what I want", "stop" or "wrong\s+thing", stop right there/);
     expect(prompt).toMatch(/a new\s+goal is a new start_lesson, which replaces the running lesson/);
     expect(prompt).toMatch(
-      /Every time you ask them to\s+touch, move or operate something, call highlight on it \(style "target"\) in that same turn,\s+before you say it/,
+      /Every time\s+you ask them to touch, move or operate something, or they ask you to show them a thing, call\s+highlight on it \(style "target"\) in that same turn, before you say it/,
     );
-    expect(prompt).toMatch(/If it is not in the plan, give look_for/);
+    expect(prompt).toMatch(/If it is not in the\s+plan, give look_for/);
+    // Anything can be lit: an answer that it is not lit yet is never a reason to say it cannot be.
+    expect(prompt).toMatch(/so never say you\s+cannot highlight something/);
+    expect(prompt).toMatch(/When highlight answers shown\s+false, it lights up by itself/);
     expect(prompt).toMatch(
       /If they did not say what they want, call end_lesson and\s+ask in a few words/,
     );

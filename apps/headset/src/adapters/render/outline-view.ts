@@ -27,6 +27,8 @@ import { makeText, setText } from './text';
 
 const LABEL_SIZE = 0.024;
 const LABEL_GAP = 0.01;
+/** A longer label (jev's words with ?boxes=1) wraps, centered, at this width (m). */
+const LABEL_MAX_WIDTH = 0.36;
 const FADE_IN_MS = 180;
 const FADE_OUT_MS = 600;
 /** An object back after fading below this is found again: it flares like a new one. */
@@ -70,10 +72,12 @@ export class PrimaryOutlineView {
     }
     this.label = makeText({
       size: LABEL_SIZE,
+      maxWidth: LABEL_MAX_WIDTH,
       anchorX: 'center',
       anchorY: 'bottom',
       bold: true,
     }) as FadingText;
+    this.label.textAlign = 'center';
     // After the glow, and over the hands (on-top.ts): the name stays readable as a hand works.
     this.label.renderOrder = 11;
     drawOnTop(this.label);

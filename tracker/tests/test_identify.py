@@ -89,3 +89,23 @@ def test_http_identifier_errors():
     finder = HttpIdentifier("http://127.0.0.1:8787/x", transport=httpx.MockTransport(handler))
     with pytest.raises(IdentifierError, match="503"):
         finder.identify(jpeg(960, 720), [CAP])
+
+
+def test_jev_dump_writes_frame_and_questions(tmp_path):
+    from clio_tracker.dump import JevDump
+    from clio_tracker.jev import Answer, Target
+
+    dump = JevDump(tmp_path / "dump")
+    im = Image.new("RGB", (64, 48), (20, 20, 20))
+    buf = io.BytesIO()
+    im.save(buf, format="JPEG")
+    targets = [
+        Target(id="door", query="The white fridge door with a silver handle.", phrase="fridge door")
+    ]
+    dump.write(buf.getvalue(), targets, [Answer(0.9, [0.1, 0.1, 0.6, 0.8])], None, 0.42)
+    files = sorted(p.name for p in (tmp_path / "dump").iterdir())
+    assert len(files) == 2 and files[0].endswith(".jpg") and files[1].endswith(".json")
+    record = json.loads((tmp_path / "dump" / files[1]).read_text())
+    assert record["objects"][0]["asked_box"].startswith("The fridge door in `photo`.")
+    assert "Description: The white fridge door" in record["objects"][0]["asked_box"]
+    assert record["objects"][0]["answer"]["box"] == [0.1, 0.1, 0.6, 0.8]

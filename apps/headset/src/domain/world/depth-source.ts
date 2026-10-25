@@ -12,6 +12,12 @@ export interface DepthHit {
   normal: Vec3;
   /** Meters along the ray from its origin. */
   distance: number;
+  /**
+   * From the depth map (depth sensing): the nearest real surface, small objects included. Hit-test
+   * answers from the room mesh, which leaves small objects out, so its far hits are the wall
+   * behind them.
+   */
+  sensed?: boolean;
 }
 
 /** Port: hits along world-space rays. */

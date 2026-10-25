@@ -38,6 +38,12 @@ import { interpretServerMessage, TranscriptAggregator } from './messages';
 // dropped. updateInstruction() changes the system
 // instruction the next connection starts with, so a reconnect starts from the current plan.
 //
+// Frames go at MEDIA_RESOLUTION_HIGH, 540 tokens each against 266 at LOW (MEDIUM is LOW for video).
+// With 1024 px frames the voice got 97 of 99 detail questions right on the bench's fridge scene,
+// against 79 at LOW with 640 px (docs/coach-plan.md). Live keeps only the newest frame in its
+// context, so sharper frames don't fill it faster and compression stays at 25k; speech fills it,
+// about 32 tokens a second from either voice.
+//
 // Tool answers go only to the connection that made the call, and not to a call it cancelled: Live
 // matches an answer with an id it never issued to a call still pending, and speaks it twice. A
 // non-blocking call's answer (look_closer) is scheduled WHEN_IDLE, so the voice says it once
@@ -189,7 +195,7 @@ export class GeminiLiveAgent implements RealtimeAgent {
         slidingWindow: { targetTokens: '12000' },
       },
       sessionResumption: this.resumeHandle ? { handle: this.resumeHandle } : {},
-      mediaResolution: MediaResolution.MEDIA_RESOLUTION_LOW,
+      mediaResolution: MediaResolution.MEDIA_RESOLUTION_HIGH,
       ...(this.options.voice
         ? {
             speechConfig: {

@@ -97,6 +97,8 @@ export interface LiveObjectsOptions {
   /** The registry hears about each object at most this often (ms). */
   observeEveryMs?: number;
   motion?: MotionSmoothingOptions;
+  /** Draw each object's box instead of its outline (a test); measuring and recording are unchanged. */
+  boxes?: boolean;
 }
 
 export interface LiveObjectsDeps {
@@ -444,7 +446,9 @@ export class LiveObjects {
   private place(d: Detected, depth: ObjectDepth, measured: boolean, draw = true): void {
     const { f, det, frame, mask, model, head } = d;
     if (f.retired) return;
-    const placement = placeOutline(mask, head, model, depth);
+    // Without an outline, placeOutline frames the box (corner brackets, not a glow).
+    const drawn = this.deps.options?.boxes ? { ...mask, outline: null } : mask;
+    const placement = placeOutline(drawn, head, model, depth);
     if (!placement) return;
     if (draw) {
       const eye = composePose(head, model.headFromCamera).p;

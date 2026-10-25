@@ -1,3 +1,4 @@
+import { mountDemoPreview } from './demo-preview';
 import {
   fitFrames,
   launchFrame,
@@ -24,7 +25,20 @@ const $ = (id: string) => {
 const params = new URLSearchParams(location.search);
 const alone = LAUNCH_STATES.find((s) => stateSlug(s.name) === params.get('launch'));
 if (alone) showLaunchAlone(alone, params.get('focus'));
+else if (params.has('demo')) void import('./gallery.css').then(showDemoAlone);
 else void import('./gallery.css').then(mountGallery);
+
+function showDemoAlone(): void {
+  document.title = 'Demonstrations';
+  const main = document.createElement('main');
+  main.className = 'demo-alone';
+  const title = document.createElement('h1');
+  title.textContent = 'Demonstrations';
+  const preview = document.createElement('div');
+  main.append(title, preview);
+  document.body.replaceChildren(main);
+  mountDemoPreview(preview);
+}
 
 function mountGallery(): void {
   const launch = $('launch');
@@ -35,6 +49,7 @@ function mountGallery(): void {
   );
   mountPanelMotionPreview($('panel-motion'));
   mountPanelCards($('panel-cards'), PANEL_STATES);
+  mountDemoPreview($('demo-preview'));
 
   // Every frame has a fixed size, so the page is at full height now: restore the scroll position.
   const SCROLL_KEY = 'clio-gallery-scroll';

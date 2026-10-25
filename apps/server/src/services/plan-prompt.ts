@@ -37,7 +37,7 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
   '- Without views, assume a typical home setup and leave `sightings` empty.',
   '',
   'ONE THING, NEVER A KIND',
-  '- Every object, place or part a step uses is one particular thing in view. Everything you ' +
+  '- Every object or place a step uses is one particular thing in view. Everything you ' +
     'write about it must single it out, so that an object finder that sees one camera frame ' +
     'and nothing else cannot pick anything else: the instruction, the show description, ' +
     '`tracking.query` and doneWhen.',
@@ -47,13 +47,16 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
     'drawer on the right". Left and right are as seen in the camera views.',
   '- Anchor it to large things that stay put (the fridge, the sink, the desk, the edge of the ' +
     'table), and add its color, material, size and any text, number or symbol on it.',
+  "- The object finder's words (the show `description` and `tracking.query`) always say both " +
+    'where it is in the camera picture and where it is relative to other things in view, as ' +
+    'SHOW says.',
   '- Places count too: "Put the yogurt drink on the second shelf from the top.", not "on a ' +
     'shelf". Something not in sight yet (inside a closed fridge or drawer) is described as it ' +
     'will look once it is open, and where: "the second glass shelf from the top inside the ' +
     'black mini fridge, once its door is open".',
   '- Never a bare kind: "the shelf inside the refrigerator", "black refrigerator door" and ' +
-    '"the beaker" are too vague. Good: "The black front door of the mini fridge on the floor ' +
-    'right of the desk, with a silver handle along its left edge."',
+    '"the beaker" are too vague. Good: "The black mini fridge on the floor right of the desk, ' +
+    'the lower of two stacked black boxes, with a silver handle along the left edge of its door."',
   '',
   'STEPS',
   '- 3 to 10 steps, in the order a person does them, with exactly one physical action per step.',
@@ -106,9 +109,9 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
   '- `coachNotes`: a sentence or two for the coach: what to watch for and how to help.',
   '',
   'SHOW',
-  '- `show`: what Clio outlines in AR during the step, most important first: the thing the ' +
-    'learner acts on, then where it goes. Every step that involves an object shows at least ' +
-    'one; a step with nothing to point at may show none. At most 3.',
+  '- `show`: the one object Clio outlines in AR during the step: the whole thing the learner ' +
+    'acts on (the mini fridge for "Open the mini fridge door."). One object at a time: never ' +
+    'a second one, and never a part of it. A step with nothing to point at shows none.',
   '- When the step starts, Clio hands each item to an object finder that sees one live camera ' +
     'frame and nothing else, and outlines what it finds. Each item must work on its own, ' +
     'without the plan, the other steps or the other items:',
@@ -117,33 +120,39 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
     'concrete noun, e.g. "blue plastic cap", "white yogurt bottle". Name what stays true all ' +
     "lesson (a cup's own color, not its contents'). Never a position, a verb, or a word as " +
     'bare as "item", "object" or "container".',
-  '  - `description`: one standalone sentence of 15 to 35 words that names this one thing by ' +
-    'what a camera sees, as ONE THING, NEVER A KIND says: what it is, its color, material, ' +
-    'shape, size next to a hand, any text or symbols on it, its state at that point in the ' +
-    'task (after earlier steps, a cap may be off and lying on the fender), and where it is ' +
-    'next to large things that stay put and to its neighbors, enough to tell it from every ' +
-    'look-alike in view. No actions, no mention of steps. Good: "Round blue plastic cap with ' +
-    'a windshield-spray symbol, on a white tank at the front left of the engine bay, the left ' +
-    'one of two caps." Too vague: "The washer fluid cap."',
+  '  - `description`: one short standalone sentence of at most 30 words that the object finder ' +
+    'can check against the one picture it sees: what the thing is and its color (and any text ' +
+    'or symbol on it, or its state at that point in the task, when that tells it apart), then, ' +
+    'always, both where it is in the picture (left or right, top or bottom, closest to the ' +
+    'camera) and where it is relative to other things in view: its place among look-alikes ' +
+    '("the bottom one of the three chargers", "the leftmost cup") or next to a nearby object ' +
+    '("left of the laptop", "on top of the white extension block"). Never just a name. Left ' +
+    'and right are as the camera sees them. Relate it to whole things in view, not to parts of ' +
+    'them. No actions, no mention of steps. Good: "White charger brick at the bottom right of ' +
+    'the picture, the bottom one of the three chargers, left of the laptop." and "Round blue ' +
+    'plastic cap closest to the camera, the left one of the two caps on the white tank." Too ' +
+    'vague: "The washer fluid cap." Too hard to check: "The white charger brick plugged into ' +
+    'the lower socket of the white extension block on the gray cushion."',
   '',
   'OBJECTS',
   '- Declare every object that any step targets, acts on or checks (a look-alike that a ' +
-    'mistake checks counts, and so does the whole object a component is part of), and nothing ' +
-    'else. Ids are lowercase slugs (a-z, 0-9, "_" or "-"), e.g. "washer_cap".',
+    'mistake checks counts), and nothing else. Ids are lowercase slugs (a-z, 0-9, "_" or "-"), ' +
+    'e.g. "washer_cap".',
+  '- Whole things only: declare the whole thing a camera can pick out on its own, never a part ' +
+    'that stays attached to it: the mini fridge, not its door, handle, shelf or freezer ' +
+    'compartment; the caliper, not its scale or screw. The object finder can follow a whole ' +
+    'thing, but it mistakes a part for whatever is next to it (an open door for the freezer ' +
+    'compartment). Name the part in the words instead: the instruction ("Open the mini fridge ' +
+    'door by its handle on the left."), the doneWhen and the show description.',
   '- `label`: a short spoken name, 1 to 3 words, e.g. "washer cap".',
   '- Object `kind`: "tool" or "container" only when the whole tool or container is meant; ' +
-    '"item" otherwise. An attached component or a bounded area of a larger object, such as a ' +
-    "caliper's vernier scale or locking screw, is an object of its own, with its own id, kind " +
-    '"item" and `partOf` naming the whole object it sits on. Declare that whole object too, ' +
-    'with its own `tracking.query`, even when no step acts on it as a whole: the camera ' +
-    'follows and records both. In `show`, describe only that part, so its glow stays on the ' +
-    'component.',
+    '"item" otherwise.',
   '- `placement.method` is always "detect": the headset camera finds the object. Add ' +
     '`placement.hint` with where to look when it helps; it never replaces saying where in ' +
     '`tracking.query`.',
   '- `tracking.query`: written as a show `description` is, for the object as the views show ' +
-    'it, e.g. "blue plastic cap with a windshield symbol on the white tank at the front left ' +
-    'of the engine bay, left of the yellow cap". The finder gets only this sentence. Set ' +
+    'it, e.g. "blue plastic cap with a windshield symbol, the left one of the two caps, nearest ' +
+    'the camera". The finder gets only this sentence. Set ' +
     '`tracking.moves` to true for things that get picked up or carried.',
   '- `radius`: approximate size in meters (half of the largest dimension).',
   '',
@@ -208,9 +217,9 @@ function firstStageText(r: PlannerRequest): string {
       "An object's `phrase` and `look` are all the object finder gets: write them as SHOW says " +
       'for `phrase` and `description`. The look becomes its tracking.query.',
     '- `firstStep`: that first step as a card, with the same id as outline[0]. `show` lists ' +
-      'object ids. Each mistake names the object it is made with, never one the step itself ' +
-      'uses: Clio speaks its message when a hand lingers at that object. Clio confirms the step ' +
-      'by its `doneWhen`.',
+      'the one object id it outlines. Each mistake names the object it is made with, never one ' +
+      'the step itself uses: Clio speaks its message when a hand lingers at that object. Clio ' +
+      'confirms the step by its `doneWhen`.',
     'Get the first step right: it starts from the scene as it is now, it names the right ' +
       'object so that a look-alike cannot pass for it, and its doneWhen is a state the camera ' +
       'will see.',

@@ -134,15 +134,22 @@ describe('maskRays', () => {
   });
 });
 
-/** A probe over fixed geometry: the table, and the object as a vertical card facing +z. */
-function sceneProbe(objects: { min: Vec3; max: Vec3 }[], tableY: number | null): DepthSource {
+/**
+ * A probe over fixed geometry: the table, and the object as a vertical card facing +z. `sensed`
+ * answers as depth sensing does (the depth map), else as hit-test does (the room mesh).
+ */
+function sceneProbe(
+  objects: { min: Vec3; max: Vec3 }[],
+  tableY: number | null,
+  sensed = false,
+): DepthSource {
   const cast = (ray: Ray): DepthHit | null => {
     let best: DepthHit | null = null;
     const consider = (point: Vec3 | null, normal: Vec3) => {
       if (!point) return;
       const distance = dot(sub(point, ray.origin), ray.direction);
       if (distance > 0 && (!best || distance < best.distance - 1e-9)) {
-        best = { point, normal, distance };
+        best = { point, normal, distance, ...(sensed ? { sensed: true } : {}) };
       }
     };
     if (tableY !== null) consider(intersectPlaneY(ray, tableY), [0, 1, 0]);
@@ -216,6 +223,36 @@ describe('measureDepth', () => {
       expect(depth?.kind).toBe('surface');
       near(depth?.center, (await measureDepth(mask, model, head, null, noSurfaces))?.center ?? []);
     }
+  });
+
+  it('trusts a depth-map hit on an object past the table guess, even far away', async () => {
+    // A bottle on a nightstand 2.2 m away, lower than the table guess (45 cm below the head).
+    // The depth map sees the bottle itself, so its hit is the bottle, not a wall behind it.
+    const bottle = { min: [0, 0.45, -2.2] as Vec3, max: [0.1, 0.65, -2.2] as Vec3 };
+    const center: Vec3 = [0.05, 0.55, -2.2];
+    const far: ObjectMask = {
+      point: uv(center),
+      box: null,
+      outline: [
+        [0, 0.45, -2.2],
+        [0.1, 0.45, -2.2],
+        [0.1, 0.65, -2.2],
+        [0, 0.65, -2.2],
+      ].map((p) => uv(p as Vec3)),
+      contact: uv([0.05, 0.45, -2.2]),
+    };
+    const sensed = await measureDepth(
+      far,
+      model,
+      head,
+      sceneProbe([bottle], null, true),
+      noSurfaces,
+    );
+    expect(sensed?.kind).toBe('point');
+    near(sensed?.center, center);
+    // Hit-test's room mesh has no bottle in it: the same far hit is still passed over.
+    const meshed = await measureDepth(far, model, head, sceneProbe([bottle], null), noSurfaces);
+    expect(meshed?.kind).toBe('surface');
   });
 
   it('puts a flat object, not in the mesh, where its middle meets the table', async () => {

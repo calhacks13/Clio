@@ -3,7 +3,10 @@
 Every locate request is one frame. The frame goes through YOLOE once, each requested object's
 tracker steps on it, and the answer goes back right away. jev runs beside that, in a thread:
 an object is sent along with the frame when its interval has passed (or straight away when the
-tracker has nothing to follow, or doubts it is still on the same object). After a failed call
+tracker has nothing to follow, or doubts it is still on the same object). With
+identify_moving_s, the interval is paced by the object: the full one while it is held steadily
+and still (ObjectTracker.steady), the short one while it moves on its own, coasts or was just
+found, and the full one again for an object jev has just said is out of view. After a failed call
 nothing is sent for the interval, then twice as long after each further failure, up to
 identify_backoff_max_s, until jev answers again. The frame's SAVPE maps are kept until jev
 answers, so its box becomes a prompt on the very frame jev looked at, then is matched to the
@@ -29,7 +32,8 @@ In objects mode an anchor (TRACK.md) is another finder's box for one object: Gem
 the next frame: matched on the streamed frame captured nearest it (the session keeps the
 streamed frames and their capture times for this), cut out of that frame as a keyframe, and
 never stale. For anchor_hold_s after it, jev's answers about the object give way: one that says
-it is not in view, or puts it elsewhere, is ignored.
+it is not in view, or puts it elsewhere, is ignored, and one that agrees leaves the anchor's box
+and its cut in place, since jev's box takes in neighbors.
 """
 
 from __future__ import annotations
@@ -61,6 +65,12 @@ log = logging.getLogger("clio_tracker")
 @dataclass(frozen=True)
 class SessionSettings:
     identify_interval_s: float = 1.0  # how often jev looks again at each object
+    # How often instead while it is not steady (moving on its own, coasting, just found); None:
+    # every object at identify_interval_s.
+    identify_moving_s: float | None = None
+    # No call starts sooner than this after the last one, not even for an object that is new, lost
+    # or in doubt (those are asked on every call).
+    identify_min_gap_s: float = 0.0
     # jev's client never overlaps billed calls; another identifier may allow more.
     identify_max_in_flight: int = 1
     identify_backoff_max_s: float = 16.0  # the longest wait for the next call while jev fails
@@ -125,6 +135,7 @@ class TrackerSession:
         self._generations: dict[str, int] = {}
         self._asked: dict[str, float] = {}
         self._last_ask: dict[str, float] = {}
+        self._last_call = -np.inf
         self._in_flight: dict[str, int] = {}
         # Frames jev is looking at: their YOLOE pass, and their pixels for a segmenter's keyframe.
         self._frames: dict[int, tuple[Encoding, np.ndarray | None]] = {}
@@ -365,6 +376,14 @@ class TrackerSession:
         s = self.settings
         if self.in_flight >= s.identify_max_in_flight or now < self._retry_at:
             return
+        if now - self._last_call < s.identify_min_gap_s:
+            return
+
+        def interval(q: Query, tr: ObjectTracker) -> float:
+            if s.identify_moving_s is None or tr.steady(now) or self._absent.get(q.id) == q.query:
+                return s.identify_interval_s
+            return s.identify_moving_s
+
         # An object with nothing to follow is asked about again as soon as jev answers, unless
         # jev just said it is out of view in these same words: an object that really is out of
         # sight (in a closed fridge) kept jev busy eight times a second on a Quest, all billed.
@@ -376,13 +395,14 @@ class TrackerSession:
                 and self._in_flight.get(q.id, 0) == 0
                 and self._absent.get(q.id) != q.query
             )
-            or now - self._last_ask.get(q.id, -np.inf) >= s.identify_interval_s
+            or now - self._last_ask.get(q.id, -np.inf) >= interval(q, tr)
         ]
         if not due:
             return
         ask = _Ask(
             seq, now, {q.id: self._generations[q.id] for q in due}, {q.id: q.query for q in due}
         )
+        self._last_call = now
         for q in due:
             self._last_ask[q.id] = now
             self._in_flight[q.id] = self._in_flight.get(q.id, 0) + 1
@@ -468,6 +488,12 @@ class TrackerSession:
         anchored = self._outranked(answer.id, tr, ask.seq, present, box, carry, now)
         if anchored is not None:
             log.info(f"{said}: ignored, anchored {anchored:.1f} s ago")
+            return None
+        since = now - self._anchored.get(answer.id, -np.inf)
+        if present and since < self.settings.anchor_hold_s:
+            # It agrees, so the anchor's box stands, and its cut: jev's takes in neighbors (on a
+            # Quest it boxed a row of three chargers for one, and the light took in all three).
+            log.info(f"{said}: agrees, anchored {since:.1f} s ago, its box kept")
             return None
         appearance = self.vision.prompts(enc, box)[0] if box is not None else None
         change = tr.identified(ask.seq, now, present, box, appearance, carry)

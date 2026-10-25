@@ -12,7 +12,7 @@ frame) pick which track that is, and its box becomes the prompt's anchor. Betwee
 - **The target keeps its identity** through ByteTrack, even when a look-alike scores higher.
   ByteTrack's second stage lets a weak candidate (down to 0.10) continue an existing track, and
   the target alone may continue on a weaker one still (down to 0.03) that overlaps its predicted
-  box by IoU 0.5: YOLOE's prompt score for an object swings from frame to frame (motion blur, a
+  box by IoU 0.3: YOLOE's prompt score for an object swings from frame to frame (motion blur, a
   glare), while its box stays put.
 - **jev's box takes effect at once.** When no track was where jev looked, the best candidate
   in jev's box (carried to now) becomes the target on the next frame, as a new track if need
@@ -70,7 +70,7 @@ from .vision import Encoding, MaskCrop, YoloeVision
 class TrackerParams:
     candidate_min: float = 0.10  # weaker candidates never reach ByteTrack...
     rescue_min: float = 0.03  # ...but may continue the target where it is predicted to be
-    rescue_iou: float = 0.5  # a weak candidate's IoU with the target's predicted box
+    rescue_iou: float = 0.3  # a weak candidate's IoU with the target's predicted box
     max_candidates: int = 30
     nms_iou: float = 0.7
     track_high: float = 0.25  # ByteTrack's first association stage
@@ -79,6 +79,12 @@ class TrackerParams:
     fuse_score: bool = True
     lost_s: float = 3.0  # ByteTrack keeps a lost track this long
     lost_velocity_keep: float = 0.8  # a lost track's own velocity decays by this each frame
+    # The Kalman filter's velocity noise, per box height a frame. ByteTrack's 1/160 suits people
+    # walking; an object a hand moves starts and stops harder, and a track whose prediction lags
+    # loses a small fast object. On hand-moved objects about 45 px across (the Quest's median),
+    # 1/40 with rescue_iou 0.3 instead of 0.5 cut coasting from 8.7% to 2.2% of frames and track
+    # switches from 43 to 23.
+    velocity_noise: float = 1 / 40
     coast_s: float = 0.5  # a missed target is drawn at its predicted box this long...
     hold_s: float = 1.0  # ...or this long when it was at an edge or filled the view
     in_view: float = 0.25  # ...while at least this share of the predicted box is in the frame
@@ -99,6 +105,14 @@ class TrackerParams:
     views: int = 4
     doubt_similarity: float = 0.75  # below this the target may have swapped: ask jev early
     doubt_frames: int = 3
+    # Steady (`steady`): sighted on every frame for steady_s, never faster than moving_speed box
+    # sizes a second across the picture: its own motion (the smoother's) plus the camera's at its
+    # box, so a head turn counts as much as a hand moving it, and an object the head follows does
+    # not. jev looks again at a steady object less often. On the harness's hand-moved objects, a
+    # still one reads 0.07 (p50) to 0.5 (p90) on its own with YOLOE's and SAM's wobble, a slid one
+    # 1.6 to 1.7 (p50).
+    moving_speed: float = 1.0
+    steady_s: float = 0.5
     match_iou: float = 0.3  # jev's box against a track on jev's frame...
     match_inside: float = 0.8  # ...or the smaller of the two this much inside the other
     place_iou: float = 0.3  # a candidate overlapping jev's box (carried to now) this much
@@ -186,6 +200,7 @@ class ObjectTracker:
                 fuse_score=p.fuse_score,
             ),
             p.lost_velocity_keep,
+            p.velocity_noise,
         )
         self._history: deque[tuple[int, float, dict[int, np.ndarray]]] = deque()
         self._pending: tuple[np.ndarray, float] | None = None  # jev's box, carried to now
@@ -204,6 +219,8 @@ class ObjectTracker:
         self._follow_doubt = 0  # consecutive frames the follower could not stand for it
         self._disagrees = False  # on the last frame: sure of itself, but away from ByteTrack's box
         self._sighted_now = False  # ByteTrack had the target on the last frame (not coasting)
+        self._still_since: float | None = None  # tracked and slow on every frame since then
+        self._view_velocity = np.zeros(4)  # the camera's motion at the target's box (`steady`)
 
     # --- prompt ----------------------------------------------------------------------------
 
@@ -222,6 +239,13 @@ class ObjectTracker:
         return (
             self.anchor is None or self.target_id is None or self.doubt >= self.params.doubt_frames
         )
+
+    def steady(self, t: float) -> bool:
+        """The object has been tracked on every frame for `steady_s` up to `t`, never moving
+        across the picture faster than `moving_speed` (on its own, or with the camera): jev need
+        not look again as often."""
+        since = self._still_since
+        return since is not None and t - since >= self.params.steady_s
 
     @property
     def wants_refresh(self) -> bool:
@@ -259,6 +283,7 @@ class ObjectTracker:
         """Follow the object on frame `seq`. `camera` is how the picture moved since the frame
         before (a 2x3 transform, motion.py), when known. `gray` is the frame in 8-bit gray for
         the follower, which steps on every frame it is given."""
+        dt = t - self._last_t if self._last_t is not None else 0.0
         self._tick_fps(t)
         self._moved(camera)
         self._followed = self._tracked = None
@@ -268,6 +293,7 @@ class ObjectTracker:
         prompt = self.prompt
         if prompt is None:
             self._remember(seq, t)
+            self._still_since = None
             return Sighting(False, state="unknown")
 
         boxes, scores, anchors = self._candidates(enc, self._scores(enc, vision, prompt))
@@ -291,10 +317,32 @@ class ObjectTracker:
 
         if tid is not None and tid in active:
             i, score = active[tid]
-            return self._sighted(enc, vision, tid, anchors[i], boxes[i], score, t)
-        if tid is not None:
-            return self._coast(tid, t)
-        return Sighting(False, state="absent" if self.absent else "lost")
+            sighting = self._sighted(enc, vision, tid, anchors[i], boxes[i], score, t)
+        elif tid is not None:
+            sighting = self._coast(tid, t)
+        else:
+            sighting = Sighting(False, state="absent" if self.absent else "lost")
+        self._pace(sighting, camera, dt, t)
+        return sighting
+
+    def _pace(self, s: Sighting, camera: np.ndarray | None, dt: float, t: float) -> None:
+        """Whether the object holds still across the picture, for `steady`: its own velocity
+        (the smoother's) plus the camera's motion at its box, filtered alike."""
+        if s.state != "tracking" or s.measured is None:
+            self._still_since = None
+            self._view_velocity = np.zeros(4)
+            return
+        if dt > 0:
+            box = s.measured
+            moved = _cxcywh(warp_box(box, camera)) - _cxcywh(box)
+            size = math.sqrt(max(float((box[2] - box[0]) * (box[3] - box[1])), 1.0))
+            a = dt / (dt + 1 / (2 * math.pi * self.params.smooth.d_cutoff))
+            self._view_velocity += a * (moved / size / dt - self._view_velocity)
+        across = float(np.linalg.norm(self._smooth.velocity + self._view_velocity))
+        if across > self.params.moving_speed:
+            self._still_since = None
+        elif self._still_since is None:
+            self._still_since = t
 
     def _scores(self, enc: Encoding, vision: YoloeVision, prompt: np.ndarray) -> np.ndarray:
         """Each candidate's score: the best against the prompt and jev's recent views."""
@@ -793,10 +841,25 @@ def _byte_tracker():
     class ByteTrack(BYTETracker):
         """Ultralytics' ByteTrack, plus the camera's motion and a way to place a track by hand."""
 
-        def __init__(self, args, lost_velocity_keep: float):
+        def __init__(self, args, lost_velocity_keep: float, velocity_noise: float):
             super().__init__(args)
             self.camera: np.ndarray | None = None
             self.lost_velocity_keep = lost_velocity_keep
+            self.kalman_filter._std_weight_velocity = velocity_noise
+
+        def multi_predict(self, tracks) -> None:
+            # STrack.multi_predict predicts with one filter shared by every tracker in the
+            # process; this tracker's own (its velocity noise) is used instead.
+            if not tracks:
+                return
+            mean = np.asarray([t.mean for t in tracks])
+            covariance = np.asarray([t.covariance for t in tracks])
+            for i, t in enumerate(tracks):
+                if t.state != TrackState.Tracked:
+                    mean[i][7] = 0
+            mean, covariance = self.kalman_filter.multi_predict(mean, covariance)
+            for t, m, c in zip(tracks, mean, covariance, strict=True):
+                t.mean, t.covariance = m, c
 
         def _pre_first_associate(self, strack_pool, unconfirmed, img, results_high) -> None:
             # After the Kalman prediction, before matching: move every track with the camera.
@@ -848,11 +911,11 @@ def _byte_tracker():
 _ByteTrackClass = None
 
 
-def _ByteTrack(args, lost_velocity_keep: float):  # noqa: N802 - built on first use
+def _ByteTrack(args, lost_velocity_keep: float, velocity_noise: float):  # noqa: N802 - built on first use
     global _ByteTrackClass
     if _ByteTrackClass is None:
         _ByteTrackClass = _byte_tracker()
-    return _ByteTrackClass(args, lost_velocity_keep)
+    return _ByteTrackClass(args, lost_velocity_keep, velocity_noise)
 
 
 class _Detections:
@@ -916,6 +979,10 @@ def _inside(box: np.ndarray, size: tuple[int, int]) -> float:
     iw = max(0.0, min(float(box[2]), w) - max(float(box[0]), 0.0))
     ih = max(0.0, min(float(box[3]), h) - max(float(box[1]), 0.0))
     return iw * ih / area
+
+
+def _cxcywh(b: np.ndarray) -> np.ndarray:
+    return np.array([(b[0] + b[2]) / 2, (b[1] + b[3]) / 2, b[2] - b[0], b[3] - b[1]], np.float64)
 
 
 def _unit(v: np.ndarray) -> np.ndarray:
