@@ -137,7 +137,16 @@ const wrongCup = stepOf(ph, 2).mistakes[0]?.message ?? '';
 const syringeTip = stepOf(ph, 0).coachNotes ?? '';
 
 export const PANEL_STATES: PanelState[] = [
-  { name: 'Idle, listening', snapshot: QUIET },
+  { name: 'Ready', snapshot: QUIET },
+  {
+    name: 'Instruction',
+    snapshot: lessonStep(ph, 0, {
+      voice: 'speaking',
+      caption: { role: 'coach', text: syringeTip },
+    }),
+  },
+  { name: 'Planning', snapshot: { ...QUIET, phase: 'planning' } },
+  { name: 'Long detail', snapshot: lessonStep(SHIRT_FOLD, 3, {}, { progress: 0.7 }) },
   {
     name: 'Learner talking',
     snapshot: {
@@ -145,14 +154,6 @@ export const PANEL_STATES: PanelState[] = [
       voice: 'hearing',
       caption: { role: 'user', text: 'I want to test an acid and a base with cabbage juice.' },
     },
-  },
-  { name: 'Planning', snapshot: { ...QUIET, phase: 'planning' } },
-  {
-    name: 'Clio speaking',
-    snapshot: lessonStep(ph, 0, {
-      voice: 'speaking',
-      caption: { role: 'coach', text: syringeTip },
-    }),
   },
   { name: 'Connecting', snapshot: { ...QUIET, coach: 'connecting' } },
   { name: 'Reconnecting', snapshot: lessonStep(ph, 2, { coach: 'reconnecting' }) },
@@ -168,7 +169,6 @@ export const PANEL_STATES: PanelState[] = [
       { progress: 0.4, detail: 'A few drops in each cup is enough.' },
     ),
   },
-  { name: 'Long detail', snapshot: lessonStep(SHIRT_FOLD, 3, {}, { progress: 0.7 }) },
   { name: 'Objects missing', snapshot: lessonStep(ph, 0, { missing: ['indicator', 'syringe'] }) },
   {
     name: 'Mistake',

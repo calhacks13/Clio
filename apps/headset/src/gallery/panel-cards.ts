@@ -1,5 +1,6 @@
 import {
   Color,
+  Matrix4,
   Mesh,
   MeshBasicMaterial,
   PerspectiveCamera,
@@ -7,78 +8,93 @@ import {
   Scene,
   SRGBColorSpace,
   TextureLoader,
+  Vector3,
   WebGLRenderer,
 } from 'three';
+import { ObjectHighlight } from '../adapters/render/object-highlight';
 import type { PresentContext } from '../adapters/render/presenter';
 import {
   InstructionPanelPresenter,
   PANEL_TOP,
-  PANEL_WIDTH,
 } from '../adapters/render/presenters/instruction-panel';
-import type { Pose } from '../core/math';
+import type { Pose, Vec3 } from '../core/math';
+import { billboard, outlinePoint } from '../domain/world/outline';
+import type { Placement } from '../domain/world/placement';
+import { CALIPER_OUTLINE, CALIPER_PHOTO_HEIGHT, CALIPER_PHOTO_WIDTH } from './caliper-outline';
 import type { PanelState } from './states';
 
-// The in-headset instruction panel, one card per state: the real presenter, fed a fixed head pose
-// and the state's snapshot every animation frame (ctx.t moves its animated parts). Browsers cap
-// WebGL contexts, so one renderer draws every visible card in turn and each card copies the
-// result into its own 2D canvas. Behind the panel, the demo photo dimmed to about 60% stands in
-// for passthrough. The panel grows downward with its text, so each card frames its whole height.
+// One real instruction presenter per state, with the saved caliper segmentation as an obstacle.
+// The photo and its exact mask share a plane, so the gallery shows genuine clearance instead of
+// putting a centred card over an unrelated background. A single renderer serves visible cards.
 
-/** Share of the card's width the panel fills; the rest shows the room and any overflowing text. */
-const FILL = 0.78;
-/** The most of the card's height a tall panel fills. */
-const FILL_HEIGHT = 0.9;
-const FOV = 40;
-const BACKDROP_BEHIND = 0.8;
-const BACKDROP = '/demo/caliper.jpg';
 const HEAD: Pose = { p: [0, 1.6, 0], q: [0, 0, 0, 1] };
 const WORKSPACE: Pose = { p: [0, 0, 0], q: [0, 0, 0, 1] };
+const FRAME_PADDING = 1.1;
 
 interface Card {
   state: PanelState;
   presenter: InstructionPanelPresenter;
+  mask: Placement;
   canvas: HTMLCanvasElement;
   context: CanvasRenderingContext2D;
   visible: boolean;
+}
+
+/** The original photo silhouette, upright and facing the learner as in the production renderer. */
+function caliperAt(center: Vec3): Placement {
+  const plane = billboard(center, HEAD.p);
+  if (!plane) throw new Error('Caliper preview is at the eye');
+  return {
+    center,
+    outline: CALIPER_OUTLINE,
+    points: CALIPER_OUTLINE.points.map((point) => outlinePoint(plane, center, point)),
+    label: outlinePoint(plane, center, [0, 0.095]),
+    depth: 'fixed',
+  };
 }
 
 export function mountPanelCards(grid: HTMLElement, states: readonly PanelState[]): void {
   const renderer = new WebGLRenderer({ antialias: true });
   const scene = new Scene();
   scene.background = new Color(0x15181d);
-  const camera = new PerspectiveCamera(FOV, 2, 0.01, 10);
+  const camera = new PerspectiveCamera(40, 1.6, 0.01, 10);
+  camera.position.set(...HEAD.p);
   const backdrop = new Mesh(
-    new PlaneGeometry(1, 1),
-    new MeshBasicMaterial({ color: 0x999999, depthWrite: false }),
+    new PlaneGeometry(CALIPER_PHOTO_WIDTH, CALIPER_PHOTO_HEIGHT),
+    new MeshBasicMaterial({ depthWrite: false }),
   );
   backdrop.renderOrder = -1;
   backdrop.visible = false;
   scene.add(backdrop);
-  let photoAspect = 1;
-  new TextureLoader().load(BACKDROP, (texture) => {
+  new TextureLoader().load('/demo/caliper.jpg', (texture) => {
     texture.colorSpace = SRGBColorSpace;
     backdrop.material.map = texture;
     backdrop.material.needsUpdate = true;
-    photoAspect = texture.image.width / texture.image.height;
     backdrop.visible = true;
   });
+  const glow = new ObjectHighlight();
+  glow.setOutline(CALIPER_OUTLINE, 'object');
+  scene.add(glow);
 
-  const cards: Card[] = states.map((state) => {
+  const cards: Card[] = states.map((state, index) => {
     const figure = document.createElement('figure');
     figure.className = 'card';
+    figure.id = `panel-${state.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
     const canvas = document.createElement('canvas');
     canvas.setAttribute('role', 'img');
-    canvas.setAttribute('aria-label', state.name);
+    canvas.setAttribute('aria-label', `${state.name}, lesson card beside the highlighted object`);
     const caption = document.createElement('figcaption');
     caption.textContent = state.name;
     figure.append(canvas, caption);
     grid.append(figure);
     const context = canvas.getContext('2d');
     if (!context) throw new Error('No 2D canvas context');
-    // The Done button is touched by a fingertip; no hands here, so it never fires.
+    // Alternate the task's place in view to exercise clear placements on either side.
+    const mask = caliperAt([index % 2 === 0 ? -0.12 : 0.12, 1.48, -0.65]);
     return {
       state,
       presenter: new InstructionPanelPresenter(() => {}),
+      mask,
       canvas,
       context,
       visible: false,
@@ -93,8 +109,7 @@ export function mountPanelCards(grid: HTMLElement, states: readonly PanelState[]
   });
   for (const card of cards) seen.observe(card.canvas);
 
-  let aspect = 2;
-  const tan = Math.tan(((FOV / 2) * Math.PI) / 180);
+  let aspect = 1.6;
   function resize(): void {
     const first = cards[0]?.canvas;
     if (!first) return;
@@ -110,25 +125,55 @@ export function mountPanelCards(grid: HTMLElement, states: readonly PanelState[]
     camera.aspect = aspect;
     camera.updateProjectionMatrix();
   }
-  /** Moves the camera back far enough for the whole panel, and covers its view with the photo. */
-  function fit(panelHeight: number): number {
-    const distance = Math.max(
-      PANEL_WIDTH / FILL / aspect / 2 / tan,
-      panelHeight / FILL_HEIGHT / 2 / tan,
-    );
-    // Like object-fit: cover.
-    const viewHeight = 2 * (distance + BACKDROP_BEHIND) * tan;
-    const viewWidth = viewHeight * aspect;
-    const wider = aspect > photoAspect;
-    backdrop.scale.set(
-      wider ? viewWidth : viewHeight * photoAspect,
-      wider ? viewWidth / photoAspect : viewHeight,
-      1,
-    );
-    return distance;
-  }
   new ResizeObserver(resize).observe(grid);
   resize();
+
+  const basis = new Matrix4();
+  const right = new Vector3();
+  const up = new Vector3();
+  const normal = new Vector3();
+  const point = new Vector3();
+  const target = new Vector3();
+  const min = new Vector3();
+  const max = new Vector3();
+  const panelCorners = Array.from({ length: 4 }, () => new Vector3());
+
+  /** Keep the actual eye fixed and fit both the task and card, preserving their projection. */
+  function frameCard(card: Card): void {
+    const { presenter, mask } = card;
+    presenter.object.updateMatrixWorld(true);
+    const halfWidth = presenter.panelWidth / 2;
+    const bottom = PANEL_TOP - presenter.panelHeight;
+    panelCorners[0]?.set(-halfWidth, PANEL_TOP, 0).applyMatrix4(presenter.object.matrixWorld);
+    panelCorners[1]?.set(halfWidth, PANEL_TOP, 0).applyMatrix4(presenter.object.matrixWorld);
+    panelCorners[2]?.set(-halfWidth, bottom, 0).applyMatrix4(presenter.object.matrixWorld);
+    panelCorners[3]?.set(halfWidth, bottom, 0).applyMatrix4(presenter.object.matrixWorld);
+    min.set(Infinity, Infinity, Infinity);
+    max.set(-Infinity, -Infinity, -Infinity);
+    for (const corner of panelCorners) {
+      min.min(corner);
+      max.max(corner);
+    }
+    for (const vertex of mask.points) {
+      point.set(...vertex);
+      min.min(point);
+      max.max(point);
+    }
+    target.addVectors(min, max).multiplyScalar(0.5);
+    camera.lookAt(target);
+    camera.updateMatrixWorld(true);
+    let tan = 0;
+    for (const corner of panelCorners) {
+      point.copy(corner).applyMatrix4(camera.matrixWorldInverse);
+      tan = Math.max(tan, Math.abs(point.y / point.z), Math.abs(point.x / point.z) / aspect);
+    }
+    for (const vertex of mask.points) {
+      point.set(...vertex).applyMatrix4(camera.matrixWorldInverse);
+      tan = Math.max(tan, Math.abs(point.y / point.z), Math.abs(point.x / point.z) / aspect);
+    }
+    camera.fov = (2 * Math.atan(tan * FRAME_PADDING) * 180) / Math.PI;
+    camera.updateProjectionMatrix();
+  }
 
   const draw = (card: Card, t: number, dt: number) => {
     const ctx: PresentContext = {
@@ -137,6 +182,7 @@ export function mountPanelCards(grid: HTMLElement, states: readonly PanelState[]
       snapshot: card.state.snapshot,
       procedure: null,
       objects: [],
+      objectMasks: [card.mask],
       demo: null,
       demoHands: null,
       hands: null,
@@ -147,14 +193,15 @@ export function mountPanelCards(grid: HTMLElement, states: readonly PanelState[]
     };
     scene.add(card.presenter.object);
     card.presenter.update(ctx);
-    // The panel settles in front of the head, facing it; look straight at its middle.
-    const at = card.presenter.object.position;
-    const h = card.presenter.panelHeight;
-    const y = at.y + PANEL_TOP - h / 2;
-    const distance = fit(h);
-    camera.position.set(at.x, y, at.z + distance);
-    camera.lookAt(at.x, y, at.z);
-    backdrop.position.set(at.x, y, at.z - BACKDROP_BEHIND);
+    const plane = billboard(card.mask.center, HEAD.p);
+    if (plane) {
+      basis.makeBasis(right.set(...plane.right), up.set(...plane.up), normal.set(...plane.normal));
+      backdrop.quaternion.setFromRotationMatrix(basis);
+      glow.quaternion.copy(backdrop.quaternion);
+    }
+    backdrop.position.set(...card.mask.center);
+    glow.position.copy(backdrop.position);
+    frameCard(card);
     renderer.render(scene, camera);
     scene.remove(card.presenter.object);
     card.context.drawImage(renderer.domElement, 0, 0);

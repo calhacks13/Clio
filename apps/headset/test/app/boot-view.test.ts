@@ -108,12 +108,14 @@ function page(html: string) {
 describe('renderBoot', () => {
   it('asks one question with one button and says nothing else when everything works', () => {
     const html = renderBoot(ready);
-    expect(html).toContain('<h1><label for="goal">What do you want to learn?</label></h1>');
+    expect(html).toContain('<h1><label for="goal">What do you want to do?</label></h1>');
     expect(html).toContain('<span class="label">Start lesson</span>');
     expect(html).not.toMatch(/<button id="enter"[^>]*\sdisabled/);
     expect(html).not.toContain('class="problems"');
-    expect(html).toContain('Every lesson trains two students: you, and a robot.');
-    expect(html).toContain('Or leave it empty and tell Clio once you’re in.');
+    expect(html).not.toContain('class="brand"');
+    expect(html).not.toContain('Every lesson trains two students');
+    expect(html).not.toContain('leave it empty');
+    expect(html).not.toContain('boot-hint');
     expect(html).toContain('<details class="more">');
     expect(html).toContain('role="status" aria-live="polite"');
     // Peter's rules: no bullets, middle dots or arrows anywhere in the copy.

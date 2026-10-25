@@ -140,7 +140,7 @@ function renderSavedLessons(procedures: ProcedureSummary[], selected: string | n
 }
 
 export function renderBoot(model: BootModel): string {
-  const { health, procedures, ar, goal } = model;
+  const { procedures, ar, goal } = model;
   const procedureId =
     model.procedureId && procedures.some((p) => p.id === model.procedureId)
       ? model.procedureId
@@ -148,25 +148,18 @@ export function renderBoot(model: BootModel): string {
   const calibrate = model.calibrate ?? false;
   const record = model.record ?? false;
   const start = bootStart({ procedureId, record });
-  // Leaving the goal empty only works with a coach that listens.
-  const hint = health?.coach.configured ? 'Or leave it empty and tell Clio once you’re in.' : '';
   const on = (checked: boolean) => (checked ? ' checked' : '');
   return `
     <main class="boot" data-start="${start}" data-progress="idle">
-      <header class="brand">
-        <p class="wordmark">Clio</p>
-        <p class="tagline">Every lesson trains two students: you, and a robot.</p>
-      </header>
       ${renderProblems(problems(model))}
       <form class="start" id="boot-form" autocomplete="off" novalidate>
-        <h1><label for="goal">What do you want to learn?</label></h1>
+        <h1><label for="goal">What do you want to do?</label></h1>
         <input id="goal" type="text" enterkeyhint="go" placeholder="Refill the windshield washer fluid"
-          value="${esc(goal)}"${hint ? ' aria-describedby="boot-hint"' : ''}${procedureId ? ' disabled' : ''}>
+          value="${esc(goal)}"${procedureId ? ' disabled' : ''}>
         <button id="enter" class="go" type="submit" aria-describedby="boot-error"${ar ? '' : ' disabled'}>
           <span class="label">${bootButtonLabel(start, { kind: 'idle' })}</span>
         </button>
         <div class="note">
-          <p class="hint" id="boot-hint">${hint}</p>
           <p class="error" id="boot-error"></p>
         </div>
         <details class="more"${procedureId || calibrate || record ? ' open' : ''}>

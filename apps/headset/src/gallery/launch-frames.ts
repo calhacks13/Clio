@@ -94,6 +94,10 @@ export function fitFrames(column: HTMLElement): void {
   const fit = () => {
     const scale = Math.min(1, column.clientWidth / QUEST_WINDOW.width);
     column.style.setProperty('--scale', scale.toFixed(4));
+    column.style.setProperty(
+      '--phone-scale',
+      Math.min(1, column.clientWidth / PHONE.width).toFixed(4),
+    );
   };
   new ResizeObserver(fit).observe(column);
   fit();

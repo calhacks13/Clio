@@ -1,145 +1,112 @@
 import {
-  CircleGeometry,
-  Color,
   Group,
   Mesh,
   MeshBasicMaterial,
   PlaneGeometry,
-  Quaternion,
-  RingGeometry,
+  Shape,
+  ShapeGeometry,
   Vector3,
 } from 'three';
 import type { Text } from 'troika-three-text';
-import { rotateVec, yawOnly } from '../../../core/math';
+import { type Pose, rotateVec } from '../../../core/math';
 import { jointPosition } from '../../../domain/hands/features';
-import { type CoachStatusState, coachStatus } from '../../../domain/overlay/coach-status';
-import { OBJECT_HIGHLIGHT_COLOR } from '../object-highlight';
+import { placeInstructionPanel } from '../panel-placement';
 import type { PresentContext, Presenter } from '../presenter';
 import { makeText, setText } from '../text';
 
-// The floating instruction card. It lazily follows the learner's gaze (re-centering only when it
-// drifts out of view), shows the current step, progress, coach captions and corrections, and has a
-// touchable "Done" button so a learner can confirm a step even when voice fails. At the right of
-// the header row a small light and a word say what the voice coach is doing (coachStatus).
-//
-// The text is stacked: header row, instruction and detail from the top, then a bottom row with the
-// status line beside the Done button. Each block is placed from its measured height, and the panel
-// grows downward from its top edge to fit; the progress bar keeps to its bottom edge.
+// A content-fitted instruction card, placed beside the objects by panel-placement.ts. The step and
+// instruction lead; corrections appear only when the learner needs them. Conversation stays in
+// the voice channel, without a duplicate transcript or a listening indicator.
 
-const W = 0.44;
-/** The panel's least height. */
-const MIN_H = 0.17;
-/** The panel's top edge; it never moves, the panel grows below it. */
-const TOP = MIN_H / 2;
-/** In metres, for views that frame the panel (the gallery). */
-export const PANEL_WIDTH = W;
+const TOP = 0.15;
+/** The card's fixed top edge; width and height come from its rendered content. */
 export const PANEL_TOP = TOP;
-const FOLLOW_DISTANCE = 0.65;
-const FOLLOW_DROP = 0.17;
-const RECENTER_BEYOND = 0.3;
+const MIN_WIDTH = 0.2;
+const MIN_PHASE_WIDTH = 0.16;
+const MAX_WIDTH = 0.38;
 const BUTTON_TOUCH = 0.03;
 const BUTTON_COOLDOWN_MS = 1500;
-
-const PANEL_COLOR = 0x0b1220;
-const BUTTON_COLOR = 0x2a7d5a;
-const HEADER_COLOR = 0x9fb4d8;
-const HEADER_SIZE = 0.014;
-const TOAST_COLOR = { mistake: 0xff6b78, success: 0x7dffa4, info: 0xd6e4ff } as const;
-/** Inter's normal line height, in font sizes. */
+const PANEL_COLOR = 0xffffff;
+const BUTTON_COLOR = 0x0f1117;
+const INK = 0x0f1117;
+const MUTED = 0x5b6472;
+const ERROR = 0xa52d3d;
+const HEADER_SIZE = 0.012;
 const LINE = 1.21;
-
-const LEFT = -W / 2 + 0.02;
-const HEADER_X = LEFT;
-const HEADER_Y = TOP - 0.015;
-/** Between the header row and the instruction, the instruction and its detail, and the bottom row. */
-const GAP_HEADER = 0.006;
-const GAP_DETAIL = 0.005;
-const GAP_ROW = 0.01;
-/** From the panel's bottom edge (the progress bar runs inside it) to the bottom row. */
-const PAD_BOTTOM = 0.0125;
-const TEXT_W = W - 0.08;
-
-const BUTTON_W = 0.06;
-const BUTTON_H = 0.035;
-const BUTTON_X = W / 2 - 0.04;
-/** Beside the button the status line wraps short of it. */
-const STATUS_W = W - 0.04;
-const STATUS_W_BESIDE_BUTTON = BUTTON_X - BUTTON_W / 2 - 0.012 - LEFT;
-
-/** The status mark's outer radius. It keeps the header row's right end, whatever the word. */
-const MARK_R = 0.0058;
-const MARK_X = W / 2 - 0.02 - MARK_R;
-/** Centred on the header's capitals. */
-const MARK_Y = HEADER_Y - 0.0085;
-const LABEL_X = MARK_X - MARK_R - 0.006;
-/** "Voice offline", the widest label (measured). */
-const LABEL_MAX_W = 0.085;
-/**
- * The header keeps to this many characters (the title gives way; nothing moves), and is clipped
- * short of the widest label in case wide letters still reach it. Both hold with or without the
- * mark, so the header reads the same either way and never runs past the panel.
- */
-const HEADER_CHARS = 34;
-const HEADER_CLIP = [-1, -1, LABEL_X - LABEL_MAX_W - 0.012 - HEADER_X, 1];
-
-type ClippedText = Text & { clipRect: number[] | null };
+const PAD = 0.022;
+const HEADER_Y = TOP - PAD;
+const MAX_TEXT_W = MAX_WIDTH - PAD * 2;
+const GAP_HEADER = 0.014;
+const GAP_DETAIL = 0.01;
+const GAP_STATUS = 0.016;
+const GAP_BUTTON = 0.018;
+const PAD_BOTTOM = 0.022;
+const BUTTON_W = 0.076;
+const BUTTON_H = 0.037;
 
 export class InstructionPanelPresenter implements Presenter {
   readonly object = new Group();
-  private readonly header = makeText({
-    size: HEADER_SIZE,
-    color: HEADER_COLOR,
-    bold: true,
-  }) as ClippedText;
-  private readonly coachLabel = makeText({
-    size: HEADER_SIZE,
-    color: HEADER_COLOR,
-    anchorX: 'right',
+  private readonly header = makeText({ size: HEADER_SIZE, color: MUTED, maxWidth: MAX_TEXT_W });
+  private readonly instruction = makeText({
+    size: 0.023,
+    color: INK,
+    maxWidth: MAX_TEXT_W,
     bold: true,
   });
-  private readonly coachMark = new CoachMark();
-  private readonly instruction = makeText({ size: 0.026, maxWidth: TEXT_W, bold: true });
-  private readonly detail = makeText({ size: 0.016, color: 0xb9c4d6, maxWidth: TEXT_W });
-  private readonly status = makeText({ size: 0.016, maxWidth: STATUS_W });
+  private readonly detail = makeText({ size: 0.015, color: MUTED, maxWidth: MAX_TEXT_W });
+  private readonly status = makeText({ size: 0.015, color: ERROR, maxWidth: MAX_TEXT_W });
   private readonly background = new Mesh(
-    new PlaneGeometry(W, 1),
+    roundedRect(MIN_WIDTH, 0.1, 0.014),
     new MeshBasicMaterial({ color: PANEL_COLOR }),
   );
   private readonly bar = new Mesh(
-    new PlaneGeometry(1, 0.006),
-    new MeshBasicMaterial({ color: 0x4fe3ff }),
+    new PlaneGeometry(1, 0.0025),
+    new MeshBasicMaterial({ color: 0x1768d9 }),
   );
   private readonly button = new Group();
   private readonly buttonMaterial = new MeshBasicMaterial({ color: BUTTON_COLOR });
-  private readonly target = new Vector3();
-  private initialized = false;
   private lastPress = Number.NEGATIVE_INFINITY;
-  private panelH = MIN_H;
+  private panelW = MIN_WIDTH;
+  private panelH = 0.1;
+  private progress = 0;
+  private latestContext: PresentContext | null = null;
+  // Detached texts measure actual font metrics without wrapping. They are never added to the scene.
+  private readonly measures = [
+    makeText({ size: HEADER_SIZE, color: MUTED }),
+    makeText({ size: 0.023, color: INK, bold: true }),
+    makeText({ size: 0.015, color: MUTED }),
+    makeText({ size: 0.015, color: ERROR }),
+  ];
+  private readonly measureDone = () => this.applyMeasuredWidth();
+  private previousPose: Pose | null = null;
   /** Text lays itself out asynchronously; each finished layout re-stacks the panel. */
   private readonly relayout = () => this.layout();
 
   /** @param onDone called when the learner touches the Done button. */
   constructor(private readonly onDone: () => void) {
-    this.header.position.set(HEADER_X, HEADER_Y, 0.001);
-    this.header.clipRect = HEADER_CLIP;
-    this.coachLabel.position.set(LABEL_X, HEADER_Y, 0.001);
-    this.coachMark.object.position.set(MARK_X, MARK_Y, 0.002);
-    this.instruction.position.set(LEFT, HEADER_Y, 0.001);
-    this.detail.position.set(LEFT, HEADER_Y, 0.001);
-    this.status.position.set(LEFT, HEADER_Y, 0.001);
-    this.bar.position.z = 0.002;
-
-    const buttonBg = new Mesh(new PlaneGeometry(BUTTON_W, BUTTON_H), this.buttonMaterial);
-    const buttonLabel = makeText({ size: 0.014, anchorX: 'center', anchorY: 'middle', bold: true });
+    const buttonBg = new Mesh(roundedRect(BUTTON_W, BUTTON_H, BUTTON_H / 2), this.buttonMaterial);
+    const buttonLabel = makeText({
+      size: 0.014,
+      color: 0xffffff,
+      anchorX: 'center',
+      anchorY: 'middle',
+      bold: true,
+    });
     setText(buttonLabel, 'Done');
     buttonLabel.position.z = 0.001;
+    buttonLabel.outlineWidth = 0;
     this.button.add(buttonBg, buttonLabel);
-    this.button.position.set(BUTTON_X, 0, 0.003);
+    this.button.position.z = 0.003;
     this.button.visible = false;
-
     for (const text of [this.header, this.instruction, this.detail, this.status]) {
+      text.position.set(0, HEADER_Y, 0.001);
+      text.overflowWrap = 'break-word';
+      text.outlineWidth = 0;
       text.addEventListener('synccomplete', this.relayout);
     }
+    for (const measure of this.measures) measure.addEventListener('synccomplete', this.measureDone);
+    this.object.visible = false;
+    this.bar.position.z = 0.002;
     this.object.add(
       this.background,
       this.header,
@@ -148,123 +115,151 @@ export class InstructionPanelPresenter implements Presenter {
       this.status,
       this.bar,
       this.button,
-      this.coachLabel,
-      this.coachMark.object,
     );
     this.layout();
   }
 
-  /** The panel's height in metres, from its fixed top edge down. */
+  /** Actual dimensions of the visible content and its padding, in metres. */
+  get panelWidth(): number {
+    return this.panelW;
+  }
+
   get panelHeight(): number {
     return this.panelH;
   }
 
   update(ctx: PresentContext): void {
-    this.follow(ctx);
+    this.latestContext = ctx;
     const s = ctx.snapshot;
-    const coach = coachStatus(s);
-
+    let header = '';
+    let instruction = '';
+    let detail = '';
     if (ctx.calibration) {
-      setText(this.header, clip('SET UP YOUR WORK AREA', HEADER_CHARS));
-      setText(this.instruction, ctx.calibration.text);
-      setText(
-        this.detail,
-        ctx.calibration.error ?? 'Touch the table with your index finger and thumb together.',
-      );
+      header = 'Work area';
+      instruction = ctx.calibration.text;
+      detail =
+        ctx.calibration.error ?? 'Touch the table with your index finger and thumb together.';
     } else if (s.instruction) {
       const i = s.instruction;
-      setText(this.header, stepHeader(s.title, i.index, i.total, HEADER_CHARS));
-      setText(this.instruction, i.text);
-      setText(this.detail, i.detail ?? '');
+      header = stepHeader(i.index, i.total);
+      instruction = i.text;
+      detail = i.detail ?? '';
     } else {
-      setText(this.header, clip(s.title ? s.title.toUpperCase() : 'CLIO', HEADER_CHARS));
-      setText(this.instruction, PHASE_TEXT[s.phase] ?? '');
-      setText(this.detail, s.phase === 'idle' ? 'Say what you want to learn.' : '');
+      instruction = PHASE_TEXT[s.phase] ?? '';
     }
 
-    this.coachLabel.visible = coach !== null;
-    if (coach) {
-      setText(this.coachLabel, coach.label);
-      // The one state that needs the learner: the voice is gone, so the Done button is the way on.
-      this.coachLabel.color = coach.state === 'offline' ? TOAST_COLOR.mistake : HEADER_COLOR;
-    }
-    this.coachMark.update(coach?.state ?? null, ctx.t);
-
-    // The button first: beside it the status line wraps narrower.
-    const withButton = !!s.instruction;
+    const withButton = !!s.instruction && !ctx.calibration;
     if (this.button.visible !== withButton) {
       this.button.visible = withButton;
-      this.status.maxWidth = withButton ? STATUS_W_BESIDE_BUTTON : STATUS_W;
-      this.status.sync();
       this.layout();
     }
-    if (withButton) this.pressCheck(ctx);
-
     const missing = s.missing.length
       ? `Can't see: ${s.missing.join(', ')}. Pinch it to show me.`
       : '';
-    const line =
-      s.toast?.text ||
-      missing ||
-      (s.caption ? `${s.caption.role === 'coach' ? 'Clio' : 'You'}: ${s.caption.text}` : '');
-    // Never the instruction twice (the lesson's end is both the phase text and a toast).
-    setText(this.status, line === this.instruction.text ? '' : line);
-    this.status.color = s.toast ? TOAST_COLOR[s.toast.kind] : 0xd6e4ff;
+    const offline =
+      withButton && (s.coach === 'error' || s.coach === 'closed')
+        ? 'Voice offline. Use Done to continue.'
+        : '';
+    const line = s.toast?.kind === 'mistake' ? s.toast.text : missing || offline;
+    const content = [header, instruction, detail, line];
+    this.measures.forEach((measure, index) => {
+      setText(measure, content[index] ?? '');
+    });
+    this.applyMeasuredWidth();
+    this.status.color = s.toast?.kind === 'mistake' || offline ? ERROR : MUTED;
 
-    const progress = s.instruction?.progress ?? 0;
-    this.bar.visible = progress > 0;
-    this.bar.scale.x = Math.max(0.0001, progress * W);
-    this.bar.position.x = -W / 2 + (progress * W) / 2;
+    this.progress = Math.max(0, Math.min(1, s.instruction?.progress ?? 0));
+    this.layout();
+    this.follow(ctx);
+    if (withButton && this.object.visible) this.pressCheck(ctx);
   }
 
-  /**
-   * Stacks the text from its measured heights and fits the panel to it: header row, instruction
-   * and detail from the top edge, then the bottom row (status line and Done button, the line
-   * centred on the button) at least GAP_ROW below, the panel no shorter than MIN_H.
-   */
+  /** Choose a wrap measure from real unwrapped glyph area, never a character-count estimate. */
+  private applyMeasuredWidth(): void {
+    if (!this.measures.every(currentLayout)) return;
+    const widths = this.measures.map(measuredWidth);
+    const area = this.measures.reduce(
+      (sum, measure) => sum + measuredWidth(measure) * measuredHeight(measure),
+      0,
+    );
+    const minWidth = this.button.visible ? MIN_WIDTH : MIN_PHASE_WIDTH;
+    const simple =
+      !this.button.visible &&
+      this.measures.every((measure, index) => index === 1 || measure.text === '');
+    const preferred = simple
+      ? Math.max(...widths)
+      : Math.min(Math.max(...widths), Math.sqrt(area * 2.4));
+    const wrap = Math.min(MAX_TEXT_W, Math.max(minWidth - PAD * 2, preferred));
+    const lines = [this.header, this.instruction, this.detail, this.status];
+    lines.forEach((line, index) => {
+      const value = this.measures[index]?.text ?? '';
+      if (line.text !== value || Math.abs(line.maxWidth - wrap) > 1e-6) {
+        line.text = value;
+        line.maxWidth = wrap;
+        line.sync();
+      }
+    });
+  }
+
   private layout(): void {
-    let y = HEADER_Y - Math.max(measuredHeight(this.header), HEADER_SIZE * LINE);
+    const headerHeight = measuredHeight(this.header);
+    let y = HEADER_Y - (headerHeight > 0 ? Math.max(headerHeight, HEADER_SIZE * LINE) : 0);
     const instruction = measuredHeight(this.instruction);
     if (instruction > 0) {
-      this.instruction.position.y = y - GAP_HEADER;
-      y -= GAP_HEADER + instruction;
+      const gap = headerHeight > 0 ? GAP_HEADER : 0;
+      this.instruction.position.y = y - gap;
+      y -= gap + instruction;
     }
     const detail = measuredHeight(this.detail);
     if (detail > 0) {
-      const gap = instruction > 0 ? GAP_DETAIL : GAP_HEADER;
-      this.detail.position.y = y - gap;
-      y -= gap + detail;
+      this.detail.position.y = y - GAP_DETAIL;
+      y -= GAP_DETAIL + detail;
     }
     const status = measuredHeight(this.status);
-    const row = status > 0 || this.button.visible ? Math.max(status, BUTTON_H) : 0;
-    const content = row > 0 ? y - GAP_ROW - row : y;
-    const bottom = Math.min(TOP - MIN_H, content - PAD_BOTTOM);
-    this.panelH = TOP - bottom;
-
-    this.background.scale.y = this.panelH;
+    if (status > 0) {
+      this.status.position.y = y - GAP_STATUS;
+      y -= GAP_STATUS + status;
+    }
+    const contentBottom = this.button.visible ? y - GAP_BUTTON - BUTTON_H : y;
+    const bottom = contentBottom - PAD_BOTTOM;
+    const height = TOP - bottom;
+    const minWidth = this.button.visible ? MIN_WIDTH : MIN_PHASE_WIDTH;
+    const lines = [this.header, this.instruction, this.detail, this.status];
+    const width = Math.max(minWidth, ...lines.map(measuredWidth).map((w) => w + PAD * 2));
+    const resized = Math.abs(width - this.panelW) > 1e-6 || Math.abs(height - this.panelH) > 1e-6;
+    if (resized) {
+      this.background.geometry.dispose();
+      this.background.geometry = roundedRect(width, height, 0.014);
+      this.panelW = width;
+      this.panelH = height;
+    }
+    const left = -this.panelW / 2 + PAD;
+    for (const line of lines) line.position.x = left;
     this.background.position.y = TOP - this.panelH / 2;
-    const rowBottom = bottom + PAD_BOTTOM;
-    this.status.position.y = rowBottom + (row + status) / 2;
-    this.button.position.y = rowBottom + BUTTON_H / 2;
-    this.bar.position.y = bottom + 0.004;
+    this.button.position.set(
+      this.panelW / 2 - PAD - BUTTON_W / 2,
+      bottom + PAD_BOTTOM + BUTTON_H / 2,
+      0.003,
+    );
+    this.bar.visible = this.progress > 0;
+    this.bar.scale.x = Math.max(0.0001, this.progress * (this.panelW - PAD * 2));
+    this.bar.position.x = left + (this.progress * (this.panelW - PAD * 2)) / 2;
+    this.bar.position.y = bottom + 0.008;
+    if (
+      this.latestContext &&
+      lines.every((line, index) => currentLayout(line) && line.text === this.measures[index]?.text)
+    ) {
+      this.object.visible = lines.some((line) => line.text.trim().length > 0);
+    }
+    // Troika finishes between frames. Resize and mask clearance must change together.
+    if (resized && this.latestContext) this.follow(this.latestContext);
   }
 
   private follow(ctx: PresentContext): void {
-    const yaw = yawOnly(ctx.head.q);
-    const ahead = rotateVec(yaw, [0, 0, -FOLLOW_DISTANCE]);
-    this.target.set(
-      ctx.head.p[0] + ahead[0],
-      ctx.head.p[1] - FOLLOW_DROP,
-      ctx.head.p[2] + ahead[2],
-    );
-    if (!this.initialized || this.object.position.distanceTo(this.target) > RECENTER_BEYOND) {
-      this.initialized = true;
-      this.object.position.copy(this.target);
-    } else {
-      this.object.position.lerp(this.target, Math.min(1, ctx.dt / 600));
-    }
-    // A plane faces +z; the head's yaw turns +z back toward the learner.
-    this.object.quaternion.slerp(new Quaternion(...yaw), Math.min(1, ctx.dt / 300));
+    const pose = placeInstructionPanel(ctx, this.panelW, this.panelH, TOP, this.previousPose);
+    this.object.position.set(...pose.p);
+    this.object.quaternion.set(...pose.q);
+    this.previousPose = pose;
   }
 
   /** Index fingertip (either hand) touching the button, in world space. */
@@ -273,170 +268,80 @@ export class InstructionPanelPresenter implements Presenter {
     const center = this.button.getWorldPosition(new Vector3());
     for (const hand of [ctx.hands.left, ctx.hands.right]) {
       if (!hand) continue;
-      // Hands are in workspace space; convert the fingertip to world space.
       const tip = jointPosition(hand, 'index-finger-tip');
       const w = ctx.worldFromWorkspace;
       const r = rotateVec(w.q, tip);
       const world = new Vector3(w.p[0] + r[0], w.p[1] + r[1], w.p[2] + r[2]);
       if (world.distanceTo(center) < BUTTON_TOUCH) {
         this.lastPress = ctx.t;
-        this.buttonMaterial.color.setHex(0x7dffa4);
+        this.buttonMaterial.color.setHex(0x24303d);
         setTimeout(() => this.buttonMaterial.color.setHex(BUTTON_COLOR), 300);
         this.onDone();
         return;
       }
     }
   }
+
+  dispose(): void {
+    for (const text of [this.header, this.instruction, this.detail, this.status]) {
+      text.removeEventListener('synccomplete', this.relayout);
+      text.dispose();
+    }
+    for (const measure of this.measures) {
+      measure.removeEventListener('synccomplete', this.measureDone);
+      measure.dispose();
+    }
+    (this.button.children[1] as Text).dispose();
+    (this.button.children[0] as Mesh).geometry.dispose();
+    this.background.geometry.dispose();
+    this.background.material.dispose();
+    this.bar.geometry.dispose();
+    this.bar.material.dispose();
+    this.buttonMaterial.dispose();
+  }
 }
 
-/**
- * "TITLE   STEP n OF m", where `index` counts the steps done so far. Over `chars` characters, the
- * title gives way and the step count stays.
- */
-export function stepHeader(
-  title: string | null,
-  index: number,
-  total: number,
-  chars = Number.POSITIVE_INFINITY,
-): string {
-  const count = `   STEP ${Math.min(index + 1, total)} OF ${total}`;
-  return `${clip((title ?? 'LESSON').toUpperCase(), chars - count.length)}${count}`;
+export function stepHeader(index: number, total: number): string {
+  return `Step ${Math.min(index + 1, total)} of ${total}`;
 }
 
-/** `text` in at most `chars` characters, cut after a whole word when one is near and marked. */
-function clip(text: string, chars: number): string {
-  if (text.length <= chars) return text;
-  const cut = text.slice(0, Math.max(0, chars - 1));
-  const space = cut.lastIndexOf(' ');
-  return `${(space > cut.length / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
+/** Centered planar surface with a measured radius, including pill buttons. */
+function roundedRect(width: number, height: number, radius: number): ShapeGeometry {
+  const x = -width / 2;
+  const y = -height / 2;
+  const r = Math.min(radius, width / 2, height / 2);
+  const shape = new Shape();
+  shape.moveTo(x + r, y);
+  shape.lineTo(x + width - r, y);
+  shape.quadraticCurveTo(x + width, y, x + width, y + r);
+  shape.lineTo(x + width, y + height - r);
+  shape.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  shape.lineTo(x + r, y + height);
+  shape.quadraticCurveTo(x, y + height, x, y + height - r);
+  shape.lineTo(x, y + r);
+  shape.quadraticCurveTo(x, y, x + r, y);
+  return new ShapeGeometry(shape, 10);
 }
 
-/** `text`'s height as last laid out (troika lays out asynchronously); 0 before that or empty. */
+/** A completed result belongs to a specific text and wrap width, not the latest request. */
+function currentLayout(text: Text): boolean {
+  const info = text.textRenderInfo;
+  if (!info) return text.text === '';
+  return info.parameters.text === text.text && info.parameters.maxWidth === text.maxWidth;
+}
+
+function measuredWidth(text: Text): number {
+  const bounds = text.textRenderInfo?.blockBounds;
+  return bounds ? bounds[2] - bounds[0] : 0;
+}
+
 function measuredHeight(text: Text): number {
   const bounds = text.textRenderInfo?.blockBounds;
   return bounds ? bounds[3] - bounds[1] : 0;
 }
 
-const CYAN = new Color(OBJECT_HIGHLIGHT_COLOR);
-const AMBER = new Color(0xffaa33);
-const RED = new Color(TOAST_COLOR.mistake);
-// Dimmed by mixing in the panel's color, so the mark stays opaque.
-const CYAN_DIM = CYAN.clone().lerp(new Color(PANEL_COLOR), 0.35);
-const AMBER_DIM = AMBER.clone().lerp(new Color(PANEL_COLOR), 0.75);
-
-const RING_IN = 0.0045;
-const DOT_R = 0.0024;
-const LAMP_R = 0.0042;
-const BAR_W = 0.0022;
-const BAR_GAP = 0.0035;
-const BAR_MIN = 0.0035;
-const BAR_MAX = 0.0116;
-/** The glow's breath (DESIGN.md). */
-const BREATH_MS = 3600;
-const TURN_MS = 1200;
-const BLINK_MS = 1000;
-/** Per bar: two periods (ms) and a phase, so the three never move in step. */
-const BAR_WAVES = [
-  [430, 190, 0],
-  [340, 230, 2.1],
-  [510, 170, 4.2],
-] as const;
-
-/**
- * The coach status mark: listening is a cyan dot in a ring that breathes like the glow, hearing the
- * same ring pulsing faster, speaking three white bars, planning a turning cyan arc, connecting a
- * blinking amber lamp, and offline a still red one. Solid, opaque, and nothing allocated per frame.
- */
-class CoachMark {
-  readonly object = new Group();
-  private readonly lampMaterial = new MeshBasicMaterial({ color: CYAN });
-  private readonly ringMaterial = new MeshBasicMaterial({ color: CYAN });
-  private readonly lamp = new Mesh(new CircleGeometry(1, 32), this.lampMaterial);
-  private readonly ring = new Mesh(new RingGeometry(RING_IN, MARK_R, 48), this.ringMaterial);
-  private readonly arc = new Mesh(
-    new RingGeometry(RING_IN, MARK_R, 36, 1, 0, Math.PI * 1.5),
-    this.ringMaterial,
-  );
-  private readonly bars: Mesh[] = [];
-
-  constructor() {
-    const geometry = new PlaneGeometry(1, 1);
-    const material = new MeshBasicMaterial({ color: 0xffffff });
-    for (let i = 0; i < BAR_WAVES.length; i++) {
-      const bar = new Mesh(geometry, material);
-      bar.position.x = (i - 1) * BAR_GAP;
-      bar.scale.set(BAR_W, BAR_MIN, 1);
-      this.bars.push(bar);
-    }
-    this.object.add(this.lamp, this.ring, this.arc, ...this.bars);
-    this.object.visible = false;
-  }
-
-  update(state: CoachStatusState | null, t: number): void {
-    this.object.visible = state !== null;
-    if (state === null) return;
-    const listening = state === 'listening' || state === 'hearing';
-    this.ring.visible = listening;
-    this.arc.visible = state === 'planning';
-    this.lamp.visible = state !== 'speaking' && state !== 'planning';
-    for (const bar of this.bars) bar.visible = state === 'speaking';
-
-    switch (state) {
-      case 'listening': {
-        const k = wave(t, BREATH_MS);
-        this.ring.scale.setScalar(0.94 + 0.12 * k);
-        this.ringMaterial.color.lerpColors(CYAN_DIM, CYAN, 0.4 + 0.6 * k);
-        this.lamp.scale.setScalar(DOT_R);
-        this.lampMaterial.color.copy(CYAN);
-        break;
-      }
-      case 'hearing': {
-        // Two quick waves, so it reads as reacting to a voice rather than ticking.
-        const k = 0.6 * wave(t, 620) + 0.4 * wave(t, 370, 1.1);
-        this.ring.scale.setScalar(1 + 0.22 * k);
-        this.ringMaterial.color.copy(CYAN);
-        this.lamp.scale.setScalar(DOT_R * (1 + 0.35 * k));
-        this.lampMaterial.color.copy(CYAN);
-        break;
-      }
-      case 'speaking':
-        for (let i = 0; i < this.bars.length; i++) {
-          const [a, b, phase] = BAR_WAVES[i] ?? BAR_WAVES[0];
-          const k = 0.65 * wave(t, a, phase) + 0.35 * wave(t, b);
-          this.bars[i]?.scale.setY(BAR_MIN + (BAR_MAX - BAR_MIN) * k);
-        }
-        break;
-      case 'planning':
-        this.ringMaterial.color.copy(CYAN);
-        this.arc.rotation.z = -((t % TURN_MS) / TURN_MS) * 2 * Math.PI;
-        break;
-      case 'connecting': {
-        // A blink with soft edges: mostly on or off, never a hard flicker.
-        const k = smoothstep(0.35, 0.65, wave(t, BLINK_MS));
-        this.lamp.scale.setScalar(LAMP_R);
-        this.lampMaterial.color.lerpColors(AMBER_DIM, AMBER, k);
-        break;
-      }
-      case 'offline':
-        this.lamp.scale.setScalar(LAMP_R);
-        this.lampMaterial.color.copy(RED);
-        break;
-    }
-  }
-}
-
-/** 0 to 1 and back over `period` ms. */
-function wave(t: number, period: number, phase = 0): number {
-  return 0.5 + 0.5 * Math.sin((2 * Math.PI * t) / period + phase);
-}
-
-function smoothstep(a: number, b: number, x: number): number {
-  const k = Math.min(1, Math.max(0, (x - a) / (b - a)));
-  return k * k * (3 - 2 * k);
-}
-
 const PHASE_TEXT: Partial<Record<string, string>> = {
-  idle: 'What do you want to learn?',
+  idle: 'What do you want to do?',
   planning: 'Planning your lesson…',
   locating: 'Looking for the objects…',
   calibrating: 'Setting up…',

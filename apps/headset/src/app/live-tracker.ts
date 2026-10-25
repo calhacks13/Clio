@@ -31,6 +31,7 @@ import type { DepthSource } from '../domain/world/depth-source';
 import type { SurfaceRaycaster } from '../domain/world/grounding';
 import { LiveObjects } from '../domain/world/live-objects';
 import type { ObjectRegistry } from '../domain/world/object-registry';
+import type { Placement } from '../domain/world/placement';
 import type { PoseHistory } from '../domain/world/pose-history';
 import type { Workspace } from '../domain/world/workspace';
 
@@ -94,6 +95,11 @@ export class LiveTracker {
   private followed: string | null = null;
   private highlights: LiveHighlight[] = [];
   private readonly onVisibility = () => this.updateStreaming();
+
+  /** The same current silhouettes drawn by the live presenter, for instruction-card clearance. */
+  get panelMasks(): readonly Placement[] {
+    return this.highlights.map((highlight) => highlight.placement);
+  }
 
   constructor(private readonly deps: LiveTrackerDeps) {
     const { bus, clock, registry, camera, workspace } = deps;

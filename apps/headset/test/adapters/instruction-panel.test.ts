@@ -1,7 +1,8 @@
 // The presenter pulls in troika text, whose typings live with the source (tsconfig.node.json
 // covers only test/), so point the typecheck at them.
 /// <reference path="../../src/adapters/render/troika.d.ts" />
-import { type Group, type Mesh, type MeshBasicMaterial, Object3D, type PlaneGeometry } from 'three';
+import { HAND_SAMPLE_LENGTH, jointOffset } from '@clio/protocol';
+import { type Group, type Mesh, type MeshBasicMaterial, Object3D } from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import type { TextOptions } from '../../src/adapters/render/text';
 
@@ -18,16 +19,37 @@ const text = vi.hoisted(() => {
     maxWidth: number,
     anchorX: string,
     anchorY: string,
+    breakWords = false,
   ): Bounds {
-    const em = 0.55 * size;
+    const measure = (line: string) =>
+      [...line].reduce(
+        (sum, character) =>
+          sum + size * ('ilI'.includes(character) ? 0.25 : 'WM'.includes(character) ? 0.9 : 0.55),
+        0,
+      );
     const lines: string[] = [];
+    const words: string[] = [];
     for (const word of value ? value.split(' ') : []) {
+      if (!breakWords || measure(word) <= maxWidth) words.push(word);
+      else {
+        let part = '';
+        for (const character of word) {
+          if (part && measure(part + character) > maxWidth) {
+            words.push(part);
+            part = '';
+          }
+          part += character;
+        }
+        if (part) words.push(part);
+      }
+    }
+    for (const word of words) {
       const last = lines.at(-1);
-      if (last !== undefined && (last.length + 1 + word.length) * em <= maxWidth) {
+      if (last !== undefined && measure(`${last} ${word}`) <= maxWidth) {
         lines[lines.length - 1] = `${last} ${word}`;
       } else lines.push(word);
     }
-    const w = Math.max(0, ...lines.map((l) => l.length * em));
+    const w = Math.max(0, ...lines.map(measure));
     const h = lines.length * 1.21 * size;
     const x = anchorX === 'right' ? -w : anchorX === 'center' ? -w / 2 : 0;
     const y = anchorY === 'bottom' ? h : anchorY === 'middle' ? h / 2 : 0;
@@ -37,7 +59,11 @@ const text = vi.hoisted(() => {
     pending,
     bounds,
     flush() {
-      while (pending.length) pending.shift()?.();
+      let steps = 0;
+      while (pending.length) {
+        if (++steps > 1000) throw new Error('Text layout did not settle');
+        pending.shift()?.();
+      }
     },
   };
 });
@@ -55,11 +81,24 @@ vi.mock('../../src/adapters/render/text', () => ({
       clipRect: null,
       fontSize: size,
       maxWidth,
-      textRenderInfo: null as { blockBounds: Bounds } | null,
+      overflowWrap: 'normal',
+      textRenderInfo: null as {
+        blockBounds: Bounds;
+        parameters: { text: string; maxWidth: number; fontSize: number };
+      } | null,
       sync() {
+        const parameters = { text: t.text, fontSize: t.fontSize, maxWidth: t.maxWidth };
+        const breakWords = t.overflowWrap === 'break-word';
         text.pending.push(() => {
-          const b = text.bounds(t.text, t.fontSize, t.maxWidth, String(anchorX), String(anchorY));
-          t.textRenderInfo = { blockBounds: b };
+          const b = text.bounds(
+            parameters.text,
+            parameters.fontSize,
+            parameters.maxWidth,
+            String(anchorX),
+            String(anchorY),
+            breakWords,
+          );
+          t.textRenderInfo = { blockBounds: b, parameters };
           t.dispatchEvent({ type: 'synccomplete' } as never);
         });
       },
@@ -74,42 +113,20 @@ vi.mock('../../src/adapters/render/text', () => ({
   },
 }));
 
+import * as panelPlacement from '../../src/adapters/render/panel-placement';
 import type { PresentContext } from '../../src/adapters/render/presenter';
 import {
   InstructionPanelPresenter,
   PANEL_TOP,
-  PANEL_WIDTH,
   stepHeader,
 } from '../../src/adapters/render/presenters/instruction-panel';
+import { invertPose, transformPoint } from '../../src/core/math';
 import type { OverlaySnapshot } from '../../src/domain/overlay/overlay-model';
-
-const LONG_TITLE = 'Test an acid and a base with red-cabbage indicator';
-
-describe('instruction panel header', () => {
-  it('shows the lesson and the step count, separated by spaces only', () => {
-    expect(stepHeader('Refill', 0, 3)).toBe('REFILL   STEP 1 OF 3');
-    expect(stepHeader(null, 1, 2)).toBe('LESSON   STEP 2 OF 2');
-  });
-
-  it('never counts past the last step', () => {
-    expect(stepHeader('Refill', 3, 3)).toBe('REFILL   STEP 3 OF 3');
-  });
-
-  it('uses no bullet or middle-dot separators', () => {
-    expect(stepHeader('Refill', 0, 3)).not.toMatch(/[·•]/);
-  });
-
-  it('cuts the title after a whole word to fit, and keeps the step count', () => {
-    expect(stepHeader(LONG_TITLE, 9, 12, 34)).toBe('TEST AN ACID AND…   STEP 10 OF 12');
-    expect(stepHeader('Refill washer fluid', 0, 4, 34)).toBe('REFILL WASHER FLUID   STEP 1 OF 4');
-    expect(stepHeader('X'.repeat(40), 0, 4, 20)).toBe(`${'X'.repeat(5)}…   STEP 1 OF 4`);
-  });
-});
 
 type Line = Object3D & {
   text: string;
   color: number;
-  clipRect: number[] | null;
+  outlineWidth: number;
   maxWidth: number;
   textRenderInfo: { blockBounds: Bounds } | null;
 };
@@ -153,11 +170,13 @@ function context(
   };
 }
 
-/** The panel's parts in the order it adds them, and the mark's: lamp, ring, arc, three bars. */
+function update(panel: InstructionPanelPresenter, ctx: PresentContext): void {
+  panel.update(ctx);
+  text.flush();
+}
+
 function parts(panel: InstructionPanelPresenter) {
   const children = panel.object.children;
-  const mark = children[8] as Group;
-  const [lamp, ring, arc, ...bars] = mark.children as Mesh[];
   const button = children[6] as Group;
   return {
     background: children[0] as Mesh,
@@ -168,113 +187,95 @@ function parts(panel: InstructionPanelPresenter) {
     bar: children[5] as Mesh,
     button,
     buttonBg: button.children[0] as Mesh,
-    label: children[7] as Line,
-    mark,
-    lamp: lamp as Mesh,
-    ring: ring as Mesh,
-    arc: arc as Mesh,
-    bars,
   };
 }
 
-const hex = (mesh: Mesh) => (mesh.material as MeshBasicMaterial).color.getHex();
+function extent(t: Line) {
+  const [x0, y0, x1, y1] = t.textRenderInfo?.blockBounds ?? [0, 0, 0, 0];
+  const { x, y } = t.position;
+  return { left: x + x0, right: x + x1, top: y + y1, bottom: y + y0, empty: y1 - y0 === 0 };
+}
 
-describe('InstructionPanelPresenter coach status', () => {
-  it('shows a mark and a word at the right of the header row', () => {
+function meshBox(mesh: Mesh) {
+  mesh.geometry.computeBoundingBox();
+  const bounds = mesh.geometry.boundingBox;
+  if (!bounds) throw new Error('No geometry bounds');
+  return {
+    left: mesh.position.x + bounds.min.x,
+    right: mesh.position.x + bounds.max.x,
+    top: mesh.position.y + bounds.max.y,
+    bottom: mesh.position.y + bounds.min.y,
+    height: bounds.max.y - bounds.min.y,
+    width: bounds.max.x - bounds.min.x,
+  };
+}
+
+function buttonBox(panel: InstructionPanelPresenter) {
+  const { button, buttonBg } = parts(panel);
+  const box = meshBox(buttonBg);
+  return {
+    left: box.left + button.position.x,
+    right: box.right + button.position.x,
+    top: box.top + button.position.y,
+    bottom: box.bottom + button.position.y,
+  };
+}
+
+describe('InstructionPanelPresenter minimal content', () => {
+  it('shows only the step count above the instruction, regardless of lesson title', () => {
+    expect(stepHeader(0, 3)).toBe('Step 1 of 3');
+    expect(stepHeader(3, 3)).toBe('Step 3 of 3');
     const panel = new InstructionPanelPresenter(() => {});
-    panel.update(context(snapshot()));
-    const { label, mark, header } = parts(panel);
-    expect(label.visible).toBe(true);
-    expect(label.text).toBe('Listening');
-    expect(mark.visible).toBe(true);
-    expect(label.position.y).toBe(header.position.y);
-    expect(label.position.x).toBeLessThan(mark.position.x);
-    expect(mark.position.x).toBeGreaterThan(header.position.x);
+    update(panel, context(snapshot({ title: 'A very long repeated lesson title' })));
+    expect(parts(panel).header.text).toBe('Step 1 of 3');
   });
 
-  it('hides it for a coach that cannot hear, and without a coach', () => {
+  it('has no listening label, coach mark or duplicate conversational caption', () => {
     const panel = new InstructionPanelPresenter(() => {});
-    for (const over of [{ voice: 'off' }, { coach: 'off', voice: 'off' }] as const) {
-      panel.update(context(snapshot()));
-      panel.update(context(snapshot(over)));
-      const { label, mark } = parts(panel);
-      expect(label.visible).toBe(false);
-      expect(mark.visible).toBe(false);
+    for (const voice of ['quiet', 'hearing', 'speaking'] as const) {
+      update(
+        panel,
+        context(snapshot({ voice, caption: { role: 'coach', text: 'Open the cap.' } })),
+      );
+      expect(panel.object.children).toHaveLength(7);
+      expect(parts(panel).status.text).toBe('');
+      expect(parts(panel).header.text).toBe('Step 1 of 3');
     }
+    update(panel, context(snapshot({ phase: 'idle', instruction: null })));
+    expect(parts(panel).header.text).toBe('');
+    expect(parts(panel).detail.text).toBe('');
   });
 
-  it('cuts a long title the same with or without the mark, and moves nothing', () => {
+  it('keeps actionable corrections, missing-object guidance and offline recovery', () => {
     const panel = new InstructionPanelPresenter(() => {});
-    const long = {
-      title: LONG_TITLE,
-      instruction: { text: 'Add vinegar.', index: 9, total: 12, progress: 0 },
-    };
-    const { header, label } = parts(panel);
-    panel.update(context(snapshot({ ...long, voice: 'off' })));
-    text.flush();
-    const at = header.position.clone();
-    const clipRect = header.clipRect;
-    expect(header.text).toBe('TEST AN ACID AND…   STEP 10 OF 12');
-    expect(clipRect).not.toBeNull();
-    // Without the mark the header still ends well inside the panel.
-    expect(extent(header).right).toBeLessThan(PANEL_WIDTH / 2 - 0.02);
-
-    panel.update(context(snapshot(long)));
-    text.flush();
-    expect(header.text).toBe('TEST AN ACID AND…   STEP 10 OF 12');
-    expect(header.clipRect).toEqual(clipRect);
-    expect(header.position).toEqual(at);
-    expect(extent(header).right).toBeLessThan(extent(label).left);
+    const { status } = parts(panel);
+    update(panel, context(snapshot({ missing: ['syringe'] })));
+    expect(status.text).toBe("Can't see: syringe. Pinch it to show me.");
+    update(panel, context(snapshot({ coach: 'error' })));
+    expect(status.text).toBe('Voice offline. Use Done to continue.');
+    update(panel, context(snapshot({ toast: { kind: 'mistake', text: 'Use cup A.' } })));
+    expect(status.text).toBe('Use cup A.');
+    update(panel, context(snapshot({ toast: { kind: 'success', text: 'Nice!' } })));
+    expect(status.text).toBe('');
   });
 
-  it('draws each state with its own mark, in solid opaque colors', () => {
+  it('says completion once without a title or success toast', () => {
     const panel = new InstructionPanelPresenter(() => {});
-    const { lamp, ring, arc, bars, label } = parts(panel);
-    const shown = () =>
-      [lamp.visible && 'lamp', ring.visible && 'ring', arc.visible && 'arc'].filter(Boolean);
-    const cases: [Partial<OverlaySnapshot>, string[], string][] = [
-      [{}, ['lamp', 'ring'], 'Listening'],
-      [{ voice: 'hearing' }, ['lamp', 'ring'], 'Listening'],
-      [{ voice: 'speaking' }, [], 'Speaking'],
-      [{ phase: 'planning', instruction: null }, ['arc'], 'Planning'],
-      [{ coach: 'reconnecting' }, ['lamp'], 'Connecting'],
-      [{ coach: 'error' }, ['lamp'], 'Voice offline'],
-    ];
-    for (const [over, marks, word] of cases) {
-      panel.update(context(snapshot(over)));
-      expect(shown()).toEqual(marks);
-      expect(bars.every((b) => b.visible)).toBe(word === 'Speaking');
-      expect(label.text).toBe(word);
-    }
-    // Still red, the word too: the voice is gone.
-    expect(hex(lamp)).toBe(0xff6b78);
-    expect(label.color).toBe(0xff6b78);
-    for (const mesh of [lamp, ring, arc, ...bars]) {
-      const material = mesh.material as MeshBasicMaterial;
-      expect(material.transparent).toBe(false);
-      expect(material.opacity).toBe(1);
-    }
-  });
-
-  it('animates from the frame time, and keeps offline still', () => {
-    const panel = new InstructionPanelPresenter(() => {});
-    const { lamp, ring, arc, bars } = parts(panel);
-    const at = (over: Partial<OverlaySnapshot>, t: number) => {
-      panel.update(context(snapshot(over), t));
-      return {
-        ring: ring.scale.x,
-        arc: arc.rotation.z,
-        bars: bars.map((b) => b.scale.y),
-        lamp: hex(lamp),
-      };
-    };
-    // The listening ring breathes over 3.6 s, like the glow.
-    expect(at({}, 0).ring).not.toBeCloseTo(at({}, 900).ring, 3);
-    expect(at({ voice: 'speaking' }, 0).bars).not.toEqual(at({ voice: 'speaking' }, 120).bars);
-    const planning = { phase: 'planning', instruction: null } as const;
-    expect(at(planning, 0).arc).not.toBeCloseTo(at(planning, 300).arc, 3);
-    expect(at({ coach: 'connecting' }, 0).lamp).not.toBe(at({ coach: 'connecting' }, 250).lamp);
-    expect(at({ coach: 'closed' }, 0)).toEqual(at({ coach: 'closed' }, 777));
+    update(
+      panel,
+      context(
+        snapshot({
+          phase: 'done',
+          instruction: null,
+          toast: { kind: 'success', text: 'Lesson complete!' },
+        }),
+      ),
+    );
+    const { header, instruction, status, button } = parts(panel);
+    expect(instruction.text).toBe('Lesson complete!');
+    expect(header.text).toBe('');
+    expect(status.text).toBe('');
+    expect(button.visible).toBe(false);
   });
 });
 
@@ -286,65 +287,36 @@ const LONG_STEP = {
   progress: 0.7,
 };
 
-/** Where a text block or the panel sits, in the panel's plane. */
-function extent(t: Line) {
-  const [x0, y0, x1, y1] = t.textRenderInfo?.blockBounds ?? [0, 0, 0, 0];
-  const { x, y } = t.position;
-  return { left: x + x0, right: x + x1, top: y + y1, bottom: y + y0, empty: y1 - y0 === 0 };
-}
-
-function panelBox(panel: InstructionPanelPresenter) {
-  const { background } = parts(panel);
-  const top = background.position.y + background.scale.y / 2;
-  return { top, bottom: top - background.scale.y, height: background.scale.y };
-}
-
-function buttonBox(panel: InstructionPanelPresenter) {
-  const { button, buttonBg } = parts(panel);
-  const { width, height } = (buttonBg.geometry as PlaneGeometry).parameters;
-  const { x, y } = button.position;
-  return { left: x - width / 2, right: x + width / 2, top: y + height / 2, bottom: y - height / 2 };
-}
-
 describe('InstructionPanelPresenter layout', () => {
+  it('waits for its first measured content before showing the card', () => {
+    const panel = new InstructionPanelPresenter(() => {});
+    expect(panel.object.visible).toBe(false);
+    panel.update(context(snapshot()));
+    expect(panel.object.visible).toBe(false);
+    text.pending.shift()?.();
+    expect(panel.object.visible).toBe(false);
+    text.flush();
+    expect(panel.object.visible).toBe(true);
+  });
+
   const cases: [string, Partial<OverlaySnapshot>, PresentContext['calibration']?][] = [
-    [
-      'a three-line step, a long detail and a coach caption',
-      {
-        instruction: LONG_STEP,
-        voice: 'speaking',
-        caption: {
-          role: 'coach',
-          text: 'Dip the syringe tip into the bottle and pull the plunger back.',
-        },
-      },
-    ],
+    ['long instruction and detail', { instruction: LONG_STEP }],
     ['objects missing', { instruction: LONG_STEP, missing: ['indicator', 'syringe', 'cup A'] }],
     [
-      'a long mistake',
+      'long correction',
       {
-        instruction: { ...LONG_STEP, detail: undefined },
+        instruction: LONG_STEP,
         toast: {
           kind: 'mistake',
           text: "That's cup B. Vinegar goes in cup A, the one on the left.",
         },
       },
     ],
-    ['a long title, no mark', { title: LONG_TITLE, coach: 'off', instruction: LONG_STEP }],
+    ['voice offline', { instruction: LONG_STEP, coach: 'error' }],
+    ['idle', { phase: 'idle', instruction: null }],
     [
-      'the learner talking, no button',
-      {
-        phase: 'idle',
-        instruction: null,
-        caption: {
-          role: 'user',
-          text: 'I want to test an acid and a base with cabbage juice, please.',
-        },
-      },
-    ],
-    [
-      'a calibration error',
-      { phase: 'idle', instruction: null, coach: 'off' },
+      'calibration error',
+      { phase: 'idle', instruction: null },
       {
         step: 'second',
         text: 'Now pinch the near-right corner of your work area.',
@@ -355,16 +327,16 @@ describe('InstructionPanelPresenter layout', () => {
   ];
 
   for (const [name, over, calibration] of cases) {
-    it(`stacks ${name} without overlap, inside a panel grown down from its top`, () => {
+    it(`fits ${name} without text or button overlap`, () => {
       const panel = new InstructionPanelPresenter(() => {});
-      panel.update(context(snapshot(over), 0, calibration ?? null));
+      update(panel, context(snapshot(over), 0, calibration ?? null));
       text.flush();
-      const { header, instruction, detail, status, bar, button } = parts(panel);
-      const box = panelBox(panel);
-      expect(box.top).toBeCloseTo(PANEL_TOP, 9);
-      expect(box.height).toBeGreaterThanOrEqual(0.17);
-      expect(panel.panelHeight).toBeCloseTo(box.height, 9);
-
+      const { header, instruction, detail, status, background, button, bar } = parts(panel);
+      const box = meshBox(background);
+      expect(box.top).toBeCloseTo(PANEL_TOP, 6);
+      expect(box.height).toBeGreaterThan(0.04);
+      expect(panel.panelWidth).toBeCloseTo(box.width, 6);
+      expect(panel.panelHeight).toBeCloseTo(box.height, 6);
       const blocks = [header, instruction, detail, status].map(extent).filter((b) => !b.empty);
       for (let i = 1; i < blocks.length; i++) {
         expect(blocks[i - 1]?.bottom).toBeGreaterThan((blocks[i]?.top ?? 0) + 0.004);
@@ -372,90 +344,145 @@ describe('InstructionPanelPresenter layout', () => {
       for (const b of blocks) {
         expect(b.top).toBeLessThan(box.top - 0.01);
         expect(b.bottom).toBeGreaterThan(box.bottom + 0.01);
-        expect(b.left).toBeGreaterThanOrEqual(-PANEL_WIDTH / 2 + 0.02);
-        expect(b.right).toBeLessThanOrEqual(PANEL_WIDTH / 2 - 0.02);
+        expect(b.left).toBeGreaterThanOrEqual(-panel.panelWidth / 2 + 0.02);
+        expect(b.right).toBeLessThanOrEqual(panel.panelWidth / 2 - 0.02);
       }
-
-      expect(button.visible).toBe(over.instruction !== null);
+      expect(button.visible).toBe(over.instruction !== null && !calibration);
       if (button.visible) {
         const done = buttonBox(panel);
-        const above = extent(detail).empty ? extent(instruction) : extent(detail);
-        expect(done.top).toBeLessThan(above.bottom);
-        expect(done.bottom).toBeGreaterThan(box.bottom);
-        expect(done.right).toBeLessThan(PANEL_WIDTH / 2);
-        if (status.text) expect(extent(status).right).toBeLessThan(done.left);
+        expect(done.top).toBeLessThan(blocks.at(-1)?.bottom ?? 0);
+        expect(done.bottom).toBeGreaterThan(box.bottom + 0.01);
+        expect(done.right).toBeLessThan(panel.panelWidth / 2 - 0.01);
       }
-      // The progress bar runs along the bottom edge.
       expect(bar.position.y).toBeGreaterThan(box.bottom);
       expect(bar.position.y).toBeLessThan(box.bottom + 0.01);
     });
   }
 
-  it('keeps the least height for short text, the status line centred on the button', () => {
+  it('fits both axes to the content and shrinks again after a shorter instruction', () => {
     const panel = new InstructionPanelPresenter(() => {});
-    panel.update(context(snapshot({ toast: { kind: 'success', text: 'Nice!' } })));
-    text.flush();
-    const { status } = parts(panel);
-    expect(panelBox(panel).height).toBeCloseTo(0.17, 9);
-    const done = buttonBox(panel);
-    const line = extent(status);
-    expect((line.top + line.bottom) / 2).toBeCloseTo((done.top + done.bottom) / 2, 9);
+    update(panel, context(snapshot()));
+    const short = { width: panel.panelWidth, height: panel.panelHeight };
+    expect(short.height).toBeLessThan(short.width);
+    update(panel, context(snapshot({ instruction: LONG_STEP, missing: ['indicator', 'syringe'] })));
+    expect(panel.panelWidth).toBeGreaterThan(short.width);
+    expect(panel.panelHeight).toBeGreaterThan(short.height);
+    update(panel, context(snapshot()));
+    expect(panel.panelWidth).toBeCloseTo(short.width, 6);
+    expect(panel.panelHeight).toBeCloseTo(short.height, 6);
   });
 
-  it('lays out again when text finishes laying out, with no new frame', () => {
+  it('keeps a simple phase message on one line when its natural width fits', () => {
     const panel = new InstructionPanelPresenter(() => {});
-    const { instruction, detail } = parts(panel);
-    const step = { ...LONG_STEP, text: 'Open the cap.' };
-    panel.update(context(snapshot({ instruction: step })));
-    text.flush();
-    const before = { detail: detail.position.y, height: panelBox(panel).height };
+    update(panel, context(snapshot({ phase: 'idle', instruction: null })));
+    const line = parts(panel).instruction;
+    expect(extent(line).top - extent(line).bottom).toBeCloseTo(0.023 * 1.21, 6);
+    expect(panel.panelHeight).toBeLessThan(0.1);
+    expect(panel.panelWidth).toBeCloseTo(extent(line).right - extent(line).left + 0.044, 6);
+  });
+
+  it('sizes from actual glyph metrics rather than the number of characters', () => {
+    const panel = new InstructionPanelPresenter(() => {});
+    const step = snapshot().instruction;
+    if (!step) throw new Error('No step');
+    update(
+      panel,
+      context(snapshot({ instruction: { ...step, text: Array(6).fill('iiiiiiii').join(' ') } })),
+    );
+    const narrow = panel.panelWidth;
+    update(
+      panel,
+      context(snapshot({ instruction: { ...step, text: Array(6).fill('WWWWWWWW').join(' ') } })),
+    );
+    expect(panel.panelWidth).toBeGreaterThan(narrow);
+  });
+
+  it('ignores stale asynchronous measurements and settles without a resync loop', () => {
+    const panel = new InstructionPanelPresenter(() => {});
     panel.update(context(snapshot({ instruction: LONG_STEP })));
-    // troika still shows the old text, so the old layout stays until the new one is measured.
-    expect(detail.position.y).toBe(before.detail);
-    text.flush();
-    expect(detail.position.y).toBeLessThan(before.detail);
-    expect(extent(instruction).bottom).toBeGreaterThan(extent(detail).top);
-    expect(panelBox(panel).height).toBeGreaterThan(before.height);
-  });
-
-  it('wraps the status line short of the Done button, and across the panel without it', () => {
-    const panel = new InstructionPanelPresenter(() => {});
-    const { status } = parts(panel);
-    panel.update(context(snapshot({ missing: ['indicator', 'syringe'] })));
-    text.flush();
-    const beside = status.maxWidth;
-    expect(status.position.x + beside).toBeLessThan(buttonBox(panel).left);
-
-    const caption = { role: 'user', text: 'I want to test an acid and a base.' } as const;
-    panel.update(context(snapshot({ phase: 'idle', instruction: null, caption })));
-    text.flush();
-    expect(status.maxWidth).toBeGreaterThan(beside);
-    expect(status.position.x + status.maxWidth).toBeLessThanOrEqual(PANEL_WIDTH / 2 - 0.02);
-  });
-
-  it('says the lesson is complete once, and still shows other toasts', () => {
-    const panel = new InstructionPanelPresenter(() => {});
-    const { instruction, status } = parts(panel);
-    const toast = { kind: 'success', text: 'Lesson complete!' } as const;
-    panel.update(context(snapshot({ phase: 'done', instruction: null, toast })));
-    expect(instruction.text).toBe('Lesson complete!');
-    expect(status.text).toBe('');
-    panel.update(context(snapshot({ toast: { kind: 'success', text: 'Nice!' } })));
-    expect(status.text).toBe('Nice!');
-  });
-
-  it('draws the panel and the Done button solid and opaque, in their colors', () => {
-    const panel = new InstructionPanelPresenter(() => {});
     panel.update(context(snapshot()));
-    const { background, buttonBg } = parts(panel);
+    text.flush();
+    expect(parts(panel).instruction.text).toBe('Open the cap.');
+    const size = [panel.panelWidth, panel.panelHeight];
+    update(panel, context(snapshot()));
+    expect([panel.panelWidth, panel.panelHeight]).toEqual(size);
+    expect(text.pending).toHaveLength(0);
+  });
+
+  it('rechecks mask clearance using actual dimensions as soon as async resizing finishes', () => {
+    const place = vi.spyOn(panelPlacement, 'placeInstructionPanel');
+    try {
+      const panel = new InstructionPanelPresenter(() => {});
+      update(panel, context(snapshot()));
+      panel.update(
+        context(snapshot({ instruction: LONG_STEP, missing: ['indicator', 'syringe'] })),
+      );
+      place.mockClear();
+      text.flush();
+      expect(place).toHaveBeenCalled();
+      const latest = place.mock.calls.at(-1);
+      expect(latest?.[1]).toBe(panel.panelWidth);
+      expect(latest?.[2]).toBe(panel.panelHeight);
+    } finally {
+      place.mockRestore();
+    }
+  });
+
+  it('reflows after async text measurement without needing a new frame', () => {
+    const panel = new InstructionPanelPresenter(() => {});
+    update(panel, context(snapshot({ instruction: { ...LONG_STEP, text: 'Open the cap.' } })));
+    text.flush();
+    const { instruction, detail } = parts(panel);
+    const before = detail.position.y;
+    panel.update(context(snapshot({ instruction: LONG_STEP })));
+    expect(detail.position.y).toBe(before);
+    text.flush();
+    expect(detail.position.y).toBeLessThan(before);
+    expect(extent(instruction).bottom).toBeGreaterThan(extent(detail).top);
+  });
+
+  it('uses opaque white and ink surfaces without dark text outlines', () => {
+    const panel = new InstructionPanelPresenter(() => {});
+    const { background, buttonBg, header, instruction, detail, status } = parts(panel);
     for (const [mesh, color] of [
-      [background, 0x0b1220],
-      [buttonBg, 0x2a7d5a],
+      [background, 0xffffff],
+      [buttonBg, 0x0f1117],
     ] as const) {
       const material = mesh.material as MeshBasicMaterial;
       expect(material.transparent).toBe(false);
       expect(material.opacity).toBe(1);
       expect(material.color.getHex()).toBe(color);
+    }
+    for (const line of [header, instruction, detail, status]) expect(line.outlineWidth).toBe(0);
+  });
+
+  it('confirms a fingertip touch in workspace coordinates and prevents repeated presses', () => {
+    vi.useFakeTimers();
+    try {
+      const onDone = vi.fn();
+      const panel = new InstructionPanelPresenter(onDone);
+      const ctx = context(snapshot(), 2000);
+      ctx.worldFromWorkspace = { p: [1, 0.2, -0.3], q: [0, Math.SQRT1_2, 0, Math.SQRT1_2] };
+      update(panel, ctx);
+      text.flush();
+      const center = parts(panel).button.getWorldPosition(new Object3D().position);
+      const tip = transformPoint(invertPose(ctx.worldFromWorkspace), center.toArray());
+      const joints = new Array<number>(HAND_SAMPLE_LENGTH).fill(0);
+      const offset = jointOffset('index-finger-tip');
+      joints.splice(offset, 3, ...tip);
+      ctx.hands = { t: ctx.t, head: ctx.head, left: { joints, pinch: 0.03 }, right: null };
+      update(panel, ctx);
+      expect(onDone).toHaveBeenCalledTimes(1);
+      update(panel, { ...ctx, t: 2100 });
+      expect(onDone).toHaveBeenCalledTimes(1);
+      update(panel, { ...ctx, t: 3600 });
+      expect(onDone).toHaveBeenCalledTimes(2);
+      joints[offset] = (joints[offset] ?? 0) + 0.2;
+      update(panel, { ...ctx, t: 5200 });
+      expect(onDone).toHaveBeenCalledTimes(2);
+      vi.runAllTimers();
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

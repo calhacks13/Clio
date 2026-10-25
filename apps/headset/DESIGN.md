@@ -1,4 +1,41 @@
-# Tracked object light
+# Headset UI
+
+The launch page and lesson cards use the supplied **Clio Design Principles** (2026-10-24):
+quiet cool slate, opaque white surfaces, near-black ink, hairlines and filled pill controls.
+The shared library reference is `awesome-design-md/references/design-md/linear.app/DESIGN.md`
+for restraint, hierarchy and surface separation; the supplied light palette and pill shapes
+override that reference's dark palette and purple controls.
+- Canvas `#EDF2F6`, surface `#FFFFFF`, inset `#F4F6FA`, ink `#0F1117`, secondary `#5B6472`,
+  placeholder `#646D7C`, opaque hairline `#D7DFE8`. Focus is guidance blue `#1768D9`.
+- Inter carries UI copy, with Inter Tight for the launch question. Self-host fonts. The launch
+  screen uses a low-contrast painted daylight sky; AR always keeps the real passthrough view.
+  No marketing sections or decorative serif words are added to this task surface.
+- Launch with the question, goal field and dark filled Start lesson button. Remove the wordmark,
+  tagline and empty-goal hint. Keep options below and setup problems only when relevant.
+- Controls stay at least 56px tall on the launch page. Use 24px vertical grouping and 12px
+  within the field/button pair. On phones use 24px side padding and natural vertical scrolling.
+- Lesson cards fit the measured content in both width and height. Short messages are compact;
+  instructions, details and actionable corrections expand naturally within a comfortable reading
+  width. Keep readable text size and padding rather than shrinking the type or forcing a square.
+  Use subtly rounded corners, dark text, a dark filled Done pill and sentence-case metadata.
+  Quiet listening has no label or dot. Report a disconnected voice with an actionable message.
+- Position cards beside the projected object silhouette with a 3.5cm gap at the card plane.
+  Consider left, right, top and bottom, avoiding every known mask, including live tracker masks.
+  Follow the full gaze orientation, including looking down at a table; start adjacent to the task.
+  Use conservative mask bounds; estimates without masks use their declared object radius.
+  Evaluate the full measured card rectangle, preferred view bounds, task proximity and gaze travel
+  when choosing a side. Recheck when its size changes, and prefer a fully visible comfortable fit.
+  Keep a clear placement stable. If a moving mask blocks it, choose a new clear position without
+  animating across the object. In a crowded view, preserving object visibility takes precedence
+  over keeping the whole card inside the preferred view area.
+- Keep keyboard focus, readable disabled states, reduced-motion support and local-only assets.
+  The gallery previews the actual launch UI and presenter, including explicit mask-clearance cases.
+
+The supplied Inter families are an intentional exception to generic font-diversity lint warnings.
+Gallery headings are styled through its dynamically imported CSS (H2 25.6px, H3 17.6px, body 16px),
+which the HTML-only hierarchy detector does not resolve.
+
+## Tracked object light
 
 The headset is an AR task surface. Preserve labels, placement, hand skeletons and HUD. The
 visual reference is Desktop `Jev fun/experiments/edgetam/preview/index.html`: saturated cyan
@@ -57,11 +94,5 @@ with no allocations; all softness is shaped in the fragment shader. Quad, materi
 reused; XR frames only move, fade and animate the group. `glow-preview.html` renders the effect
 on the demo photo with saved masks, a live local tracker mask, jitter and an orbiting eye.
 
-The instruction panel's coach status mark borrows this cyan, and the 3.6 s breath while Clio
-listens. It is solid and opaque (white bars speaking, amber connecting, red offline) and keeps the
-header row's right end, so the light never moves when its word changes.
-
-The instruction panel itself is solid and opaque: navy `#0b1220`, the Done button solid green
-`#2a7d5a`. Its text stacks from the panel's top edge (header row, instruction, detail) above a
-bottom row where the status line wraps beside the Done button, and the panel grows downward to
-fit, never shorter than 17 cm. The header's title gives way to the step count, mark or not.
+The object-light treatment is independent of the white instruction cards. Preserve its existing
+cyan and destination-yellow semantics while applying the slate theme to UI surfaces.

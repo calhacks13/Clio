@@ -7,6 +7,7 @@ import type { TrackedFrame } from '../../domain/hands/types';
 import type { OverlaySnapshot } from '../../domain/overlay/overlay-model';
 import type { CalibrationPrompt } from '../../domain/world/calibration';
 import type { ObjectEstimate } from '../../domain/world/object-registry';
+import type { Placement } from '../../domain/world/placement';
 
 /** Everything a presenter may read in a frame. Presenters never mutate domain state. */
 export interface PresentContext {
@@ -15,6 +16,8 @@ export interface PresentContext {
   snapshot: OverlaySnapshot;
   procedure: Procedure | null;
   objects: readonly ObjectEstimate[];
+  /** Current live tracker silhouettes in world space, used to keep UI clear of real objects. */
+  objectMasks?: readonly Placement[];
   demo: Demonstration | null;
   /** Ghost hands for this frame (workspace frame), when a demo is playing. */
   demoHands: HandsSample | null;

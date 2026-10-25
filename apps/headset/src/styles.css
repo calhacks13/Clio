@@ -1,32 +1,30 @@
-/* The launch page (app/boot-view.ts): the headset's light world on a 2D page. A deep navy ground
-   like a dark room before passthrough, one light (the cyan the real objects glow, DESIGN.md) on
-   the button and the focus ring, solid borderless fields, and problems as solid blocks. Read at
-   arm's length in a browser window floating in the headset, so the type is large and every
-   target is at least 56 px tall. Every fill is solid. */
+/* Quiet slate UI over a painted sky. Shared by launch and gallery frames. */
+@import "./ui-fonts.css";
 
 :root {
-  color-scheme: dark;
-  --ground: #070b14;
-  --raised: #121b2f;
-  --raised-hover: #1a2640;
-  --raised-strong: #2b3b5d;
-  --sunken: #0c1220;
-  --text: #e8eefc;
-  --muted: #8ea0c2;
-  --placeholder: #8193b6;
-  --faint: #5d6f93;
-  --accent: #24d4ed;
-  --accent-hover: #62e2f4;
-  --accent-press: #1ab8cf;
-  --on-accent: #03161d;
-  --bad: #ff8585;
-  --bad-hover: #ffa1a1;
-  --bad-text: #ffa3a3;
-  --on-bad: #2a0808;
-  --warn: #ffb547;
-  --on-warn: #2a1800;
-  --radius: 0.75rem;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme: light;
+  --ground: #edf2f6;
+  --raised: #ffffff;
+  --raised-hover: #f5f7fa;
+  --raised-strong: #8190a3;
+  --sunken: #e3e9f0;
+  --text: #0f1117;
+  --muted: #5b6472;
+  --placeholder: #646d7c;
+  --faint: #5b6472;
+  --accent: #0f1117;
+  --accent-hover: #24303d;
+  --accent-press: #3a414d;
+  --on-accent: #ffffff;
+  --focus: #1768d9;
+  --bad: #fbe6e7;
+  --bad-hover: #f5d4d7;
+  --bad-text: #a52d3d;
+  --on-bad: #7f2532;
+  --warn: #fff0e4;
+  --on-warn: #914100;
+  --radius: 9999px;
+  font-family: "Inter", sans-serif;
   scrollbar-color: var(--raised-strong) var(--ground);
 }
 
@@ -42,15 +40,23 @@ body {
   color: var(--text);
 }
 
+body {
+  min-height: 100svh;
+  background-image: url("/assets/sky-day.webp");
+  background-size: cover;
+  background-position: center 20%;
+  background-attachment: fixed;
+}
+
 ::selection {
   background: var(--accent);
   color: var(--on-accent);
 }
 
 .boot {
-  max-width: 40rem;
+  max-width: 42rem;
   margin: 0 auto;
-  padding: clamp(1.5rem, 8vh, 4.5rem) 1rem 4rem;
+  padding: clamp(3rem, 15vh, 7rem) 1.5rem 4rem;
   font-size: 1.15rem;
   line-height: 1.45;
 }
@@ -60,7 +66,7 @@ body {
 }
 
 .boot :focus-visible {
-  outline: 3px solid var(--accent);
+  outline: 3px solid var(--focus);
   outline-offset: 3px;
 }
 
@@ -70,49 +76,18 @@ body {
   white-space: nowrap;
 }
 
-/* Name and tagline: present, subordinate to the question. */
-.brand {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.25rem 1rem;
-}
-
-.wordmark {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 1.25rem;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-}
-
-.wordmark::before {
-  content: "";
-  width: 0.75rem;
-  height: 0.75rem;
-  border-radius: 50%;
-  background: var(--accent);
-}
-
-.tagline {
-  color: var(--muted);
-  font-size: 1.1rem;
-  text-wrap: balance;
-}
-
 /* Only when something is wrong: the problem, then the fix. */
 .problems {
   list-style: none;
   padding: 0;
-  margin-top: 2.5rem;
+  margin-bottom: 2.5rem;
   display: grid;
   gap: 0.5rem;
 }
 
 .problem {
   padding: 1rem 1.25rem;
-  border-radius: var(--radius);
+  border-radius: 18px;
 }
 
 .problem.bad {
@@ -130,20 +105,24 @@ body {
 }
 
 .start {
-  margin-top: clamp(2.5rem, 10vh, 4.5rem);
+  margin-top: 0;
   display: flex;
   flex-direction: column;
 }
 
 .problems + .start {
-  margin-top: 2.5rem;
+  margin-top: 0;
 }
 
 .start h1 {
-  margin-bottom: 1.25rem;
-  font-size: clamp(2rem, 1.5rem + 2vw, 2.4rem);
-  font-weight: 650;
-  line-height: 1.15;
+  align-self: center;
+  max-width: 18ch;
+  margin-bottom: 2rem;
+  font-family: "Inter Tight", "Inter", sans-serif;
+  font-size: clamp(2.5rem, 2rem + 2vw, 3.5rem);
+  text-align: center;
+  font-weight: 700;
+  line-height: 1.05;
   letter-spacing: -0.02em;
   text-wrap: balance;
 }
@@ -158,11 +137,12 @@ body {
   background: var(--raised);
   color: var(--text);
   font: inherit;
-  caret-color: var(--accent);
+  caret-color: var(--text);
+  box-shadow: inset 0 0 0 1px #d7dfe8;
 }
 
 #goal {
-  font-size: 1.3rem;
+  font-size: 1.125rem;
 }
 
 #goal::placeholder {
@@ -172,7 +152,7 @@ body {
 
 #goal:hover:not(:disabled),
 .field select:hover {
-  background: var(--raised-hover);
+  background-color: var(--raised-hover);
 }
 
 #goal:disabled {
@@ -195,7 +175,7 @@ body {
   background: var(--accent);
   color: var(--on-accent);
   font: inherit;
-  font-size: 1.3rem;
+  font-size: 1.125rem;
   font-weight: 650;
   cursor: pointer;
 }
@@ -251,20 +231,10 @@ body {
   }
 }
 
-/* The hint and an error share one two-line slot, so neither moves the page. */
+/* Keep retry errors in a stable slot without adding helper copy. */
 .note {
-  display: grid;
-  min-height: calc(2 * 1.45em);
+  min-height: 1.5em;
   margin-top: 0.75rem;
-}
-
-.note > p {
-  grid-area: 1 / 1;
-}
-
-.hint {
-  color: var(--muted);
-  text-wrap: pretty;
 }
 
 .error {
@@ -273,15 +243,12 @@ body {
   -webkit-line-clamp: 2;
   overflow: hidden;
   color: var(--bad-text);
-}
-
-.boot[data-progress="error"] .hint,
-.start:has(#goal:disabled) .hint {
-  visibility: hidden;
+  font-size: 0.95rem;
+  text-wrap: pretty;
 }
 
 .more {
-  margin-top: 1rem;
+  margin-top: 0.5rem;
 }
 
 .more summary {
@@ -327,17 +294,17 @@ body {
   color: var(--muted);
 }
 
-/* Chromium draws the native arrow against the padding edge; a border in the fill's own color
-   moves it in from the edge. */
+/* A native select with an inset icon, without distorting the pill's surface. */
 .field select {
-  padding-right: 0.25rem;
-  border-right: 1rem solid var(--raised);
-  font-size: 1.2rem;
+  appearance: none;
+  padding-right: 3rem;
+  border: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' viewBox='0 0 16 16'%3E%3Cpath d='m4 6 4 4 4-4' stroke='%235B6472' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 1.25rem center;
+  background-size: 16px;
+  font-size: 1.125rem;
   cursor: pointer;
-}
-
-.field select:hover {
-  border-right-color: var(--raised-hover);
 }
 
 .field :is(option, optgroup) {
@@ -362,7 +329,7 @@ body {
 }
 
 .switch:has(input:focus-visible) {
-  outline: 3px solid var(--accent);
+  outline: 3px solid var(--focus);
   outline-offset: 3px;
 }
 
@@ -391,7 +358,7 @@ body {
   width: 1.5rem;
   height: 1.5rem;
   border-radius: 50%;
-  background: var(--muted);
+  background: #ffffff;
   transition:
     transform 220ms cubic-bezier(0.16, 1, 0.3, 1),
     background-color 160ms ease-out;
@@ -403,7 +370,7 @@ body {
 
 .switch input:checked::before {
   transform: translateX(1.5rem);
-  background: var(--on-accent);
+  background: #ffffff;
 }
 
 .visually-hidden {
@@ -438,4 +405,15 @@ body {
   position: fixed;
   inset: 0;
   z-index: -1;
+}
+
+@media (max-width: 480px) {
+  .boot {
+    padding-top: 4rem;
+    font-size: 1rem;
+  }
+
+  .switch {
+    border-radius: 18px;
+  }
 }

@@ -9,6 +9,8 @@ declare module 'troika-three-text' {
   }
 
   export interface TextRenderInfo {
+    /** Parameters captured when this asynchronous result was requested. */
+    parameters: { text: string; maxWidth: number; fontSize: number };
     /** [minX, minY, maxX, maxY] of the whole block, each line's full height included. */
     blockBounds: [number, number, number, number];
   }
@@ -25,6 +27,7 @@ declare module 'troika-three-text' {
     textAlign: 'left' | 'right' | 'center' | 'justify';
     fillOpacity: number;
     outlineWidth: number | string;
+    overflowWrap: 'normal' | 'break-word';
     outlineColor: Color | string | number;
     depthOffset: number;
     material: Material;

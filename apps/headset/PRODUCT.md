@@ -57,7 +57,7 @@ catalog, and the real objects are found and lit in place rather than drawn as ge
 
 ## Brand Commitments
 
-- Name: Clio. Tagline: "Every lesson trains two students: you, and a robot."
+- Name: Clio. The launch UI omits the wordmark and tagline so the learner reaches the goal directly.
 - Tracked objects glow cyan (`#24d4ed`); a lesson destination is yellow (`#ffd23f`)
   (apps/headset/DESIGN.md).
 - Peter's UI rules: solid filled controls (no outlined buttons, pills or chips); solid opaque
@@ -73,5 +73,5 @@ Demo photos `public/demo/caliper.jpg` and `public/demo/micrometer.jpg`. Curated 
 
 1. Get the learner into the lesson with almost no reading or typing.
 2. Say what is wrong only when something is wrong, with the fix.
-3. The learner should always know whether Clio is listening, talking or thinking.
+3. Keep quiet listening visually silent; show actionable connection problems and relevant captions.
 4. Perception serves the learner's view and the dataset; it never pretends to be measured.

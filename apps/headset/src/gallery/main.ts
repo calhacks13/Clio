@@ -40,6 +40,7 @@ function mountGallery(): void {
   try {
     const y = Number(sessionStorage.getItem(SCROLL_KEY));
     if (y > 0) window.scrollTo(0, y);
+    else if (location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
   } catch {
     // Storage blocked: start at the top.
   }
