@@ -46,7 +46,14 @@ says, and answers 503 without a Gemini key, 504 past its deadline (8 s).
 Headset to tracker, text JSON:
 
 ```json
-{ "type": "anchor", "id": "cup_a", "t": 123456.7, "box": [0.31, 0.42, 0.58, 0.77], "source": "er", "query": "clear plastic cup on the left, half full of pink liquid" }
+{
+  "type": "anchor",
+  "id": "cup_a",
+  "t": 123456.7,
+  "box": [0.31, 0.42, 0.58, 0.77],
+  "source": "er",
+  "query": "clear plastic cup on the left, half full of pink liquid"
+}
 ```
 
 - `id`: an object of the current set (any other id: logged and skipped). `box`: `[left, top,
@@ -124,13 +131,13 @@ highlight stays lit until the step changes or another `target` replaces it; `att
 
 ## Who owns what
 
-| Workstream | Worktree, branch | Owns |
-| --- | --- | --- |
-| Tracker (Python) | `../Clio-jev-tracker`, `jev/tracker` | `tracker/**` |
-| Server | `../Clio-jev-server`, `jev/server` | `apps/server/**` (focus endpoint, planner descriptions) |
-| Coach + domain | `../Clio-jev-coach`, `jev/coach` | `apps/headset/src/domain/**`, `packages/protocol/src/coach-tools.ts`, coach docs |
-| AR display + wiring | `../Clio-jev-ar`, `jev/ar` | `apps/headset/src/adapters/{net,render,camera}/**`, `apps/headset/src/app/**` |
-| Desk lab | `../Clio-jev-desk`, `jev/desk` | `apps/headset/desk.html`, `apps/headset/src/desk/**`, its vite entry and docs |
+| Workstream          | Worktree, branch                     | Owns                                                                             |
+| ------------------- | ------------------------------------ | -------------------------------------------------------------------------------- |
+| Tracker (Python)    | `../Clio-jev-tracker`, `jev/tracker` | `tracker/**`                                                                     |
+| Server              | `../Clio-jev-server`, `jev/server`   | `apps/server/**` (focus endpoint, planner descriptions)                          |
+| Coach + domain      | `../Clio-jev-coach`, `jev/coach`     | `apps/headset/src/domain/**`, `packages/protocol/src/coach-tools.ts`, coach docs |
+| AR display + wiring | `../Clio-jev-ar`, `jev/ar`           | `apps/headset/src/adapters/{net,render,camera}/**`, `apps/headset/src/app/**`    |
+| Desk lab            | `../Clio-jev-desk`, `jev/desk`       | `apps/headset/desk.html`, `apps/headset/src/desk/**`, its vite entry and docs    |
 
 Another agent is building the Gemini generative UI cards at the same time (branch
 `feat/coach-widgets`, worktree `../Clio-widgets`). Leave its ground alone: the instruction panel
