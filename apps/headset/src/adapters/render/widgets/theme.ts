@@ -1,9 +1,11 @@
 import type { FaceId, TypeRole } from './text-port';
 
 // Every colour, size, type role and motion constant of the coach's widgets (docs/widgets.md), from
-// the Clio design system: white surfaces, ink type, navy hairlines, sunken tracks and soft
-// CSS-like shadows, with signal colour only for state (citrus live, mint done). Blue is absent on
-// purpose: blue means AR guidance, and widgets are information. Views read only WIDGET_THEME.
+// the Clio design system: white surfaces, ink type, solid light fills for controls and dividers,
+// sunken tracks and soft CSS-like shadows for depth, with signal colour only for state (citrus
+// live, mint done). Every fill is a solid, opaque colour: no rings, outlines or translucent tints
+// (the navy hairlines are precomputed over white). Blue is absent on purpose: blue means AR
+// guidance, and widgets are information. Views read only WIDGET_THEME.
 // Design sizes are in mm (1 mm subtends 0.088 deg at the card's 0.65 m); the theme stores metres.
 
 export const MM = 0.001;
@@ -36,6 +38,10 @@ export type ColorToken =
   | 'surface'
   | 'sunken'
   | 'sunkenSoft'
+  | 'divider'
+  | 'control'
+  | 'controlHover'
+  | 'cautionSurface'
   | 'citrus'
   | 'citrusText'
   | 'mint'
@@ -63,15 +69,10 @@ export type MotionKey =
   | 'tickDiscMs'
   | 'segmentGrowMs'
   | 'othersFadeMs'
-  | 'othersAlpha'
   | 'pressHoldMs';
 
 export interface WidgetTheme {
   readonly color: Readonly<Record<ColorToken, number>>;
-  readonly line: {
-    readonly hairline: { readonly color: number; readonly alpha: number };
-    readonly hairlineStrong: { readonly color: number; readonly alpha: number };
-  };
   /** CSS box-shadow layers in mm (y down), sigma = blur / 2. */
   readonly shadow: {
     readonly card: readonly ShadowLayer[];
@@ -86,8 +87,8 @@ export interface WidgetTheme {
     readonly tileRadius: number;
     readonly pillHeight: number;
     readonly chipHeight: number;
+    /** A divider's thickness. */
     readonly hairline: number;
-    readonly ring: number;
     readonly dot: number;
     readonly gap: number;
     /** No text is drawn smaller than this. */
@@ -108,6 +109,13 @@ export const LIGHT: WidgetTheme = {
     surface: 0xffffff,
     sunken: 0xf1f3f7,
     sunkenSoft: 0xf4f6fa,
+    // The design system's navy hairline (#0E2A52) precomputed over white: 10% for dividers and a
+    // control at rest (answers, open checklist circles), 22% under a fingertip.
+    divider: 0xe7eaee,
+    control: 0xe7eaee,
+    controlHover: 0xcad0d9,
+    // The launch page's warning surface.
+    cautionSurface: 0xfff0e4,
     citrus: 0xff7b3d,
     // Reserved: citrus as text on light; no widget text is citrus yet.
     citrusText: 0xb94a00,
@@ -116,10 +124,7 @@ export const LIGHT: WidgetTheme = {
     mintText: 0x007d4d,
     shadow: 0x0f1117,
   },
-  line: {
-    hairline: { color: 0x0e2a52, alpha: 0.1 },
-    hairlineStrong: { color: 0x0e2a52, alpha: 0.16 },
-  },
+  // Shadows are the one translucent thing: offset, blurred depth under a card, never a tint.
   shadow: {
     card: [
       { y: 2, blur: 3, spread: 0, alpha: 0.08 },
@@ -136,7 +141,6 @@ export const LIGHT: WidgetTheme = {
     pillHeight: 34 * MM,
     chipHeight: 30 * MM,
     hairline: 1 * MM,
-    ring: 1.5 * MM,
     dot: 6 * MM,
     gap: 8 * MM,
     floor: 12 * MM,
@@ -193,7 +197,6 @@ export const LIGHT: WidgetTheme = {
     tickDiscMs: 180,
     segmentGrowMs: 200,
     othersFadeMs: 200,
-    othersAlpha: 0.4,
     /** An optimistic press shows this long at most if the board never answers it. */
     pressHoldMs: 600,
   },
@@ -203,10 +206,18 @@ export const LIGHT: WidgetTheme = {
 /** The one line a night variant changes: `export const WIDGET_THEME = NIGHT;`. */
 export const WIDGET_THEME: WidgetTheme = LIGHT;
 
-/** Fills the glare knob dims: the white and sunken surfaces. */
-const LEVELLED: readonly ColorToken[] = ['surface', 'sunken', 'sunkenSoft'];
+/** Fills the glare knob dims: the white surfaces and the light fills drawn on them. */
+const LEVELLED: readonly ColorToken[] = [
+  'surface',
+  'sunken',
+  'sunkenSoft',
+  'divider',
+  'control',
+  'controlHover',
+  'cautionSurface',
+];
 
-/** A token's colour as drawn: surface and sunken fills scaled by `surfaceLevel`. */
+/** A token's colour as drawn: surface and light fills scaled by `surfaceLevel`. */
 export function tokenColor(token: ColorToken, theme: WidgetTheme = WIDGET_THEME): number {
   const hex = theme.color[token];
   return theme.surfaceLevel === 1 || !LEVELLED.includes(token)

@@ -175,10 +175,16 @@ caution) are small cards beside the step card. [docs/widgets.md](../../docs/widg
 reference and `src/adapters/render/widgets/theme.ts` holds every value. What a headset designer
 needs from it:
 - They use the card's light theme: white `#FFFFFF` surfaces, ink `#0F1117`, secondary `#5B6472`
-  and inset `#F4F6FA`, navy-tinted hairlines, soft shadows, Inter and Inter Tight, sentence case,
-  no middle dot, no emoji. Nothing beside the card outweighs its instruction.
-- Signal colours mean state, never decoration, and only on dots, rings, strokes and small state
-  text: citrus `#FF7B3D` for what is live (a running timer, a lasting hazard), mint for done.
+  and inset `#F4F6FA`, soft shadows, Inter and Inter Tight, sentence case, no middle dot, no emoji.
+  Nothing beside the card outweighs its instruction.
+- Solid opaque fills only: no rings, outlines or translucent tints, and no state shown by opacity.
+  Elements are told apart by fill. Answers at rest and open checklist circles are `#E7EAEE`,
+  `#CAD0D9` under a fingertip and ink once pressed or chosen; answers not chosen turn `#F4F6FA`
+  with `#8A94A4` text. Dividers are `#E7EAEE`. Those greys are the navy hairline precomputed over
+  white. The caution sits on the launch page's warning surface `#FFF0E4`. The soft drop shadows
+  stay only as depth cues under cards, pills and answers, never as a tint.
+- Signal colours mean state, never decoration, and only on dots, the timer's ring, checks and small
+  state text: citrus `#FF7B3D` for what is live (a running timer, a lasting hazard), mint for done.
   Guidance blue is absent: blue means AR guidance, and widgets are information.
 - They hang in a column beside the card, its top level with the card's top edge, and follow the
   card: the column copies its pose every frame, so it glides with it beside the lit objects. They

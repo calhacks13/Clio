@@ -55,8 +55,6 @@ const LAYER_ORDER: Readonly<Record<Layer, (o: FaceOrders) => number>> = {
   text: (o) => o.text,
 };
 
-const LINE = WIDGET_THEME.line;
-
 export abstract class Face<W extends Widget = Widget> {
   readonly object = onTopGroup();
   width = WIDGET_THEME.size.dockWidth;
@@ -119,7 +117,7 @@ export abstract class Face<W extends Widget = Widget> {
     return quad;
   }
 
-  /** The card's own quad: surface, an inset hairline-strong ring, a shadow. */
+  /** The card's own quad: a solid surface and the card shadow under it, no ring. */
   protected cardQuad(height: number, radius = WIDGET_THEME.size.cardRadius): UiQuad {
     return this.quad(
       {
@@ -130,9 +128,7 @@ export abstract class Face<W extends Widget = Widget> {
         shadow: WIDGET_THEME.shadow.card,
       },
       'card',
-    )
-      .fill(tokenColor('surface'))
-      .stroke(LINE.hairlineStrong.color, LINE.hairlineStrong.alpha, WIDGET_THEME.size.hairline);
+    ).fill(tokenColor('surface'));
   }
 
   protected label(role: TypeRole, anchor?: TextAnchor): TextHandle {

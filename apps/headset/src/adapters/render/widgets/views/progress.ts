@@ -9,13 +9,12 @@ import { Face } from './face';
 // The progress card (180 x 62): the label and the count ("3 of 4", "120 of 250 mL") over a bar,
 // or for a long amount the label, then the count beside a bar at least 40 mm long, or the count on
 // a row of its own over a full-width bar (180 x 83). A whole-number total of at most 12 with no
-// unit is a segmented bar like the site's step bar (ink pills, sunken empty ones with a hairline);
-// anything else is a continuous ink fill on a sunken track. At the target the fill turns mint and
-// the count becomes a mint dot and "Done".
+// unit is a segmented bar like the site's step bar (ink pills, solid sunken empty ones, no
+// outline); anything else is a continuous ink fill on a sunken track. At the target the fill turns
+// mint and the count becomes a mint dot and "Done".
 
 const C = WIDGET_THEME.color;
 const M = WIDGET_THEME.motion;
-const LINE = WIDGET_THEME.line;
 /** Gap between segments, and the continuous fill's least width (m). */
 const SEGMENT_GAP = 3 * MM;
 const MIN_FILL = 8 * MM;
@@ -23,13 +22,8 @@ const MIN_FILL = 8 * MM;
 /** A bar quad's look: segments (count, gap) or a continuous track (min fill). */
 export function styleBar(quad: UiQuad, segments: number): void {
   quad.fill(tokenColor('sunken')).accent(C.ink);
-  if (segments > 1) {
-    quad.stroke(LINE.hairline.color, LINE.hairline.alpha, WIDGET_THEME.size.hairline);
-    quad.param(segments, 0, SEGMENT_GAP, 0);
-  } else {
-    quad.stroke(0, 0, 0);
-    quad.param(1, 0, 0, MIN_FILL);
-  }
+  if (segments > 1) quad.param(segments, 0, SEGMENT_GAP, 0);
+  else quad.param(1, 0, 0, MIN_FILL);
 }
 
 /** What the bar fills to: whole segments filled, or the share of the total. */

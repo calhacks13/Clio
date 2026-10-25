@@ -10,13 +10,15 @@ import {
 import { onTopMaterial } from '../on-top';
 import { MM, mixHex, type ShadowLayer, WIDGET_THEME } from './theme';
 
-// One widget shape per quad, drawn as a signed distance field: a rounded box with an inset stroke
-// and up to two CSS-like shadow layers, a ring with an arc and its end-dot, a check that draws on,
-// a segmented bar, or the caution's "!" disc. Every quad shares one PlaneGeometry and one compiled
-// program; a frame only writes uniforms. Colours are sRGB token values, premultiplied, composited
-// in sRGB as CSS does, with no colorspace conversion: the framebuffer holds sRGB-encoded values, so
-// a token comes out as its exact hex. Edges are antialiased over one pixel at any distance, so a
-// 1 mm hairline (about 2.2 px on Quest at 0.65 m) stays crisp. Like the step card, a quad draws
+// One widget shape per quad, drawn as a signed distance field: a solid rounded box with up to two
+// CSS-like shadow layers, a ring with an arc and its end-dot, a check on a disc that draws on, a
+// segmented bar, or the caution's "!" disc. Shapes are solid fills: nothing is outlined, and the
+// only stroke is the surface-coloured gap around a ring's end-dot. Every quad shares one
+// PlaneGeometry and one compiled program; a frame only writes uniforms. Colours are sRGB token
+// values, premultiplied, composited in sRGB as CSS does, with no colorspace conversion: the
+// framebuffer holds sRGB-encoded values, so a token comes out as its exact hex. Edges are
+// antialiased over one pixel at any distance, so a 1 mm divider (about 2.2 px on Quest at 0.65 m)
+// stays crisp. Like the step card, a quad draws
 // on top (on-top.ts): no depth test, after everything else.
 
 export type QuadMode = 'box' | 'ring' | 'check' | 'segments' | 'bang';
@@ -107,14 +109,6 @@ vec4 over(vec4 top, vec4 under) {
   return top + under * (1.0 - top.a);
 }
 
-// A rounded box's fill with an inset stroke on top.
-vec4 strokedBox(float d, float px, vec4 fill, vec4 stroke, float width) {
-  float c = cover(d, px);
-  vec4 col = fill * c;
-  if (stroke.a > 0.0 && width > 0.0) col = over(stroke * (c - cover(d + width, px)), col);
-  return col;
-}
-
 // The check's distance: two strokes in Lucide's proportions, drawn on up to trim (0..1).
 float sdCheck(vec2 p, float width, float trim) {
   vec2 a = vec2(-0.5, -0.03125) * width;
@@ -135,7 +129,7 @@ void main() {
 
   if (uMode == 0) {
     float d = sdRoundBox(p, uHalf, uRadius);
-    col = strokedBox(d, px, uFill, uStroke, uStrokeWidth);
+    col = uFill * cover(d, px);
     // Shadows sit under the box only, as CSS clips a box-shadow to outside its border box.
     float keep = 1.0;
     for (int i = 0; i < 2; i++) {
@@ -174,13 +168,10 @@ void main() {
       col = over(uParam2 * cover(dd - dotR, px), col);
     }
   } else if (uMode == 2) {
-    // Check circle: an inset ring (uStroke), a disc scaled by uParam.w (uFill) and a check in
-    // uAccent, uParam = (trim, stroke width, check width, disc scale).
+    // Check circle: a full disc (uParam2, the empty circle), a disc scaled by uParam.w (uFill) over
+    // it and a check in uAccent, uParam = (trim, stroke width, check width, disc scale).
     float r = length(p);
-    float dOuter = r - uRadius;
-    if (uStroke.a > 0.0 && uStrokeWidth > 0.0) {
-      col = uStroke * (cover(dOuter, px) - cover(dOuter + uStrokeWidth, px));
-    }
+    col = uParam2 * cover(r - uRadius, px);
     if (uFill.a > 0.0 && uParam.w > 0.0) col = over(uFill * cover(r - uRadius * uParam.w, px), col);
     if (uAccent.a > 0.0 && uParam.x > 0.0) {
       float dc = sdCheck(p, uParam.z, uParam.x) - 0.5 * uParam.y;
@@ -189,12 +180,12 @@ void main() {
   } else if (uMode == 3) {
     // Bar: uParam = (segments, filled, gap, min fill). One segment is a continuous bar whose ink
     // fill is at least the min fill wide; more are pills with gaps, a fractional one growing from
-    // its left. Empty parts: uFill with an inset uStroke.
+    // its left. Empty parts: uFill.
     float n = max(1.0, floor(uParam.x + 0.5));
     float H = uHalf.y;
     if (n < 1.5) {
       float d = sdRoundBox(p, uHalf, H);
-      col = strokedBox(d, px, uFill, uStroke, uStrokeWidth);
+      col = uFill * cover(d, px);
       float frac = clamp(uParam.y, 0.0, 1.0);
       if (frac > 0.0) {
         float fw = min(2.0 * uHalf.x, max(uParam.w, 2.0 * uHalf.x * frac));
@@ -209,7 +200,7 @@ void main() {
       float i = clamp(floor((x + 0.5 * gap) / (sw + gap)), 0.0, n - 1.0);
       float left = -uHalf.x + i * (sw + gap);
       float d = sdRoundBox(p - vec2(left + 0.5 * sw, 0.0), vec2(0.5 * sw, H), H);
-      col = strokedBox(d, px, uFill, uStroke, uStrokeWidth);
+      col = uFill * cover(d, px);
       float f = clamp(uParam.y - i, 0.0, 1.0);
       if (f > 0.0) {
         float fw = sw * f;
@@ -343,6 +334,7 @@ export class UiQuad {
     return this.fill(mixHex(a, b, k), alpha);
   }
 
+  /** The surface-coloured gap around a ring's end-dot (ring mode only; no other shape has one). */
   stroke(hex: number, alpha: number, width: number): this {
     setRgba(this.uniforms.uStroke.value, hex, alpha);
     this.uniforms.uStrokeWidth.value = width;
@@ -365,6 +357,7 @@ export class UiQuad {
     return this;
   }
 
+  /** A ring's end-dot, or a check circle's empty disc. */
   param2(hex: number, alpha = 1): this {
     setRgba(this.uniforms.uParam2.value, hex, alpha);
     return this;

@@ -528,30 +528,38 @@ press that pushes through the card.
 
 ## How they look
 
-Small Clio cards: white surfaces, ink type, navy hairlines, sunken tracks and a soft shadow, with
-signal colour only for state. Every value is in `adapters/render/widgets/theme.ts`; if this page
-and the theme disagree, the theme wins. Views read only `WIDGET_THEME`, and a night variant would
+Small Clio cards: white surfaces, ink type, solid light fills for controls and dividers, sunken
+tracks and a soft shadow, with signal colour only for state. Every fill is a solid, opaque colour:
+nothing is ringed or outlined and nothing is a translucent tint, so elements are told apart by fill
+contrast. The soft drop shadows stay, offset and blurred, as depth cues under cards, pills and
+answers. Every value is in `adapters/render/widgets/theme.ts`; if this page and the theme disagree,
+the theme wins. Views read only `WIDGET_THEME`, and a night variant would
 change one line (`export const WIDGET_THEME = NIGHT;`).
 
 ### Tokens
 
-| Token            | Value            | Used for                                                     |
-| ---------------- | ---------------- | ------------------------------------------------------------ |
-| `ink`            | `#0F1117`        | type, arcs, filled segments, ticked circles, pressed answers |
-| `inkMuted`       | `#5B6472`        | eyebrow labels, ticked rows                                  |
-| `inkFaint`       | `#8A94A4`        | an unticked circle's ring                                    |
-| `onInk`          | `#FFFFFF`        | text on ink                                                  |
-| `surface`        | `#FFFFFF`        | cards, pills, chips                                          |
-| `sunken`         | `#F1F3F7`        | tracks, empty segments                                       |
-| `sunkenSoft`     | `#F4F6FA`        | hover tiles and fills                                        |
-| `citrus`         | `#FF7B3D`        | a running timer's end-dot, the caution                       |
-| `citrusText`     | `#B94A00`        | reserved                                                     |
-| `mint`           | `#6FD3A0`        | done dots                                                    |
-| `mintStrong`     | `#2AC48A`        | done rings, fills and checks                                 |
-| `mintText`       | `#007D4D`        | "Done", "Time's up"                                          |
-| `shadow`         | `#0F1117`        | shadow colour                                                |
-| `hairline`       | `#0E2A52` at 10% | inner dividers, empty segments                               |
-| `hairlineStrong` | `#0E2A52` at 16% | the outer ring of cards, pills and answers                   |
+| Token            | Value     | Used for                                                                |
+| ---------------- | --------- | ----------------------------------------------------------------------- |
+| `ink`            | `#0F1117` | type, arcs, filled segments, ticked circles, pressed and chosen answers |
+| `inkMuted`       | `#5B6472` | eyebrow labels, ticked rows                                             |
+| `inkFaint`       | `#8A94A4` | the text of answers not chosen                                          |
+| `onInk`          | `#FFFFFF` | text on ink                                                             |
+| `surface`        | `#FFFFFF` | cards, pills, chips                                                     |
+| `sunken`         | `#F1F3F7` | tracks, empty segments                                                  |
+| `sunkenSoft`     | `#F4F6FA` | the hover tile under a checklist row, answers not chosen                |
+| `divider`        | `#E7EAEE` | 1 mm lines between checklist rows                                       |
+| `control`        | `#E7EAEE` | answers at rest, open checklist circles                                 |
+| `controlHover`   | `#CAD0D9` | an answer or open circle under a fingertip                              |
+| `cautionSurface` | `#FFF0E4` | the caution (the launch page's warning surface)                         |
+| `citrus`         | `#FF7B3D` | a running timer's end-dot, the caution's "!" disc                       |
+| `citrusText`     | `#B94A00` | reserved                                                                |
+| `mint`           | `#6FD3A0` | done dots                                                               |
+| `mintStrong`     | `#2AC48A` | done rings, fills and checks                                            |
+| `mintText`       | `#007D4D` | "Done", "Time's up"                                                     |
+| `shadow`         | `#0F1117` | shadow colour                                                           |
+
+`divider`, `control` and `controlHover` are the design system's navy hairline (`#0E2A52`) at 10%,
+10% and 22%, precomputed over white: opaque colours, never alpha.
 
 | Shadow | Layers (mm, y down; sigma = blur / 2)                          |
 | ------ | -------------------------------------------------------------- |
@@ -562,20 +570,24 @@ change one line (`export const WIDGET_THEME = NIGHT;`).
 | ------------ | --- | --- | ------------ | --- |
 | `dockWidth`  | 180 |     | `pillHeight` | 34  |
 | `padX`       | 16  |     | `hairline`   | 1   |
-| `padY`       | 14  |     | `ring`       | 1.5 |
-| `cardRadius` | 18  |     | `dot`        | 6   |
-| `tileRadius` | 8   |     | `gap`        | 8   |
-| `floor`      | 12  |     | `chipHeight` | 30  |
+| `padY`       | 14  |     | `dot`        | 6   |
+| `cardRadius` | 18  |     | `gap`        | 8   |
+| `tileRadius` | 8   |     | `chipHeight` | 30  |
+| `floor`      | 12  |     |              |     |
 
-`surfaceLevel` (1 by default) multiplies the surface and sunken fills on the device: the glare knob.
+`surfaceLevel` (1 by default) multiplies the surface and light fills on the device: the glare knob.
 
 Rules:
 - `ar-blue` and `ar-deep` are deliberately absent: blue means AR guidance, and widgets are
   information.
-- Signal colours appear only on dots, rings, strokes and small state text, never on a fill larger
-  than a progress segment.
-- Citrus appears only on a running timer's end-dot and on the caution. Mint appears only in done
-  states, which are transient.
+- Every fill is opaque. States change fills (a darker control under a fingertip, ink once pressed,
+  a paler fill and faint text when not chosen), never opacity, and nothing is ringed or outlined.
+  Shadows are the one translucent thing, and only as depth under a shape, never as a tint.
+- Signal colours appear only on dots, the timer's ring, checks, segments and small state text,
+  never on a fill larger than a progress segment. The caution's surface is the launch page's pale
+  warning colour, not citrus.
+- Citrus appears only on a running timer's end-dot and on the caution's "!" disc. Mint appears only
+  in done states, which are transient.
 
 ### Type roles
 
@@ -602,21 +614,20 @@ installed but unused.
 
 ### Cards
 
-Every dock card is 180 mm wide, with content from x 16 to 164: a `surface` card of radius 18, a
-1 mm inset `hairlineStrong` ring (the caution has a 2 mm `citrus` ring instead, a full ring and
-never a left border), `shadow.card`, 1 mm `hairline` dividers, and no coloured containers or cards
-inside cards. A collapsed widget is a 180 by 34 mm pill (radius 17, `hairlineStrong` ring,
-`shadow.xs`); a chip is the pill style at 30 mm tall, as wide as its content (about 207 mm at
-most).
+Every dock card is 180 mm wide, with content from x 16 to 164: a solid `surface` card of radius 18
+with `shadow.card` and no ring (the caution sits on `cautionSurface` instead, never with a coloured
+left border), 1 mm `divider` lines, and no coloured containers or cards inside cards. A collapsed
+widget is a 180 by 34 mm pill (radius 17, solid `surface`, `shadow.xs`, no ring); a chip is the
+pill style at 30 mm tall, as wide as its content (about 207 mm at most).
 
-| Kind      | Card                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Done, chosen and touch states                                                                                                                                                                                                | Pill                                                                                                                                                                  |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| timer     | 180 x 74 (91 with a two-line label). A 40 mm ring (stroke 4, `sunken` track) at (36, middle); an `ink` arc for the time left, clockwise from 12 o'clock, with a 7 mm `citrus` end-dot riding its end. At x 72: the label (2 lines), then the digits in `display`, without a leading zero ("4:12")                                                                                                                                                                                                                                                | the arc fills to a full `mintStrong` ring (300 ms), the end-dot fades, a 16 mm `mintStrong` check draws on, the digits cross-fade to "Time's up"; one pulse; no blinking in the last seconds                                 | 22 mm ring, digits at x 36, then the label; done reads "Done" in `mintText`. The chip has an 18 mm ring and 14 mm digits                                              |
-| progress  | 180 x 62: the label left, the count right in `status`, a bar at y 40 to 48. A count too wide to leave the label its row: the label alone, then the count right beside a bar at least 40 mm long (`MIN_BAR`). Wider still: the count on a row of its own, left under the label, over a full-width bar (180 x 83; 102 when the count is wider than the row and breaks before its unit). Segments (3 mm gaps, `ink` filled, `sunken` empty) when the total is a whole number up to 12 with no unit, else a continuous `ink` fill at least 8 mm wide | fill and segments turn `mintStrong`; the count becomes a `mint` dot and "Done", where the count was; the fill tweens over 300 ms                                                                                             | a 20 x 6 mini bar, the count, then the label. A count too long for its place after the bar starts at the pad without the bar; the label shows only with 30 mm of room |
-| checklist | 180 x (40 + rows + 10). The title in `title` and "1 of 3" in `label`; rows 32 mm (50 for two lines) with an 18 mm circle and the item in `body` at x 44, `hairline` dividers between rows                                                                                                                                                                                                                                                                                                                                                        | ticked: an `ink` disc with a white check, the text `inkMuted`; hover: the ring turns `ink` on a `sunkenSoft` tile; all done: "Done" in `mintText` (`status`) in place of the count, with no dot, so the title keeps its room | the title, then the count, or "Done"                                                                                                                                  |
-| choices   | 180 x (14 + question + 12 + answers + 14), never collapsed while open. The question in `title` (4 lines), then stacked 148 x 38 answer pills 8 mm apart; two columns of 70 only for exactly two answers that both fit 42 mm; 250 mm at most                                                                                                                                                                                                                                                                                                      | rest: `surface` with a `hairlineStrong` ring; hover: 1.5 mm `ink` ring on `sunkenSoft`; pressed and chosen: `ink` with `onInk` text and a white check, the others fade to 40%                                                | once answered: the question, then the answer                                                                                                                          |
-| value     | 180 x 74 at one line. The label in `label`, then the value in `figure` at 22 mm, stepping to 20 and 18 and then two lines at 18 (89 mm); a value is never cut off                                                                                                                                                                                                                                                                                                                                                                                | a change cross-fades over 160 ms with one pulse; no signal colour                                                                                                                                                            | the label, then the value (never cut)                                                                                                                                 |
-| caution   | 180 x (14 + max(20, lines x 18.2) + 14), 119 mm at five lines. A 20 mm `citrus` disc with a white "!" at the left, the text in `strong` at x 46 (5 lines)                                                                                                                                                                                                                                                                                                                                                                                        | static                                                                                                                                                                                                                       | none: it never collapses (a pill would cut its text)                                                                                                                  |
+| Kind      | Card                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Done, chosen and touch states                                                                                                                                                                                                         | Pill                                                                                                                                                                  |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| timer     | 180 x 74 (91 with a two-line label). A 40 mm ring (stroke 4, `sunken` track) at (36, middle); an `ink` arc for the time left, clockwise from 12 o'clock, with a 7 mm `citrus` end-dot riding its end. At x 72: the label (2 lines), then the digits in `display`, without a leading zero ("4:12")                                                                                                                                                                                                                                                | the arc fills to a full `mintStrong` ring (300 ms), the end-dot fades, a 16 mm `mintStrong` check draws on, the digits cross-fade to "Time's up"; one pulse; no blinking in the last seconds                                          | 22 mm ring, digits at x 36, then the label; done reads "Done" in `mintText`. The chip has an 18 mm ring and 14 mm digits                                              |
+| progress  | 180 x 62: the label left, the count right in `status`, a bar at y 40 to 48. A count too wide to leave the label its row: the label alone, then the count right beside a bar at least 40 mm long (`MIN_BAR`). Wider still: the count on a row of its own, left under the label, over a full-width bar (180 x 83; 102 when the count is wider than the row and breaks before its unit). Segments (3 mm gaps, `ink` filled, `sunken` empty) when the total is a whole number up to 12 with no unit, else a continuous `ink` fill at least 8 mm wide | fill and segments turn `mintStrong`; the count becomes a `mint` dot and "Done", where the count was; the fill tweens over 300 ms                                                                                                      | a 20 x 6 mini bar, the count, then the label. A count too long for its place after the bar starts at the pad without the bar; the label shows only with 30 mm of room |
+| checklist | 180 x (40 + rows + 10). The title in `title` and "1 of 3" in `label`; rows 32 mm (50 for two lines) with an 18 mm `control` disc and the item in `body` at x 44, `divider` lines between rows                                                                                                                                                                                                                                                                                                                                                    | ticked: an `ink` disc with a white check, the text `inkMuted`; hover: the disc turns `controlHover` on a `sunkenSoft` tile; all done: "Done" in `mintText` (`status`) in place of the count, with no dot, so the title keeps its room | the title, then the count, or "Done"                                                                                                                                  |
+| choices   | 180 x (14 + question + 12 + answers + 14), never collapsed while open. The question in `title` (4 lines), then stacked 148 x 38 answer pills 8 mm apart; two columns of 70 only for exactly two answers that both fit 42 mm; 250 mm at most                                                                                                                                                                                                                                                                                                      | rest: a solid `control` fill; hover: `controlHover`; pressed and chosen: `ink` with `onInk` text and a white check; the others turn `sunkenSoft` with `inkFaint` text (200 ms), still opaque                                          | once answered: the question, then the answer                                                                                                                          |
+| value     | 180 x 74 at one line. The label in `label`, then the value in `figure` at 22 mm, stepping to 20 and 18 and then two lines at 18 (89 mm); a value is never cut off                                                                                                                                                                                                                                                                                                                                                                                | a change cross-fades over 160 ms with one pulse; no signal colour                                                                                                                                                                     | the label, then the value (never cut)                                                                                                                                 |
+| caution   | 180 x (14 + max(20, lines x 18.2) + 14), 119 mm at five lines. On `cautionSurface`: a 20 mm `citrus` disc with a white "!" at the left, the text in `strong` at x 46 (5 lines)                                                                                                                                                                                                                                                                                                                                                                   | static                                                                                                                                                                                                                                | none: it never collapses (a pill would cut its text)                                                                                                                  |
 
 A progress card and its pill each take their form from the widest the count gets (any count up to
 the total, or "Done"), so a bar, a row or a label never comes or goes as it counts: "3 of 1000
@@ -680,8 +691,9 @@ such as "Waterproofing" in the timer's 92 mm, breaks between characters.
 - **One quad per element** (`ui-quad.ts`). Each shape is one mesh on a shared unit plane with one
   `ShaderMaterial` (all share one compiled program), sized to the shape plus its shadow margin.
   Sizes and radii are clamped at zero, so a layout that came out negative can never hand the
-  shader an inside-out shape. Five modes: a rounded box with its shadows, a ring arc with its
-  end-dot, a check, segments, and the caution's "!". Edges use `fwidth`, so 1 mm lines (about 2.2
+  shader an inside-out shape. Five modes: a solid rounded box with its shadows, a ring arc with
+  its end-dot, a check on a disc, solid segments, and the caution's "!". Nothing is stroked but
+  the surface-coloured gap around the ring's end-dot. Edges use `fwidth`, so 1 mm lines (about 2.2
   pixels) stay crisp. Per frame only uniforms change (a running arc's sweep and end-dot, tween
   values); geometry is never created after a view is built.
 - **Colour in sRGB.** Uniforms carry token values as sRGB, premultiplied, and shapes composite in

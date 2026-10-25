@@ -11,13 +11,12 @@ import { barTarget } from './progress';
 import { doneRing, runningRing, styleRing, sweepAt } from './timer';
 
 // The collapsed forms. A pill (180 x 34) is what a card becomes when the column runs out of room:
-// the same white surface and hairline-strong ring with the small shadow, one line of the widget's
-// gist (a timer's ring and digits, a mini bar and count, a value). A chip (30 tall, as wide as its
-// content) is a timer's pill beside the lesson object it is about.
+// the same solid white surface (the caution's warm one) with the small shadow and no ring, one line
+// of the widget's gist (a timer's ring and digits, a mini bar and count, a value). A chip (30 tall,
+// as wide as its content) is a timer's pill beside the lesson object it is about.
 
 const C = WIDGET_THEME.color;
 const M = WIDGET_THEME.motion;
-const LINE = WIDGET_THEME.line;
 
 /** A timer's ring and digits running, then its mint ring and "Done" once it ends. */
 class TimerGist {
@@ -96,14 +95,7 @@ export class PillFace extends Face<Widget> {
         shadow: WIDGET_THEME.shadow.xs,
       },
       'card',
-    ).fill(tokenColor('surface'));
-    if (kind === 'caution') this.card.stroke(C.citrus, 1, WIDGET_THEME.size.ring);
-    else
-      this.card.stroke(
-        LINE.hairlineStrong.color,
-        LINE.hairlineStrong.alpha,
-        WIDGET_THEME.size.hairline,
-      );
+    ).fill(tokenColor(kind === 'caution' ? 'cautionSurface' : 'surface'));
     this.place(this.card, { x: 0, y: 0, w: this.width, h: pillH }, pillH / 2);
     this.primary = this.label(kind === 'caution' ? 'strong' : 'label');
     if (kind === 'timer') {
@@ -116,7 +108,6 @@ export class PillFace extends Face<Widget> {
       this.mark
         .fill(tokenColor('sunken'))
         .accent(C.ink)
-        .stroke(0, 0, 0)
         .param(1, 0, 0, 3 * MM);
       this.secondary = this.label('status');
     } else if (kind === 'caution') {
@@ -204,9 +195,7 @@ export class TimerChip extends Face<TimerWidget> {
     this.card = this.quad(
       { mode: 'box', width: 100 * MM, height: h, radius: h / 2, shadow: WIDGET_THEME.shadow.xs },
       'card',
-    )
-      .fill(tokenColor('surface'))
-      .stroke(LINE.hairlineStrong.color, LINE.hairlineStrong.alpha, WIDGET_THEME.size.hairline);
+    ).fill(tokenColor('surface'));
     this.ring = this.quad({ mode: 'ring', width: 18 * MM, height: 18 * MM });
     this.digits = this.tabular('pillValue', 5, 14 * MM);
     this.labelText = this.label('label');

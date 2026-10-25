@@ -1,60 +1,57 @@
 import type { ChoicesWidget } from '../../../../domain/widgets/types';
 import { type ChoiceOptionLayout, choicesCard } from '../layout';
-import { ColorTween, NumberTween, tween } from '../motion';
+import { ColorTween, tween } from '../motion';
 import type { TextFactory, TextHandle } from '../text-port';
 import { MM, tokenColor, WIDGET_THEME } from '../theme';
 import type { UiQuad } from '../ui-quad';
 import { Face, type TouchLook, type TouchRect } from './face';
 
 // The choices card: the coach's question and two or three answers as stacked pills (two columns
-// only for two short answers). At rest an answer is the site's secondary button; a fingertip over
-// it rings it in ink on a soft sunken fill; a press turns it into the primary ink button at once.
-// The chosen answer stays ink with a white check while the others fade; no signal colour until an
-// answer. It never collapses, and the board closes it 1.5 s after the answer.
+// only for two short answers). At rest an answer is a solid light control fill; a fingertip over it
+// darkens the fill; a press turns it into the primary ink button at once. The chosen answer stays
+// ink with a white check while the others turn muted (a paler fill and faint text, opaque); no
+// signal colour until an answer. It never collapses, and the board closes it 1.5 s after the
+// answer.
 
 const C = WIDGET_THEME.color;
 const M = WIDGET_THEME.motion;
-const LINE = WIDGET_THEME.line;
 const MAX_OPTIONS = 3;
 const PILL_RADIUS = 19 * MM;
 
+/** An answer's looks: rest, a fingertip over it, ink (pressed or chosen), muted (not chosen). */
+type Look = 'rest' | 'hover' | 'ink' | 'muted';
+
+const FILL: Readonly<Record<Look, number>> = {
+  rest: tokenColor('control'),
+  hover: tokenColor('controlHover'),
+  ink: C.ink,
+  muted: tokenColor('sunkenSoft'),
+};
+const TEXT: Readonly<Record<Look, number>> = {
+  rest: C.ink,
+  hover: C.ink,
+  ink: C.onInk,
+  muted: C.inkFaint,
+};
+
 class OptionLook {
-  readonly fill = new ColorTween(tokenColor('surface'));
-  readonly ring = new ColorTween(LINE.hairlineStrong.color);
-  readonly ringAlpha = new NumberTween(LINE.hairlineStrong.alpha);
-  readonly ringWidth = new NumberTween(WIDGET_THEME.size.hairline);
-  readonly text = new ColorTween(C.ink);
-  readonly alpha = new NumberTween(1);
+  readonly fill = new ColorTween(FILL.rest);
+  readonly text = new ColorTween(TEXT.rest);
   touch: TouchLook = 'none';
   pressedAt = Number.NEGATIVE_INFINITY;
 
-  /**
-   * Eases to a look: rest, hover (ink ring, sunken fill) or ink (pressed or chosen). A null t
-   * jumps there.
-   */
-  to(look: 'rest' | 'hover' | 'ink', alpha: number, t: number | null): void {
-    const fill =
-      look === 'ink' ? C.ink : look === 'hover' ? tokenColor('sunkenSoft') : tokenColor('surface');
-    const ring = look === 'rest' ? LINE.hairlineStrong.color : C.ink;
-    const ringAlpha = look === 'rest' ? LINE.hairlineStrong.alpha : 1;
-    const ringWidth = look === 'hover' ? WIDGET_THEME.size.ring : WIDGET_THEME.size.hairline;
-    const text = look === 'ink' ? C.onInk : C.ink;
+  /** Eases to a look, every one a solid fill and text colour. A null t jumps there. */
+  to(look: Look, t: number | null): void {
+    const fill = FILL[look];
+    const text = TEXT[look];
     if (t === null) {
       this.fill.snap(fill);
-      this.ring.snap(ring);
-      this.ringAlpha.snap(ringAlpha);
-      this.ringWidth.snap(ringWidth);
       this.text.snap(text);
-      this.alpha.snap(alpha);
       return;
     }
-    const ms = look === 'ink' ? M.pressMs : M.hoverMs;
+    const ms = look === 'ink' ? M.pressMs : look === 'muted' ? M.othersFadeMs : M.hoverMs;
     this.fill.set(fill, t, ms);
-    this.ring.set(ring, t, ms);
-    this.ringAlpha.set(ringAlpha, t, ms);
-    this.ringWidth.set(ringWidth, t, ms);
     this.text.set(text, t, ms);
-    this.alpha.set(alpha, t, M.othersFadeMs);
   }
 }
 
@@ -156,14 +153,12 @@ export class ChoicesCard extends Face<ChoicesWidget> {
         look.pressedAt = Number.NEGATIVE_INFINITY;
         this.restyle(i, t);
       }
-      const alpha = opacity * look.alpha.value(t);
       const pill = this.pills[i] as UiQuad;
       pill.fill(look.fill.value(t));
-      pill.stroke(look.ring.value(t), look.ringAlpha.value(t), look.ringWidth.value(t));
-      pill.opacity(alpha);
+      pill.opacity(opacity);
       const label = this.labels[i] as TextHandle;
       label.setColor(look.text.value(t));
-      label.setOpacity(alpha);
+      label.setOpacity(opacity);
     }
     if (this.chosenAt === null) {
       this.check.opacity(0);
@@ -178,11 +173,11 @@ export class ChoicesCard extends Face<ChoicesWidget> {
     const look = this.looks[i];
     if (!w || !look) return;
     if (w.chosen !== null) {
-      look.to(w.chosen === i ? 'ink' : 'rest', w.chosen === i ? 1 : M.othersAlpha, t);
+      look.to(w.chosen === i ? 'ink' : 'muted', t);
       return;
     }
     const pressed = look.pressedAt > Number.NEGATIVE_INFINITY;
-    look.to(pressed ? 'ink' : look.touch === 'hover' ? 'hover' : 'rest', 1, t);
+    look.to(pressed ? 'ink' : look.touch === 'hover' ? 'hover' : 'rest', t);
   }
 
   private recentlyPressed(t: number): boolean {

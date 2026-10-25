@@ -1,12 +1,12 @@
 import type { CautionWidget } from '../../../../domain/widgets/types';
 import { cautionCard } from '../layout';
 import type { TextFactory } from '../text-port';
-import { MM, WIDGET_THEME } from '../theme';
+import { MM, tokenColor, WIDGET_THEME } from '../theme';
 import { Face } from './face';
 
 // The caution card: a lasting hazard the coach has already said out loud, in one short sentence
-// beside a citrus "!" disc, inside a full 2 mm citrus ring (never a coloured left border). It is
-// static; it stays until the coach clears it or the lesson ends.
+// beside a citrus "!" disc, on the warm caution surface instead of white (no ring, never a coloured
+// left border). It is static; it stays until the coach clears it or the lesson ends.
 
 const C = WIDGET_THEME.color;
 
@@ -17,7 +17,7 @@ export class CautionCard extends Face<CautionWidget> {
 
   constructor(text: TextFactory) {
     super(text);
-    this.card.stroke(C.citrus, 1, 2 * MM);
+    this.card.fill(tokenColor('cautionSurface'));
     this.disc.fill(C.citrus).accent(C.onInk);
   }
 

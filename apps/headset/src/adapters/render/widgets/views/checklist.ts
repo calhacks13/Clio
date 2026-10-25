@@ -7,14 +7,16 @@ import type { UiQuad } from '../ui-quad';
 import { Face, type TouchLook, type TouchRect } from './face';
 
 // The checklist card: a title and "1 of 3", then up to five rows, each a circle and its text with
-// hairline dividers between. A done item is an ink disc with a white check, as on the site, and
-// its text turns muted. A fingertip over a row rings its circle in ink and lays a soft sunken tile
-// under the row; a press fills the circle at once (optimistic) before the board confirms it.
+// solid 1 mm dividers between. An open item is a solid light disc; a done item is an ink disc with
+// a white check, as on the site, and its text turns muted. A fingertip over a row darkens its disc
+// and lays a soft sunken tile under the row; a press fills the disc with ink at once (optimistic)
+// before the board confirms it.
 
 const C = WIDGET_THEME.color;
 const M = WIDGET_THEME.motion;
-const LINE = WIDGET_THEME.line;
 const MAX_ITEMS = 5;
+const DISC = tokenColor('control');
+const DISC_HOVER = tokenColor('controlHover');
 const CHECK_W = 10 * MM;
 const CHECK_STROKE = 2.4 * MM;
 
@@ -38,7 +40,7 @@ export class ChecklistCard extends Face<ChecklistWidget> {
   private readonly optimistic = new Int8Array(MAX_ITEMS).fill(-1);
   private readonly pressedAt = new Float64Array(MAX_ITEMS).fill(Number.NEGATIVE_INFINITY);
   private readonly textColor: ColorTween[] = [];
-  private readonly ringColor: ColorTween[] = [];
+  private readonly discColor: ColorTween[] = [];
   private readonly tileAlpha = new NumberTween(0);
   private hovered = -1;
   /** The row the hover tile sits on (it stays there while it fades out). */
@@ -52,10 +54,7 @@ export class ChecklistCard extends Face<ChecklistWidget> {
     this.tile.fill(tokenColor('sunkenSoft'));
     for (let i = 0; i < MAX_ITEMS - 1; i++) {
       this.dividers.push(
-        this.quad({ mode: 'box', width: 120 * MM, height: 1 * MM }).fill(
-          LINE.hairline.color,
-          LINE.hairline.alpha,
-        ),
+        this.quad({ mode: 'box', width: 120 * MM, height: 1 * MM }).fill(tokenColor('divider')),
       );
     }
     for (let i = 0; i < MAX_ITEMS; i++) {
@@ -68,7 +67,7 @@ export class ChecklistCard extends Face<ChecklistWidget> {
       this.rowTexts.push(this.label('body'));
       this.shown.push(false);
       this.textColor.push(new ColorTween(C.ink));
-      this.ringColor.push(new ColorTween(C.inkFaint));
+      this.discColor.push(new ColorTween(DISC));
     }
     this.doneText.setColor(C.mintText);
   }
@@ -140,19 +139,19 @@ export class ChecklistCard extends Face<ChecklistWidget> {
       this.pressedAt[index] = t;
       return;
     }
-    const ring = this.ringColor[index] as ColorTween;
+    const disc = this.discColor[index] as ColorTween;
     if (look === 'hover') {
       if (this.hovered !== index) {
-        if (this.hovered >= 0) this.ringColor[this.hovered]?.set(C.inkFaint, t, M.hoverMs);
+        if (this.hovered >= 0) this.discColor[this.hovered]?.set(DISC, t, M.hoverMs);
         this.hovered = index;
         this.tileRow = index;
         this.place(this.tile, row.tile, WIDGET_THEME.size.tileRadius);
       }
-      ring.set(C.ink, t, M.hoverMs);
+      disc.set(DISC_HOVER, t, M.hoverMs);
       this.tileAlpha.set(1, t, M.hoverMs);
     } else if (this.hovered === index) {
       this.hovered = -1;
-      ring.set(C.inkFaint, t, M.hoverMs);
+      disc.set(DISC, t, M.hoverMs);
       this.tileAlpha.set(0, t, M.hoverMs);
     }
   }
@@ -185,7 +184,7 @@ export class ChecklistCard extends Face<ChecklistWidget> {
         this.textColor[i]?.set(done ? C.inkMuted : C.ink, t, M.othersFadeMs);
       }
       const circle = this.circles[i] as UiQuad;
-      circle.stroke(this.ringColor[i]?.value(t) ?? C.inkFaint, 1, WIDGET_THEME.size.ring);
+      circle.param2(this.discColor[i]?.value(t) ?? DISC);
       if (done) {
         circle.paramAt(3, tween(t, this.discAt[i] ?? 0, M.tickDiscMs));
         circle.paramAt(0, tween(t, this.checkAt[i] ?? 0, M.checkDrawMs));
