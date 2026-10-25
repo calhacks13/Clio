@@ -317,13 +317,14 @@ class PartRun:
     """Feeds scenes straight to one PartTracker at FPS, as the stream does. `old` calls it as
     before there was a follower: no gray frame, no mask with jev's answer."""
 
-    def __init__(self, vision, follower=None, old: bool = False):
+    def __init__(self, vision, follower=None, old: bool = False, params=None):
         self.vision = vision
         self.old = old
+        p = params or TrackerParams()
         self.tracker = (
-            PartTracker("target", "door of fridge")
+            PartTracker("target", "door of fridge", p)
             if old
-            else PartTracker("target", "door of fridge", follower=follower)
+            else PartTracker("target", "door of fridge", p, follower=follower)
         )
         self.seq = 0
         self.t = 0.0
@@ -432,19 +433,22 @@ def test_part_follows_its_own_motion_out_of_parent_box(vision):
         np.testing.assert_array_equal(s.measured, answer.box)
     out = shifted(DOOR, 360)  # its left side 210 px right of the parent's right side
     assert out[0] - WHOLE[2] > 200
-    for _ in range(8):
+    for k in range(8):  # the fridge is nudged 6 px halfway through
         follower.answers.append(followed(out))
-        s = run.frame(*SCENE)
+        s = run.frame(Thing(shifted(WHOLE, 6 if k >= 4 else 0), A), Thing(OTHER, B))
     assert s.found and s.state == "tracking"
     np.testing.assert_array_equal(s.measured, out)
     np.testing.assert_allclose(s.box, out, atol=1)
     np.testing.assert_array_equal(run.tracker.box, out)
     parent = run.tracker.parent
-    assert iou(parent.box_on(run.seq), WHOLE)[0, 0] > 0.95  # the parent still followed
+    assert iou(parent.box_on(run.seq), shifted(WHOLE, 6))[0, 0] > 0.95  # still followed
     follower.answers.append(followed(out, confident=False))
-    s = run.frame(*SCENE)
+    s = run.frame(Thing(shifted(WHOLE, 18), A), Thing(OTHER, B))  # and moves 12 px more
     assert s.found and s.state == "tracking"
-    np.testing.assert_allclose(s.measured, out, atol=1e-3)  # not snapped back to the parent
+    # Not snapped back to the parent: it rides on from where the follower left it, by the
+    # parent's motion since the frame before (12 px), so the parent's box was kept current
+    # while the follower was sure.
+    np.testing.assert_allclose(s.measured, shifted(out, 12), atol=1e-3)
 
 
 def test_part_falls_back_to_ride_when_follower_doubts(vision):
@@ -527,7 +531,7 @@ def test_part_reseeded_on_another_part_drops_the_old_mask(vision):
     assert run.jev(3, PART).startswith("part")  # another part of the fridge
     assert not follower.active
     assert not run.tracker.wants_refresh  # nothing asked before the next frame...
-    np.testing.assert_array_equal(run.tracker.refresh_box, PART)  # ...the door's box least of all
+    assert run.tracker.refresh_box is None  # ...around the door's box least of all
     run.tracker.refreshed(3, crop)  # its keyframe, a moment later
     assert follower.reference_seq == 3
     run.frame(*SCENE)
@@ -535,6 +539,65 @@ def test_part_reseeded_on_another_part_drops_the_old_mask(vision):
     assert not follower.active
     run.frame(*SCENE)
     assert not run.tracker.wants_refresh  # not in view: nothing to cut out
+    assert run.tracker.refresh_box is None
+
+
+def test_part_confirmed_on_jevs_frame_while_it_moves_on_its_own(vision):
+    """The jaw slides along the caliper on its own pixels, and jev's answer is about a frame
+    from before most of the slide: on that frame jev's box is where the part was, so it is the
+    same part. The follower and its mask stay, and the part box does not snap back to jev's."""
+    follower = FakeFollower()
+    run = locked_part(vision, follower)
+    jev_seq = run.seq + 1
+    for i in range(1, 11):
+        answer = followed(shifted(DOOR, 18 * i))
+        follower.answers.append(answer)
+        run.frame(*SCENE)
+    assert answer.box[0] - (DOOR[0] + 18) > DOOR[2] - DOOR[0]  # farther than its own width
+    run.jev(jev_seq, shifted(DOOR, 21, 3))  # jev's loose box on jev's frame
+    assert follower.active and follower.reference_seq == 1
+    np.testing.assert_array_equal(run.tracker.box, answer.box)
+    # Another part, then the door again before the next frame: the dropped follower no longer
+    # stands for the part, so jev's box re-seeds it.
+    run.jev(run.seq, PART)
+    assert not follower.active
+    door = shifted(answer.box, 4, 2)
+    run.jev(run.seq, door)
+    np.testing.assert_allclose(run.tracker.box, door)
+
+
+def test_a_confirming_answer_keeps_a_confident_followers_box(vision):
+    """jev's box is loose and from an older frame: while the follower is confident, an answer
+    about the same part leaves the part box on the follower's (the keyframe that follows
+    re-anchors the mask). With the follower unsure, jev's box carried to now re-seeds it."""
+    follower = FakeFollower()
+    run = locked_part(vision, follower)
+    sure = followed((455, 262, 584, 461))
+    follower.answers.append(sure)
+    run.frame(*SCENE)
+    run.jev(run.seq - 1, shifted(DOOR, 10, 6), carry=pan(4))
+    assert follower.active
+    np.testing.assert_array_equal(run.tracker.box, sure.box)
+    follower.answers.append(followed(sure.box, confident=False))
+    run.frame(*SCENE)
+    run.jev(run.seq - 1, shifted(DOOR, 10, 6), carry=pan(4))
+    assert follower.active
+    np.testing.assert_allclose(run.tracker.box, shifted(DOOR, 14, 6))  # jev's, carried to now
+
+
+def test_part_reseeded_about_a_forgotten_frame_is_told_on_the_newest(vision):
+    """An answer about a frame older than the part box's history: whether it is another part is
+    told on the newest frame, with jev's box carried to it, as before."""
+    follower = FakeFollower()
+    run = PartRun(vision, follower, params=TrackerParams(history_s=0.2))
+    run.frame(*SCENE)
+    run.jev(1, DOOR, mask=followed(DOOR).crop)
+    for _ in range(6):  # 0.4 s: frames 2 and 3 are forgotten
+        run.frame(*SCENE)
+    run.jev(2, shifted(DOOR, 6, 4))  # the door again
+    assert follower.active
+    run.jev(3, PART)  # another part of the fridge
+    assert not follower.active
 
 
 def test_part_without_follower_is_identical_to_before(vision):

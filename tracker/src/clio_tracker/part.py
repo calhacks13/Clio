@@ -35,12 +35,17 @@ Otherwise the part rides, coasts and is outlined as above, and after two frames 
 while there is no mask yet, it asks to be cut out again (`wants_refresh`): around the follower's
 box when the follower is unsure, else the part box (`refresh_box`). An answer from jev that puts
 the part box more than its own size away (another part), or says the part is not in view, drops
-the old part's mask.
+the old part's mask. Another part is told on jev's own frame, against the part box the tracker
+had then: the part may have moved on its own since. An answer about the same part while the
+follower is confident leaves the part box on the follower's: jev's box is loose and from an
+older frame, and the keyframe cut from it re-anchors the mask through the follower's log of
+motion.
 """
 
 from __future__ import annotations
 
 import math
+from collections import deque
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -116,6 +121,7 @@ class PartTracker:
         self._followed: Followed | None = None  # the follower's answer on the last frame
         self._shown = False  # the part was shown on the last frame
         self._follow_doubt = 0  # consecutive frames the follower could not stand for the part
+        self._history: deque[tuple[int, float, np.ndarray]] = deque()  # (seq, t, the part box)
 
     @property
     def box(self) -> np.ndarray | None:
@@ -133,7 +139,11 @@ class PartTracker:
     @property
     def refresh_box(self) -> np.ndarray | None:
         """The box to prompt the segmenter with: the follower's on the last frame when it was
-        unsure of itself, else the part box (which is the follower's when it was sure)."""
+        unsure of itself, else the part box (which is the follower's when it was sure). None
+        while the part is not shown: not in sight on the last frame, or right after an answer
+        that dropped the old part's mask."""
+        if not self._shown:
+            return None
         f = self._followed
         box = f.box if f is not None and not f.confident else self._box
         return None if box is None else box.copy()
@@ -154,16 +164,27 @@ class PartTracker:
         """jev's box around the part on frame `seq` (encoded as `enc`); `carry` is how the
         camera moved from that frame to the newest. `mask` is the segmenter's cut of jev's box
         on that frame, for the follower. Returns what changed, for the log."""
-        before = self._box
+        before, then = self._box, self._box_on(seq)
+        sure = self._followed is not None and self._followed.confident
         change = self._identify(seq, t, present, box, enc, vision, carry)
         if self.follower is None or change == "stale":
             return change
-        if before is None or self._box is None or _moved_off(before, self._box):
+        if before is None or self._box is None:
+            another = True
+        elif then is not None:  # on jev's frame: the part may have moved on its own since
+            another = _moved_off(then, np.asarray(box, dtype=np.float32))
+        else:  # no part box remembered on jev's frame: on the newest, jev's box carried to it
+            another = _moved_off(before, self._box)
+        if another:
             # Another part, or none: forget the old one's mask. The cut of jev's box comes from
             # jev's older frame, and must not lose to a refresh of the old part. Until the next
             # frame nothing is asked, around the old part's box least of all.
             self.follower.clear()
             self._followed, self._shown, self._follow_doubt = None, False, 0
+        elif sure:
+            # The same part, followed on its own pixels: the follower's box stands. jev's box is
+            # loose and from an older frame; the keyframe cut from it re-anchors the mask.
+            self._box = before
         if mask is not None and self._box is not None:
             self.follower.set_reference(seq, mask)
         return change
@@ -285,6 +306,7 @@ class PartTracker:
             # take it (a door swinging out of the fridge's box).
             box = followed.box.astype(np.float32)
         self._box = box
+        self._remember(seq, t, box)
         age = t - self._seen_t
         if _inside(box, size) < p.in_view or age > p.part_hold_s:
             return Sighting(False, state="lost")
@@ -320,6 +342,20 @@ class PartTracker:
                             parent.track_id, box.copy(), crop)  # fmt: skip
         confidence = round(0.5 * (1 - 0.5 * age / p.part_hold_s), 3)
         return Sighting(True, shown, shape, confidence, "coasting", None, box.copy(), crop)
+
+    def _remember(self, seq: int, t: float, box: np.ndarray) -> None:
+        self._history.append((seq, t, box.copy()))
+        while self._history and t - self._history[0][1] > self.params.history_s:
+            self._history.popleft()
+
+    def _box_on(self, seq: int) -> np.ndarray | None:
+        """The part box on frame `seq`, if there was one and it is still remembered."""
+        for s, _, box in reversed(self._history):
+            if s == seq:
+                return box
+            if s < seq:
+                return None
+        return None
 
     def _ride(
         self,
