@@ -26,9 +26,9 @@ import type { SyntheticEpisode } from "./synthetic-episode";
 // box, wound outward as a mesh need not be) and four furniture volumes: the table under the tray,
 // turned 6 degrees like the detected table plane, a couch along the right wall turned a quarter
 // turn, the small shelf the plane fixture has, and a screen on the wall ahead. The models: the
-// syringe as a Gemini CAD program of parts (barrel, plunger, flange, tip), lying along its measured
-// shape's yaw; cup A as a primitive cylinder from the plan's radius; the indicator bottle as a
-// primitive standing in for a CAD answer that failed, with a note saying so.
+// syringe as a TripoSR mesh (here built of parts: barrel, plunger, flange, tip), lying along its
+// measured shape's yaw; cup A as a primitive cylinder from the plan's radius; the indicator bottle
+// as a primitive standing in for a TripoSR run that failed, with a note saying so.
 
 const FLOAT = 5126;
 const UINT = 5125;
@@ -550,10 +550,9 @@ export function syntheticScene(
       model: {
         id: "syringe",
         label: "syringe",
-        backend: "gemini-cad",
-        generator: "gemini-pro-latest",
+        backend: "triposr",
+        generator: "TripoSR (grid 128)",
         model: "model-syringe.glb",
-        cad: "cad-syringe.json",
         crops: [
           crop("syringe", 1, "observation"),
           crop("syringe", 2, "observation"),
@@ -577,7 +576,6 @@ export function syntheticScene(
         backend: "primitive",
         generator: null,
         model: "model-cup_a.glb",
-        cad: null,
         crops: [crop("cup_a", 1, "projection")],
         size: [2 * radius("cup_a"), 0.1, 2 * radius("cup_a")],
         sizeSource: "radius",
@@ -603,7 +601,6 @@ export function syntheticScene(
         backend: "primitive",
         generator: null,
         model: "model-indicator.glb",
-        cad: null,
         crops: [crop("indicator", 1, "projection")],
         size: [2 * radius("indicator"), 0.2, 2 * radius("indicator")],
         sizeSource: "radius",
@@ -612,7 +609,7 @@ export function syntheticScene(
           rotation: yaw(Math.PI / 6),
           rotationSource: "view",
         },
-        note: "Gemini CAD answered no parts; a primitive stands in",
+        note: "The triposr backend failed (TripoSR found no surface), so it is a primitive",
       },
       nodes: [
         {
@@ -629,7 +626,7 @@ export function syntheticScene(
       ? { name: "models", status: "ok", detail: `${models.length} models` }
       : { name: "models", status: "failed", detail: options.modelsFailed },
   ];
-  const backend: ModelBackend = "gemini-cad";
+  const backend: ModelBackend = "triposr";
   const doc: SceneDoc = {
     schema: SCENE_SCHEMA_ID,
     episodeId: episode.meta.episodeId,

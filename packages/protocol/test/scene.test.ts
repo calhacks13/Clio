@@ -10,10 +10,9 @@ import {
 const model = {
   id: 'cup_a',
   label: 'cup A',
-  backend: 'gemini-cad',
-  generator: 'gemini-pro-latest',
+  backend: 'triposr',
+  generator: 'TripoSR (grid 128)',
   model: 'model-cup_a.glb',
-  cad: 'cad-cup_a.json',
   crops: [
     {
       file: 'crop-cup_a-1.jpg',
@@ -36,7 +35,7 @@ const scene = {
   frame: 'workspace',
   compiledAt: '2026-10-25T10:15:30.000Z',
   inputs: [{ name: 'derived/manifest.json', bytes: 120, sha256: 'a'.repeat(64) }],
-  options: { models: 'gemini-cad' },
+  options: { models: 'triposr' },
   stages: [{ name: 'models', status: 'ok' }],
   keyframes: 48,
   objects: [model],
@@ -49,7 +48,7 @@ describe('rebuilt scene', () => {
   });
 
   it('allows an object without a model', () => {
-    const bare = { ...scene, objects: [{ ...model, model: null, cad: null }] };
+    const bare = { ...scene, objects: [{ ...model, model: null }] };
     expect(SceneDocSchema.safeParse(bare).success).toBe(true);
   });
 

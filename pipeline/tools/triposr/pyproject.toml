@@ -1,0 +1,25 @@
+[project]
+name = "clio-triposr"
+version = "0.1.0"
+description = "TripoSR as Clio's object model generator: a crop of an object in, a GLB out (docs/room-scene.md)."
+readme = "README.md"
+# torch, rembg's onnxruntime and transformers 4.x all have wheels for these on macOS and Linux.
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "torch>=2.2",
+    # TripoSR's image tokenizer is transformers' ViTModel (tested upstream on 4.35).
+    "transformers>=4.40,<5",
+    "omegaconf==2.3.0",
+    "einops>=0.7",
+    "huggingface-hub>=0.20",
+    "trimesh>=4.0",
+    "pillow>=10.4",
+    "numpy>=1.26,<3",
+    # Marching cubes with wheels, in place of torchmcubes (a C++/CUDA build TripoSR asks for).
+    "pymcubes>=0.1.6",
+    # Background removal for a crop without the tracker's outline.
+    "rembg[cpu]>=2.0.50",
+]
+
+[tool.uv]
+package = false

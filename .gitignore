@@ -26,3 +26,7 @@ __pycache__/
 
 # Impeccable review captures (regenerated per review)
 .impeccable/review/
+
+# TripoSR tool (pipeline/tools/triposr/setup.sh)
+pipeline/tools/triposr/.venv/
+pipeline/tools/triposr/.vendor/

@@ -62,7 +62,7 @@ export interface Config {
    * off: never. Builds follow compiles, so they are off whenever compiling is.
    */
   scene: 'auto' | 'off';
-  /** How scene builds make object models. gemini-cad sends crops of each object to Google. */
+  /** How scene builds make object models: triposr (TripoSR on this machine) unless set. */
   sceneModels: ModelBackend;
   /** How long one scene build may run; null for the builder's default. */
   sceneTimeoutMs: number | null;
@@ -147,7 +147,7 @@ const EnvSchema = z.object({
   CLIO_SCENE: autoOrOff(),
   CLIO_SCENE_MODELS: z.preprocess(
     blank,
-    z.string().trim().pipe(ModelBackendSchema).default('primitive'),
+    z.string().trim().pipe(ModelBackendSchema).default('triposr'),
   ),
   // Past a day, Node's timers overflow and would stop every build at once.
   CLIO_SCENE_TIMEOUT_MS: z.preprocess(
@@ -201,10 +201,10 @@ export function loadConfig(
   };
 }
 
-/** For the startup log: what a scene build after each compile will do, and what leaves the laptop. */
+/** For the startup log: what a scene build after each compile will do. */
 export function describeSceneBuilds(
   config: Config,
-  ready: { gemini: boolean; scene: boolean },
+  ready: { triposr: boolean; scene: boolean },
 ): string {
   if (!ready.scene) {
     return config.scene === 'off' ? 'off (CLIO_SCENE=off)' : 'off, since compiling is off';
@@ -212,10 +212,10 @@ export function describeSceneBuilds(
   switch (config.sceneModels) {
     case 'primitive':
       return 'on (object models: primitive, offline)';
-    case 'gemini-cad':
-      return ready.gemini
-        ? 'on (object models: gemini-cad, which sends crops of each object to Google)'
-        : 'on (object models: gemini-cad, but GEMINI_API_KEY is not set, so primitives)';
+    case 'triposr':
+      return ready.triposr
+        ? 'on (object models: TripoSR, on this machine)'
+        : 'on (object models: triposr, but TripoSR is not set up, so primitives: run pipeline/tools/triposr/setup.sh)';
     case 'command':
       return 'on (object models: command, which runs CLIO_MODEL_COMMAND)';
   }

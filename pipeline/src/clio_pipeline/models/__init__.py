@@ -2,9 +2,9 @@
 declared object gets a mesh scaled to what was measured of it and placed relative to its tracked
 position, made by one of three backends (packages/protocol/src/scene.ts, ModelBackend):
 
-    primitive   a box or cylinder from the measured size and the crops' color; offline
-    gemini-cad  Gemini writes a CAD program (parts with dimensions) from the crops, the label and
-                the measured size; this package builds the mesh from it
+    primitive   a box or cylinder from the measured size and the crops' color; offline, instant
+    triposr     TripoSR (pipeline/tools/triposr) makes the mesh from the best crop, on this
+                machine (triposr.py); this package scales and places it
     command     an external image-to-3D command ($CLIO_MODEL_COMMAND) makes the mesh from the
                 best crop; this package scales and places it
 
@@ -19,11 +19,12 @@ to, or a whole above that, is modelled: the whole is followed and recorded with 
 part's model would sit inside the whole's. A part whose whole is not modelled gets its own.
 
 For each one (views.py, fit.py): the best keyframe views and their crops, the measured size and
-the placement, then the backend. A backend that fails, or cannot run (no key, no command, no
-crop for the command), gives way to the primitive, with a note saying why. One object's failure
-does not stop the others; it gets `model: null` and a note. Only a failure of every object raises.
+the placement, then the backend. A backend that fails, or cannot run (TripoSR not set up, no
+command, no crop to give it), gives way to the primitive, with a note saying why. One object's
+failure does not stop the others; it gets `model: null` and a note. Only a failure of every object
+raises.
 
-Files, in `out_dir`: model-<stem>.glb, cad-<stem>.json (gemini-cad) and crop-<stem>-<n>.jpg, where
+Files, in `out_dir`: model-<stem>.glb and crop-<stem>-<n>.jpg, where
 the stem is the object id when it is a plain lowercase slug (packages/protocol SCENE_FILE_NAME),
 else a cleaned id with a short hash.
 """
@@ -41,12 +42,13 @@ import numpy as np
 from ..episode import Episode
 from ..keyframes import Keyframe
 from .describe import ObjectWords, object_words
-from .fit import Measured, Placement, measure, off_axes, place
+from .fit import Measured, Placement, measure, place, stretch_note
 from .primitive import crop_color, looks_round, write_primitive
 from .settings import ModelSettings
+from .triposr import TriposrWorker
 from .views import Images, Observations, View, save_crops, select_views
 
-MODEL_BACKENDS = ("primitive", "gemini-cad", "command")
+MODEL_BACKENDS = ("primitive", "triposr", "command")
 DRAWN_KINDS = frozenset({"item", "container", "tool"})
 
 __all__ = ["MODEL_BACKENDS", "ModelSettings", "build_object_models", "drawable_objects"]
@@ -65,7 +67,7 @@ def build_object_models(
     log: Callable[[str], None] = lambda message: None,
     settings: ModelSettings | None = None,
 ) -> list[dict[str, Any]]:
-    """Write model-<id>.glb (and cad-<id>.json, crop-<id>-<n>.jpg) for every drawable object of
+    """Write model-<id>.glb (and crop-<id>-<n>.jpg) for every drawable object of
     `tracks` (tracks.json) into `out_dir`, and return one SceneModel dict per object for
     scene.json's `objects`. `shapes` is shapes.json, or None when the compile has none. An object
     whose backend fails falls back to `primitive` with a `note` saying why; only a problem with
@@ -89,16 +91,21 @@ def build_object_models(
         settings=settings,
         log=log,
         stems=file_stems([o["id"] for o in drawn]),
+        triposr=TriposrWorker(settings) if backend == "triposr" else None,
     )
     results: list[dict[str, Any]] = []
     failures: list[str] = []
-    for obj in drawn:
-        try:
-            results.append(build.one(obj))
-        except Exception as e:  # one object's failure must not stop the others
-            log(f"models: {obj['id']}: failed: {type(e).__name__}: {e}")
-            failures.append(f"{obj['id']}: {e}")
-            results.append(build.failed(obj, e))
+    try:
+        for obj in drawn:
+            try:
+                results.append(build.one(obj))
+            except Exception as e:  # one object's failure must not stop the others
+                log(f"models: {obj['id']}: failed: {type(e).__name__}: {e}")
+                failures.append(f"{obj['id']}: {e}")
+                results.append(build.failed(obj, e))
+    finally:
+        if build.triposr is not None:
+            build.triposr.close()
     if drawn and len(failures) == len(drawn):
         raise RuntimeError(f"no object model could be made: {'; '.join(failures)}")
     return results
@@ -183,19 +190,19 @@ class _Build:
         notes = list(measured.notes)
         if not views:
             notes.append("no keyframe showed it")
-        made = self._backend(obj, stem, words, measured, placement, views, color, notes)
+        made = self._backend(obj, stem, words, measured, placement, views, notes)
         if made is None:
             size = write_primitive(
                 self.out_dir / f"model-{stem}.glb", placement.size, round_, color, object_id=obj_id
             )
-            made = ("primitive", None, None, size)
+            made = ("primitive", None, size)
             if color is None:
                 notes.append("gray: no crop to take its color from")
             shape_word = "cylinder" if round_ else "box"
             self.log(f"models: {obj_id}: primitive {shape_word} ({why_round}), {measured.source}")
-        used, generator, cad, size = made
+        used, generator, size = made
         return _scene_model(
-            obj, used, generator, f"model-{stem}.glb", cad, crops, size, measured, placement, notes
+            obj, used, generator, f"model-{stem}.glb", crops, size, measured, placement, notes
         )
 
     def _backend(
@@ -206,53 +213,52 @@ class _Build:
         measured: Measured,
         placement: Placement,
         views: list[View],
-        color: np.ndarray | None,
         notes: list[str],
-    ) -> tuple[str, str | None, str | None, np.ndarray] | None:
-        """(backend, generator, cad file, size) from gemini-cad or the command, or None when the
-        primitive should be drawn (always for "primitive"; on a failure, with a note)."""
+    ) -> tuple[str, str | None, np.ndarray] | None:
+        """(backend, generator, size) from TripoSR or the command, or None when the primitive
+        should be drawn (always for "primitive"; on a failure, with a note)."""
         if self.backend == "primitive":
             return None
         try:
-            if self.backend == "gemini-cad":
-                from .gemini import make_cad_model
+            if not views:
+                raise RuntimeError("no crop to give it")
+            per_axis = measured.source in ("shape", "extent")
+            if self.backend == "triposr":
+                from .triposr import make_triposr_model
 
-                cad = make_cad_model(
-                    object_id=obj["id"],
+                size, stretch = make_triposr_model(
+                    self.triposr,
+                    views[0],
                     stem=stem,
-                    words=words,
-                    measured=measured,
-                    placement=placement,
-                    views=views,
-                    color=color,
                     out_dir=self.out_dir,
-                    settings=self.settings,
+                    size=placement.size,
+                    per_axis=per_axis,
                 )
-                notes.extend(cad.notes)
-                if not views:
-                    notes.append("Gemini modelled it from its name alone")
-                self.log(f"models: {obj['id']}: gemini-cad ({cad.generator}), {measured.source}")
-                return "gemini-cad", cad.generator, cad.cad, cad.size
+                note = stretch_note(stretch, "TripoSR's")
+                if note:
+                    notes.append(note)
+                mask = "the tracker's outline" if views[0].outline is not None else "rembg"
+                self.log(f"models: {obj['id']}: triposr (cut out by {mask}), {measured.source}")
+                return "triposr", self.triposr.generator, size
             template = self.settings.model_command
             if template is None:
                 raise RuntimeError("CLIO_MODEL_COMMAND is not set")
-            if not views:
-                raise RuntimeError("no crop to give it")
             from .command import make_command_model
 
-            size = make_command_model(
+            size, stretch = make_command_model(
                 template,
                 image=self.out_dir / f"crop-{stem}-1.jpg",
                 label=words.label,
                 model_path=self.out_dir / f"model-{stem}.glb",
-                height=float(placement.size[1]),
+                size=placement.size,
+                per_axis=per_axis,
                 timeout_s=self.settings.command_timeout_s,
             )
-            off = off_axes(size, placement.size, measured.source)
-            if off:
-                notes.append(f"the command's model is {off} after fitting its height")
+            note = stretch_note(stretch, "the command's")
+            if note:
+                notes.append(note)
             self.log(f"models: {obj['id']}: command, {measured.source}")
-            return "command", template, None, size
+            return "command", template, size
         except Exception as e:  # any failure of a generator falls back to the primitive
             _clear(self.out_dir, stem, crops=False)
             notes.append(f"the {self.backend} backend failed ({e}), so it is a primitive")
@@ -272,7 +278,6 @@ class _Build:
             "primitive",
             None,
             None,
-            None,
             [],
             np.zeros(3),
             measured,
@@ -286,7 +291,6 @@ def _scene_model(
     backend: str,
     generator: str | None,
     model: str | None,
-    cad: str | None,
     crops: list[dict[str, Any]],
     size: np.ndarray,
     measured: Measured,
@@ -300,7 +304,6 @@ def _scene_model(
         "backend": backend,
         "generator": generator,
         "model": model,
-        "cad": cad,
         "crops": crops,
         "size": _rounded(size),
         "sizeSource": measured.source,
@@ -315,9 +318,7 @@ def _scene_model(
 
 def _clear(out_dir: Path, stem: str, *, crops: bool = True) -> None:
     """Remove what an earlier build wrote for this stem, so no stale file outlives it."""
-    names = [f"model-{stem}.glb", f"cad-{stem}.json"]
-    for name in names:
-        (out_dir / name).unlink(missing_ok=True)
+    (out_dir / f"model-{stem}.glb").unlink(missing_ok=True)
     if crops:
         pattern = re.compile(rf"^crop-{re.escape(stem)}-\d+\.jpg$")
         for path in out_dir.iterdir():

@@ -236,7 +236,6 @@ describe('GET /api/episodes/:id/scene/:name', () => {
     const id = await create(h);
     const files: [string, string, Uint8Array][] = [
       ['scene.json', 'application/json', new TextEncoder().encode('{"schema":"clio.scene/1"}')],
-      ['cad-cup_a.json', 'application/json', new TextEncoder().encode('{"parts":[]}')],
       ['model-cup_a.glb', 'model/gltf-binary', new Uint8Array([0x67, 0x6c, 0x54, 0x46, 2, 0])],
       ['crop-cup_a-1.jpg', 'image/jpeg', new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10])],
     ];

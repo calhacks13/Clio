@@ -4,10 +4,10 @@ What a lesson leaves behind to look at, beside the measurements: the room the le
 and a model of every object they worked with, in the episode's workspace frame W. The room is what
 the Quest already knows; nothing is reconstructed from photos and nothing heavy runs on the laptop.
 
-| Part          | Comes from                                                                                                                                  | What it is        |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
-| Room          | The Quest room scan (Space Setup), read by WebXR mesh detection: the room's global mesh and labelled furniture volumes                      | Measured, earlier |
-| Object models | A generator (primitive, Gemini CAD, or a command), scaled and placed by the measured size and track, from a few camera stills of the object | Generated         |
+| Part          | Comes from                                                                                                                    | What it is        |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| Room          | The Quest room scan (Space Setup), read by WebXR mesh detection: the room's global mesh and labelled furniture volumes        | Measured, earlier |
+| Object models | TripoSR (or a primitive, or a command), from a camera still of the object, scaled to its measured box and placed on its track | Generated         |
 
 Nothing here is an object measurement. Tracks, extents and fused shapes stay what
 [data-pipeline.md](data-pipeline.md) describes; a model is drawn where the track says and as big as
@@ -26,7 +26,7 @@ the measurements say, and its look is labelled generated.
                                    └─► data/derived/<id>/room.glb, environment.json `room`
                                    clio scene (auto after a compile, CLIO_SCENE=auto)
                                    └─► data/scenes/<id>/ scene.json, model-<id>.glb,
-                                       cad-<id>.json, crop-<id>-<n>.jpg
+                                       crop-<id>-<n>.jpg
  visualizer /clio/<id> ◄── GET /api/episodes/:id/derived/room.glb, /scene/<name>
 ```
 
@@ -75,24 +75,31 @@ compile and writes `data/scenes/<id>/`:
   hashes, options, stages with their status and detail, and how each model was made.
 
 Backends (`--models`, server `CLIO_SCENE_MODELS`):
-- `primitive` (default): a box or a cylinder from the measured size and the crops' color. Offline.
-- `gemini-cad`: Gemini (`$CLIO_CAD_MODEL`, default `gemini-pro-latest`, key `GEMINI_API_KEY`)
-  receives the crops, the object's label and detector words and its measured size, and answers a
-  CAD program: named parts (box, cylinder, cone, sphere, torus, capsule, lathe profile, extruded
-  outline) with dimensions in meters, positions, rotations and colors. The pipeline builds the
-  mesh from the program and keeps the program as `cad-<id>.json`. This sends the crops to Google,
-  so it runs only when asked for.
+- `triposr` (the default): [TripoSR](https://github.com/VAST-AI-Research/TripoSR) (MIT; weights
+  `stabilityai/TripoSR`) makes a mesh from the object's best crop, on this machine. The object is
+  cut out by the tracker's outline on that crop when the crop came from an observation, otherwise
+  by rembg, and the surface comes from marching cubes on a 128 grid (`CLIO_TRIPOSR_RESOLUTION`):
+  a few seconds an object on a laptop's GPU, the model loaded once per build. It runs in its own
+  environment, `pipeline/tools/triposr/` (set up once with `pipeline/tools/triposr/setup.sh`,
+  which fetches TripoSR at a pinned commit and downloads its weights, about 1.7 GB, and rembg's,
+  about 170 MB), so the pipeline itself stays numpy-only. Settings: `CLIO_TRIPOSR_RESOLUTION`
+  (default 128), `CLIO_TRIPOSR_DEVICE` (`auto`: CUDA, else Apple's MPS, else the CPU),
+  `CLIO_TRIPOSR_TIMEOUT` (seconds an object, default 300), `CLIO_TRIPOSR_DIR`.
+- `primitive`: a box or a cylinder from the measured size and the crops' color. Instant.
 - `command`: `$CLIO_MODEL_COMMAND`, a command template with `{image}`, `{out}` and `{label}`, that
-  writes a GLB (an image-to-3D model on another machine, for example). The pipeline scales it to
-  the measured size and places it like the others.
+  writes a GLB (an image-to-3D model on another machine, for example).
 
-An object whose backend fails gets a primitive with a note saying why.
+TripoSR's and the command's meshes are fitted to the measured box: each axis on its own when the
+box was measured (a shape box or an extent), since one photo says least about depth, else
+uniformly to the height; the note says when an axis was stretched or squeezed by more than a
+quarter. An object whose backend fails, or cannot run (TripoSR not set up, no crop), gets a
+primitive with a note saying why.
 
 The server runs `clio scene --if-stale` after each successful compile when `CLIO_SCENE=auto` (the
 default; `off` disables it), one episode at a time, and reports `scene: {state, scene, error}` on
 the episode detail. `GET /api/episodes/:id/scene/:name` serves the files (`SCENE_FILE_NAME`).
-Settings: `CLIO_SCENE_MODELS` (`primitive`, `gemini-cad`, `command`), `CLIO_MODEL_COMMAND`,
-`CLIO_CAD_MODEL`.
+Settings: `CLIO_SCENE_MODELS` (`triposr`, `primitive`, `command`), the TripoSR settings above,
+`CLIO_MODEL_COMMAND`. The startup log says whether TripoSR is set up.
 
 ## Viewer
 

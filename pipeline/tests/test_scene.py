@@ -57,7 +57,6 @@ def model(object_id="cup", **overrides):
         "backend": "primitive",
         "generator": None,
         "model": f"model-{object_id}.glb",
-        "cad": None,
         "crops": [
             {
                 "file": f"crop-{object_id}-1.jpg",
@@ -147,7 +146,7 @@ def test_a_models_failure_fails_its_stage_and_the_scene_is_still_written(data, m
 
     monkeypatch.setattr(models_module, "build_object_models", unbuilt)
 
-    result = build_scene(episode, derived, scenes, models="gemini-cad")
+    result = build_scene(episode, derived, scenes, models="triposr")
 
     assert result.scene["stages"] == [
         {
@@ -156,7 +155,7 @@ def test_a_models_failure_fails_its_stage_and_the_scene_is_still_written(data, m
             "detail": "NotImplementedError: clio_pipeline.models is built by the models work",
         }
     ]
-    assert result.scene["objects"] == [] and result.scene["options"] == {"models": "gemini-cad"}
+    assert result.scene["objects"] == [] and result.scene["options"] == {"models": "triposr"}
     assert _schema_errors(_read(result.out_dir / "scene.json")) == []
 
 

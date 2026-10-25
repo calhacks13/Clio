@@ -947,17 +947,17 @@ describe("scene status", () => {
       detail: "Timed out",
     });
     const failedStage = syntheticScene(EPISODE, COMPILED.manifest, {
-      modelsFailed: "gemini-cad: quota exceeded",
+      modelsFailed: "triposr: TripoSR is not set up",
     }).doc;
     expect(view({ sceneState: "ok", scene: failedStage })).toEqual({
       label: "Scene failed",
       problem: true,
-      detail: "models: gemini-cad: quota exceeded",
+      detail: "models: triposr: TripoSR is not set up",
     });
     expect(
       view({ sceneState: "stale", sceneError: "Timed out", scene: failedStage })
         ?.detail,
-    ).toBe("Timed out\nmodels: gemini-cad: quota exceeded");
+    ).toBe("Timed out\nmodels: triposr: TripoSR is not set up");
   });
 
   test("a skipped stage is not a failure", () => {

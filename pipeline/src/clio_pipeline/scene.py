@@ -4,7 +4,6 @@
     scene.json         SceneDoc (packages/protocol/src/scene.ts): the compile it was built from,
                        the inputs with their hashes, the options, the stages and every model
     model-<id>.glb     a model of each drawable object, scaled to its measured size
-    cad-<id>.json      the CAD program a model was built from (gemini-cad)
     crop-<id>-<n>.jpg  the keyframe crops a model was made from
 
 The room is not here: it is the Quest room scan the compile keeps (derived room.glb). A scene
@@ -54,7 +53,7 @@ SCENE_SCHEMA_ID = "clio.scene/1"
 BUILDER_NAME = "clio_pipeline"
 SCENE_FILE = "scene.json"
 # packages/protocol/src/scene.ts ModelBackendSchema (clio_pipeline.models.MODEL_BACKENDS)
-MODEL_BACKENDS = ("primitive", "gemini-cad", "command")
+MODEL_BACKENDS = ("primitive", "triposr", "command")
 # File names the server serves from data/scenes/<id>/ (scene.ts SCENE_FILE_NAME).
 SCENE_FILE_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,95}\.(json|glb|jpg)$")
 # packages/protocol/src/episode.ts KEYFRAME_MEDIA
@@ -233,8 +232,8 @@ def _object_problem(
 
 
 def _files_of(obj: dict[str, Any]) -> list[str]:
-    """The scene files a SceneModel names: its model, CAD program and crops."""
-    files = [obj.get("model"), obj.get("cad")]
+    """The scene files a SceneModel names: its model and its crops."""
+    files = [obj.get("model")]
     files += [crop.get("file") for crop in obj.get("crops") or [] if isinstance(crop, dict)]
     return [f for f in files if isinstance(f, str)]
 

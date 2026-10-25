@@ -354,13 +354,13 @@ def _parse(argv):
 
 def test_scene_takes_the_servers_arguments():
     args = _parse(
-        ["scene", "ep", "--derived", "d", "--out", "s", "--models", "gemini-cad", "--if-stale"]
+        ["scene", "ep", "--derived", "d", "--out", "s", "--models", "triposr", "--if-stale"]
     )
     assert (args.episodes, args.derived, args.out, args.models, args.if_stale, args.json) == (
         ["ep"],
         "d",
         "s",
-        "gemini-cad",
+        "triposr",
         True,
         False,
     )
@@ -368,7 +368,7 @@ def test_scene_takes_the_servers_arguments():
     assert (defaults.derived, defaults.out, defaults.models, defaults.if_stale) == (
         None,
         None,
-        "primitive",
+        "triposr",
         False,
     )
 

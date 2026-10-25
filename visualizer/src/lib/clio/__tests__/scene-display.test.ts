@@ -203,9 +203,9 @@ describe("the inspector's model rows", () => {
     expect(modelRows(model("syringe"))).toEqual([
       {
         label: "Model (generated)",
-        value: "Gemini CAD, gemini-pro-latest",
+        value: "TripoSR, TripoSR (grid 128)",
         basis: "generated",
-        title: "Gemini CAD model made by gemini-pro-latest",
+        title: "TripoSR model made by TripoSR (grid 128)",
       },
       {
         label: "Sized by",
@@ -242,7 +242,8 @@ describe("the inspector's model rows", () => {
     });
     expect(rows[3]).toEqual({
       label: null,
-      value: "Gemini CAD answered no parts; a primitive stands in",
+      value:
+        "The triposr backend failed (TripoSR found no surface), so it is a primitive",
       basis: "generated",
     });
   });

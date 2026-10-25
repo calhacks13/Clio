@@ -31,7 +31,7 @@ class CliError(Exception):
 
 # packages/protocol/src/scene.ts ModelBackendSchema (scene.MODEL_BACKENDS, kept here so the
 # parser does not import the scene build)
-SCENE_MODEL_BACKENDS = ("primitive", "gemini-cad", "command")
+SCENE_MODEL_BACKENDS = ("primitive", "triposr", "command")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -97,8 +97,9 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--models",
         choices=SCENE_MODEL_BACKENDS,
-        default="primitive",
-        help="how object models are made (primitive: offline; gemini-cad sends crops to Google)",
+        default="triposr",
+        help="how object models are made (triposr: TripoSR on this machine, falling back to "
+        "primitive boxes and cylinders when it is not set up; command: $CLIO_MODEL_COMMAND)",
     )
     p.add_argument("--if-stale", action="store_true", help="keep scenes that are up to date")
     p.add_argument("--json", action="store_true", help="print one JSON line per episode")

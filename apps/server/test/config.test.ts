@@ -30,7 +30,7 @@ describe('loadConfig', () => {
       retargetProfiles: ['/repo/pipeline/src/clio_pipeline/retarget/profiles/clio-arm-6dof.json'],
       // Each compile is followed by a scene build with offline primitive models.
       scene: 'auto',
-      sceneModels: 'primitive',
+      sceneModels: 'triposr',
       sceneTimeoutMs: null,
     });
   });
@@ -179,12 +179,12 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ CLIO_SCENE: 'on' }, '/repo')).toThrow(/CLIO_SCENE/);
   });
 
-  it('reads the object model backend, primitive unless set', () => {
-    for (const models of ['primitive', 'gemini-cad', 'command'] as const) {
+  it('reads the object model backend, triposr unless set', () => {
+    for (const models of ['primitive', 'triposr', 'command'] as const) {
       expect(loadConfig({ CLIO_SCENE_MODELS: ` ${models} ` }, '/repo').sceneModels).toBe(models);
     }
-    expect(loadConfig({ CLIO_SCENE_MODELS: '' }, '/repo').sceneModels).toBe('primitive');
-    for (const value of ['gemini', 'trellis', 'Primitive']) {
+    expect(loadConfig({ CLIO_SCENE_MODELS: '' }, '/repo').sceneModels).toBe('triposr');
+    for (const value of ['gemini-cad', 'trellis', 'Primitive']) {
       expect(() => loadConfig({ CLIO_SCENE_MODELS: value }, '/repo')).toThrow(/CLIO_SCENE_MODELS/);
     }
   });
@@ -209,18 +209,18 @@ describe('loadConfig', () => {
 });
 
 describe('describeSceneBuilds', () => {
-  const on = { gemini: true, scene: true };
+  const on = { triposr: true, scene: true };
 
-  it('says which models scene builds make, and that gemini-cad sends crops to Google', () => {
+  it('says which models scene builds make, and how to set TripoSR up when it is not', () => {
     const models = (sceneModels: string) => loadConfig({ CLIO_SCENE_MODELS: sceneModels }, '/r');
     expect(describeSceneBuilds(models('primitive'), on)).toBe(
       'on (object models: primitive, offline)',
     );
-    expect(describeSceneBuilds(models('gemini-cad'), on)).toBe(
-      'on (object models: gemini-cad, which sends crops of each object to Google)',
+    expect(describeSceneBuilds(models('triposr'), on)).toBe(
+      'on (object models: TripoSR, on this machine)',
     );
-    expect(describeSceneBuilds(models('gemini-cad'), { ...on, gemini: false })).toBe(
-      'on (object models: gemini-cad, but GEMINI_API_KEY is not set, so primitives)',
+    expect(describeSceneBuilds(models(''), { ...on, triposr: false })).toBe(
+      'on (object models: triposr, but TripoSR is not set up, so primitives: run pipeline/tools/triposr/setup.sh)',
     );
     expect(describeSceneBuilds(models('command'), on)).toBe(
       'on (object models: command, which runs CLIO_MODEL_COMMAND)',

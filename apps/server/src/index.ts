@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { Server } from 'node:http';
 import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
@@ -110,6 +111,7 @@ function main(): void {
       gemini: gemini !== null,
       compile: compiler !== null,
       scene: sceneBuilder !== null,
+      triposr: triposrReady(config),
     });
     // Never awaited: startup does not wait for compiles or builds, and lessons finished from now on
     // go first. The scene sweep comes once the compiles are queued, so it leaves those episodes to
@@ -143,7 +145,7 @@ function createPipelineRunners(
     logger,
   });
   if (config.scene === 'auto') {
-    // The children inherit this environment: GEMINI_API_KEY, CLIO_CAD_MODEL, CLIO_MODEL_COMMAND.
+    // The children inherit this environment: CLIO_TRIPOSR_*, CLIO_MODEL_COMMAND.
     sceneBuilder = new ProcessSceneBuilder({
       command,
       episodesDir,
@@ -158,6 +160,14 @@ function createPipelineRunners(
   return { compiler, sceneBuilder };
 }
 
+/** Whether pipeline/tools/triposr/setup.sh has run (or CLIO_TRIPOSR_DIR names a set-up tool). */
+function triposrReady(config: Config): boolean {
+  const tool = process.env.CLIO_TRIPOSR_DIR?.trim() || join(config.pipelineDir, 'tools', 'triposr');
+  return (
+    existsSync(join(tool, '.venv', 'bin', 'python')) && existsSync(join(tool, '.vendor', 'TripoSR'))
+  );
+}
+
 function canRun(command: string, args: string[]): boolean {
   return spawnSync(command, args, { stdio: 'ignore', timeout: 5000 }).status === 0;
 }
@@ -165,7 +175,7 @@ function canRun(command: string, args: string[]): boolean {
 function logStartup(
   config: Config,
   logger: Logger,
-  ready: { gemini: boolean; compile: boolean; scene: boolean },
+  ready: { gemini: boolean; compile: boolean; scene: boolean; triposr: boolean },
 ): void {
   const { gemini: geminiReady, compile: compileReady } = ready;
   const hosts =

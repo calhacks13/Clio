@@ -72,7 +72,7 @@ export function modelOriginAt(
 
 const BACKEND_LABEL: Record<SceneModel["backend"], string> = {
   primitive: "Primitive",
-  "gemini-cad": "Gemini CAD",
+  triposr: "TripoSR",
   command: "Image to 3D",
 };
 

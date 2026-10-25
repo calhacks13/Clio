@@ -2,7 +2,7 @@
 words: its label and description, the detector prompt the camera looked for it with
 (`tracking.query`), the phrases and descriptions of the steps that showed it, and the declared
 objects that are parts of it (`partOf`). The primitive backend reads the names for whether the
-thing is round; gemini-cad sends all of it with the crops.
+thing is round; the command backend gets its label.
 """
 
 from __future__ import annotations

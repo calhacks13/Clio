@@ -170,7 +170,7 @@ that without inventing anything, and the visualizer labels them as what they are
 ## Object models
 
 `clio scene` builds a generated model of each object from a compiled episode into
-`data/scenes/<id>/` (`scene.json`, `model-<id>.glb`, `cad-<id>.json`, `crop-<id>-<n>.jpg`); the
+`data/scenes/<id>/` (`scene.json`, `model-<id>.glb`, `crop-<id>-<n>.jpg`); the
 design, the backends and the viewer are in [room-scene.md](room-scene.md). It reads the episode's
 keyframes and the compile (`manifest.json` is required, then `tracks.json` and `shapes.json`), and
 runs one stage, `models`. Like a compile it is built aside and swapped in, under a lock on
@@ -258,7 +258,7 @@ head. The feet stay planted in the reference stance and step only after the body
 turned 35 degrees; each leg is solved for its planted ankle, sole flat. Each palm is solved
 (position only) onto the scaled palm point; an untracked hand keeps its last pose. The Dex3
 fingers close with the pinch. The pelvis, legs, waist and fingers are rules, not measurements, and
-the viewer draws the G1 muted, as a wireframe, labelled "Inferred". Each frame records how far each
+the viewer draws the G1 solid in the dataset viewer's colors, labelled "Inferred". Each frame records how far each
 palm stayed from the hand (`handResidualM`).
 
 ## Running it
@@ -269,13 +269,14 @@ cd pipeline && uv run clio compile ../data/episodes/<id>    # by hand, into ../d
 cd pipeline && uv run clio compile ../data/episodes --if-stale
 cd pipeline && uv run clio scene ../data/episodes/<id>      # object models, into ../data/scenes/<id>/
 cd pipeline && uv run clio scene ../data/episodes/<id> --derived ../data/derived \
-    --out ../data/scenes --models gemini-cad --if-stale     # what the server runs, by hand
+    --out ../data/scenes --models triposr --if-stale        # what the server runs, by hand
+pipeline/tools/triposr/setup.sh            # once: TripoSR for the object models
 ```
 
 Server settings: `CLIO_COMPILE=off` disables automatic compiles. `CLIO_RETARGET_PROFILES` is a
 comma-separated list of profile files (`none` for no retargeting); the default is the bundled
 example arm. `CLIO_SCENE=off` disables the scene build that follows each compile (object models,
 [room-scene.md](room-scene.md)); builds are off whenever compiling is. `CLIO_SCENE_MODELS` picks
-how the models are made: `primitive` (the default, offline), `gemini-cad` (sends crops of each
-object to Google) or `command` (`CLIO_MODEL_COMMAND`). `CLIO_SCENE_TIMEOUT_MS` bounds one build
+how the models are made: `triposr` (the default: TripoSR on this machine, primitives until
+`pipeline/tools/triposr/setup.sh` has run), `primitive` or `command` (`CLIO_MODEL_COMMAND`). `CLIO_SCENE_TIMEOUT_MS` bounds one build
 (10 minutes by default).

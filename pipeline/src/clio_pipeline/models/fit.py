@@ -41,7 +41,7 @@ from typing import Any
 
 import numpy as np
 
-from .cad import rows_times
+from .mesh import rows_times
 
 MIN_AXIS_M = 0.01
 OFF_RATIO = 0.25  # a fitted model's axis this far from the measurement is noted
@@ -204,13 +204,12 @@ def _wrap(angle: float) -> float:
     return (angle + math.pi) % (2 * math.pi) - math.pi
 
 
-def off_axes(size: np.ndarray, measured: np.ndarray, source: str) -> str | None:
-    """How the fitted model's measured horizontal axes differ from the measurement by more than
-    OFF_RATIO, in words; None when they agree. Only measured axes count: the extent's depth is a
-    guess."""
-    axes = (0,) if source == "extent" else (0, 2)
-    off = [a for a in axes if measured[a] > 0 and abs(size[a] / measured[a] - 1) > OFF_RATIO]
-    if not off:
+def stretch_note(stretch: np.ndarray, who: str) -> str | None:
+    """Which axes a generated model was stretched or squeezed by more than OFF_RATIO to fill the
+    measured box, in words; None when none was."""
+    names = {0: "across", 1: "tall", 2: "deep"}
+    changed = [a for a in range(3) if abs(float(stretch[a]) - 1.0) > OFF_RATIO]
+    if not changed:
         return None
-    names = {0: "across", 2: "deep"}
-    return ", ".join(f"{size[a]:.3f} m {names[a]} (measured {measured[a]:.3f})" for a in off)
+    parts = ", ".join(f"{float(stretch[a]):.1f}x {names[a]}" for a in changed)
+    return f"{who} model was stretched to the measured size ({parts})"

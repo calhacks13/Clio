@@ -114,16 +114,17 @@ The server runs `clio scene --if-stale` after each compile; run it by hand to re
 ```bash
 uv run clio scene ../data/episodes/ep-...                    # writes ../data/scenes/ep-.../
 uv run clio scene ../data/episodes/ep-... --derived ../data/derived --out ../data/scenes \
-    --models gemini-cad --if-stale                           # what the server runs
+    --models triposr --if-stale                              # what the server runs
 ```
 
 Each episode needs its compile (`<derived>/<id>/manifest.json`; without one the exit code is 1
 and the last line on stderr says so). It gets `<out>/<episodeId>/`: `scene.json` (inputs with
-hashes, options, stages, one entry per object model), `model-<id>.glb`, `cad-<id>.json` and
-`crop-<id>-<n>.jpg` ([docs/room-scene.md](../docs/room-scene.md)).
+hashes, options, stages, one entry per object model), `model-<id>.glb` and `crop-<id>-<n>.jpg`
+([docs/room-scene.md](../docs/room-scene.md)).
 
-- `--models`: `primitive` (default, offline), `gemini-cad` (sends crops of each object to Google)
-  or `command` (`$CLIO_MODEL_COMMAND`). The one stage, `models`, calls
+- `--models`: `triposr` (default: TripoSR on this machine, in its own environment in
+  `tools/triposr/`; run `tools/triposr/setup.sh` once, until then objects get primitives),
+  `primitive` (instant) or `command` (`$CLIO_MODEL_COMMAND`). The one stage, `models`, calls
   `clio_pipeline.models.build_object_models`; a failure is recorded in scene.json, which is still
   written (exit code 0). An object whose entry breaks the schema or names a file that was not
   written is left out and said in the stage's detail.

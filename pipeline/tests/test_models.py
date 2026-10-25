@@ -34,9 +34,9 @@ from clio_pipeline.episode import load_episode
 from clio_pipeline.glb import glb_bounds, read_glb
 from clio_pipeline.keyframes import load_keyframes
 from clio_pipeline.models import ModelSettings, build_object_models, drawable_objects, file_stems
-from clio_pipeline.models.cad import srgb_to_linear
 from clio_pipeline.models.describe import object_words
 from clio_pipeline.models.fit import Measured, measure, place, yaw_of, yaw_quat
+from clio_pipeline.models.mesh import srgb_to_linear
 from clio_pipeline.models.primitive import footprint_is_round, head_noun, looks_round
 from clio_pipeline.models.views import (
     Images,
@@ -68,7 +68,7 @@ BLOCK_BOX = {
     "size": [0.12, 0.06, 0.08],
 }
 RED, BLUE = (200, 40, 40), (40, 60, 200)
-NO_KEY = {"PATH": "/usr/bin:/bin"}
+BARE_ENV = {"PATH": "/usr/bin:/bin"}
 
 
 def orbit(center, degrees, *, up=0.25, out=0.45):
@@ -633,7 +633,7 @@ def test_round_things_by_name_or_by_their_depth_samples():
 
 
 def _settings(**env):
-    return ModelSettings(env={**NO_KEY, **env}, sleep=lambda s: None)
+    return ModelSettings(env={**BARE_ENV, **env})
 
 
 def test_primitive_models_have_the_measured_size_and_the_crops_color(scene, tmp_path):
@@ -644,12 +644,7 @@ def test_primitive_models_have_the_measured_size_and_the_crops_color(scene, tmp_
         episode, keyframes, tracks, shapes, out, log=log.append, settings=_settings()
     )
     cup, block = results
-    assert (cup["id"], cup["backend"], cup["generator"], cup["cad"]) == (
-        "cup",
-        "primitive",
-        None,
-        None,
-    )
+    assert (cup["id"], cup["backend"], cup["generator"]) == ("cup", "primitive", None)
     assert cup["sizeSource"] == "extent" and cup["size"] == pytest.approx([0.08, 0.1, 0.08])
     assert cup["placement"]["offset"] == pytest.approx([0.0, -0.05, 0.0])
     assert cup["placement"]["rotationSource"] == "view"
@@ -710,7 +705,6 @@ def test_a_rebuild_leaves_no_stale_files(scene, tmp_path):
     episode, keyframes, tracks, shapes = scene
     out = tmp_path / "s"
     build_object_models(episode, keyframes, tracks, shapes, out, settings=_settings())
-    (out / "cad-cup.json").write_text("{}")
     (out / "crop-cup-a-1.jpg").write_bytes(b"another object's")
     build_object_models(episode, keyframes[:1], tracks, shapes, out, settings=_settings())
     assert sorted(p.name for p in out.iterdir()) == [

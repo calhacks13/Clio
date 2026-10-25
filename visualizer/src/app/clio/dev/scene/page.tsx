@@ -129,7 +129,9 @@ function SceneHarness() {
   const scene = useMemo(
     () =>
       syntheticScene(episode, derived.manifest, {
-        ...(on.sceneFailed && { modelsFailed: "gemini-cad: quota exceeded" }),
+        ...(on.sceneFailed && {
+          modelsFailed: "triposr: TripoSR is not set up",
+        }),
       }),
     [episode, derived.manifest, on.sceneFailed],
   );

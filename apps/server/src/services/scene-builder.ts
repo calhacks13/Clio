@@ -10,7 +10,7 @@ import { EpisodeJobQueue, type EpisodeJobRequest, type EpisodeJobState } from '.
 // Builds the scene of each compiled episode in the background with the pipeline's `clio scene`,
 // which reads data/episodes/<id>/ and data/derived/<id>/ and writes data/scenes/<id>/: a model of
 // every object, scaled and placed by what was measured (docs/room-scene.md). It follows each
-// compile on a queue of its own, since with gemini-cad a build waits on a model call per object.
+// compile on a queue of its own, since a build runs TripoSR on every object.
 
 /** Port: background scene builds. null when they are off (CLIO_SCENE=off, or compiling is off). */
 export interface SceneBuilder {
@@ -46,7 +46,7 @@ export interface ProcessSceneBuilderOptions {
   logger?: Logger;
 }
 
-/** At most one model call per object (gemini-cad), and the first `uv run` also syncs. */
+/** TripoSR loads once and takes seconds an object; the first `uv run` also syncs. */
 export const DEFAULT_SCENE_TIMEOUT_MS = 10 * 60_000;
 
 /** `clio scene` as a child process, one episode per run, on its own queue (EpisodeJobQueue). */

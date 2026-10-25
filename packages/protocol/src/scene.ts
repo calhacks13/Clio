@@ -8,10 +8,9 @@ import { NormalizedBoxSchema, QuatSchema, Vec3Schema } from './geometry';
 //
 //   scene.json         SceneDoc: what was built, from which inputs, and how each model was made
 //   model-<id>.glb     a generated model of each object, scaled to its measured size
-//   cad-<id>.json      the CAD program a generated model was built from (gemini-cad)
 //   crop-<id>-<n>.jpg  the keyframe crops an object's model was made from
 //
-// Unlike data/derived/<id>/, a scene build can call a model service (gemini-cad), so it is its own
+// Unlike data/derived/<id>/, a scene build runs an image-to-3D model (TripoSR), so it is its own
 // step with its own staleness. Every spatial value is in the episode's workspace frame W. A model's
 // appearance is generated, never measured: it is scaled and placed by what was measured.
 
@@ -22,11 +21,12 @@ export const SCENE_FILE_NAME = /^[a-z0-9][a-z0-9._-]{0,95}\.(json|glb|jpg)$/;
 
 /**
  * How an object's model was made. primitive: a box or cylinder from its measured size and the
- * crops' color, offline. gemini-cad: Gemini wrote a CAD program (parts with dimensions) from the
- * crops, the label and the measured size; the pipeline built the mesh from it. command: an
- * external image-to-3D command ($CLIO_MODEL_COMMAND) made the mesh from the best crop.
+ * crops' color. triposr: TripoSR made the mesh from the best crop, on the machine that built the
+ * scene (marching cubes on a 128 grid by default). command: an external image-to-3D command
+ * ($CLIO_MODEL_COMMAND) made the mesh from the best crop. The last two are scaled to the measured
+ * height and placed like the primitive.
  */
-export const ModelBackendSchema = z.enum(['primitive', 'gemini-cad', 'command']);
+export const ModelBackendSchema = z.enum(['primitive', 'triposr', 'command']);
 
 export const SceneStageSchema = z.object({
   name: z.string(),
@@ -54,13 +54,12 @@ export const SceneModelSchema = z.object({
   generator: z
     .string()
     .nullable()
-    .describe('What generated it, e.g. "gemini-pro-latest" or the command; null for primitive'),
+    .describe('What generated it, e.g. "TripoSR (grid 128)" or the command; null for primitive'),
   model: sceneFile()
     .nullable()
     .describe(
       'GLB in meters, +y up, origin at the bottom center of its bounds; null when none could be made',
     ),
-  cad: sceneFile().nullable().describe('The CAD program the model was built from (gemini-cad)'),
   crops: z.array(SceneCropSchema),
   size: Vec3Schema.describe("The model's bounds after fitting, m, along its own x, y (up), z"),
   sizeSource: z

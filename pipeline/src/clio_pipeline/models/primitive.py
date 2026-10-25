@@ -23,8 +23,8 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from ..glb import MeshData, Node, write_glb
-from .cad import Mesh, box_mesh, cylinder_mesh, srgb_to_linear
 from .describe import ObjectWords
+from .mesh import Mesh, box_mesh, cylinder_mesh, srgb_to_linear
 from .views import View
 
 ROUND_NOUNS = frozenset(

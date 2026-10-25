@@ -59,7 +59,6 @@ export function sceneDoc(episodeId: string, compiledAt: string): SceneDoc {
         backend: 'primitive',
         generator: null,
         model: 'model-cup_a.glb',
-        cad: null,
         crops: [],
         size: [0.08, 0.1, 0.08],
         sizeSource: 'extent',

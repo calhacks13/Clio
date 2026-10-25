@@ -113,7 +113,7 @@ const kindsOf = async (t: Setup) =>
 
 describe('ProcessSceneBuilder', () => {
   it('builds a scene with exactly the pipeline command line', async () => {
-    const t = await setup({ models: 'gemini-cad' });
+    const t = await setup({ models: 'command' });
     const id = await t.compiled();
     t.builder.enqueue(id);
     expect(t.builder.state(id)).toBe('running');
@@ -131,14 +131,14 @@ describe('ProcessSceneBuilder', () => {
       '--out',
       t.scenesDir,
       '--models',
-      'gemini-cad',
+      'command',
       '--if-stale',
     ]);
     const manifest = JSON.parse(await readFile(join(t.derivedDir, id, 'manifest.json'), 'utf8'));
     expect(await t.scene(id)).toMatchObject({
       episodeId: id,
       compiledAt: manifest.compiledAt,
-      options: { models: 'gemini-cad' },
+      options: { models: 'command' },
     });
     expect(t.logger.lines.some((l) => l.startsWith(`info Scene build of ${id} finished in`))).toBe(
       true,
@@ -173,14 +173,14 @@ describe('ProcessSceneBuilder', () => {
     const id = await t.compiled();
     const traceback =
       'Traceback (most recent call last):\n  File "scene.py", line 40, in build\n' +
-      'RuntimeError: gemini-cad: GEMINI_API_KEY is not set\n';
+      'RuntimeError: command: CLIO_MODEL_COMMAND is not set\n';
     await steer(t.control, id, 'fail', traceback);
     t.builder.enqueue(id);
     await t.builder.idle();
     expect(t.builder.lastError(id)).toBe(traceback.trim());
     expect(t.logger.lines).toContainEqual(
       expect.stringMatching(
-        new RegExp(`^warn Scene build of ${id} failed after .*: RuntimeError: gemini-cad: `),
+        new RegExp(`^warn Scene build of ${id} failed after .*: RuntimeError: command: `),
       ),
     );
 

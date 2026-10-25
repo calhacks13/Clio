@@ -75,7 +75,7 @@
           "type": "string",
           "enum": [
             "primitive",
-            "gemini-cad",
+            "triposr",
             "command"
           ]
         }
@@ -133,12 +133,12 @@
             "type": "string",
             "enum": [
               "primitive",
-              "gemini-cad",
+              "triposr",
               "command"
             ]
           },
           "generator": {
-            "description": "What generated it, e.g. \"gemini-pro-latest\" or the command; null for primitive",
+            "description": "What generated it, e.g. \"TripoSR (grid 128)\" or the command; null for primitive",
             "type": [
               "string",
               "null"
@@ -155,18 +155,6 @@
               }
             ],
             "description": "GLB in meters, +y up, origin at the bottom center of its bounds; null when none could be made"
-          },
-          "cad": {
-            "anyOf": [
-              {
-                "type": "string",
-                "pattern": "^[a-z0-9][a-z0-9._-]{0,95}\\.(json|glb|jpg)$"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The CAD program the model was built from (gemini-cad)"
           },
           "crops": {
             "type": "array",
@@ -328,7 +316,6 @@
           "backend",
           "generator",
           "model",
-          "cad",
           "crops",
           "size",
           "sizeSource",

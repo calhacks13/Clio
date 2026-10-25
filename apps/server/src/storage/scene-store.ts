@@ -4,7 +4,7 @@ import { isSafeId } from '../ids';
 import type { Logger } from '../log';
 import { DocReader, type OpenedFile, openFile } from './files';
 
-// <root>/<episodeId>/ scene.json, model-<id>.glb, cad-<id>.json, crop-<id>-<n>.jpg, written by the
+// <root>/<episodeId>/ scene.json, model-<id>.glb, crop-<id>-<n>.jpg, written by the
 // pipeline's `clio scene` (docs/room-scene.md). The server only reads them: a build replaces them,
 // and the whole directory can be deleted and built again from the episode and its compile.
 

@@ -102,7 +102,7 @@ describe("planClioProxy: allowed reads", () => {
       "scene.json",
       "model-syringe.glb",
       "model-cup_a.glb",
-      "cad-indicator.json",
+      "model-indicator.glb",
       "crop-syringe-1.jpg",
       "crop-cup_a-12.jpg",
       `${"a".repeat(92)}.glb`,
