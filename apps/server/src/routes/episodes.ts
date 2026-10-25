@@ -111,16 +111,12 @@ export function episodeRoutes({ episodes, derived, compiler, limits }: ServerDep
       throw new ApiError(
         400,
         'invalid_name',
-        'Invalid derived file name: use lowercase letters, digits, ".", "_" or "-", ending in .json',
+        'Invalid derived file name: use lowercase letters, digits, ".", "_" or "-", ending in .json or .glb',
       );
     }
-    const stream = await derived.open(id, name);
-    if (!stream) throw notFound(`No compiled file "${name}" for episode "${id}"`);
-    return c.body(stream, 200, {
-      'content-type': 'application/json',
-      // A compile replaces these files in place.
-      'cache-control': 'no-store',
-    });
+    const file = await derived.open(id, name);
+    if (!file) throw notFound(`No compiled file "${name}" for episode "${id}"`);
+    return c.body(file.stream, 200, fileHeaders(name, file.bytes));
   });
 
   app.get('/api/episodes', async (c) =>
@@ -150,6 +146,25 @@ export function episodeRoutes({ episodes, derived, compiler, limits }: ServerDep
   });
 
   return app;
+}
+
+/** By extension, for the compiled and scene files (DERIVED_FILE_NAME, SCENE_FILE_NAME). */
+const CONTENT_TYPES: Readonly<Record<string, string>> = {
+  json: 'application/json',
+  glb: 'model/gltf-binary',
+  ply: 'application/octet-stream',
+  jpg: 'image/jpeg',
+};
+
+function fileHeaders(name: string, bytes: number): Record<string, string> {
+  return {
+    'content-type':
+      CONTENT_TYPES[name.slice(name.lastIndexOf('.') + 1)] ?? 'application/octet-stream',
+    // A splat or a room mesh runs to tens of MB: the length lets a viewer show progress.
+    'content-length': String(bytes),
+    // A compile or a scene build replaces these files in place.
+    'cache-control': 'no-store',
+  };
 }
 
 function isNdjsonFile(value: string): value is NdjsonFile {

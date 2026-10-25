@@ -1,14 +1,13 @@
-import { type FileHandle, open } from 'node:fs/promises';
 import { join } from 'node:path';
-import { Readable } from 'node:stream';
 import { type CompileManifest, CompileManifestSchema, DERIVED_FILE_NAME } from '@clio/protocol';
 import { isSafeId } from '../ids';
-import { describeError, type Logger } from '../log';
-import { isMissing } from './files';
+import type { Logger } from '../log';
+import { DocReader, type OpenedFile, openFile } from './files';
 
-// <root>/<episodeId>/ manifest.json, tracks.json, environment.json, retarget-<profile>.json, written
-// by the pipeline's `clio compile` (docs/data-pipeline.md). The server only reads them: a compile
-// replaces them, and the whole directory can be deleted and rebuilt from the raw episode.
+// <root>/<episodeId>/ manifest.json, tracks.json, environment.json, shapes.json, room.glb,
+// retarget-<profile>.json, written by the pipeline's `clio compile` (docs/data-pipeline.md). The
+// server only reads them: a compile replaces them, and the whole directory can be deleted and
+// rebuilt from the raw episode.
 
 /** Raw episode files a compile reads. Its manifest lists the ones that existed, with their sizes. */
 export const COMPILE_INPUTS = [
@@ -47,13 +46,13 @@ export interface DerivedStoreOptions {
 
 export class DerivedStore {
   readonly #root: string;
-  readonly #logger: Logger | undefined;
-  /** Per episode, which invalid manifest (mtime and size) was last warned about. */
-  readonly #warned = new Map<string, string>();
+  readonly #manifests: DocReader<CompileManifest>;
 
   constructor(root: string, options: DerivedStoreOptions = {}) {
     this.#root = root;
-    this.#logger = options.logger;
+    this.#manifests = new DocReader(CompileManifestSchema, (id, why) =>
+      options.logger?.warn(`Episode ${id}: derived manifest.json ${why}; reported as stale`),
+    );
   }
 
   #path(id: string, name: string): string {
@@ -66,66 +65,15 @@ export class DerivedStore {
   /** Warns about an invalid manifest once per version of the file, not on every status request. */
   async readManifest(id: string): Promise<ManifestRead> {
     if (!isSafeId(id)) return { status: 'missing' };
-    let handle: FileHandle;
-    try {
-      handle = await open(this.#path(id, 'manifest.json'), 'r');
-    } catch (error) {
-      if (isMissing(error)) {
-        this.#warned.delete(id);
-        return { status: 'missing' };
-      }
-      const code = (error as NodeJS.ErrnoException).code ?? 'error';
-      return this.#invalid(id, code, `unreadable (${describeError(error)})`);
-    }
-    try {
-      const { mtimeMs, size } = await handle.stat();
-      const version = `${mtimeMs}:${size}`;
-      let raw: unknown;
-      try {
-        raw = JSON.parse(await handle.readFile('utf8'));
-      } catch (error) {
-        return this.#invalid(id, version, `unreadable (${describeError(error)})`);
-      }
-      const parsed = CompileManifestSchema.safeParse(raw);
-      if (!parsed.success) return this.#invalid(id, version, 'does not match the schema');
-      this.#warned.delete(id);
-      return { status: 'ok', manifest: parsed.data };
-    } finally {
-      await handle.close();
-    }
-  }
-
-  #invalid(id: string, version: string, why: string): ManifestRead {
-    if (this.#warned.get(id) !== version) {
-      this.#warned.set(id, version);
-      this.#logger?.warn(`Episode ${id}: derived manifest.json ${why}; reported as stale`);
-    }
-    return { status: 'invalid' };
+    const read = await this.#manifests.read(id, this.#path(id, 'manifest.json'));
+    return read.status === 'ok' ? { status: 'ok', manifest: read.doc } : read;
   }
 
   /**
-   * A compiled file's bytes, or null when it does not exist. Rejects a name that DERIVED_FILE_NAME
-   * refuses. Opened before streaming, so a compile replacing the file mid-request cannot turn a
-   * found file into a broken stream.
+   * A compiled file's bytes and size, or null when it does not exist. Rejects a name that
+   * DERIVED_FILE_NAME refuses.
    */
-  async open(id: string, name: string): Promise<ReadableStream<Uint8Array> | null> {
-    const path = this.#path(id, name);
-    let handle: FileHandle;
-    try {
-      handle = await open(path, 'r');
-    } catch (error) {
-      if (isMissing(error) || (error as NodeJS.ErrnoException).code === 'EISDIR') return null;
-      throw error;
-    }
-    try {
-      if (!(await handle.stat()).isFile()) {
-        await handle.close();
-        return null;
-      }
-    } catch (error) {
-      await handle.close();
-      throw error;
-    }
-    return Readable.toWeb(handle.createReadStream()) as ReadableStream<Uint8Array>;
+  open(id: string, name: string): Promise<OpenedFile | null> {
+    return openFile(this.#path(id, name));
   }
 }

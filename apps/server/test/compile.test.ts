@@ -289,6 +289,20 @@ describe('GET /api/episodes/:id/derived/:name', () => {
     }
   });
 
+  it('serves the room scan as binary glTF', async () => {
+    const h = await harness();
+    const id = await create(h);
+    const glb = new Uint8Array([0x67, 0x6c, 0x54, 0x46, 2, 0, 0, 0, 0, 255]);
+    await mkdir(join(h.derivedDir, id), { recursive: true });
+    await writeFile(join(h.derivedDir, id, 'room.glb'), glb);
+    const res = await h.request('GET', ApiPaths.episodeDerived(id, 'room.glb'));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('model/gltf-binary');
+    expect(res.headers.get('content-length')).toBe(String(glb.length));
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(glb);
+  });
+
   it('serves whatever the compiler wrote, with no compiler running', async () => {
     const h = await harness();
     const id = await create(h);
@@ -314,10 +328,16 @@ describe('GET /api/episodes/:id/derived/:name', () => {
       '-tracks.json',
       'tracks.json%00.txt',
       `${'a'.repeat(100)}.json`,
+      'room.GLB',
+      'room.gltf',
+      'splat.ply',
+      'crop-cup_a-1.jpg',
     ]) {
       const res = await h.request('GET', `/api/episodes/${id}/derived/${name}`);
       expect(res.status, name).toBe(400);
-      expect((await errorOf(res)).code).toBe('invalid_name');
+      const error = await errorOf(res);
+      expect(error.code).toBe('invalid_name');
+      expect(error.message).toMatch(/ending in \.json or \.glb$/);
     }
     const unsafe = await h.request('GET', '/api/episodes/..%2Fepisodes/derived/manifest.json');
     expect(unsafe.status).toBe(400);
