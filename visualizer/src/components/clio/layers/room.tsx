@@ -195,7 +195,9 @@ export function RoomLayer({
   const { value: scan } = useSceneFile(file, loadRoomScan, disposeRoomScan);
   const invalidate = useThree((s) => s.invalidate);
   // The file arrives after the frame that mounted the layer.
-  useEffect(() => invalidate(), [scan, invalidate]);
+  useEffect(() => {
+    invalidate();
+  }, [scan, invalidate]);
   if (!scan) return null;
   const { surface, surfaceEdge, volume, volumeEdge } = scan.materials;
   surface.color.set(themed(SCENE_COLORS.roomSurface, theme));

@@ -136,7 +136,9 @@ export function GeneratedModel({
 }) {
   const { value: model } = useSceneFile(file.file, loadModel, disposeModel);
   const invalidate = useThree((s) => s.invalidate);
-  useEffect(() => invalidate(), [model, invalidate]);
+  useEffect(() => {
+    invalidate();
+  }, [model, invalidate]);
   const placement = useMemo(() => modelPlacement(file.model), [file.model]);
   const rotation = useMemo(
     () => new Quaternion(...placement.rotation),
