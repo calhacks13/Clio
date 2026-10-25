@@ -43,6 +43,8 @@ DERIVED_SCHEMAS: dict[str, str] = {
     "shapes": "derived-shapes.schema.json",
     "retarget": "derived-retarget.schema.json",
 }
+# Rebuilt scene (clio.scene/1, packages/protocol/src/scene.ts), data/scenes/<id>/scene.json
+SCENE_SCHEMA = "scene.schema.json"
 
 
 @dataclass(frozen=True)

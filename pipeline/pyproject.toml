@@ -7,6 +7,7 @@ requires-python = ">=3.11,<3.14"
 dependencies = [
     "numpy>=1.26",
     "jsonschema>=4.18",
+    "pillow>=10.4",  # keyframe JPEGs: decoding for room colors and object crops, encoding crops
 ]
 
 [project.optional-dependencies]

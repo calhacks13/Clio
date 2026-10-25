@@ -9,10 +9,14 @@ import {
   EpisodeMetaSchema,
   FrameRecordSchema,
   jointOffset,
+  KEYFRAME_MEDIA,
+  keyframeMediaName,
   LOCATION_FLAG,
   ObjectObservationSchema,
   ObjectStateSchema,
   ObjectTrackRecordSchema,
+  ROOM_SCAN_MEDIA,
+  roomScanMediaName,
 } from '../src/index';
 
 const hand = (n = 200) => ({ joints: new Array(n).fill(0), pinch: 0.03 });
@@ -179,7 +183,7 @@ describe('episode meta', () => {
 
 describe('event type list', () => {
   it('is derived from the schema, so the recorder knows every recordable event', () => {
-    expect(EPISODE_EVENT_TYPES).toHaveLength(20);
+    expect(EPISODE_EVENT_TYPES).toHaveLength(22);
     expect(EPISODE_EVENT_TYPES).toEqual(
       expect.arrayContaining([
         'step.entered',
@@ -189,8 +193,67 @@ describe('event type list', () => {
         'object.grasped',
         'object.released',
         'environment.planes',
+        'environment.meshes',
+        'scene.keyframe',
       ]),
     );
+  });
+});
+
+describe('room scan and keyframes', () => {
+  it('records a room scan snapshot that names its GLB', () => {
+    const e = EpisodeEventSchema.parse({
+      t: 40,
+      type: 'environment.meshes',
+      media: roomScanMediaName(1),
+      meshes: [
+        {
+          id: 'mesh-1',
+          kind: 'other',
+          label: 'global mesh',
+          global: true,
+          vertices: 9,
+          triangles: 4,
+        },
+        { id: 'mesh-2', kind: 'table', label: 'table', global: false, vertices: 8, triangles: 12 },
+      ],
+    });
+    expect(e.type).toBe('environment.meshes');
+    expect(ROOM_SCAN_MEDIA.test('room-scan-1.glb')).toBe(true);
+  });
+
+  it('records a keyframe with its camera pose and scaled intrinsics', () => {
+    const e = EpisodeEventSchema.parse({
+      t: 520,
+      type: 'scene.keyframe',
+      media: keyframeMediaName(7),
+      capturedT: 470.5,
+      pose: [0.1, 0.4, 0.6, 0, 0, 0, 1],
+      width: 960,
+      height: 720,
+      intrinsics: { fx: 650, fy: 650, cx: 480, cy: 360 },
+    });
+    expect(e.type === 'scene.keyframe' && e.media).toBe('keyframe-0007.jpg');
+  });
+
+  it('refuses media names outside the room scan and keyframe patterns', () => {
+    const keyframe = {
+      t: 0,
+      type: 'scene.keyframe',
+      media: '../meta.json',
+      capturedT: 0,
+      pose: [0, 0, 0, 0, 0, 0, 1],
+      width: 4,
+      height: 3,
+      intrinsics: { fx: 1, fy: 1, cx: 2, cy: 1.5 },
+    };
+    expect(EpisodeEventSchema.safeParse(keyframe).success).toBe(false);
+    expect(
+      EpisodeEventSchema.safeParse({ t: 0, type: 'environment.meshes', media: 'a.glb', meshes: [] })
+        .success,
+    ).toBe(false);
+    expect(KEYFRAME_MEDIA.test(keyframeMediaName(12345))).toBe(true);
+    expect(EPISODE_FEATURE.environmentMeshes).toBe('environment.meshes');
   });
 });
 

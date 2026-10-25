@@ -131,7 +131,7 @@
         "properties": {
           "name": {
             "type": "string",
-            "pattern": "^[a-z0-9][a-z0-9._-]{0,95}\\.json$"
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,95}\\.(json|glb)$"
           },
           "kind": {
             "type": "string",
@@ -139,7 +139,8 @@
               "tracks",
               "environment",
               "shapes",
-              "retarget"
+              "retarget",
+              "room"
             ]
           },
           "bytes": {

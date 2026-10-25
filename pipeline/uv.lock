@@ -263,6 +263,7 @@ source = { editable = "." }
 dependencies = [
     { name = "jsonschema" },
     { name = "numpy" },
+    { name = "pillow" },
 ]
 
 [package.optional-dependencies]
@@ -284,6 +285,7 @@ requires-dist = [
     { name = "jsonschema", specifier = ">=4.18" },
     { name = "lerobot", extras = ["dataset"], marker = "python_full_version >= '3.12' and extra == 'lerobot'", specifier = ">=0.6" },
     { name = "numpy", specifier = ">=1.26" },
+    { name = "pillow", specifier = ">=10.4" },
     { name = "rerun-sdk", marker = "extra == 'viz'", specifier = ">=0.40" },
 ]
 provides-extras = ["viz", "lerobot"]

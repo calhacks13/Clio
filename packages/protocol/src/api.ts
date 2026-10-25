@@ -8,6 +8,7 @@ import {
 } from './episode';
 import { NormalizedBoxSchema, NormalizedPointSchema, NormalizedPolygonSchema } from './geometry';
 import { ProcedureSchema } from './procedure';
+import { SceneDocSchema } from './scene';
 
 // HTTP contract between the headset and the laptop server. Both sides import these schemas, so a
 // mismatch is a type error rather than a 400 at the venue.
@@ -36,6 +37,7 @@ export const ApiPaths = {
   episodeObservations: (id: string) => `/api/episodes/${seg(id)}/observations`,
   episodeCompile: (id: string) => `/api/episodes/${seg(id)}/compile`,
   episodeDerived: (id: string, name: string) => `/api/episodes/${seg(id)}/derived/${seg(name)}`,
+  episodeScene: (id: string, name: string) => `/api/episodes/${seg(id)}/scene/${seg(name)}`,
   clipsFromEpisode: '/api/clips/from-episode',
   clip: (procedureId: string, stepId: string) => `/api/clips/${seg(procedureId)}/${seg(stepId)}`,
 } as const;
@@ -368,6 +370,16 @@ export const EpisodeDerivedStatusSchema = z.object({
   manifest: CompileManifestSchema.nullable().describe('The last successful compile, if any'),
   error: z.string().nullable().describe('Why the last compile run failed'),
 });
+/**
+ * The rebuilt scene (`clio scene`, data/scenes/<id>/), with the same states as a compile: none,
+ * never built; queued / running; ok: built from the current compile and media; stale: they changed
+ * since; failed: the last build failed before writing scene.json.
+ */
+export const EpisodeSceneStatusSchema = z.object({
+  state: CompileStateSchema,
+  scene: SceneDocSchema.nullable().describe('The last successful build, if any'),
+  error: z.string().nullable().describe('Why the last build run failed'),
+});
 export const EpisodeDetailResponseSchema = z.object({
   meta: EpisodeMetaSchema,
   summary: EpisodeSummarySchema,
@@ -376,6 +388,9 @@ export const EpisodeDetailResponseSchema = z.object({
   derived: EpisodeDerivedStatusSchema.optional()
     .catch(undefined)
     .describe('Absent from servers older than compiling; unreadable compile state is dropped'),
+  scene: EpisodeSceneStatusSchema.optional()
+    .catch(undefined)
+    .describe('Absent from servers older than scene builds; unreadable scene state is dropped'),
 });
 export const EpisodeCompileResponseSchema = z.object({
   ok: z.literal(true),
@@ -441,6 +456,7 @@ export type EpisodeBatchIntegrity = z.infer<typeof EpisodeBatchIntegritySchema>;
 export type EpisodeDetailResponse = z.infer<typeof EpisodeDetailResponseSchema>;
 export type CompileState = z.infer<typeof CompileStateSchema>;
 export type EpisodeDerivedStatus = z.infer<typeof EpisodeDerivedStatusSchema>;
+export type EpisodeSceneStatus = z.infer<typeof EpisodeSceneStatusSchema>;
 export type EpisodeCompileResponse = z.infer<typeof EpisodeCompileResponseSchema>;
 export type ClipsFromEpisodeRequest = z.infer<typeof ClipsFromEpisodeRequestSchema>;
 export type ClipsFromEpisodeResponse = z.infer<typeof ClipsFromEpisodeResponseSchema>;

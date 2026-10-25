@@ -10,3 +10,4 @@ export * from './geometry';
 export * from './hand';
 export * from './primary';
 export * from './procedure';
+export * from './scene';

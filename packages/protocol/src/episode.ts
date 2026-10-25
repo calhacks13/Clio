@@ -50,7 +50,26 @@ export const EPISODE_FEATURE = {
   objectSurface: 'object.surface',
   /** `environment.planes` events record the planes the headset detected (table, floor, walls). */
   environmentPlanes: 'environment.planes',
+  /**
+   * `environment.meshes` events record the Quest room scan (WebXR mesh detection: furniture volumes
+   * and the room's global mesh), each snapshot's geometry uploaded as a GLB media file.
+   */
+  environmentMeshes: 'environment.meshes',
+  /**
+   * `scene.keyframe` events record passthrough camera stills with the camera's pose, each image
+   * uploaded as a JPEG media file, so the room and its objects can be rebuilt after the episode.
+   */
+  sceneKeyframes: 'scene.keyframes',
 } as const;
+
+/**
+ * Media files the headset uploads for the room scan and the keyframes (media/<name>). Snapshot and
+ * keyframe numbers start at 1 for each episode.
+ */
+export const ROOM_SCAN_MEDIA = /^room-scan-[0-9]{1,4}\.glb$/;
+export const KEYFRAME_MEDIA = /^keyframe-[0-9]{4,5}\.jpg$/;
+export const roomScanMediaName = (n: number) => `room-scan-${n}.glb`;
+export const keyframeMediaName = (n: number) => `keyframe-${String(n).padStart(4, '0')}.jpg`;
 
 /** Where a passthrough camera model came from. */
 export const CameraModelSourceSchema = z.enum([
@@ -95,6 +114,31 @@ export const EnvironmentPlaneSchema = z.object({
     .min(3)
     .max(256)
     .describe('Outline in plane-local [x, z] meters'),
+});
+
+/**
+ * One mesh of the Quest room scan (an XRMesh): a furniture volume or the room's global mesh. The
+ * geometry is in the snapshot's GLB (media/room-scan-<n>.glb), as the node named `id`: its
+ * translation and rotation are the mesh pose in W, its POSITION values mesh-local meters and its
+ * indices triangles. The node's `extras` repeat `kind`, `label` and `global`.
+ */
+export const EnvironmentMeshSchema = z.object({
+  id: z
+    .string()
+    .describe('Stable within the episode; the headset numbers meshes as it first sees them'),
+  kind: SurfaceKindSchema,
+  label: z.string().nullable().describe('The WebXR semanticLabel as reported, if any'),
+  global: z.boolean().describe('The room\'s global mesh (semanticLabel "global mesh")'),
+  vertices: z.number().int().nonnegative(),
+  triangles: z.number().int().nonnegative(),
+});
+
+/** Pinhole intrinsics in pixels of the image they come with. */
+export const PixelIntrinsicsSchema = z.object({
+  fx: z.number().positive(),
+  fy: z.number().positive(),
+  cx: z.number(),
+  cy: z.number(),
 });
 
 export const PlacedObjectSchema = z.object({
@@ -405,6 +449,35 @@ export const EpisodeEventSchema = z.discriminatedUnion('type', [
       .max(128)
       .describe('Every plane detected now: a full snapshot, not a list of changes'),
   }),
+  event('environment.meshes', {
+    media: z
+      .string()
+      .regex(ROOM_SCAN_MEDIA)
+      .describe('The GLB with this snapshot\'s geometry, in media/ (e.g. "room-scan-1.glb")'),
+    meshes: z
+      .array(EnvironmentMeshSchema)
+      .max(512)
+      .describe('Every mesh detected now: a full snapshot, not a list of changes'),
+  }),
+  event('scene.keyframe', {
+    media: z
+      .string()
+      .regex(KEYFRAME_MEDIA)
+      .describe('The JPEG still, in media/ (e.g. "keyframe-0001.jpg")'),
+    capturedT: z
+      .number()
+      .describe(
+        "ms since episode start when the camera frame was captured (the same clock as an observation's observedT); negative if before the start",
+      ),
+    pose: Pose7Schema.describe(
+      'Camera pose in W at capturedT: head pose then meta.camera.headFromCamera. Camera frame as WebXR: x right, y up, looking down -z',
+    ),
+    width: z.number().int().positive().describe('Pixels of the stored image'),
+    height: z.number().int().positive(),
+    intrinsics: PixelIntrinsicsSchema.describe(
+      "meta.camera's intrinsics scaled to the stored image",
+    ),
+  }),
   event('annotation', { label: z.string(), data: z.unknown().optional() }),
 ]);
 
@@ -442,6 +515,8 @@ export type CameraModelSource = z.infer<typeof CameraModelSourceSchema>;
 export type CameraModelRecord = z.infer<typeof CameraModelSchema>;
 export type SurfaceKind = z.infer<typeof SurfaceKindSchema>;
 export type EnvironmentPlane = z.infer<typeof EnvironmentPlaneSchema>;
+export type EnvironmentMesh = z.infer<typeof EnvironmentMeshSchema>;
+export type PixelIntrinsics = z.infer<typeof PixelIntrinsicsSchema>;
 export type ObservationStatus = z.infer<typeof ObservationStatusSchema>;
 export type ObservationRole = z.infer<typeof ObservationRoleSchema>;
 export type ObjectObservation = z.infer<typeof ObjectObservationSchema>;

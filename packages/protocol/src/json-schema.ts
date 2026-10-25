@@ -17,6 +17,7 @@ import {
   ObjectTrackRecordSchema,
 } from './episode';
 import { ProcedureSchema } from './procedure';
+import { SceneDocSchema } from './scene';
 
 // JSON Schema exports for non-TypeScript consumers (pipeline/). Procedures are authored by hand,
 // so they use the *input* shape (defaults optional). Episode files are written by the app, so they
@@ -96,5 +97,6 @@ export function buildJsonSchemas(): Record<string, object> {
       RetargetDocSchema,
       'output',
     ),
+    exportSchema('scene.schema.json', 'Clio rebuilt scene.json', SceneDocSchema, 'output'),
   ]);
 }
