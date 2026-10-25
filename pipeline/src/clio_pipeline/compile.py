@@ -5,47 +5,48 @@
                              object with its estimated metric extent
     shapes.json              every object's depth samples fused relative to its tracked position
                              (only when the headset recorded any)
-    environment.json         table, floor and detected planes
+    environment.json         table, floor and detected planes, and the room scan's summary
+    room.glb                 the Quest room scan in W (only when the headset recorded one)
     retarget-<profile>.json  one per robot profile
 
 Raw files are only read, and a compile refuses to write into the episode or beside it in its
 episodes directory. Each stage runs on its own: a failure is recorded in the manifest (status
 `failed`, with what went wrong) and the other stages still run. Everything is written to a hidden
-directory inside the derived root first (its name starts with ".", so it is never mistaken for an
-episode), then swapped in for the old compile, so readers never see a mix. Only an earlier compile
-(or an empty directory) is ever replaced.
+directory inside the derived root first, then swapped in for the old compile, so readers never see
+a mix (builddir.py). Only an earlier compile (or an empty directory) is ever replaced. Compiles of
+one episode take turns: each holds a lock on `<derived root>/.<id>.lock` and first removes the
+hidden directories a killed compile left behind.
 
-Compiles of one episode take turns: each holds an exclusive lock on `<derived root>/.<id>.lock`
-(where fcntl exists) and first removes the hidden directories a killed compile left behind.
-
-A compile is stale when a raw input, the compiler version, the fps or a robot profile (its file
-or its URDF) changed. With `if_stale=True` an up-to-date compile is kept and nothing is written.
+A compile is stale when a raw input (the files in INPUT_FILES and the room scan GLBs in media/),
+the compiler version, the fps or a robot profile (its file or its URDF) changed. With
+`if_stale=True` an up-to-date compile is kept and nothing is written.
 """
 
 from __future__ import annotations
 
-import hashlib
-import os
 import re
 import shutil
 import sys
-import tempfile
-import uuid
-from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - not on Windows
-    fcntl = None
-
 from . import __version__
+from .builddir import (
+    describe,
+    episode_id_of,
+    episode_lock,
+    fingerprint_files,
+    is_apart,
+    make_work_dir,
+    remove_leftovers,
+    same_inputs,
+    swap_in,
+    utc_now,
+)
 from .derived_io import DERIVED_SCHEMA_ID, rounded, time_or_none, times, write_json
 from .environment import environment_doc
 from .episode import Episode, load_episode
@@ -60,6 +61,14 @@ from .objects import (
 from .observations import observation_summaries
 from .quality import quality
 from .resample import MAX_FRAME_GAP_MS, Resampled, resample_episode
+from .room import (
+    ROOM_FILE,
+    latest_room_scan,
+    room_doc,
+    room_scan_media,
+    room_snapshots,
+    write_room_glb,
+)
 from .schema import ValidationIssue, parse_json, validate_episode
 from .shapes import (
     DEFAULT_MIN_HITS,
@@ -70,7 +79,8 @@ from .shapes import (
 )
 
 COMPILER_NAME = "clio_pipeline"
-# Raw files a compile reads, in the episode directory. Any change makes the compile stale.
+# Raw files a compile reads, in the episode directory. Any change makes the compile stale, and so
+# does a change to the room scan GLBs (inputs "media/room-scan-<n>.glb", room.room_scan_media).
 INPUT_FILES = (
     "meta.json",
     "frames.ndjson",
@@ -81,8 +91,7 @@ INPUT_FILES = (
     "batches.json",
 )
 # File names the server serves from data/derived/<id>/ (derived.ts DERIVED_FILE_NAME).
-DERIVED_FILE_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,95}\.json$")
-_EPISODE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+DERIVED_FILE_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,95}\.(json|glb)$")
 
 
 @dataclass
@@ -117,9 +126,13 @@ def compile_episode(
     fps = int(fps)
     if isinstance(retarget_profiles, str | Path):
         retarget_profiles = [retarget_profiles]
-    episode_id = _episode_id(episode_dir)
+    episode_id = episode_id_of(episode_dir)
     out_dir = out_root / episode_id
-    _check_apart(episode_dir, out_root, out_dir)
+    if not is_apart(episode_dir, out_root, out_dir):
+        raise ValueError(
+            f"will not compile {episode_dir} into {out_root}: compiled files never go into an "
+            "episode or its episodes directory (use a derived root such as data/derived)"
+        )
     profiles = _load_profiles(retarget_profiles)
 
     def kept() -> CompileResult | None:
@@ -131,26 +144,25 @@ def compile_episode(
     if if_stale and (result := kept()) is not None:
         return result
     out_root.mkdir(parents=True, exist_ok=True)
-    with _episode_lock(out_root, episode_id) as locked:
+    with episode_lock(out_root, episode_id) as locked:
         if if_stale and (result := kept()) is not None:  # compiled while this one waited
             return result
         if locked:  # no other compile of this episode is running
-            _remove_leftovers(out_root, episode_id)
+            remove_leftovers(out_root, episode_id)
 
         inputs = fingerprint(episode_dir)  # before reading, so a late append makes it stale
         issues = validate_episode(episode_dir, max_issues_per_file=sys.maxsize)  # count them all
         episode = load_episode(episode_dir)
 
-        work = Path(tempfile.mkdtemp(prefix=f".{episode_id}.", dir=out_root))
+        work = make_work_dir(out_root, episode_id)
         try:
-            work.chmod(0o755)  # mkdtemp's 0700 would keep other readers of data/ out
             stages, artifacts, verdict = _run_stages(
                 episode, episode_dir, work, fps, profiles, issues
             )
             manifest = {
                 "schema": DERIVED_SCHEMA_ID,
                 "episodeId": episode.episode_id,
-                "compiledAt": _utc_now(),
+                "compiledAt": utc_now(),
                 "compiler": {"name": COMPILER_NAME, "version": __version__},
                 "fps": fps,
                 "inputs": inputs,
@@ -160,7 +172,7 @@ def compile_episode(
                 "quality": verdict,
             }
             write_json(work / "manifest.json", manifest, indent=2)
-            _swap_in(work, out_dir)
+            swap_in(work, out_dir, replaceable=_is_compile, refusal=_not_a_compile(out_dir))
         except BaseException:
             shutil.rmtree(work, ignore_errors=True)
             raise
@@ -196,7 +208,7 @@ def _run_stages(
         try:
             result = run()
         except Exception as e:  # one stage's failure must not stop the others
-            detail = _describe(e) if ok_detail is None else f"{ok_detail}: {_describe(e)}"
+            detail = describe(e) if ok_detail is None else f"{ok_detail}: {describe(e)}"
             stages.append({"name": name, "status": "failed", "detail": detail})
             return None
         stages.append(
@@ -229,7 +241,14 @@ def _run_stages(
         stages.append({"name": "shapes", "status": "skipped", "detail": "no depth samples"})
     else:
         stage("shapes", shapes)
-    stage("environment", lambda: write("environment.json", "environment", environment_doc(episode)))
+    room = _room_stage(episode, work, stages, artifacts)
+
+    def environment() -> None:
+        doc = environment_doc(episode)
+        doc["room"] = room
+        write("environment.json", "environment", doc)
+
+    stage("environment", environment)
 
     if not profiles:
         stages.append({"name": "retarget", "status": "skipped", "detail": "no profile"})
@@ -255,6 +274,36 @@ def _run_stages(
     if verdict is None:
         verdict = _unknown_quality(episode, issues)
     return stages, artifacts, verdict
+
+
+def _room_stage(
+    episode: Episode, work: Path, stages: list[dict[str, Any]], artifacts: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """The `room` stage: room.glb from the last room scan snapshot whose GLB arrived and can be
+    read (room.py), and its summary for environment.json (None when there is none). Skipped
+    without a snapshot or when no GLB arrived; failed, with room.glb left out, when none that
+    arrived can be read. Passing over an unreadable later snapshot is said in the detail."""
+    snapshots = room_snapshots(episode)
+    if not snapshots:
+        stages.append({"name": "room", "status": "skipped", "detail": "no room scan"})
+        return None
+    try:
+        scan = latest_room_scan(episode)
+        if scan is None:
+            missing = ", ".join(sorted({e["media"] for e in snapshots}))
+            detail = f"no room scan arrived ({missing} not in media/)"
+            stages.append({"name": "room", "status": "skipped", "detail": detail})
+            return None
+        doc = room_doc(scan)
+        size = write_room_glb(scan, doc, work / ROOM_FILE)
+    except Exception as e:  # one stage's failure must not stop the others
+        (work / ROOM_FILE).unlink(missing_ok=True)
+        stages.append({"name": "room", "status": "failed", "detail": describe(e)})
+        return None
+    artifacts.append({"name": ROOM_FILE, "kind": "room", "bytes": size})
+    detail = f"kept {scan.media}; " + "; ".join(scan.passed_over) if scan.passed_over else None
+    stages.append({"name": "room", "status": "ok", **({"detail": detail} if detail else {})})
+    return doc
 
 
 def _retarget(episode: Episode, profile: Any, fps: int, write, name: str) -> None:
@@ -365,14 +414,18 @@ def _unknown_quality(episode: Episode, issues: list[ValidationIssue]) -> dict[st
 
 
 def fingerprint(episode_dir: Path | str) -> list[dict[str, Any]]:
-    """{name, bytes, sha256} of each raw input that exists."""
-    episode_dir = Path(episode_dir)
-    inputs = []
-    for name in INPUT_FILES:
-        if (path := episode_dir / name).is_file():
-            size, sha256 = _digest(path)
-            inputs.append({"name": name, "bytes": size, "sha256": sha256})
-    return inputs
+    """{name, bytes, sha256} of each raw input that exists: INPUT_FILES, then the room scan GLBs
+    as "media/<name>"."""
+    return fingerprint_files(input_paths(Path(episode_dir)))
+
+
+def input_paths(episode_dir: Path) -> dict[str, Path]:
+    """Every raw input a compile may read, by its name in manifest.inputs, whether it exists or
+    not (keyframe JPEGs and other media are not compile inputs)."""
+    paths = {name: episode_dir / name for name in INPUT_FILES}
+    for name in room_scan_media(episode_dir):
+        paths[f"media/{name}"] = episode_dir / "media" / name
+    return paths
 
 
 def _up_to_date(
@@ -401,13 +454,7 @@ def _up_to_date(
             path = out_dir / artifact["name"]
             if not path.is_file() or path.stat().st_size != artifact["bytes"]:
                 return False
-        recorded = {i["name"]: i for i in manifest["inputs"]}
-        present = {n: p for n in INPUT_FILES if (p := episode_dir / n).is_file()}
-        if set(recorded) != set(present):
-            return False
-        if any(p.stat().st_size != recorded[n]["bytes"] for n, p in present.items()):
-            return False
-        return all(_digest(p)[1] == recorded[n]["sha256"] for n, p in present.items())
+        return same_inputs(manifest["inputs"], input_paths(episode_dir))
     except (KeyError, TypeError, ValueError, OSError):
         return False
 
@@ -439,7 +486,7 @@ def _load_profiles(paths: Sequence[Path | str]) -> list[_Profile]:
         try:
             loaded.append(_Profile(str(path), load_profile(path), None))
         except Exception as e:  # a bad profile fails its stage, not the compile
-            loaded.append(_Profile(str(path), None, f"cannot load {path}: {_describe(e)}"))
+            loaded.append(_Profile(str(path), None, f"cannot load {path}: {describe(e)}"))
     return loaded
 
 
@@ -451,114 +498,14 @@ def _read_manifest(out_dir: Path) -> dict[str, Any] | None:
     return manifest if isinstance(manifest, dict) else None
 
 
-def _check_apart(episode_dir: Path, out_root: Path, out_dir: Path) -> None:
-    """Raw files are never touched: refuse an output that is the episode, inside it or around it,
-    or the episode's own episodes directory (where `<out>/<id>` is the episode or a sibling)."""
-    episode, root, out = episode_dir.resolve(), out_root.resolve(), out_dir.resolve()
-    if root == episode.parent or out.is_relative_to(episode) or episode.is_relative_to(out):
-        raise ValueError(
-            f"will not compile {episode_dir} into {out_root}: compiled files never go into an "
-            "episode or its episodes directory (use a derived root such as data/derived)"
-        )
+def _is_compile(out_dir: Path) -> bool:
+    """Whether `out_dir` holds an earlier compile (a clio.derived/1 manifest.json)."""
+    manifest = _read_manifest(out_dir)
+    return manifest is not None and manifest.get("schema") == DERIVED_SCHEMA_ID
 
 
-def _episode_id(episode_dir: Path) -> str:
-    meta_path = episode_dir / "meta.json"
-    if not meta_path.is_file():
-        raise FileNotFoundError(f"{episode_dir} is not a Clio episode: no meta.json")
-    meta = parse_json(meta_path.read_text(encoding="utf-8"))
-    episode_id = meta.get("episodeId") if isinstance(meta, dict) else None
-    if not isinstance(episode_id, str) or not _EPISODE_ID.match(episode_id):
-        raise ValueError(f"{meta_path}: episodeId {episode_id!r} cannot name a directory")
-    return episode_id
-
-
-# --- files ----------------------------------------------------------------------------------------
-
-
-@contextmanager
-def _episode_lock(out_root: Path, episode_id: str) -> Iterator[bool]:
-    """Hold an exclusive lock on `out_root/.<id>.lock` (kept, never deleted, so every compile
-    locks the same file); yields whether it is held. Without fcntl, compiles are not serialized."""
-    if fcntl is None:  # pragma: no cover - not on Windows
-        yield False
-        return
-    fd = os.open(out_root / f".{episode_id}.lock", os.O_RDWR | os.O_CREAT, 0o644)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        yield True
-    finally:
-        os.close(fd)  # releases the lock
-
-
-def _remove_leftovers(out_root: Path, episode_id: str) -> None:
-    """Remove the hidden work and backup directories (`.<id>.<8 random characters>`,
-    `.<id>.old-<8 hex digits>`) of compiles that were killed. Call it holding the lock: no other
-    compile of the episode is running then. The lock file is not a directory and stays."""
-    leftover = re.compile(rf"^\.{re.escape(episode_id)}\.(old-[0-9a-f]{{8}}|[a-z0-9_]{{8}})$")
-    for path in out_root.iterdir():
-        if leftover.match(path.name) and path.is_dir() and not path.is_symlink():
-            shutil.rmtree(path, ignore_errors=True)
-
-
-def _swap_in(work: Path, out_dir: Path) -> None:
-    """Replace `out_dir` with `work` by two renames: a reader may find no compile for an instant,
-    never a half-written one. Only an earlier compile or an empty directory is replaced; anything
-    else at `out_dir` raises FileExistsError and is left as it was."""
-    backup = None
-    if out_dir.exists() or out_dir.is_symlink():
-        _check_replaceable(out_dir)
-        backup = out_dir.with_name(f".{out_dir.name}.old-{uuid.uuid4().hex[:8]}")
-    try:
-        if backup is not None:
-            try:
-                out_dir.rename(backup)
-            except FileNotFoundError:  # removed meanwhile: nothing to back up
-                backup = None
-        work.rename(out_dir)
-    except BaseException:  # SystemExit from SIGTERM included: put the old compile back
-        if backup is not None and backup.exists() and not out_dir.exists():
-            backup.rename(out_dir)
-        raise
-    if backup is not None:
-        shutil.rmtree(backup, ignore_errors=True)
-
-
-def _check_replaceable(out_dir: Path) -> None:
-    """Raise FileExistsError unless `out_dir` is gone, empty, or an earlier compile (it holds a
-    clio.derived/1 manifest.json)."""
-    try:
-        if out_dir.is_dir() and not out_dir.is_symlink():
-            if not any(out_dir.iterdir()):
-                return
-            manifest = _read_manifest(out_dir)
-            if manifest is not None and manifest.get("schema") == DERIVED_SCHEMA_ID:
-                return
-        elif not out_dir.exists() and not out_dir.is_symlink():
-            return
-    except FileNotFoundError:
-        return
-    raise FileExistsError(
+def _not_a_compile(out_dir: Path) -> str:
+    return (
         f"{out_dir} exists and is not a compile (no {DERIVED_SCHEMA_ID} manifest.json): "
         "not replacing it"
     )
-
-
-def _utc_now() -> str:
-    """ISO 8601 in UTC with milliseconds, e.g. 2026-10-24T03:15:02.123Z."""
-    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-
-
-def _digest(path: Path) -> tuple[int, str]:
-    """(bytes, SHA-256) of the bytes actually read, consistent even while a file grows."""
-    digest, size = hashlib.sha256(), 0
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            digest.update(chunk)
-            size += len(chunk)
-    return size, digest.hexdigest()
-
-
-def _describe(e: BaseException) -> str:
-    text = f"{type(e).__name__}: {e}"
-    return text if len(text) <= 300 else text[:297] + "..."

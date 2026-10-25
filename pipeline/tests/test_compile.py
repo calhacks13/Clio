@@ -337,6 +337,7 @@ def test_a_profile_that_cannot_be_loaded_fails_only_its_stage(episode_dir, tmp_p
     assert [s["status"] for s in result.manifest["stages"] if s["name"] != "retarget"] == [
         "ok",
         "skipped",  # shapes: no depth samples
+        "skipped",  # room: no room scan
         "ok",
         "ok",
     ]
@@ -691,6 +692,7 @@ def test_a_malformed_observation_does_not_stop_the_compile(featured_episode_dir,
 
     assert [s["status"] for s in result.manifest["stages"]] == [
         "ok",
+        "skipped",
         "skipped",
         "ok",
         "skipped",

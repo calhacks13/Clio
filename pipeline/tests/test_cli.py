@@ -198,6 +198,7 @@ def test_compile_prints_one_json_line_per_episode(make_default_episode, tmp_path
     assert [s["name"] for s in first["stages"]] == [
         "tracks",
         "shapes",
+        "room",
         "environment",
         "retarget",
         "quality",
