@@ -129,14 +129,14 @@ to a track (`part.py`):
   scale when the parent, wholly in view, grows alike in width and height. While the parent
   coasts or none is in sight, the camera alone carries it (`state: "coasting"`, for up to 6 s
   after jev's last answer or the parent's last sighting).
-- `outline` is the parent's mask inside the part box, so it follows the object's edges where the
-  part meets them; when that mask hardly covers the part box, the part box as a rounded
-  rectangle. `point` and `contact` are the part's. `box` is the part box.
+- Without a segmenter, `outline` is the parent's mask inside the part box, so it follows the
+  object's edges where the part meets them; when that mask hardly covers the part box, the part
+  box as a rounded rectangle. `point` and `contact` are the part's. `box` is the part box.
 - Each new answer re-seeds the part box where jev put it; it is never snapped to the parent.
 
 With a segmenter (`--segmenter`, [README.md](README.md#how-it-works)), the part's outline is SAM
 2.1's mask of it, carried to every frame by the part's own pixels, also where the parent's motion
-would never take it (a jaw sliding off its caliper). A part on its own pixels reports `tracking`
+would never take it (a jaw sliding along its caliper). A part on its own pixels reports `tracking`
 (it is measured, not predicted), at the parent's score while the parent is in sight, else 0.5; the
 mask message is unchanged.
 

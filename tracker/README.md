@@ -20,7 +20,7 @@ headset lesson ────────── ws /track, objects mode ───�
 
 | Endpoint                  | Who calls it                                                    | What it does                                                                                                                                                  |
 | ------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /locate`            | Clio's primary-object route (`CLIO_PRIMARY_FINDER_URL`)         | One jev call for the frame, then YOLOE outlines each box jev found (`model`: `jev-1.14.0+yoloe-26l-seg`). One request at a time; another gets 503. |
+| `POST /locate`            | Clio's primary-object route (`CLIO_PRIMARY_FINDER_URL`)         | One jev call for the frame, then YOLOE outlines each box jev found (`model`: `jev-1.14.0+yoloe-26l-seg` without a segmenter, `...+sam2.1-small` with one). One request at a time; another gets 503. |
 | `POST /locate` + `session` | Clio's locate route (`CLIO_VISION_URL`), for lesson outlines   | Answers at once from tracking state, with `refreshMs: 50` so the headset sends the next frame soon; jev looks again about once a second.                    |
 | `WS /track`               | `apps/headset/primary.html`                                     | Frames in, one mask per frame out; the page forwards each primary answer's box as the target. Protocol: [TRACK.md](TRACK.md).                              |
 | `WS /track`, objects mode | the headset's lesson                                            | Frames and the lesson's objects in words in, every object's outline per frame out; jev about once a second, as with a session. [TRACK.md](TRACK.md#objects-mode). |
@@ -61,10 +61,11 @@ adb shell pm grant com.oculus.browser android.permission.CAMERA
 ```
 
 `curl 127.0.0.1:8790/health` should answer `{"ok":true,...,"model":"jev-1.14.0+yoloe-26l-seg",
-"backend":"coreml-ane"}`. Without a jev key, `pnpm tracker --fake-jev` answers every object at
-one fixed box (no cost), and `CLIO_TRACKER_IDENTIFIER_URL=http://127.0.0.1:8787/api/vision/locate`
-uses Gemini's locator in jev's place (only while Clio's `CLIO_VISION_URL` is unset: otherwise
-Clio would send the request straight back here).
+"backend":"coreml-ane"}` without a segmenter (with SAM 2.1 the model ends in `+sam2.1-small`).
+Without a jev key, `pnpm tracker --fake-jev` answers every object at one fixed box (no cost), and
+`CLIO_TRACKER_IDENTIFIER_URL=http://127.0.0.1:8787/api/vision/locate` uses Gemini's locator in jev's
+place (only while Clio's `CLIO_VISION_URL` is unset: otherwise Clio would send the request straight
+back here).
 
 `pnpm tracker --segmenter sam2.1-small` outlines with SAM 2.1 instead of YOLOE's masks (about
 180 MB, downloaded on first use; `auto`, the default, already picks it when `transformers` is
@@ -222,19 +223,19 @@ deepest inside it, where Clio lifts the object into 3D, and its contact point (t
 lowest edge), which the primary demo uses to measure the object's distance.
 
 **The outline is the segmenter's mask** (`segment.py`, `follow.py`, `refresh.py`). YOLOE's mask
-comes from 32 coarse prototypes and is ragged as an outline; SAM 2.1 cuts an object out of its box
-far more cleanly, but a call took 180 ms with Small and 620 ms with Large on this Mac's GPU, so it
-never runs on every frame. It cuts jev's box out on jev's frame, and again whenever the tracker
-doubts the mask it has, in a background thread (one call at a time, at least 150 ms apart; a new jev
-answer goes first). The follower carries the latest mask to every frame: optical-flow points inside
-it, started from where the camera's motion and the object's own last motion put them and kept by the
-same forward-backward check and RANSAC as the camera's, so the mask moves with the object itself and
-not only with the camera (a caliper's jaw slides along its scale, a name plate swings on its hinge).
-YOLOE and ByteTrack still decide which object it is. The follower's mask is what is drawn while it
-is sure of itself and its box agrees with ByteTrack's (IoU 0.3, or inside it as a part inside its
-whole); otherwise YOLOE's is, and after two frames of doubt SAM is asked again. A part gets a mask
-of its own the same way and reads `tracking`: it is measured, not predicted
-([TRACK.md](TRACK.md#following-a-part)).
+comes from 32 coarse prototypes and is ragged as an outline; judged by eye on the still-photo
+benchmark, SAM 2.1 cuts an object out of its box more cleanly, but a call took 180 ms with Small and
+620 ms with Large on the M5 Pro's GPU, so it never runs on every frame. It cuts jev's box out on
+jev's frame, and again whenever the tracker doubts the mask it has, in a background thread (one call
+at a time, at least 150 ms apart; a new jev answer goes first). The follower carries the latest mask
+to every frame: optical-flow points inside it, started from where the camera's motion and the
+object's own last motion put them and kept by the same forward-backward check and RANSAC as the
+camera's, so the mask moves with the object itself and not only with the camera (a caliper's jaw
+slides along its scale, a name plate swings on its hinge). YOLOE and ByteTrack still decide which
+object it is. The follower's mask is what is drawn while it is sure of itself and its box agrees
+with ByteTrack's (IoU 0.3, or inside it as a part inside its whole); otherwise YOLOE's is, and after
+two frames of doubt SAM is asked again. A part gets a mask of its own the same way and reads
+`tracking`: it is measured, not predicted ([TRACK.md](TRACK.md#following-a-part)).
 
 **Steady outlines** (`smooth.py`). What is returned is filtered; what is tracked is not. The box
 goes through a One Euro filter (cutoff 1.5 Hz at rest, rising 4 Hz per box size a second of
@@ -323,14 +324,15 @@ frames before (IoU 0.45), 3% after (0.78). The seven whole-object sequences give
 numbers as before to the last digit.
 
 **With a segmenter** (`clio-tracker jitter --segmenter sam2.1-small --pace`, and `sam2.1-large`):
-the same fourteen sequences, summed up as `all` (seven whole objects), `parts` (five parts that
-stay put) and `moving` (two parts that move on their own: a caliper's sliding jaw and a
-micrometer's swinging name plate, with the photo's own part erased where it leaves). The SAM runs
-were paced (`--pace`: each frame at least 1/25 s, as the headset's stream is at 40 to 75 ms,
-because the refresher spaces its calls by wall clock and the harness alone plays a frame in 20
-ms) and took 3.6 and 4.4 minutes; the run without a segmenter, 1.4. The Mac was an M5 (24 GB),
-YOLOE-26L on the Neural Engine, SAM 2.1 on the GPU (MPS, float32), load average 2.3 to 2.7 with
-nothing else busy. The look was outlined by SAM, and by YOLOE where SAM cut nothing.
+the same fourteen sequences, summed up as `all` (seven whole objects), `parts` (five parts that stay
+put) and `moving` (two parts that move on their own: a caliper's sliding jaw and a micrometer's
+swinging name plate, with the photo's own part erased where it leaves). The SAM runs were paced
+(`--pace`: each frame at least 1/25 s, the fast end of the headset's stream at 40 to 75 ms a frame,
+because the refresher spaces its calls by wall clock and the harness alone plays a frame in 20 ms)
+and took 3.6 and 4.4 minutes; the run without a segmenter, 1.4. These runs were on an Apple M5 Pro
+(48 GB), not the M5 (24 GB) of the sections above: YOLOE-26L on the Neural Engine, SAM 2.1 on the
+GPU (MPS, float32), load average 2.3 to 2.7 with nothing else busy. The look was outlined by SAM,
+and by YOLOE where SAM cut nothing.
 
 | Set (sequences)  | Segmenter | Lost | Wrong | IoU   | Mask f2f | Swaps | Refreshes | Step, ms |
 | ---------------- | --------- | ---: | ----: | ----: | -------: | ----: | --------: | -------: |
@@ -344,11 +346,15 @@ nothing else busy. The look was outlined by SAM, and by YOLOE where SAM cut noth
 |                  | Small     | 0.6% |    0% | 0.480 |    0.899 |    15 |        46 |     24.7 |
 |                  | Large     | 2.4% |    0% | 0.625 |    0.913 |     8 |        26 |     22.4 |
 
-By these measures SAM did not steady the answers: the whole objects' outlines changed as little
-from frame to frame as YOLOE's (mask f2f, the IoU of each outline with the last frame's, camera
-motion removed, 0.958 to 0.961 against 0.959) but were redrawn as a different shape more often
-(swaps, 20 against 1), and a frame took 6 to 8 ms longer in `step`. The harness's truth is a
-box per frame, so what SAM is for, the outline's shape, is not measured here.
+By these measures SAM did not steady the answers: the whole objects' outlines changed as little from
+frame to frame as YOLOE's (mask f2f, the IoU of each outline with the last frame's, camera motion
+removed, 0.958 to 0.961 against 0.959) but were redrawn as a different shape more often (swaps, 20
+against 1), and a frame took 6 to 8 ms longer in `step`. It also lost more of the whole objects
+(1.7% against 1.0%: the condenser, for a run of 21 frames in both SAM runs against 9 with YOLOE's
+mask) and did worse on the terminals scene (wrong 14.0% with YOLOE's mask, 20.1% with Small and
+21.8% with Large). Each row is a single run, and `parts` varied by 0.04 IoU in the repeat of Small
+(0.692 and 0.736). The harness's truth is a box per frame, so what SAM is for, the outline's shape,
+is not measured here.
 
 **The two moving scenes.** The jaw sliding along the caliper was taken for something else
 on 4.8% of its found frames with YOLOE's mask and on none with either SAM (3.0% in a repeat of
