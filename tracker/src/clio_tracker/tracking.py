@@ -33,13 +33,13 @@ frame) pick which track that is, and its box becomes the prompt's anchor. Betwee
 With a segmenter (segment.py) the outline is its mask instead of YOLOE's: cut out on jev's
 frame, and again whenever asked, then carried to every frame by a RegionFollower (follow.py) on
 the object's own pixels. While the follower is confident and its box agrees with ByteTrack's
-(IoU 0.3 or more, or one box inside the other, as a part and its whole), its box and mask are
-what is returned, also on a frame YOLOE missed while the target coasts; ByteTrack and the
-appearance still decide which object it is, and a jev answer that changes the target drops the
-old one's mask. Otherwise the outline is YOLOE's, as without a segmenter, and after two frames
-of doubt, or while there is no mask yet, the tracker asks for the object to be cut out again
-(`wants_refresh`): around the follower's box, or ByteTrack's when the follower is sure of itself
-but elsewhere (`refresh_box`).
+(IoU 0.3 or more, or lying inside it as a part inside its whole), its box and mask are what is
+returned, also on a frame YOLOE missed, against the predicted box while the target coasts;
+ByteTrack and the appearance still decide which object it is, and a jev answer that changes the
+target drops the old one's mask. Otherwise the outline is YOLOE's, as without a segmenter, and
+after two frames of doubt, or while there is no mask yet, the tracker asks for the object to be
+cut out again (`wants_refresh`): around the follower's box, or ByteTrack's when the follower is
+sure of itself but elsewhere (`refresh_box`).
 """
 
 from __future__ import annotations
@@ -108,8 +108,8 @@ class TrackerParams:
     part_jump_iou: float = 0.7  # the parent's box against its last, carried by the camera
     smooth: SmoothParams = field(default_factory=SmoothParams)
     follow: FollowParams = field(default_factory=FollowParams)
-    # The follower's box against ByteTrack's: below this it is doubted, unless one of the two
-    # lies `part_inside` inside the other (a part and its whole).
+    # The follower's box against ByteTrack's: below this it is doubted, unless it lies
+    # `part_inside` inside ByteTrack's with IoU match_iou / 2 at least (a part inside its whole).
     follow_agree_iou: float = 0.3
     refresh_after_frames: int = 2  # frames of doubt before asking for a refresh
 
@@ -365,7 +365,7 @@ class ObjectTracker:
             return Sighting(False, state="lost", track_id=tid)  # it left the view
         self._tracked = box.copy()
         confidence = round(fresh.confidence * (1 - 0.5 * age / window), 3)
-        followed = self._follows(None)
+        followed = self._follows(box)
         if followed is not None:  # YOLOE missed it, but its own pixels were followed
             measured, crop = followed.box, followed.crop
             shown, shape = self._smooth.sighted(t, measured, crop, fresh.size)
@@ -373,20 +373,20 @@ class ObjectTracker:
         shown, shape = self._smooth.coasting(t, box, fresh.size)
         return Sighting(True, shown, shape, confidence, "coasting", tid, box.copy())
 
-    def _follows(self, tracked: np.ndarray | None) -> Followed | None:
-        """The follower's answer on this frame when it may stand for the object: confident and,
-        when ByteTrack sighted the object at `tracked`, agreeing with that box: overlapping it by
-        `follow_agree_iou`, or one of the two inside the other, as a part and its whole (in
-        objects mode a part is followed as an object, and ByteTrack's track may be the whole).
-        A frame on which it answers but may not counts as one of doubt."""
+    def _follows(self, tracked: np.ndarray) -> Followed | None:
+        """The follower's answer on this frame when it may stand for the object: confident, and
+        agreeing with ByteTrack's box for it (`tracked`, predicted while it coasts): overlapping
+        it by `follow_agree_iou`, or lying `part_inside` inside it with at least `_match`'s IoU
+        floor, as a part inside its whole (in objects mode a part is followed as an object, and
+        ByteTrack's track may be the whole). A frame on which it answers but may not counts as
+        one of doubt."""
         f = self._followed
         if f is None:
             return None
         p = self.params
-        agrees = (
-            tracked is None
-            or float(iou(f.box, tracked)[0, 0]) >= p.follow_agree_iou
-            or float(_overlap(f.box, tracked)[0]) >= p.part_inside
+        overlap = float(iou(f.box, tracked)[0, 0])
+        agrees = overlap >= p.follow_agree_iou or (
+            overlap >= p.match_iou / 2 and _within(f.box, tracked) >= p.part_inside
         )
         self._disagrees = f.confident and not agrees
         trusted = f.confident and agrees
@@ -533,9 +533,11 @@ class ObjectTracker:
             return change
         if self.target_id is None or self.target_id != previous:
             # Another object, or none: forget the old one's mask. The cut of jev's box comes
-            # from jev's older frame, and must not lose to a refresh of the old object.
+            # from jev's older frame, and must not lose to a refresh of the old object. Until
+            # the next frame nothing is asked, around the old object's box least of all.
             self.follower.clear()
             self._follow_doubt = 0
+            self._followed = self._tracked = None
         if mask is not None and not self.absent:
             self.follower.set_reference(seq, mask)
         return change
@@ -596,14 +598,15 @@ class ObjectTracker:
 
     def refreshed(self, seq: int, crop: MaskCrop | None) -> None:
         """The segmenter's answer to a refresh asked on frame `seq`: its mask of the object, or
-        None when it found nothing (a frame of doubt). The follower ignores a mask from before
-        the one it has."""
+        None when it found nothing (a frame of doubt). A mask ends the doubt; the follower
+        ignores one from before the mask it has."""
         if self.follower is None:
             return
         if crop is None:
             self._follow_doubt += 1
         else:
             self.follower.set_reference(seq, crop)
+            self._follow_doubt = 0
 
     def _match(self, tracks: dict[int, np.ndarray] | None, box: np.ndarray) -> int | None:
         """The track jev's box means: the one it overlaps most, if by `match_iou`, or one of the
@@ -824,6 +827,13 @@ def _overlap(boxes: np.ndarray, box: np.ndarray) -> np.ndarray:
     area = (b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1])
     smaller = np.minimum(area, (box[2] - box[0]) * (box[3] - box[1]))
     return np.where(smaller > 0, w * h / np.maximum(smaller, 1e-9), 0.0)
+
+
+def _within(box: np.ndarray, outer: np.ndarray) -> float:
+    """The share of `box` inside `outer`."""
+    w = max(0.0, min(float(box[2]), float(outer[2])) - max(float(box[0]), float(outer[0])))
+    h = max(0.0, min(float(box[3]), float(outer[3])) - max(float(box[1]), float(outer[1])))
+    return w * h / max(float((box[2] - box[0]) * (box[3] - box[1])), 1e-9)
 
 
 def _inside(box: np.ndarray, size: tuple[int, int]) -> float:
