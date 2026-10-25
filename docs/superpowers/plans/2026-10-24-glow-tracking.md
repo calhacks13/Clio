@@ -17,7 +17,7 @@
 - `--segmenter none` (and `CLIO_TRACKER_SEGMENTER=none`) must leave every existing test green and every existing code path identical; new behaviour only when a segmenter is loaded.
 - The stream thread never calls the segmenter. Segmenter calls run in the `Refresher`'s executor; at most one in flight; at least 150 ms apart unless it is a keyframe.
 - Segmenter names: `none`, `auto`, `sam2.1-small` (`facebook/sam2.1-hiera-small`), `sam2.1-large` (`facebook/sam2.1-hiera-large`). `auto` is `sam2.1-small` when `transformers` imports, else `none`.
-- Mask selection in SAM 2.1: best of the three candidate masks by the model's predicted IoU, no box padding.
+- Mask selection in SAM 2.1: of the three candidate masks, the one whose predicted IoU times the IoU of its bounds with the prompt box is highest (amended after the harness showed the model's confidence alone picking one jaw of a loosely boxed caliper), no box padding.
 - Follower motion model: full affine (`cv2.estimateAffine2D`, RANSAC) with at least 12 inliers, similarity (`cv2.estimateAffinePartial2D`) with 8 to 11, else the camera's motion alone and `confident=False`.
 - When not confident the tracker behaves exactly as today (ByteTrack box, YOLOE crop, coast and fade), and asks for a refresh.
 - Style: ruff clean (`uv run ruff check src tests`), line length 100, the repository's prose style in docstrings and README (no bullet dots or arrows in UI text; none of this is UI).
