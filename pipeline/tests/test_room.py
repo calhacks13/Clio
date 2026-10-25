@@ -27,7 +27,7 @@ from conftest import (
 )
 
 SCHEMA_DIR = Path(__file__).resolve().parents[2] / "packages" / "protocol" / "schema"
-DATA = Path(__file__).resolve().parent / "data"
+ASSETS = Path(__file__).resolve().parent / "assets"
 GLOBAL_BOUNDS = {"min": [-1.6, -0.75, -1.5], "max": [2.4, 1.75, 2.5]}
 TABLE_BOUNDS = {"min": [0.0, -0.74, -0.6], "max": [0.8, 0.0, 0.0]}
 
@@ -118,7 +118,7 @@ def test_room_glb_keeps_the_node_layout_in_w_and_adds_normals(room_scan_episode_
 
 
 def test_a_room_scan_written_by_the_headset_compiles(tmp_path):
-    # tests/data/headset-room-scan.glb comes from apps/headset's writeGlb (headset-room-scan.ts):
+    # tests/assets/headset-room-scan.glb comes from apps/headset's writeGlb (headset-room-scan.ts):
     # translation and rotation always written, a null label, a mesh with vertices and no
     # indices (mesh-3) and one without vertices (mesh-4).
     b = build_room_scan(tmp_path)
@@ -129,7 +129,7 @@ def test_a_room_scan_written_by_the_headset_compiles(tmp_path):
         b.room_mesh("mesh-3", "other", vertices=2, triangles=0),
         b.room_mesh("mesh-4", "couch", label="couch", vertices=0, triangles=0),
     ]
-    b.room_scan(0.0, 1, (DATA / "headset-room-scan.glb").read_bytes(), meshes)
+    b.room_scan(0.0, 1, (ASSETS / "headset-room-scan.glb").read_bytes(), meshes)
     b.events.sort(key=lambda e: e["t"])
 
     result = compile_episode(b.write(), tmp_path / "derived")
