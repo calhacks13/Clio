@@ -1,16 +1,26 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import * as THREE from "three";
-import { buildCaptureFromClio } from "@clio-viewer/capture/from-clio";
-import type { Capture } from "@clio-viewer/capture/model";
+import type { Fetch } from "@clio-viewer/api";
+import { buildCaptureFromClio, rosFromW } from "@clio-viewer/capture/from-clio";
+import type { Capture, Vec3 } from "@clio-viewer/capture/model";
 import type { SceneLayersProps } from "@/components/clio/clio-scene";
+import { SceneFetchContext } from "@/components/clio/use-scene-file";
 import { syntheticDerived } from "../__fixtures__/synthetic-derived";
 import {
   SYNTHETIC_TIMES,
   syntheticEpisode,
 } from "../__fixtures__/synthetic-episode";
+import {
+  nodePoint,
+  syntheticRoom,
+  syntheticScene,
+  withRoom,
+} from "../__fixtures__/synthetic-scene";
 import { captureKey } from "../capture-key";
 import { compiledObjectAt } from "../compiled-objects";
+import { modelFiles, roomFile } from "../scene-files";
+import { modelPlacement, modelPointInRos } from "../scene-display";
 
 // What the Clio viewer's 3D scene holds when it moves to another capture (a
 // newer episode on /clio/live, or a rebuild of the same one), without a
@@ -22,7 +32,10 @@ import { compiledObjectAt } from "../compiled-objects";
 // kept the old one reachable (about 100 MB for 10 minutes at 90 Hz). drei's
 // Html, Grid and OrbitControls need a DOM and are left out. The compiled case
 // checks that objects follow tracks.json, vanish where it has no position and
-// that their extent boxes and shape points are disposed with the rest.
+// that their extent boxes and shape points are disposed with the rest. The
+// rebuilt case reads the room scan and the generated models through the
+// scene's fetch, as the viewer does through the proxy, and checks where they
+// land, that a hidden toggle reads nothing and that both are disposed.
 
 mock.module("@react-three/drei", () => ({
   Html: () => null,
@@ -86,6 +99,7 @@ class SceneSlot {
     capture: Capture,
     revision: number,
     extra: Partial<SceneLayersProps> = {},
+    fetch: Fetch | null = null,
   ): Promise<void> {
     const key = captureKey(capture);
     if (key !== this.key) {
@@ -103,17 +117,21 @@ class SceneSlot {
     const root = this.root as Root;
     await act(async () => {
       this.store = root.render(
-        createElement(SceneLayers, {
-          capture,
-          clock,
-          revision,
-          theme: "dark",
-          debug: false,
-          handsKeptFromUs: null,
-          framesLoadedToUs: null,
-          selectedId: null,
-          ...extra,
-        }),
+        createElement(
+          SceneFetchContext.Provider,
+          { value: fetch },
+          createElement(SceneLayers, {
+            capture,
+            clock,
+            revision,
+            theme: "dark",
+            debug: false,
+            handsKeptFromUs: null,
+            framesLoadedToUs: null,
+            selectedId: null,
+            ...extra,
+          }),
+        ),
       );
     });
     // One frame, so every layer reads the capture as it draws.
@@ -269,5 +287,248 @@ describe("the scene with a compiled episode", () => {
     }
     await slot.clear();
     expect(resources.filter((r) => !disposed.has(r))).toEqual([]);
+  });
+});
+
+describe("the scene with the room scan and generated models", () => {
+  const episode = syntheticEpisode({
+    episodeId: "ep-20261024-120000-dddd",
+    startEpochMs: START_EPOCH_MS,
+    recordedGrasps: true,
+  });
+  const id = episode.meta.episodeId;
+  const capture = buildCaptureFromClio(episode);
+  const compiled = syntheticDerived(episode);
+  const room = syntheticRoom(episode);
+  const scene = syntheticScene(episode, compiled.manifest);
+  const state = {
+    episodeId: id,
+    environment: withRoom(compiled.environment, room),
+    compiledAt: compiled.manifest.compiledAt,
+    scene: scene.doc,
+  };
+  const at = (tUs: number) => ({
+    getTimeUs: () => tUs,
+    subscribe: () => () => {},
+  });
+
+  /** The proxy URLs answered from memory, every request kept. */
+  function files() {
+    const served = new Map<string, Uint8Array>([
+      [`/api/clio/episodes/${id}/derived/room.glb`, room.glb],
+      ...Object.entries(scene.files).map(
+        ([name, bytes]) =>
+          [`/api/clio/episodes/${id}/scene/${name}`, bytes] as const,
+      ),
+    ]);
+    const requests: string[] = [];
+    const fetch: Fetch = async (input) => {
+      requests.push(input);
+      const bytes = served.get(input);
+      return bytes
+        ? new Response(bytes.slice().buffer)
+        : new Response("Not found", { status: 404 });
+    };
+    return { fetch, requests };
+  }
+
+  /** Lets the reads and parses finish, then draws a frame. */
+  async function settle(slot: SceneSlot, until: () => boolean): Promise<void> {
+    for (let i = 0; i < 50 && !until(); i++) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      });
+    }
+    await act(async () => advance(performance.now()));
+    if (!until()) throw new Error("the scene files never arrived");
+    expect(slot.store).not.toBeNull();
+  }
+
+  const find = (slot: SceneSlot, name: string) =>
+    slot.store?.getState().scene.getObjectByName(name) ?? null;
+  /** A point in the scene's ROS group's frame (the layers' root). */
+  const inRos = (
+    slot: SceneSlot,
+    object: THREE.Object3D,
+    local: THREE.Vector3,
+  ) => {
+    const scene = slot.store?.getState().scene;
+    const ros = scene?.children[0];
+    if (!ros) throw new Error("no ROS group");
+    scene.updateMatrixWorld(true);
+    return ros.worldToLocal(object.localToWorld(local.clone())).toArray();
+  };
+  const expectClose = (
+    actual: readonly number[],
+    expected: readonly number[],
+  ) => actual.forEach((v, i) => expect(v).toBeCloseTo(expected[i], 5));
+
+  test("the room scan lands in W through the turn, and a model on its object's compiled position", async () => {
+    const slot = new SceneSlot();
+    const { fetch } = files();
+    const tUs = 11_000_000;
+    await slot.show(
+      capture,
+      0,
+      {
+        tracks: compiled.tracks,
+        shapes: compiled.shapes,
+        room: roomFile(state, true),
+        models: modelFiles(state, true),
+        clock: at(tUs),
+      },
+      fetch,
+    );
+    await settle(
+      slot,
+      () => Boolean(find(slot, "room-scan")) && Boolean(find(slot, "barrel")),
+    );
+
+    // A furniture volume's corner, by its node transform in W.
+    const couch = find(slot, "mesh-3") as THREE.Mesh;
+    const position = couch.geometry.getAttribute("position");
+    const corner = new THREE.Vector3().fromBufferAttribute(position, 0);
+    expectClose(
+      inRos(slot, couch, corner),
+      rosFromW(nodePoint(room.nodes[2], corner.toArray() as Vec3)),
+    );
+
+    // A model vertex: the compiled position, then the placement, then the GLB.
+    const syringe = compiledObjectAt(compiled.tracks, "syringe", tUs);
+    if (!syringe) throw new Error("the syringe is compiled at 11 s");
+    const barrel = find(slot, "barrel") as THREE.Mesh;
+    const v = new THREE.Vector3().fromBufferAttribute(
+      barrel.geometry.getAttribute("position"),
+      3,
+    );
+    const model = scene.doc.objects[0];
+    expectClose(
+      inRos(slot, barrel, v),
+      modelPointInRos(
+        syringe.position,
+        modelPlacement(model),
+        v.toArray() as Vec3,
+      ),
+    );
+    await slot.clear();
+  });
+
+  test("a model hides where its object's compiled position is null", async () => {
+    const slot = new SceneSlot();
+    const { fetch } = files();
+    const props = {
+      tracks: compiled.tracks,
+      shapes: compiled.shapes,
+      models: modelFiles(state, true),
+    };
+    await slot.show(capture, 0, { ...props, clock: at(4_000_000) }, fetch);
+    await settle(slot, () => Boolean(find(slot, "barrel")));
+    const visible = (o: THREE.Object3D | null) => {
+      let shown = true;
+      for (let p = o; p; p = p.parent) shown &&= p.visible;
+      return shown;
+    };
+    expect(visible(find(slot, "barrel"))).toBe(true);
+    const { start, end } = SYNTHETIC_TIMES.dropout;
+    await slot.show(
+      capture,
+      1,
+      { ...props, clock: at(Math.round(((start + end) / 2) * 1000)) },
+      fetch,
+    );
+    expect(visible(find(slot, "barrel"))).toBe(false);
+    await slot.clear();
+  });
+
+  test("nothing is read while the Room and Models toggles are off, or without a compiled series", async () => {
+    const slot = new SceneSlot();
+    const { fetch, requests } = files();
+    await slot.show(
+      capture,
+      0,
+      {
+        tracks: compiled.tracks,
+        room: roomFile(state, false),
+        models: modelFiles(state, false),
+        clock: at(11_000_000),
+      },
+      fetch,
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(requests).toEqual([]);
+    // Models are placed from the compiled series only: without it, none is drawn.
+    await slot.show(
+      capture,
+      1,
+      { models: modelFiles(state, true), clock: at(11_000_000) },
+      fetch,
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(requests).toEqual([]);
+    expect(find(slot, "barrel")).toBeNull();
+    await slot.clear();
+  });
+
+  test("the room and the models are disposed when hidden and with the scene", async () => {
+    const slot = new SceneSlot();
+    const { fetch } = files();
+    const props = {
+      tracks: compiled.tracks,
+      shapes: compiled.shapes,
+      room: roomFile(state, true),
+      models: modelFiles(state, true),
+      clock: at(11_000_000),
+    };
+    await slot.show(capture, 0, props, fetch);
+    await settle(
+      slot,
+      () => Boolean(find(slot, "room-scan")) && Boolean(find(slot, "barrel")),
+    );
+    const under = (roots: (THREE.Object3D | null | undefined)[]) => {
+      const found = new Set<THREE.BufferGeometry | THREE.Material>();
+      for (const root of roots) {
+        root?.traverse((object) => {
+          const drawn = object as Partial<THREE.Mesh>;
+          if (drawn.geometry) found.add(drawn.geometry);
+          const m = drawn.material;
+          for (const material of Array.isArray(m) ? m : m ? [m] : []) {
+            found.add(material);
+          }
+        });
+      }
+      return [...found];
+    };
+    const room = under([find(slot, "room-scan")]);
+    // The models' own: the objects' outline materials go with the objects.
+    const models = under(
+      ["syringe", "cup_a", "indicator"].map((n) =>
+        find(slot, n)?.getObjectByName("model"),
+      ),
+    ).filter((r) => !(r instanceof THREE.LineBasicMaterial && r.transparent));
+    expect(room.filter((r) => r instanceof THREE.EdgesGeometry).length).toBe(5);
+    expect(
+      models.filter((r) => r instanceof THREE.MeshLambertMaterial).length,
+    ).toBeGreaterThanOrEqual(3);
+    const all = [...room, ...models];
+    const disposed = new Set<object>();
+    for (const r of all) r.addEventListener("dispose", () => disposed.add(r));
+
+    // Models off: theirs go, the room stays.
+    await slot.show(
+      capture,
+      1,
+      { ...props, models: modelFiles(state, false) },
+      fetch,
+    );
+    for (const m of models) expect(disposed.has(m)).toBe(true);
+    expect(find(slot, "barrel")).toBeNull();
+    expect(find(slot, "room-scan")).not.toBeNull();
+
+    await slot.clear();
+    expect(all.filter((r) => !disposed.has(r))).toEqual([]);
   });
 });

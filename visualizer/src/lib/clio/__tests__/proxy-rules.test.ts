@@ -88,11 +88,41 @@ describe("planClioProxy: allowed reads", () => {
       "retarget-arm_v2.1.json",
       "0.json",
       `${"a".repeat(91)}.json`,
+      // The room scan the compile keeps.
+      "room.glb",
     ]) {
       expect(url({ path: ["episodes", ID, "derived", name] })).toBe(
         `http://127.0.0.1:8787/api/episodes/${ID}/derived/${name}`,
       );
     }
+  });
+
+  test("one episode's rebuilt scene files", () => {
+    for (const name of [
+      "scene.json",
+      "model-syringe.glb",
+      "model-cup_a.glb",
+      "cad-indicator.json",
+      "crop-syringe-1.jpg",
+      "crop-cup_a-12.jpg",
+      `${"a".repeat(92)}.glb`,
+    ]) {
+      expect(url({ path: ["episodes", ID, "scene", name] })).toBe(
+        `http://127.0.0.1:8787/api/episodes/${ID}/scene/${name}`,
+      );
+    }
+    expect(
+      status({ method: "HEAD", path: ["episodes", ID, "scene", "scene.json"] }),
+    ).toBe(200);
+  });
+
+  test("from is not forwarded to scene files", () => {
+    expect(
+      url({
+        path: ["episodes", ID, "scene", "model-syringe.glb"],
+        searchParams: new URLSearchParams({ from: "10" }),
+      }),
+    ).toBe(`http://127.0.0.1:8787/api/episodes/${ID}/scene/model-syringe.glb`);
   });
 
   test("from is not forwarded to compiled files", () => {
@@ -171,6 +201,72 @@ describe("planClioProxy: rejected", () => {
       `${"a".repeat(97)}.json`,
     ]) {
       expect(status({ path: ["episodes", ID, "derived", name] })).toBe(404);
+    }
+  });
+
+  test("scene file names outside the scene name rule", () => {
+    for (const name of [
+      "..",
+      ".",
+      "%2e%2e",
+      "../scene.json",
+      "..%2fscene.json",
+      "../../derived/tracks.json",
+      "a/../scene.json",
+      ".scene.json",
+      "-model.glb",
+      "Model-syringe.glb",
+      "model-syringe.GLB",
+      "crop-syringe-1.jpeg",
+      "crop-syringe-1.png",
+      "splat.ply",
+      "model-syringe.gltf",
+      "frames.ndjson",
+      "scene",
+      "scene.json.bak",
+      "scene.json?x=1",
+      "model syringe.glb",
+      "model%20syringe.glb",
+      ".glb",
+      `${"a".repeat(97)}.glb`,
+    ]) {
+      expect(status({ path: ["episodes", ID, "scene", name] })).toBe(404);
+    }
+  });
+
+  test("compiled file names that are scene names, and the other way round", () => {
+    expect(
+      status({ path: ["episodes", ID, "derived", "crop-syringe-1.jpg"] }),
+    ).toBe(404);
+    expect(status({ path: ["episodes", ID, "derived", "room.ply"] })).toBe(404);
+  });
+
+  test("scene files at any other depth", () => {
+    for (const path of [
+      ["episodes", ID, "scene"],
+      ["episodes", ID, "scene", "scene.json", "extra"],
+      ["episodes", ID, "scene", "models", "model-syringe.glb"],
+      ["episodes", "scene", "scene.json"],
+      ["episodes", ID, "scenes", "scene.json"],
+      ["scene", "scene.json"],
+    ]) {
+      expect(status({ path })).toBe(404);
+    }
+    for (const id of ["..", "%2e%2e", ".hidden", "ep id", ""]) {
+      expect(status({ path: ["episodes", id, "scene", "scene.json"] })).toBe(
+        404,
+      );
+    }
+  });
+
+  test("writes to scene files", () => {
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+      expect(
+        status({
+          method,
+          path: ["episodes", ID, "scene", "model-syringe.glb"],
+        }),
+      ).toBe(405);
     }
   });
 
@@ -334,6 +430,10 @@ describe("headers", () => {
     expect(headers.get("authorization")).toBeNull();
     expect(headers.get("origin")).toBeNull();
     expect([...headers.keys()]).toEqual(["accept"]);
+    // JSON and NDJSON first; the binary scene files are accepted too.
+    expect(headers.get("accept")).toBe(
+      "application/json, application/x-ndjson, */*;q=0.1",
+    );
   });
 
   test("only content-type and x-next-from come back, never cached", () => {
@@ -352,5 +452,17 @@ describe("headers", () => {
       "content-type": "application/x-ndjson",
       "x-next-from": "4096",
     });
+  });
+
+  test("a binary file keeps its content-type", () => {
+    for (const type of ["model/gltf-binary", "image/jpeg"]) {
+      expect(
+        Object.fromEntries(
+          clioResponseHeaders(
+            new Headers({ "content-type": type, "content-length": "1024" }),
+          ),
+        ),
+      ).toEqual({ "cache-control": "no-store", "content-type": type });
+    }
   });
 });

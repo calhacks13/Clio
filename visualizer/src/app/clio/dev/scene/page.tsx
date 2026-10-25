@@ -11,14 +11,32 @@ import {
   SYNTHETIC_TIMES,
   syntheticEpisode,
 } from "@/lib/clio/__fixtures__/synthetic-episode";
-import { type CompileStatusView, compileStatus } from "@/lib/clio/derived";
+import {
+  syntheticRoom,
+  syntheticScene,
+  withRoom,
+} from "@/lib/clio/__fixtures__/synthetic-scene";
+import {
+  type CompileStatusView,
+  compileStatus,
+  type SceneStatusView,
+  sceneStatus,
+} from "@/lib/clio/derived";
 import { recordsLocationFlags } from "@/lib/clio/lanes";
+import {
+  type FileRef,
+  type ModelFile,
+  modelFiles,
+  roomFile,
+} from "@/lib/clio/scene-files";
 import type {
   EnvironmentDoc,
   RetargetDoc,
+  SceneDoc,
   ShapesDoc,
   TracksDoc,
 } from "@clio/protocol";
+import type { Fetch } from "@clio-viewer/api";
 import { buildCaptureFromClio } from "@clio-viewer/capture/from-clio";
 
 // Dev harness for the Clio 3D scene: the synthetic episode, built in memory
@@ -27,8 +45,11 @@ import { buildCaptureFromClio } from "@clio-viewer/capture/from-clio";
 // and the compiled documents (synthetic-derived.ts): the compiled object
 // series with the syringe's extent box and fused shape, detected planes, the
 // table on the detected table plane, the retargeted arm and the compile state
-// (a failed retarget stage, a verdict that is not usable). Not served in
-// production builds.
+// (a failed retarget stage, a verdict that is not usable). The Quest room scan
+// and the generated object models (synthetic-scene.ts) are served from memory
+// through the scene's fetch, at the proxy URLs the viewer reads, with the scene
+// build's state (building, stale, a failed stage). Not served in production
+// builds.
 
 const HANDS_KEPT_FROM_US = 4_000_000;
 // A replay stopped by the frames cap: no hands or head after this.
@@ -42,8 +63,12 @@ type Toggle =
   | "framesCut"
   | "compiled"
   | "robot"
+  | "room"
+  | "models"
   | "compileFailed"
   | "notUsable"
+  | "sceneBuilding"
+  | "sceneFailed"
   | "debug";
 
 const TOGGLES: { key: Toggle; label: string }[] = [
@@ -52,8 +77,12 @@ const TOGGLES: { key: Toggle; label: string }[] = [
   { key: "framesCut", label: "Frames cut" },
   { key: "compiled", label: "Compiled" },
   { key: "robot", label: "Robot" },
+  { key: "room", label: "Room" },
+  { key: "models", label: "Models" },
   { key: "compileFailed", label: "Compile failed" },
   { key: "notUsable", label: "Not usable" },
+  { key: "sceneBuilding", label: "Building scene" },
+  { key: "sceneFailed", label: "Scene failed" },
   { key: "debug", label: "Debug" },
 ];
 
@@ -71,8 +100,12 @@ function SceneHarness() {
     framesCut: false,
     compiled: true,
     robot: true,
+    room: true,
+    models: true,
     compileFailed: false,
     notUsable: false,
+    sceneBuilding: false,
+    sceneFailed: false,
     debug: false,
   });
   const { episode, capture } = useMemo(() => {
@@ -92,6 +125,34 @@ function SceneHarness() {
       }),
     [episode, on.notUsable, on.compileFailed],
   );
+  const room = useMemo(() => syntheticRoom(episode), [episode]);
+  const scene = useMemo(
+    () =>
+      syntheticScene(episode, derived.manifest, {
+        ...(on.sceneFailed && { modelsFailed: "gemini-cad: quota exceeded" }),
+      }),
+    [episode, derived.manifest, on.sceneFailed],
+  );
+  const episodeId = episode.meta.episodeId;
+  const environment = on.compiled ? withRoom(derived.environment, room) : null;
+  const compiledAt = on.compiled ? derived.manifest.compiledAt : null;
+  const sceneDoc = on.compiled ? scene.doc : null;
+  // The proxy URLs the viewer reads, answered from memory.
+  const sceneFetch = useMemo<Fetch>(() => {
+    const files = new Map<string, Uint8Array>([
+      [`/api/clio/episodes/${episodeId}/derived/room.glb`, room.glb],
+      ...Object.entries(scene.files).map(
+        ([name, bytes]) =>
+          [`/api/clio/episodes/${episodeId}/scene/${name}`, bytes] as const,
+      ),
+    ]);
+    return async (input) => {
+      const bytes = files.get(input);
+      return bytes
+        ? new Response(bytes.slice().buffer)
+        : new Response("Not found", { status: 404 });
+    };
+  }, [episodeId, room, scene]);
 
   return (
     <main className="min-h-dvh bg-bg text-fg">
@@ -125,6 +186,23 @@ function SceneHarness() {
         shapes={on.compiled ? derived.shapes : null}
         retarget={on.compiled ? derived.retarget : NO_RETARGET}
         showRobot={on.robot}
+        room={roomFile({ episodeId, environment, compiledAt }, on.room)}
+        models={modelFiles({ episodeId, scene: sceneDoc }, on.models)}
+        scene={sceneDoc}
+        sceneFetch={sceneFetch}
+        crops={scene.crops}
+        sceneState={sceneStatus(
+          {
+            sceneState: !on.compiled
+              ? null
+              : on.sceneBuilding
+                ? "running"
+                : "ok",
+            sceneError: null,
+            scene: sceneDoc,
+          },
+          "finished",
+        )}
         compile={compileStatus(
           {
             compile: on.compiled ? "ok" : "none",
@@ -149,6 +227,12 @@ function SceneStage({
   shapes,
   retarget,
   showRobot,
+  room,
+  models,
+  scene,
+  sceneFetch,
+  crops,
+  sceneState,
   compile,
 }: {
   capture: ReturnType<typeof buildCaptureFromClio>;
@@ -161,6 +245,13 @@ function SceneStage({
   shapes: ShapesDoc | null;
   retarget: readonly RetargetDoc[];
   showRobot: boolean;
+  room: FileRef | null;
+  models: ReadonlyMap<string, ModelFile>;
+  scene: SceneDoc | null;
+  sceneFetch: Fetch;
+  /** Crop pictures by file name. */
+  crops: Record<string, string>;
+  sceneState: SceneStatusView | null;
   compile: CompileStatusView | null;
 }) {
   const endUs = capture.endUs;
@@ -208,6 +299,9 @@ function SceneStage({
             shapes={shapes}
             retarget={retarget}
             showRobot={showRobot}
+            room={room}
+            models={models}
+            sceneFetch={sceneFetch}
             className="absolute inset-0"
           />
         </div>
@@ -219,6 +313,8 @@ function SceneStage({
             flagsRecorded={flagsRecorded}
             tracks={tracks}
             shapes={shapes}
+            model={scene?.objects.find((m) => m.id === selectedId) ?? null}
+            sceneFileUrl={(name) => crops[name] ?? null}
           />
         </aside>
       </div>
@@ -234,6 +330,7 @@ function SceneStage({
           onSeek={(t) => setTUs(Math.min(Math.max(0, t), endUs))}
           status="finished"
           compile={compile}
+          scene={sceneState}
         />
       </div>
     </div>

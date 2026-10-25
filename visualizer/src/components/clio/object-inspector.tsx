@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import {
   formatCount,
   formatExtent,
@@ -8,8 +8,8 @@ import {
 } from "@/lib/clio/compiled-objects";
 import { inspectObject, type InspectorRow } from "@/lib/clio/lanes";
 import { drawnObjects, identityColor, themed } from "@/lib/clio/object-display";
-import type { Basis } from "@/lib/clio/types";
-import type { ShapesDoc, TracksDoc } from "@clio/protocol";
+import { modelRows } from "@/lib/clio/scene-display";
+import type { SceneModel, ShapesDoc, TracksDoc } from "@clio/protocol";
 import type { Capture } from "@clio-viewer/capture/model";
 import { useTheme } from "@/utils/theme";
 
@@ -18,13 +18,18 @@ import { useTheme } from "@/utils/theme";
 // held state and the newest detector answer. Inferred values are muted with a
 // dashed underline, as inferred marks are dashed in the lanes. A compiled
 // episode adds the object's estimated size and measured shape, each only when
-// the compile has it.
+// the compile has it. When the rebuilt scene made a model of the object, a
+// "Model (generated)" block follows: how it was made, which measurement sized
+// and turned it, the keyframe crop it was made from and its note. Generated
+// values are muted with a dotted underline, a look of their own (DESIGN.md).
 
-const VALUE_CLASS: Record<Basis, string> = {
+const VALUE_CLASS: Record<InspectorRow["basis"], string> = {
   measured: "text-fg-soft",
   derived: "text-fg-muted",
   inferred:
     "text-fg-muted underline decoration-dashed decoration-1 underline-offset-4",
+  generated:
+    "text-fg-muted underline decoration-dotted decoration-1 underline-offset-4",
 };
 
 export interface ObjectInspectorProps {
@@ -38,6 +43,10 @@ export interface ObjectInspectorProps {
   tracks?: TracksDoc | null;
   /** The compiled shapes, for the measured shape. */
   shapes?: ShapesDoc | null;
+  /** The object's generated model from the rebuilt scene, if it has one. */
+  model?: SceneModel | null;
+  /** The URL of a scene file (a crop), through the proxy; null shows no crop. */
+  sceneFileUrl?: (name: string) => string | null;
   className?: string;
 }
 
@@ -81,6 +90,8 @@ export default function ObjectInspector({
   flagsRecorded,
   tracks = null,
   shapes = null,
+  model = null,
+  sceneFileUrl,
   className = "",
 }: ObjectInspectorProps) {
   const theme = useTheme();
@@ -102,6 +113,9 @@ export default function ObjectInspector({
     ...inspection.rows,
     ...compiledRows(inspection.entityId, tracks, shapes),
   ];
+  const generated = model && model.id === inspection.entityId ? model : null;
+  const crop = generated?.crops[0]?.file;
+  const cropUrl = crop ? (sceneFileUrl?.(crop) ?? null) : null;
   return (
     <section
       className={`flex min-w-0 flex-col gap-3 ${className}`}
@@ -119,29 +133,63 @@ export default function ObjectInspector({
           {inspection.label}
         </span>
       </h3>
-      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-[13px]">
-        {rows.map((row) =>
-          row.label === null ? (
+      <Rows rows={rows} />
+      {generated && (
+        <div
+          className="flex min-w-0 flex-col gap-2 border-t border-line-subtle pt-3"
+          aria-label="Generated model"
+        >
+          <Rows rows={modelRows(generated)} />
+          {cropUrl && (
+            <Crop key={cropUrl} src={cropUrl} label={generated.label} />
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Rows({ rows }: { rows: InspectorRow[] }) {
+  return (
+    <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-[13px]">
+      {rows.map((row) =>
+        row.label === null ? (
+          <dd
+            key={row.value}
+            className={`col-span-2 ${VALUE_CLASS[row.basis]}`}
+            title={row.title}
+          >
+            {row.value}
+          </dd>
+        ) : (
+          <React.Fragment key={row.label}>
+            <dt className="text-fg-faint">{row.label}</dt>
             <dd
-              key={row.value}
-              className={`col-span-2 ${VALUE_CLASS[row.basis]}`}
+              className={`min-w-0 truncate ${row.label === "Position" ? "whitespace-pre font-mono text-xs leading-5" : "tabular"} ${VALUE_CLASS[row.basis]}`}
               title={row.title}
             >
               {row.value}
             </dd>
-          ) : (
-            <React.Fragment key={row.label}>
-              <dt className="text-fg-faint">{row.label}</dt>
-              <dd
-                className={`min-w-0 truncate ${row.label === "Position" ? "whitespace-pre font-mono text-xs leading-5" : "tabular"} ${VALUE_CLASS[row.basis]}`}
-                title={row.title}
-              >
-                {row.value}
-              </dd>
-            </React.Fragment>
-          ),
-        )}
-      </dl>
-    </section>
+          </React.Fragment>
+        ),
+      )}
+    </dl>
+  );
+}
+
+/** The keyframe crop a model was made from; nothing when it cannot be read. */
+function Crop({ src, label }: { src: string; label: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  return (
+    // A local file through the proxy, never optimized or cached.
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt={`Keyframe crop of ${label} the model was made from`}
+      title="Keyframe crop the model was made from"
+      onError={() => setFailed(true)}
+      className="h-24 w-32 rounded-lg bg-fill object-cover"
+    />
   );
 }

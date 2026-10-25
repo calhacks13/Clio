@@ -1,4 +1,4 @@
-import { DERIVED_FILE_NAME } from "@clio/protocol";
+import { DERIVED_FILE_NAME, SCENE_FILE_NAME } from "@clio/protocol";
 
 // Rules for the read-only Clio proxy at /api/clio/[...path].
 //
@@ -9,9 +9,12 @@ import { DERIVED_FILE_NAME } from "@clio/protocol";
 // - GET and HEAD only. Writes (episode create, batches, finish, media) never
 //   pass through.
 // - Only the episode list, one episode's detail, its frames, events, objects
-//   and observations files, and its compiled files (derived/<name>, a
-//   DERIVED_FILE_NAME from @clio/protocol). /gemini, /api/coach/token, /api/plans, /api/vision,
-//   /api/clips and the compile trigger are never reachable.
+//   and observations files, its compiled files (derived/<name>, a
+//   DERIVED_FILE_NAME from @clio/protocol, JSON or the room scan's GLB) and its
+//   rebuilt scene's files (scene/<name>, a SCENE_FILE_NAME: scene.json, the
+//   object models, their CAD programs and crops). /gemini, /api/coach/token,
+//   /api/plans, /api/vision, /api/clips and the compile trigger are never
+//   reachable. Bodies stream through unchanged, binary ones included.
 // - The upstream must be a loopback http(s) origin, and so must the Host the
 //   request arrived on (a DNS-rebound page can't read local recordings).
 // - Request headers are built from scratch, so the hf_access_token cookie and
@@ -30,8 +33,11 @@ export const CLIO_CHANNELS = [
   "observations",
 ] as const;
 
-/** The segment before a compiled file's name: episodes/<id>/derived/<name>. */
-const DERIVED = "derived";
+/** The segment before a file's name, with the names it allows: episodes/<id>/<segment>/<name>. */
+const FILE_SEGMENTS: ReadonlyMap<string, RegExp> = new Map([
+  ["derived", DERIVED_FILE_NAME],
+  ["scene", SCENE_FILE_NAME],
+]);
 
 // Same rule as the server's ids (apps/server/src/ids.ts). It also rules out
 // "." and "..", and anything an encoded slash or percent decodes into.
@@ -105,10 +111,11 @@ export function clioUpstreamPath(path: readonly string[]): string | null {
   if (id === undefined) return "/api/episodes";
   if (!EPISODE_ID.test(id)) return null;
   if (channel === undefined) return `/api/episodes/${id}`;
-  if (channel === DERIVED) {
-    // The name pattern also excludes dot segments, slashes and percent signs.
-    if (name === undefined || !DERIVED_FILE_NAME.test(name)) return null;
-    return `/api/episodes/${id}/${DERIVED}/${name}`;
+  const names = FILE_SEGMENTS.get(channel);
+  if (names) {
+    // The name patterns also exclude dot segments, slashes and percent signs.
+    if (name === undefined || !names.test(name)) return null;
+    return `/api/episodes/${id}/${channel}/${name}`;
   }
   if (name !== undefined) return null;
   if (!(CLIO_CHANNELS as readonly string[]).includes(channel)) return null;
@@ -153,9 +160,12 @@ export function planClioProxy(req: ClioProxyRequest): ClioProxyPlan {
 }
 
 // Nothing from the browser's request is forwarded: no cookies, no
-// authorization, no origin or referer.
+// authorization, no origin or referer. Anything else is accepted after JSON
+// and NDJSON: the room scan, the object models and their crops are binary.
 export function clioUpstreamHeaders(): Headers {
-  return new Headers({ accept: "application/json, application/x-ndjson" });
+  return new Headers({
+    accept: "application/json, application/x-ndjson, */*;q=0.1",
+  });
 }
 
 export function clioResponseHeaders(upstream: Headers): Headers {

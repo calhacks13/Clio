@@ -1,0 +1,225 @@
+"use client";
+
+import { Html } from "@react-three/drei";
+import { useThree } from "@react-three/fiber";
+import type { SurfaceKind } from "@clio/protocol";
+import type { Vec3 } from "@clio-viewer/capture/model";
+import { useEffect } from "react";
+import {
+  Box3,
+  type BufferGeometry,
+  DoubleSide,
+  EdgesGeometry,
+  FrontSide,
+  type Group,
+  LineBasicMaterial,
+  LineSegments,
+  type Material,
+  type Mesh,
+  MeshLambertMaterial,
+  Vector3,
+} from "three";
+import { SCENE_COLORS, themed } from "@/lib/clio/object-display";
+import type { FileRef } from "@/lib/clio/scene-files";
+import type { Theme } from "@/utils/theme";
+import { useSceneFile } from "../use-scene-file";
+import {
+  disposeTree,
+  meshesOf,
+  onBackdrop,
+  parseGlb,
+  W_TO_ROS,
+  windToward,
+} from "./gltf";
+
+// The Quest room scan (Space Setup, read by WebXR mesh detection) the compile keeps as room.glb, in
+// W: one root node per mesh named by its id, its transform the mesh pose in W and its extras
+// {kind, label, global}. It is context, measured before the episode, so it stays as quiet as the
+// grid and never hides measured data: it draws on the backdrop layer, under everything else
+// (gltf.ts). The global mesh is a lightly lit surface a step off the canvas, wound to face the
+// room's middle and drawn front faces only, so from outside the room the near walls drop away,
+// with its creases as faint edges. Furniture volumes are translucent in the table color with their
+// edges in the stronger hairline, labelled in Debug. Every node keeps its own transform: the whole
+// file sits in one group turned from W to ROS, inside the scene's ROS group.
+
+/** A crease sharper than this between two triangles draws as an edge. */
+const SURFACE_CREASE_DEG = 40;
+const VOLUME_CREASE_DEG = 30;
+const SURFACE_EDGE_OPACITY = 0.7;
+const VOLUME_OPACITY = 0.3;
+
+/** One mesh of the scan, as its extras name it. */
+export interface RoomPart {
+  id: string;
+  kind: SurfaceKind;
+  label: string | null;
+  global: boolean;
+  mesh: Mesh;
+  edges: LineSegments;
+  /**
+   * The middle of its bounds in W, where its Debug label goes: clear of a detected plane's label,
+   * which sits on the plane, often the volume's top.
+   */
+  labelAt: Vec3;
+}
+
+export interface RoomScanView {
+  root: Group;
+  parts: RoomPart[];
+  materials: {
+    surface: MeshLambertMaterial;
+    surfaceEdge: LineBasicMaterial;
+    volume: MeshLambertMaterial;
+    volumeEdge: LineBasicMaterial;
+  };
+}
+
+const KINDS = new Set<string>([
+  "table",
+  "floor",
+  "wall",
+  "ceiling",
+  "couch",
+  "other",
+]);
+
+/** The node extras of a mesh, read from the node that holds it (the mesh or its parent group). */
+function extrasOf(mesh: Mesh, root: Group) {
+  let node: Mesh["parent"] = mesh;
+  while (node && node !== root && node.userData.kind === undefined) {
+    node = node.parent;
+  }
+  const data = node?.userData ?? {};
+  return {
+    id: node && node !== root ? node.name : mesh.name,
+    kind: (KINDS.has(data.kind) ? data.kind : "other") as SurfaceKind,
+    label: typeof data.label === "string" ? data.label : null,
+    global: data.global === true,
+  };
+}
+
+/**
+ * The parsed scan, ready to draw: its own materials (colored by the layer for the theme), each
+ * global mesh wound to face its middle with normals for the light, and edges for every mesh.
+ */
+export function prepareRoomScan(root: Group): RoomScanView {
+  const materials = {
+    surface: new MeshLambertMaterial({
+      side: FrontSide,
+      // Behind its own edges, so they never flicker on it.
+      polygonOffset: true,
+      polygonOffsetFactor: 1,
+      polygonOffsetUnits: 1,
+    }),
+    surfaceEdge: new LineBasicMaterial({
+      transparent: true,
+      opacity: SURFACE_EDGE_OPACITY,
+    }),
+    volume: new MeshLambertMaterial({
+      side: DoubleSide,
+      transparent: true,
+      opacity: VOLUME_OPACITY,
+      depthWrite: false,
+      flatShading: true,
+    }),
+    volumeEdge: new LineBasicMaterial(),
+  };
+  root.updateMatrixWorld(true);
+  const replaced = new Set<Material>();
+  const wound = new Set<BufferGeometry>();
+  const parts: RoomPart[] = [];
+  for (const mesh of meshesOf(root)) {
+    const extras = extrasOf(mesh, root);
+    for (const m of Array.isArray(mesh.material)
+      ? mesh.material
+      : [mesh.material]) {
+      replaced.add(m);
+    }
+    const { geometry } = mesh;
+    if (extras.global && !wound.has(geometry)) {
+      wound.add(geometry);
+      geometry.computeBoundingBox();
+      const middle = (geometry.boundingBox as Box3).getCenter(new Vector3());
+      windToward(geometry, middle);
+      geometry.computeVertexNormals();
+    }
+    mesh.material = extras.global ? materials.surface : materials.volume;
+    const edges = new LineSegments(
+      new EdgesGeometry(
+        geometry,
+        extras.global ? SURFACE_CREASE_DEG : VOLUME_CREASE_DEG,
+      ),
+      extras.global ? materials.surfaceEdge : materials.volumeEdge,
+    );
+    mesh.add(edges);
+    const bounds = new Box3().setFromObject(mesh);
+    const center = bounds.getCenter(new Vector3());
+    parts.push({
+      ...extras,
+      mesh,
+      edges,
+      labelAt: [center.x, center.y, center.z],
+    });
+  }
+  // The file's own materials (none, or GLTFLoader's default) are never drawn.
+  for (const m of replaced) m.dispose();
+  onBackdrop(root);
+  return { root, parts, materials };
+}
+
+/** room.glb as the room layer draws it; a file that is not a GLB throws, so it reads as invalid. */
+export async function loadRoomScan(bytes: ArrayBuffer): Promise<RoomScanView> {
+  return prepareRoomScan(await parseGlb(bytes));
+}
+
+/** Releases the scan's geometries (the edges' too) and materials. */
+export function disposeRoomScan(scan: RoomScanView): void {
+  disposeTree(scan.root);
+}
+
+const muted = "text-[11px] font-medium text-fg-muted whitespace-nowrap";
+
+/** Debug label of a furniture volume: its WebXR label, else its kind. */
+const partLabel = (part: RoomPart) => `scanned ${part.label ?? part.kind}`;
+
+export function RoomLayer({
+  file,
+  theme,
+  debug,
+}: {
+  /** The compile's room.glb (scene-files.ts, roomFile). */
+  file: FileRef;
+  theme: Theme;
+  debug: boolean;
+}) {
+  const { value: scan } = useSceneFile(file, loadRoomScan, disposeRoomScan);
+  const invalidate = useThree((s) => s.invalidate);
+  // The file arrives after the frame that mounted the layer.
+  useEffect(() => {
+    invalidate();
+  }, [scan, invalidate]);
+  if (!scan) return null;
+  const { surface, surfaceEdge, volume, volumeEdge } = scan.materials;
+  surface.color.set(themed(SCENE_COLORS.roomSurface, theme));
+  surfaceEdge.color.set(themed(SCENE_COLORS.gridSection, theme));
+  volume.color.set(themed(SCENE_COLORS.table, theme));
+  volumeEdge.color.set(themed(SCENE_COLORS.roomVolumeEdge, theme));
+  return (
+    <group quaternion={W_TO_ROS} name="room-scan">
+      <primitive object={scan.root} />
+      {debug &&
+        scan.parts
+          .filter((part) => !part.global)
+          .map((part) => (
+            <Html
+              key={part.id}
+              position={part.labelAt}
+              pointerEvents="none"
+              zIndexRange={[20, 0]}
+            >
+              <span className={muted}>{partLabel(part)}</span>
+            </Html>
+          ))}
+    </group>
+  );
+}
