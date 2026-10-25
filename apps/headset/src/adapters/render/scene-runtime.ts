@@ -9,6 +9,7 @@ import {
   WebGLRenderer,
 } from 'three';
 import type { Pose } from '../../core/math';
+import { frameGuard, installFrameDebug } from './frame-guard';
 
 /**
  * The three.js side of the app. Two roots: `workspaceRoot` follows the calibrated workspace pose,
@@ -53,12 +54,15 @@ export class SceneRuntime {
     this.workspaceRoot.matrixWorldNeedsUpdate = true;
   }
 
-  /** Runs `tick` every frame (XR frames once a session starts), then renders. */
+  /**
+   * Runs `tick` every frame (XR frames once a session starts), then renders, each guarded
+   * (frame-guard.ts): a step that throws costs that frame, never the loop.
+   */
   start(tick: (time: number, frame: XRFrame | undefined) => void): void {
-    this.renderer.setAnimationLoop((time, frame) => {
-      tick(time, frame);
-      this.renderer.render(this.scene, this.camera);
-    });
+    installFrameDebug();
+    this.renderer.setAnimationLoop(
+      frameGuard.loop(tick, () => this.renderer.render(this.scene, this.camera)),
+    );
   }
 
   stop(): void {

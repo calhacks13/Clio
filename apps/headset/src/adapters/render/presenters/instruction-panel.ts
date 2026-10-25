@@ -10,6 +10,7 @@ import {
 import type { Text } from 'troika-three-text';
 import { rotateVec } from '../../../core/math';
 import { jointPosition } from '../../../domain/hands/features';
+import { drawOnTop } from '../on-top';
 import { InstructionPanelMotion } from '../panel-motion';
 import type { PresentContext, Presenter } from '../presenter';
 import { makeText, setText } from '../text';
@@ -120,6 +121,16 @@ export class InstructionPanelPresenter implements Presenter {
       this.bar,
       this.button,
     );
+    // Over the glow and the hands (on-top.ts), layered by renderOrder: the card, then the bar and
+    // the text, then the button and its label.
+    this.background.renderOrder = 0;
+    this.bar.renderOrder = 1;
+    for (const text of [this.header, this.instruction, this.detail, this.status]) {
+      text.renderOrder = 2;
+    }
+    buttonBg.renderOrder = 3;
+    buttonLabel.renderOrder = 4;
+    drawOnTop(this.object);
     this.layout();
   }
 

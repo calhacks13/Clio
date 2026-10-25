@@ -449,7 +449,7 @@ describe('InstructionPanelPresenter layout', () => {
       [buttonBg, 0x0f1117],
     ] as const) {
       const material = mesh.material as MeshBasicMaterial;
-      expect(material.transparent).toBe(false);
+      // Drawn on top (on-top.ts) means the transparent render pass, with the colour still solid.
       expect(material.opacity).toBe(1);
       expect(material.color.getHex()).toBe(color);
     }

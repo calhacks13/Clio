@@ -399,6 +399,42 @@ describe('Narrator', () => {
     ]);
   });
 
+  it('says which criteria the watcher saw met when a step looks done', () => {
+    const { b, out } = setup();
+    b.emit('step.looks_done', {
+      t: 0,
+      stepId: 'acid',
+      observation: 'cup A is pink',
+      image: null,
+      criteria: [
+        { text: "Cup A's liquid is pink.", met: 'yes', seen: 'pink' },
+        { text: 'Cups B and C are still purple', met: 'yes' },
+      ],
+    });
+    expect(out[0]?.text).toBe(
+      '[app] Step watcher: "Add vinegar to cup A." looks done: Cup A\'s liquid is pink; Cups B and C are still purple. If you agree from what you see, call complete_step with step_id "acid" and evidence "seen"; if not, carry on without mentioning it.',
+    );
+  });
+
+  it('says which criteria are not met, and what the watcher saw, when something went wrong', () => {
+    const { b, out } = setup({ perception: 'trusted' });
+    b.emit('step.looks_wrong', {
+      t: 0,
+      stepId: 'acid',
+      wrong: 'poured vinegar into cup B, not cup A',
+      observation: 'cup B is turning pink',
+      image: null,
+      criteria: [
+        { text: "Cup A's liquid is pink.", met: 'no', seen: 'still purple.' },
+        { text: 'Cup B is still purple.', met: 'no', seen: 'pink' },
+        { text: 'Cup C is still purple.', met: 'yes', seen: 'purple' },
+      ],
+    });
+    expect(out[0]?.text).toBe(
+      '[app] Step watcher: on "Add vinegar to cup A." they seem to have done something else: poured vinegar into cup B, not cup A. Not met: Cup A\'s liquid is pink (saw: still purple); Cup B is still purple (saw: pink). If you see it too, tell them in a few words what to do instead; if not, carry on without mentioning it.',
+    );
+  });
+
   it('tells the coach in words about a hazard the step watcher sees, to warn the learner', () => {
     const { b, out } = setup({ perception: 'trusted' });
     b.emit('step.hazard', { t: 0, stepId: 'acid', hazard: 'kitchen knife by cup A', image: null });

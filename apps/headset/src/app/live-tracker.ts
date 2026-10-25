@@ -19,6 +19,7 @@ import { createDepthProbe, type XrDepthProbe } from '../adapters/xr/depth';
 import {
   createDepthSampler,
   type DepthSampler,
+  depthUsageOf,
   preferDepthSensing,
 } from '../adapters/xr/depth-sensing';
 import type { XrRuntime } from '../adapters/xr/xr-session';
@@ -178,7 +179,8 @@ export class LiveTracker {
     this.sensing = createDepthSampler(session, {
       space,
       gl: renderer.getContext() as WebGL2RenderingContext,
-      binding: session.depthUsage === 'gpu-optimized' ? renderer.xr.getBinding() : null,
+      // Not session.depthUsage: it throws on a session without depth sensing.
+      binding: depthUsageOf(session) === 'gpu-optimized' ? renderer.xr.getBinding() : null,
       windowFar: this.deps.emulated ? 'infinite' : 'reported',
     });
     this.depth = preferDepthSensing(this.sensing, this.probe);

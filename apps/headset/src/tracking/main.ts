@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { frameGuard, installFrameDebug } from '../adapters/render/frame-guard';
 import { HandsView } from './hands';
 import { TrackingHud, type TrackingStats } from './hud';
 import { SurfaceReticle } from './reticle';
@@ -64,10 +65,16 @@ function track(frame: XRFrame, time: number): void {
   hud.update(head, orientation, dt, time, stats);
 }
 
-renderer.setAnimationLoop((time, frame) => {
-  if (frame) track(frame, time);
-  renderer.render(scene, camera);
-});
+// Each step guarded (frame-guard.ts): one that throws costs that frame, never the loop.
+installFrameDebug();
+renderer.setAnimationLoop(
+  frameGuard.loop<XRFrame>(
+    (time, frame) => {
+      if (frame) track(frame, time);
+    },
+    () => renderer.render(scene, camera),
+  ),
+);
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;

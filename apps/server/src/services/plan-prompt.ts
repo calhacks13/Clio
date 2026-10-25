@@ -1,6 +1,6 @@
 import { ACTION_VERB_NAMES, ACTION_VERBS, type ActionVerb } from '@clio/protocol';
 import type { Content, Part } from '@google/genai';
-import type { PlannerRequest } from './planner';
+import type { PlannerRequest, RestLine, RestPart } from './planner';
 
 // Pure: the planner's system instruction and conversation turns. One system instruction serves
 // every stage; what a stage asks for (the whole plan, an outline with its first step as a card,
@@ -195,9 +195,12 @@ function firstStageText(r: PlannerRequest): string {
     viewsLine(r.images.length, false),
     'The lesson starts as soon as you answer, so answer briefly. Its later steps are written ' +
       'in full afterwards, while the learner works on the first one. So:',
+    '- First read the scene: `done`, each part of the goal the views show already done, and ' +
+      'what shows it (e.g. "the acid test: cup A is already pink"); `todo`, each part still ' +
+      'to do, in the order the goal names them.',
     '- `outline`: every step of the lesson in order, 3 to 10, as an id and an instruction. ' +
-      'It reaches the end of the goal: every part the goal names, not only the part the first ' +
-      'step starts, and it leaves any control untouched. outline[0] is the first step.',
+      'It does every part in `todo`, not only the part the first step starts, and none in ' +
+      '`done`, and it leaves any control untouched. outline[0] is the first step.',
     '- `objects`: only the objects the first step uses (its targets, what it shows and the ' +
       'look-alike it guards against). The later steps declare theirs when they are written. ' +
       "An object's `look` is its tracking.query and the description its outline is found by, " +
@@ -310,12 +313,134 @@ function restText(r: Revising): string {
   ].join('\n');
 }
 
+// Stage rest in parallel (plan-rest.ts): one call checks the outline, then one call per line
+// writes it in full, while another writes the card's objects in full. Each writer sees the whole
+// checked outline and the same table of objects, so the steps fit together and share ids.
+
+const keptIds = (r: Revising): string[] =>
+  r.revision.base.steps.slice(0, r.revision.fromStepIndex).map((s) => s.id);
+
+/** Check the quick outline against the scene and the goal before it is written in full. */
+function reviewText(r: Revising): string {
+  const { base, fromStepIndex } = r.revision;
+  const kept = base.steps.slice(0, fromStepIndex);
+  const outline = base.steps.slice(fromStepIndex);
+  const taken = [...keptIds(r), ...base.objects.map((o) => o.id)];
+  return [
+    'Check the outline of a lesson that has just started, before its later steps are written ' +
+      'in full.',
+    ...goalLines(r),
+    'Under way or done (they stay as they are; do not repeat them):',
+    ...(kept.length ? kept.map((s, i) => stepLine(s, i + 1)) : ['(none)']),
+    'The outline of the later steps, written quickly so the lesson could start:',
+    ...(outline.length
+      ? outline.map((s, i) => stepLine(s, fromStepIndex + i + 1))
+      : ['(none: the lesson may end after the steps above)']),
+    'Objects already declared (keep these ids):',
+    ...objectLines(r),
+    viewsLine(r.images.length, true),
+    'First read the scene and the goal:',
+    '- `done`: each part of the goal the views show already done before the lesson, and what ' +
+      'shows it (e.g. "the acid test: cup A is already pink"). A step under way is not done.',
+    '- `todo`: each part of the goal still to do, in the order the goal names them, and none ' +
+      'of those in `done`; the step under way starts one.',
+    '- `control`: in an experiment that compares samples, the one the setup keeps untouched ' +
+      'for comparison (when more like samples are set out than the parts left to do use); "" ' +
+      'in any other task.',
+    'Then write `outline`: the steps after those under way, in order, as the lesson should go on:',
+    '- Keep a line, with its id, where it is right; reword, drop, split or add lines where it ' +
+      'is not.',
+    '- Every part in `todo` gets its steps, in order; a part in `done` gets none, here or in a ' +
+      'new place; the control stays untouched. Add nothing a thing already has (indicator to a ' +
+      'cup that is already purple).',
+    '- Every step changes something a camera can see. No step only looks, observes, compares ' +
+      'or checks: what to notice belongs to the step that causes the change.',
+    '- Close what the task opened, unless the goal needs it open.',
+    '- `doneWhen`: the visible end state. `uses`: the id of every object the step touches, ' +
+      'shows or guards against.',
+    '- `objects`: each object a line uses that is not declared above, as a card (id, label, ' +
+      `phrase, look, moves). New ids must not be: ${taken.join(', ')}.`,
+    '- `summary`: one sentence, what the learner does in the whole lesson as it now goes.',
+    'Write the checked outline as JSON.',
+  ].join('\n');
+}
+
+function restLine(line: RestLine, n: number): string {
+  const doneWhen = line.doneWhen ? ` Done when: ${line.doneWhen.replace(/[.!]+$/, '')}.` : '';
+  const uses = line.uses.length ? ` Uses: ${line.uses.join(', ')}.` : '';
+  return `${n}. ${line.id}: ${line.instruction}${doneWhen}${uses}`;
+}
+
+/** One line of the checked outline in full, while the other lines are written beside it. */
+function stepPartText(r: Revising, part: Extract<RestPart, { kind: 'step' }>): string {
+  const { base, fromStepIndex } = r.revision;
+  const kept = base.steps.slice(0, fromStepIndex);
+  const n = fromStepIndex + part.index + 1;
+  const line = part.lines[part.index];
+  return [
+    'Write one step of a lesson plan in full while the learner works on its first step. The ' +
+      'other steps are written at the same time, each on its own, so write only this one.',
+    ...goalLines(r),
+    'The lesson, in order:',
+    ...kept.map((s, i) => `${stepLine(s, i + 1)} (under way)`),
+    ...part.lines.map(
+      (l, i) =>
+        `${restLine(l, fromStepIndex + i + 1)}${i === part.index ? '  <- the step to write' : ''}`,
+    ),
+    ...(part.reading?.done.length
+      ? [`Done before the lesson: ${part.reading.done.join('; ')}`]
+      : []),
+    ...(part.reading?.control ? [`Kept untouched as the control: ${part.reading.control}`] : []),
+    'Objects (every object the step touches, acts on, shows or checks is one of these):',
+    ...part.objects.map((o) => `- ${o.id} (${o.label}): ${o.look}`),
+    viewsLine(r.images.length, true),
+    `Write step ${n}, "${line?.id}", in full: keep its id and what it does. Its show ` +
+      'descriptions say how each object looks at that point, after the steps before it.',
+    part.declare.length
+      ? `Return \`step\`, and \`objects\`: ${part.declare.join(', ')} in full, each with its id and label as listed.`
+      : 'Return `step`, and `objects`: [] (they are declared elsewhere).',
+  ].join('\n');
+}
+
+/** The first stage's object cards in full, beside the steps, with the hazards in view. */
+function objectsPartText(r: Revising): string {
+  return [
+    'Write the objects of a lesson plan in full while the learner works on its first step. ' +
+      'They were declared quickly, with a default kind and size.',
+    ...goalLines(r),
+    'The lesson, in order (the later steps are an outline for now):',
+    ...r.revision.base.steps.map((s, i) => stepLine(s, i + 1)),
+    'Objects to write in full (keep each id and label, and keep saying in each tracking.query ' +
+      'which one it is and where):',
+    ...objectLines(r),
+    viewsLine(r.images.length, true),
+    'Return `objects`: each object above again in full, with its id and label. Write ' +
+      '`warnings` as for a new plan, hazards in view first, each placed by the object of the ' +
+      'task nearest to it ("left of cup A"), without mentioning the outline or the step under ' +
+      'way.',
+  ].join('\n');
+}
+
+function partText(r: Revising, part: RestPart): string {
+  if (part.kind === 'review') return reviewText(r);
+  if (part.kind === 'objects') return objectsPartText(r);
+  return stepPartText(r, part);
+}
+
 function retryText(r: PlannerRequest & { retry: NonNullable<PlannerRequest['retry']> }): string {
   const lines = [
     'Your JSON did not pass validation. Fix these errors and return the complete corrected JSON:',
     r.retry.errors,
   ];
-  if (r.revision) {
+  // A review or the objects call needs no paths: its errors name what to fix.
+  if (r.part) {
+    if (r.part.kind === 'step') {
+      lines.push(
+        'Paths refer to a plan built from your answer: steps[0] is your step, and objects are ' +
+          'the ones listed, with yours in full.',
+      );
+    }
+  } else if (r.revision) {
     const { fromStepIndex, base } = r.revision;
     lines.push(
       `Paths refer to the merged plan: your first step is steps[${fromStepIndex}] and your first new object is objects[${base.objects.length}].`,
@@ -334,6 +459,7 @@ function retryText(r: PlannerRequest & { retry: NonNullable<PlannerRequest['retr
 
 function requestText(request: PlannerRequest): string {
   const { revision } = request;
+  if (revision && request.part) return partText({ ...request, revision }, request.part);
   if (revision) {
     return request.stage === 'rest'
       ? restText({ ...request, revision })

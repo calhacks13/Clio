@@ -1,19 +1,75 @@
 import { type Camera, Matrix4, PerspectiveCamera, Vector4, type WebGLRenderer } from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  DEPTH_MIN_RELIABLE_M,
   DepthVariant,
   decodeDepth,
   depthPlanes,
   depthUniforms,
   glowOcclusion,
   installOcclusionDebug,
+  nearFade,
   normView,
   OCCLUSION_FALLOFF_M,
   OCCLUSION_MARGIN_M,
+  OCCLUSION_NEAR_OFF_M,
+  OCCLUSION_NEAR_ON_M,
   objectFront,
   occlusionSettings,
+  reliableDepth,
   XrDepthOcclusion,
 } from '../../src/adapters/render/glow/depth-occlusion';
+
+describe('up close (a learner leaning over the table)', () => {
+  it("takes reads nearer than the sensor's reliable range as unknown", () => {
+    // Meta: the Quest 3 depth estimate is unreliable nearer than about 20 cm.
+    expect(DEPTH_MIN_RELIABLE_M).toBe(0.2);
+    expect(reliableDepth(0.12)).toBeNull();
+    expect(reliableDepth(0.2)).toBe(0.2);
+    expect(reliableDepth(0.8)).toBe(0.8);
+    expect(reliableDepth(null)).toBeNull();
+    expect(reliableDepth(Number.NaN)).toBeNull();
+    expect(reliableDepth(Number.POSITIVE_INFINITY)).toBeNull();
+    // A texel that decodes to just past Quest's 0.1 m near plane is no surface in front.
+    const phantom = decodeDepth(0.05, 0.1, 0, 1);
+    expect(phantom).toBeCloseTo(0.105, 3);
+    expect(reliableDepth(phantom)).toBeNull();
+  });
+
+  it('fades the test out as the glow comes within reach of that range', () => {
+    // Off where a surface hiding the glow would have to be nearer than the reliable range...
+    expect(OCCLUSION_NEAR_OFF_M).toBeCloseTo(
+      DEPTH_MIN_RELIABLE_M + OCCLUSION_MARGIN_M + OCCLUSION_FALLOFF_M,
+      12,
+    );
+    expect(OCCLUSION_NEAR_ON_M).toBeCloseTo(0.4, 12);
+    expect(nearFade(0.1)).toBe(0);
+    expect(nearFade(OCCLUSION_NEAR_OFF_M)).toBe(0);
+    expect(nearFade((OCCLUSION_NEAR_OFF_M + OCCLUSION_NEAR_ON_M) / 2)).toBeCloseTo(0.5);
+    expect(nearFade(OCCLUSION_NEAR_ON_M)).toBe(1);
+    expect(nearFade(0.6)).toBe(1);
+    let last = 0;
+    for (let d = 0.1; d <= 0.6; d += 0.005) {
+      expect(nearFade(d)).toBeGreaterThanOrEqual(last);
+      last = nearFade(d);
+    }
+  });
+
+  it('never hides a glow 10 to 30 cm away, whatever the map reads', () => {
+    for (const glow of [0.1, 0.15, 0.2, 0.25, 0.28]) {
+      for (const real of [0, 0.05, 0.101, 0.15, 0.199, 0.21, glow - 0.08]) {
+        expect(glowOcclusion(glow, real)).toBe(0);
+      }
+    }
+    // A phantom read in front of a farther glow hides nothing either.
+    expect(glowOcclusion(0.6, 0.15)).toBe(0);
+    // Only partly between the two, and fully again from arm's length.
+    const between = glowOcclusion(0.34, 0.22);
+    expect(between).toBeGreaterThan(0);
+    expect(between).toBeLessThan(1);
+    expect(glowOcclusion(0.45, 0.25)).toBe(1);
+  });
+});
 
 describe('glowOcclusion', () => {
   it('never lets the object hide its own glow, nor a surface behind it', () => {
@@ -170,6 +226,61 @@ describe('XrDepthOcclusion', () => {
     expect(occlusion.bind(gpu.renderer, gpu.left, u)).toBe(DepthVariant.None);
   });
 
+  it('never throws on a session without depth sensing, where depthUsage itself throws', () => {
+    const { renderer, xr, left } = xrRenderer();
+    const session = {
+      enabledFeatures: ['local-floor', 'hand-tracking'],
+      get depthUsage(): XRDepthUsage {
+        throw new DOMException('Depth sensing is not enabled', 'InvalidStateError');
+      },
+    };
+    xr.getSession = () => session as unknown as { depthUsage: XRDepthUsage };
+    const occlusion = new XrDepthOcclusion();
+    const u = depthUniforms();
+    expect(occlusion.bind(renderer, left, u)).toBe(DepthVariant.None);
+    expect(occlusion.stats.render.eyes[0]).toBe('no gpu depth');
+    // And a runtime that lists no features but throws all the same.
+    xr.getSession = () => ({
+      get depthUsage(): XRDepthUsage {
+        throw new DOMException('Depth sensing is not enabled', 'InvalidStateError');
+      },
+    });
+    expect(occlusion.bind(renderer, left, u)).toBe(DepthVariant.None);
+  });
+
+  it("never leaves last frame's map bound, and reports the near plane and why a map is missing", () => {
+    const { renderer, left, nextFrame, getDepthInformation, texture } = xrRenderer();
+    const occlusion = new XrDepthOcclusion();
+    const u = depthUniforms();
+    occlusion.bind(renderer, left, u);
+    expect(u.depthMap.value.sourceTexture).toBe(texture);
+    expect(occlusion.stats.render.eyes[0]).toBe('bound');
+    // PerspectiveCamera's default near plane, read back from its projection.
+    expect(occlusion.stats.render.nearPlaneM).toBeCloseTo(0.1, 6);
+    getDepthInformation.mockImplementation(() => ({ isValid: false }) as never);
+    nextFrame();
+    expect(occlusion.bind(renderer, left, u)).toBe(DepthVariant.None);
+    expect(u.depthMap.value.sourceTexture).toBeNull();
+    expect(u.depthOn.value).toBe(0);
+    expect(occlusion.stats.render.eyes[0]).toBe('invalid');
+  });
+
+  it('hands the near range to the shader', () => {
+    const before = { ...occlusionSettings };
+    const { renderer, left } = xrRenderer();
+    const occlusion = new XrDepthOcclusion();
+    const u = depthUniforms();
+    expect(u.depthMinM.value).toBe(DEPTH_MIN_RELIABLE_M);
+    expect(u.occlusionNearOff.value).toBe(OCCLUSION_NEAR_OFF_M);
+    expect(u.occlusionNearOn.value).toBe(OCCLUSION_NEAR_ON_M);
+    Object.assign(occlusionSettings, { minDepth: 0.15, nearOff: 0.2, nearOn: 0.3 });
+    occlusion.bind(renderer, left, u);
+    expect(u.depthMinM.value).toBe(0.15);
+    expect(u.occlusionNearOff.value).toBe(0.2);
+    expect(u.occlusionNearOn.value).toBe(0.3);
+    Object.assign(occlusionSettings, before);
+  });
+
   it('gives up quietly after repeated errors', () => {
     const { renderer, left, nextFrame, getDepthInformation } = xrRenderer();
     getDepthInformation.mockImplementation(() => {
@@ -251,6 +362,17 @@ describe('window.__occlusion', () => {
     expect(u.vizMode.value).toBe(2);
     expect(api.probe?.()).toContain('next frame');
     expect(occlusion.probeEyes).toBe(3);
+    // The near range, live.
+    const near = (globalThis as unknown as { __occlusion: Record<string, unknown> }).__occlusion;
+    (near.setNearRange as (off: number, on: number) => unknown)(0.25, 0.2);
+    (near.setMinDepth as (m: number) => unknown)(0.18);
+    expect(occlusionSettings.nearOff).toBe(0.25);
+    expect(occlusionSettings.nearOn).toBe(0.25);
+    occlusion.bind(renderer, left, u);
+    expect(u.depthMinM.value).toBe(0.18);
+    const stats = near.stats as { render: { nearPlaneM: number }; frames: { frames: number } };
+    expect(stats.render.nearPlaneM).toBeCloseTo(0.1, 6);
+    expect(typeof stats.frames.frames).toBe('number');
     Object.assign(occlusionSettings, before);
     delete (globalThis as unknown as { __occlusion?: unknown }).__occlusion;
     delete (globalThis as unknown as { window?: unknown }).window;

@@ -283,13 +283,32 @@ export function depthSensingInit(usage: XRDepthUsage[] = ['cpu-optimized', 'gpu-
 }
 
 /**
+ * The session's depth usage, or null without depth sensing. Reading session.depthUsage on a
+ * session that did not enable the feature throws (the spec's InvalidStateError; Quest Browser does
+ * when the runtime refused it or it was not asked for), and inside an XR frame that would stop the
+ * render loop, so the feature list is checked first; a runtime that lists no features (IWER) gets
+ * the benefit of the doubt.
+ */
+export function depthUsageOf(session: XRSession | null | undefined): XRDepthUsage | null {
+  if (!session) return null;
+  const features = session.enabledFeatures;
+  if (features && !features.includes('depth-sensing')) return null;
+  try {
+    return session.depthUsage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * three.js (0.186) turns on depth occlusion by itself whenever the session has gpu-optimized
  * depth (Quest offers nothing else): every frame it draws the sensed depth into the depth buffer
  * before the scene, so anything with depthTest (outlines, labels, panels) disappears wherever a
  * real surface is nearer, including the tracked object's own front, which is in front of an
  * outline placed at its contact plane. Call once, after creating the renderer, to keep the
- * depth map for measuring only. (three still moves the XR cameras' near/far to the map's
- * depthNear/depthFar when those differ from the render state; that changes no pixel.)
+ * depth map for measuring only. (three still moves the XR cameras' near plane to the map's
+ * depthNear, 0.1 m on Quest, which would clip content up close: keepNearPlane, near-plane.ts,
+ * holds it at the cameras' own.)
  */
 export function disableXrDepthOcclusion(renderer: {
   xr: { getDepthSensingMesh: () => unknown };

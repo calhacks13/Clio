@@ -9,6 +9,7 @@ import {
   XrDepthOcclusion,
 } from './glow/depth-occlusion';
 import { type ObjectGlowMode, ObjectHighlight } from './object-highlight';
+import { drawOnTop } from './on-top';
 import { makeText, setText } from './text';
 
 // A tracked object's light (the primary page's main object, and each object a lesson follows live,
@@ -19,9 +20,10 @@ import { makeText, setText } from './text';
 // name, or one back after being lost) fades in quickly with a brief flare; "nothing found" fades
 // it out. A warning pulse briefly dims and brightens the light in its stop accent.
 // Nothing is allocated per frame: the group turns with lookAt, whose basis (+z at the eye, x
-// level) is the outline's billboard. The light and its name keep the room's depth order: hands
-// hide them through their occluders (hand-occluders.ts), and real surfaces nearer than
-// the object hide the light through the depth map (adapters/render/glow/depth-occlusion.ts).
+// level) is the outline's billboard. The light keeps the room's depth order: hands hide it
+// through their occluders (hand-occluders.ts), and real surfaces nearer than the object hide it
+// through the depth map (adapters/render/glow/depth-occlusion.ts), except up close, where that
+// map cannot be trusted. Its name is drawn over both (on-top.ts), so it is always readable.
 
 const LABEL_SIZE = 0.024;
 const LABEL_GAP = 0.01;
@@ -72,7 +74,9 @@ export class PrimaryOutlineView {
       anchorY: 'bottom',
       bold: true,
     }) as FadingText;
+    // After the glow, and over the hands (on-top.ts): the name stays readable as a hand works.
     this.label.renderOrder = 11;
+    drawOnTop(this.label);
     this.object.add(this.highlight, this.label);
     this.object.visible = false;
   }

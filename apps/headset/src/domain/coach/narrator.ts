@@ -1,4 +1,4 @@
-import type { CoachToolName, Procedure } from '@clio/protocol';
+import type { CoachToolName, Procedure, StepCheckCriterion } from '@clio/protocol';
 import type { AppBus, AppEvents } from '../events';
 import { briefStep, recitePlan } from '../plan/recital';
 import type { Narration } from './agent';
@@ -127,20 +127,23 @@ export class Narrator {
           stepId,
         });
       }),
-      b.on('step.looks_done', ({ t, stepId, observation }) => {
+      b.on('step.looks_done', ({ t, stepId, observation, criteria }) => {
+        const met = criteria?.length ? `: ${seenList(criteria)}.` : ` (${observation}).`;
         this.say(
           t,
           'looks_done',
-          `Step watcher: "${this.instructionOf(stepId)}" looks done (${observation}). If you agree from what you see, call complete_step with step_id "${stepId}" and evidence "seen"; if not, carry on without mentioning it.`,
+          `Step watcher: "${this.instructionOf(stepId)}" looks done${met} If you agree from what you see, call complete_step with step_id "${stepId}" and evidence "seen"; if not, carry on without mentioning it.`,
           true,
           { stepId },
         );
       }),
-      b.on('step.looks_wrong', ({ t, stepId, wrong, observation }) => {
+      b.on('step.looks_wrong', ({ t, stepId, wrong, observation, criteria }) => {
+        const unmet = criteria?.filter((c) => c.met === 'no') ?? [];
+        const why = unmet.length ? `. Not met: ${unmetList(unmet)}.` : ` (${observation}).`;
         this.say(
           t,
           'looks_wrong',
-          `Step watcher: on "${this.instructionOf(stepId)}" they seem to have done something else: ${wrong} (${observation}). If you see it too, tell them in a few words what to do instead; if not, carry on without mentioning it.`,
+          `Step watcher: on "${this.instructionOf(stepId)}" they seem to have done something else: ${wrong}${why} If you see it too, tell them in a few words what to do instead; if not, carry on without mentioning it.`,
           true,
           { stepId },
         );
@@ -260,4 +263,20 @@ export class Narrator {
   ): void {
     this.sink({ kind, text: `[app] ${body}`, reply, ...(data ? { data } : {}) }, t);
   }
+}
+
+/** The watcher's criteria are short sentences; in a narration they read as one list. */
+const clause = (text: string) => text.trim().replace(/[.;]+$/, '');
+
+/** What the watcher saw met: "cup B is blue-green; cup C is still purple". */
+function seenList(criteria: readonly StepCheckCriterion[]): string {
+  return criteria.map((c) => clause(c.text)).join('; ');
+}
+
+/** What is not met and what the watcher saw instead, at most three. */
+function unmetList(criteria: readonly StepCheckCriterion[]): string {
+  return criteria
+    .slice(0, 3)
+    .map((c) => `${clause(c.text)}${c.seen ? ` (saw: ${clause(c.seen)})` : ''}`)
+    .join('; ');
 }

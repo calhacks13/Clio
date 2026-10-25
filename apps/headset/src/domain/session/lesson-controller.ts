@@ -155,7 +155,10 @@ const REFINE_REASON = 'Write the outline steps in full while the learner does th
 /** The planner and the step check take goals up to this long. */
 const GOAL_MAX = 300;
 const PLAN_TIMEOUT_MS = 45_000;
-/** The step watcher looks again this soon after each answer, about every 2.5 s in all. */
+/**
+ * The step watcher looks again this soon after each answer, about every 2.5 s in all; once a step
+ * looks close to done, a second look runs alongside (step-watcher.ts).
+ */
 const WATCH_MS = 1000;
 /** Placements measured by something other than the camera's guess. */
 const TRUSTED_SOURCES: ReadonlySet<PlacementMethod> = new Set(['marker', 'pinch', 'manual']);

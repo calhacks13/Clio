@@ -17,7 +17,8 @@
       "!tracker",
       "!pnpm-lock.yaml",
       "!visualizer",
-      "!**/.impeccable"
+      "!**/.impeccable",
+      "!!.claude"
     ]
   },
   "formatter": {

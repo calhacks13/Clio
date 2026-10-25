@@ -1,0 +1,17 @@
+{
+  "title": "Fridge, yogurt drink beside the milk",
+  "goal": "Get a yogurt drink from the fridge",
+  "expect": [
+    "Step 1 takes the yogurt drink (white bottle, pink cap, labeled YOGURT DRINK), not the milk",
+    "Says how to tell the yogurt drink from the milk (the pink cap, the label, or the taller milk bottle with the blue cap)",
+    "Has a mistake for taking the milk instead of the yogurt drink",
+    "Does not ask the learner to open the fridge: it is already open",
+    "Every done-when is a state a camera can see (how the yogurt drink looks and where it is), not an action"
+  ],
+  "tags": ["look-alike", "synthetic"],
+  "style": "A photorealistic photo taken by the camera of a head-mounted display worn by a person standing in a home kitchen: first person, at eye height, looking slightly down, natural indoor light, a slightly wide lens, a little sensor noise. No people, no hands, no text overlays, no watermark. Printed labels are plain block capitals and spelled exactly as given.",
+  "views": [
+    "An open refrigerator seen from one step in front of it, its door swung open to the left. On the middle shelf, near the center of the frame: a white plastic bottle with a bright pink cap and a printed label that reads YOGURT DRINK stands touching, on its right, a slightly taller white plastic bottle with a blue cap and a label that reads MILK. The two bottles have the same shape and color apart from the caps, labels and height, so they are easy to confuse. Around them: a carton of eggs on the top shelf, a glass jar of jam and a block of butter on the middle shelf, a few apples in the crisper drawer at the bottom, and a ketchup bottle in the door.",
+    "The same refrigerator with the same objects in the same places, photographed a moment later by the same head-mounted camera after the person moved their head a little to the left and leaned slightly closer: the view shifts, and the YOGURT DRINK and MILK bottles are a bit larger and slightly right of center. Keep every object, label, color and position as in the attached photo."
+  ]
+}

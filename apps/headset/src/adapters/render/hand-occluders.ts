@@ -17,7 +17,9 @@ import { occlusionSettings } from './glow/depth-occlusion';
 // cross-bones that fill the palm, each a hair larger than the joint radius the runtime reports
 // (a wider margin shows as a gap around the hand). They write depth only (no colour, so passthrough shows the real hand)
 // after the opaque scene and before anything transparent, so what is drawn later and lies behind
-// a hand fails the depth test. The edge is hard: a feathered one would need a second pass.
+// a hand fails the depth test. The edge is hard: a feathered one would need a second pass. Only
+// the glow is meant to be hidden: panels and object names skip the depth test (on-top.ts), so a
+// hand raised near the face never takes the instructions away.
 
 const N = HAND_JOINTS.length;
 const CHAINS = [

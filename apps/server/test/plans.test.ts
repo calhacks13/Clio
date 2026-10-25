@@ -8,11 +8,22 @@ import {
   ProcedureSchema,
   type StepCheckRequest,
   StepCheckResponseSchema,
+  type StepCriteriaRequest,
+  StepCriteriaResponseSchema,
 } from '@clio/protocol';
 import { describe, expect, it } from 'vitest';
 import type { Planner, PlannerRequest } from '../src/services/planner';
+import type { StepChecker } from '../src/services/step-check';
 import { type Harness, harness, steppingClock } from './harness';
-import { modelFirstStage, modelPlan, modelRestStage, modelRevision } from './plan-fixtures';
+import {
+  modelFirstStage,
+  modelPlan,
+  modelRestObjects,
+  modelRestStage,
+  modelReview,
+  modelRevision,
+  modelWrittenStep,
+} from './plan-fixtures';
 import { procedureInput, writeJson } from './procedure-fixtures';
 
 function scriptedPlanner(
@@ -31,15 +42,25 @@ function scriptedPlanner(
   };
 }
 
-function checkingPlanner(answer: string | Error): Planner & { checks: StepCheckRequest[] } {
+function scriptedChecker(
+  answer: string | Error,
+  criteria: string | Error = '{"criteria":["The blue cap is open."]}',
+): StepChecker & { checks: StepCheckRequest[]; criteriaRequests: StepCriteriaRequest[] } {
   const checks: StepCheckRequest[] = [];
+  const criteriaRequests: StepCriteriaRequest[] = [];
   return {
-    ...scriptedPlanner(PLAN),
+    model: 'checker-test',
     checks,
-    async checkStep(request) {
+    criteriaRequests,
+    async check(request) {
       checks.push(request);
       if (answer instanceof Error) throw answer;
       return answer;
+    },
+    async criteria(request) {
+      criteriaRequests.push(request);
+      if (criteria instanceof Error) throw criteria;
+      return criteria;
     },
   };
 }
@@ -470,7 +491,11 @@ describe('POST /api/plans in two stages', () => {
 
   it('writes the outline in full as a revision, with a minute to think and retry', async () => {
     const planner = scriptedPlanner(FIRST, JSON.stringify(modelRestStage()));
-    const h = await planHarness(planner);
+    const h = await harness({
+      planner,
+      planRest: 'single',
+      now: steppingClock('2026-10-24T03:15:02.123Z'),
+    });
     const started = PlanResponseSchema.parse((await postPlan(h, first)).body);
     const { res, body } = await postPlan(h, {
       goal: 'Refill the washer fluid',
@@ -541,6 +566,148 @@ describe('POST /api/plans in two stages', () => {
   });
 });
 
+describe('POST /api/plans stage rest in parallel', () => {
+  const FIRST = JSON.stringify(modelFirstStage());
+  type Answer = string | Error;
+  /** Answers each call by what it asks for: stage first, a part of stage rest, or the rest whole. */
+  function partPlanner(answers: {
+    review?: Answer[];
+    objects?: Answer;
+    step?: (index: number, attempt: number) => Answer;
+    rest?: Answer;
+  }): Planner & { requests: PlannerRequest[] } {
+    const requests: PlannerRequest[] = [];
+    const tries = new Map<string, number>();
+    return {
+      model: 'planner-test',
+      requests,
+      async draft(request) {
+        requests.push(request);
+        const { part } = request;
+        const key = part?.kind === 'step' ? `step-${part.index}` : (part?.kind ?? request.stage);
+        const attempt = tries.get(String(key)) ?? 0;
+        tries.set(String(key), attempt + 1);
+        const answer = !part
+          ? request.stage === 'first'
+            ? FIRST
+            : (answers.rest ?? new Error('no rest'))
+          : part.kind === 'review'
+            ? (answers.review?.[Math.min(attempt, (answers.review?.length ?? 1) - 1)] ??
+              JSON.stringify(modelReview()))
+            : part.kind === 'objects'
+              ? (answers.objects ?? JSON.stringify(modelRestObjects()))
+              : (answers.step?.(part.index, attempt) ??
+                JSON.stringify(modelWrittenStep(part.index)));
+        if (answer instanceof Error) throw answer;
+        return answer;
+      },
+    };
+  }
+
+  async function staged(planner: Planner) {
+    const h = await planHarness(planner);
+    const started = PlanResponseSchema.parse(
+      (await postPlan(h, { goal: 'Refill the washer fluid', images: [IMAGE], stage: 'first' }))
+        .body,
+    );
+    const rest = await postPlan(h, {
+      goal: 'Refill the washer fluid',
+      images: [IMAGE],
+      stage: 'rest',
+      revise: {
+        planId: started.planId,
+        fromStepIndex: 1,
+        reason: 'Write the outline in full',
+        base: started.procedure,
+      },
+    });
+    return { h, started, ...rest };
+  }
+
+  it('checks the outline, then writes each line and the card objects at once', async () => {
+    const planner = partPlanner({});
+    const { res, body, started } = await staged(planner);
+    expect(res.status).toBe(200);
+    const plan = PlanResponseSchema.parse(body);
+    expect(plan.planId).toBe('refill-the-washer-fluid-r1');
+    expect(plan.procedure.steps[0]).toEqual(started.procedure.steps[0]);
+    expect(plan.procedure.steps.map((s) => [s.id, s.success.type])).toEqual([
+      ['open-cap', 'confirm'],
+      ['pour-fluid', 'confirm'],
+      ['close-cap', 'hand_near'],
+    ]);
+    expect(plan.procedure.steps[1]?.show.map((item) => item.object)).toEqual([
+      'fluid_jug',
+      'washer_cap',
+    ]);
+    expect(plan.procedure.objects.map((o) => [o.id, o.placement])).toEqual([
+      ['washer_cap', { method: 'detect', hint: 'front left of the engine bay' }],
+      ['coolant_cap', { method: 'detect' }],
+      ['fluid_jug', { method: 'detect' }],
+    ]);
+    expect(plan.warnings).toEqual(modelRestObjects().warnings);
+    const parts = planner.requests.slice(1).map((r) => r.part);
+    expect(parts.map((p) => p?.kind).sort()).toEqual(['objects', 'review', 'step', 'step']);
+    // The review and the objects go first, together; the writers see the checked outline and
+    // every object, and each new object is declared by the first line that uses it.
+    expect(parts.slice(0, 2).map((p) => p?.kind)).toEqual(['objects', 'review']);
+    const writers = parts.filter((p) => p?.kind === 'step');
+    expect(writers.map((p) => [p.index, p.declare, p.objects.map((o) => o.id)])).toEqual([
+      [0, ['fluid_jug'], ['washer_cap', 'coolant_cap', 'fluid_jug']],
+      [1, [], ['washer_cap', 'coolant_cap', 'fluid_jug']],
+    ]);
+    expect(planner.requests[1]).toMatchObject({ stage: 'rest', revision: { fromStepIndex: 1 } });
+  });
+
+  it('asks a writer again with its errors, and keeps its line as an outline step if it fails twice', async () => {
+    const broken = JSON.stringify({ step: { ...modelPlan().steps[2], targets: ['ghost'] } });
+    const planner = partPlanner({
+      step: (index) => (index === 1 ? broken : JSON.stringify(modelWrittenStep(index))),
+    });
+    const { body } = await staged(planner);
+    const plan = PlanResponseSchema.parse(body);
+    expect(plan.procedure.steps[2]).toMatchObject({
+      id: 'close-cap',
+      doneWhen: 'The blue cap is shut flat on the reservoir.',
+      success: { type: 'confirm', prompt: 'The blue cap is shut flat on the reservoir.' },
+      show: [],
+    });
+    const retries = planner.requests.filter((r) => r.part?.kind === 'step' && r.retry);
+    expect(retries).toHaveLength(1);
+    expect(retries[0]?.retry?.errors).toMatch(/Unknown object "ghost"/);
+  });
+
+  it('keeps the card objects as they are when the objects call fails', async () => {
+    const planner = partPlanner({ objects: new Error('503 overloaded') });
+    const { body, started } = await staged(planner);
+    const plan = PlanResponseSchema.parse(body);
+    expect(plan.procedure.objects.slice(0, 2)).toEqual(started.procedure.objects);
+    expect(plan.warnings).toEqual([]);
+  });
+
+  it('writes the rest in one call when the outline cannot be checked', async () => {
+    const planner = partPlanner({
+      review: ['{"todo": []}', '{"still": "no outline"}'],
+      rest: JSON.stringify(modelRestStage()),
+    });
+    const { res, body } = await staged(planner);
+    expect(res.status).toBe(200);
+    const plan = PlanResponseSchema.parse(body);
+    expect(plan.procedure.steps.map((s) => s.id)).toEqual([
+      'open-cap',
+      'open-cap-2',
+      'pour-slowly',
+    ]);
+    const reviews = planner.requests.filter((r) => r.part?.kind === 'review');
+    expect(reviews.map((r) => r.retry?.errors)).toEqual([
+      undefined,
+      'The answer has no `outline` array',
+    ]);
+    expect(planner.requests.at(-1)).toMatchObject({ stage: 'rest' });
+    expect(planner.requests.at(-1)).not.toHaveProperty('part');
+  });
+});
+
 describe('GET /api/plans/:id', () => {
   it('serves only generated plans', async () => {
     const h = await harness();
@@ -567,35 +734,33 @@ describe('POST /api/plans/check', () => {
     return { res, body: (await res.json()) as unknown };
   }
 
-  it('answers 503 without a planner, or with one that cannot check steps', async () => {
-    for (const planner of [undefined, scriptedPlanner(PLAN)]) {
-      const h = await harness({ planner });
-      const { res, body } = await postCheck(h, check());
-      expect(res.status).toBe(503);
-      expect(ApiErrorSchema.parse(body).error).toEqual({
-        code: 'gemini_not_configured',
-        message: 'Step checks is off: GEMINI_API_KEY is not set on the server',
-      });
-    }
+  it('answers 503 without a step checker', async () => {
+    const h = await harness({ planner: scriptedPlanner(PLAN) });
+    const { res, body } = await postCheck(h, check());
+    expect(res.status).toBe(503);
+    expect(ApiErrorSchema.parse(body).error).toEqual({
+      code: 'gemini_not_configured',
+      message: 'Step checks is off: GEMINI_API_KEY is not set on the server',
+    });
   });
 
   it("returns the model's verdict and observation, the model and the measured latency", async () => {
-    const planner = checkingPlanner('{"verdict":"done","observation":"The blue cap is open."}');
-    const h = await harness({ planner, now: steppingClock('2026-10-24T03:15:02.000Z', 250) });
+    const checker = scriptedChecker('{"verdict":"done","observation":"The blue cap is open."}');
+    const h = await harness({ checker, now: steppingClock('2026-10-24T03:15:02.000Z', 250) });
     const { res, body } = await postCheck(h, check());
     expect(res.status).toBe(200);
     expect(StepCheckResponseSchema.parse(body)).toEqual({
       verdict: 'done',
       observation: 'The blue cap is open.',
-      model: 'planner-test',
+      model: 'checker-test',
       latencyMs: 250,
     });
     expect(body).toEqual(StepCheckResponseSchema.parse(body));
-    expect(planner.checks).toEqual([check()]);
+    expect(checker.checks).toEqual([check()]);
   });
 
   it('passes the start of the step, the looks and the mix-ups on, and answers what went wrong', async () => {
-    const planner = checkingPlanner(
+    const checker = scriptedChecker(
       JSON.stringify({
         evidence: { label: 'red cap', point: [300, 700] },
         observation: 'They opened the red coolant cap.',
@@ -604,7 +769,7 @@ describe('POST /api/plans/check', () => {
         verdict: 'not_done',
       }),
     );
-    const h = await harness({ planner, now: steppingClock('2026-10-24T03:15:02.000Z', 250) });
+    const h = await harness({ checker, now: steppingClock('2026-10-24T03:15:02.000Z', 250) });
     const request = check({
       before: [IMAGE],
       objects: [{ id: 'cap', label: 'blue cap', look: 'blue flip cap with a windshield symbol' }],
@@ -618,14 +783,39 @@ describe('POST /api/plans/check', () => {
       progress: 10,
       wrong: 'opened the red coolant cap, not the blue one',
       evidence: { label: 'red cap', point: [0.7, 0.3] },
-      model: 'planner-test',
+      model: 'checker-test',
       latencyMs: 250,
     });
-    expect(planner.checks).toEqual([request]);
+    expect(checker.checks).toEqual([request]);
+  });
+
+  it('judges each criterion and holds back a done while one is not met', async () => {
+    const checker = scriptedChecker(
+      JSON.stringify({
+        criteria: [
+          { met: 'yes', seen: 'blue cap flipped up' },
+          { met: 'no', seen: 'red cap open too' },
+        ],
+        observation: 'The blue cap is open.',
+        verdict: 'done',
+      }),
+    );
+    const h = await harness({ checker });
+    const criteria = ['The blue cap is flipped open.', 'The red coolant cap is still closed.'];
+    const { res, body } = await postCheck(h, check({ criteria }));
+    expect(res.status).toBe(200);
+    expect(StepCheckResponseSchema.parse(body)).toMatchObject({
+      verdict: 'not_done',
+      criteria: [
+        { text: 'The blue cap is flipped open.', met: 'yes', seen: 'blue cap flipped up' },
+        { text: 'The red coolant cap is still closed.', met: 'no', seen: 'red cap open too' },
+      ],
+    });
+    expect(checker.checks[0]?.criteria).toEqual(criteria);
   });
 
   it('answers 502 when the model call fails', async () => {
-    const h = await harness({ planner: checkingPlanner(new Error('deadline exceeded')) });
+    const h = await harness({ checker: scriptedChecker(new Error('deadline exceeded')) });
     const { res, body } = await postCheck(h, check());
     expect(res.status).toBe(502);
     expect(ApiErrorSchema.parse(body).error).toEqual({
@@ -635,7 +825,7 @@ describe('POST /api/plans/check', () => {
   });
 
   it('answers 502 when the model answers something unusable', async () => {
-    const h = await harness({ planner: checkingPlanner('{"verdict":"probably"}') });
+    const h = await harness({ checker: scriptedChecker('{"verdict":"probably"}') });
     const { res, body } = await postCheck(h, check());
     expect(res.status).toBe(502);
     expect(ApiErrorSchema.parse(body).error).toEqual({
@@ -647,8 +837,8 @@ describe('POST /api/plans/check', () => {
   });
 
   it('validates the request', async () => {
-    const planner = checkingPlanner('{"verdict":"done","observation":"Open."}');
-    const h = await harness({ planner });
+    const checker = scriptedChecker('{"verdict":"done","observation":"Open."}');
+    const h = await harness({ checker });
     expect((await postCheck(h, check({ images: [] }))).res.status).toBe(400);
     expect((await postCheck(h, check({ images: [IMAGE, IMAGE, IMAGE, IMAGE] }))).res.status).toBe(
       400,
@@ -657,6 +847,48 @@ describe('POST /api/plans/check', () => {
     expect((await postCheck(h, noInstruction)).res.status).toBe(400);
     const res = await h.request('POST', ApiPaths.planCheck, 'not json');
     expect(ApiErrorSchema.parse(await res.json()).error.code).toBe('invalid_json');
-    expect(planner.checks).toEqual([]);
+    expect(checker.checks).toEqual([]);
+  });
+});
+
+describe('POST /api/plans/criteria', () => {
+  const step = {
+    id: 'open-cap',
+    instruction: 'Flip open the blue washer fluid cap.',
+    doneWhen: 'The blue cap is flipped open.',
+  };
+
+  it("returns the step's criteria, the model and the measured latency", async () => {
+    const checker = scriptedChecker(
+      '{}',
+      '{"criteria":["The blue cap is flipped open.","  ","The red cap is still closed."]}',
+    );
+    const h = await harness({ checker, now: steppingClock('2026-10-24T03:15:02.000Z', 250) });
+    const request = {
+      goal: 'Refill the washer fluid',
+      step,
+      images: [IMAGE],
+      confusions: ['Opening the red coolant cap instead'],
+    };
+    const res = await h.request('POST', ApiPaths.planCriteria, request);
+    expect(res.status).toBe(200);
+    expect(StepCriteriaResponseSchema.parse(await res.json())).toEqual({
+      criteria: ['The blue cap is flipped open.', 'The red cap is still closed.'],
+      model: 'checker-test',
+      latencyMs: 250,
+    });
+    expect(checker.criteriaRequests).toEqual([request]);
+  });
+
+  it('answers 503 without a checker and 502 for no criteria', async () => {
+    const off = await harness();
+    const body = { goal: 'Refill the washer fluid', step };
+    expect((await off.request('POST', ApiPaths.planCriteria, body)).status).toBe(503);
+    const h = await harness({ checker: scriptedChecker('{}', '{"criteria":[]}') });
+    const res = await h.request('POST', ApiPaths.planCriteria, body);
+    expect(res.status).toBe(502);
+    expect(ApiErrorSchema.parse(await res.json()).error.message).toBe(
+      'Step criteria gave an unusable answer: The step criteria answer has no criteria',
+    );
   });
 });

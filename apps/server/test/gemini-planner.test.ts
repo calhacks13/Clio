@@ -6,29 +6,14 @@ import {
   createGeminiPlanner,
   PLAN_THINKING,
   PLAN_TIMEOUT_MS,
-  STEP_CHECK_THINKING,
-  STEP_CHECK_TIMEOUT_MS,
+  REST_PART_THINKING,
 } from '../src/services/gemini-planner';
 import { buildPlanCandidate } from '../src/services/plan-build';
 import { PLANNER_SYSTEM_INSTRUCTION, plannerContents } from '../src/services/plan-prompt';
 import { buildPlanJsonSchema } from '../src/services/plan-schema';
-import {
-  STEP_CHECK_INSTRUCTION,
-  stepCheckContents,
-  stepCheckJsonSchema,
-} from '../src/services/step-check';
 import { modelPlan } from './plan-fixtures';
 
 const IMAGE = { mimeType: 'image/jpeg' as const, data: '/9j/4AAQSkZJRgABAQ' };
-const CHECK = {
-  goal: 'Refill the washer fluid',
-  step: {
-    id: 'open-cap',
-    instruction: 'Flip open the blue washer fluid cap.',
-    doneWhen: 'The blue cap is flipped open.',
-  },
-  images: [IMAGE],
-};
 
 function fakeAi(text: string | undefined) {
   const calls: GenerateContentParameters[] = [];
@@ -109,13 +94,11 @@ describe('createGeminiPlanner', () => {
     ]);
   });
 
-  it('gives a draft 45 s and a step check 6 s', async () => {
+  it('gives a draft 45 s', async () => {
     const timeouts = spyOnTimeouts();
-    const planner = createGeminiPlanner(fakeAi('{}'), 'm');
-    await planner.draft({ goal: 'Refill it', images: [] });
-    await planner.checkStep?.(CHECK);
-    expect([PLAN_TIMEOUT_MS, STEP_CHECK_TIMEOUT_MS]).toEqual([45_000, 6_000]);
-    expect(timeouts.mock.calls).toEqual([[45_000], [6_000]]);
+    await createGeminiPlanner(fakeAi('{}'), 'm').draft({ goal: 'Refill it', images: [] });
+    expect(PLAN_TIMEOUT_MS).toBe(45_000);
+    expect(timeouts.mock.calls).toEqual([[45_000]]);
   });
 
   it('gives a draft the time its request has left when the request says', async () => {
@@ -134,42 +117,9 @@ describe('createGeminiPlanner', () => {
     await expect(planner.draft({ goal: 'Refill it', images: [] })).rejects.toThrow(
       'Gemini did not answer within 45 s',
     );
-    await expect(planner.checkStep?.(CHECK)).rejects.toThrow('Gemini did not answer within 6 s');
     await expect(
       planner.draft({ goal: 'Refill it', images: [], timeoutMs: 21_437 }),
     ).rejects.toThrow('Gemini did not answer within 21 s');
-  });
-
-  it('checks a step with the same model, the views and the step-check schema', async () => {
-    const answer = '{"verdict":"done","observation":"The blue cap is open."}';
-    const ai = fakeAi(answer);
-    const planner = createGeminiPlanner(ai, 'planner-x');
-    expect(await planner.checkStep?.(CHECK)).toBe(answer);
-    expect(ai.calls).toEqual([
-      {
-        model: 'planner-x',
-        contents: stepCheckContents(CHECK),
-        config: {
-          systemInstruction: STEP_CHECK_INSTRUCTION,
-          responseMimeType: 'application/json',
-          responseJsonSchema: stepCheckJsonSchema(),
-          abortSignal: expect.any(AbortSignal),
-        },
-      },
-    ]);
-  });
-
-  it('checks a step with low thinking on Gemini 3 models, Robotics-ER 2 among them', async () => {
-    expect(STEP_CHECK_THINKING).toBe('low');
-    for (const [model, level] of [
-      ['gemini-robotics-er-2-preview', 'LOW'],
-      ['gemini-3.5-flash-lite', 'LOW'],
-      ['gemini-2.5-flash', undefined],
-    ] as const) {
-      const ai = fakeAi('{}');
-      await createGeminiPlanner(ai, model).checkStep?.(CHECK);
-      expect(ai.calls[0]?.config?.thinkingConfig?.thinkingLevel).toBe(level);
-    }
   });
 
   it('asks for only the remaining steps when revising, with the revision schema', async () => {
@@ -263,6 +213,48 @@ describe('createGeminiPlanner', () => {
     ]);
   });
 
+  it('writes each part of a parallel stage rest with its own schema, thinking and request', async () => {
+    const er = 'gemini-robotics-er-2-preview';
+    const ai = fakeAi('{}');
+    const planner = createGeminiPlanner(ai, er);
+    const revision = { reason: 'r', base, fromStepIndex: 1, skippedStepIds: [] };
+    const rest = { goal: 'Refill it', images: [IMAGE], stage: 'rest' as const, revision };
+    const lines = [
+      { id: 'pour-fluid', instruction: 'Pour the fluid in.', doneWhen: 'It is full.', uses: [] },
+      { id: 'close-cap', instruction: 'Close the cap.', uses: ['washer_cap'] },
+    ];
+    const objects = [{ id: 'washer_cap', label: 'washer cap', look: 'blue cap' }];
+    await planner.draft({ ...rest, part: { kind: 'review' } });
+    await planner.draft({ ...rest, part: { kind: 'objects' } });
+    await planner.draft({
+      ...rest,
+      part: { kind: 'step', index: 1, lines, objects, declare: ['washer_cap'] },
+    });
+    expect(ai.calls.map((c) => c.config?.thinkingConfig)).toEqual(
+      [REST_PART_THINKING.review, REST_PART_THINKING.objects, REST_PART_THINKING.step].map(
+        (level) => (level ? thinkingConfig(er, level).thinkingConfig : undefined),
+      ),
+    );
+    expect(ai.calls.map((c) => c.config?.responseJsonSchema)).toEqual([
+      buildPlanJsonSchema('review'),
+      buildPlanJsonSchema('objects'),
+      buildPlanJsonSchema('step'),
+    ]);
+    const text = (i: number) => {
+      const contents = (ai.calls[i]?.contents ?? []) as { parts: { text?: string }[] }[];
+      const parts = contents[0]?.parts ?? [];
+      return parts.map((p) => p.text ?? '').join('');
+    };
+    expect(text(0)).toMatch(/^Check the outline of a lesson/);
+    expect(text(0)).toContain('`control`');
+    expect(text(1)).toMatch(/^Write the objects of a lesson plan in full/);
+    expect(text(2)).toContain(
+      '3. close-cap: Close the cap. Uses: washer_cap.  <- the step to write',
+    );
+    expect(text(2)).toContain('- washer_cap (washer cap): blue cap');
+    expect(text(2)).toContain('`objects`: washer_cap in full');
+  });
+
   it('starts a lesson at minimal thinking, as measured on the bench (docs/coach-plan.md)', () => {
     expect(PLAN_THINKING).toEqual({ full: 'low', first: 'minimal', rest: 'medium' });
   });
@@ -310,9 +302,12 @@ describe('createGeminiPlanner', () => {
         "Attached: 2 current camera views from the learner's headset, numbered 1 to 2 in order.",
         'The lesson starts as soon as you answer, so answer briefly. Its later steps are ' +
           'written in full afterwards, while the learner works on the first one. So:',
+        '- First read the scene: `done`, each part of the goal the views show already done, ' +
+          'and what shows it (e.g. "the acid test: cup A is already pink"); `todo`, each part ' +
+          'still to do, in the order the goal names them.',
         '- `outline`: every step of the lesson in order, 3 to 10, as an id and an instruction. ' +
-          'It reaches the end of the goal: every part the goal names, not only the part the ' +
-          'first step starts, and it leaves any control untouched. outline[0] is the first step.',
+          'It does every part in `todo`, not only the part the first step starts, and none in ' +
+          '`done`, and it leaves any control untouched. outline[0] is the first step.',
         '- `objects`: only the objects the first step uses (its targets, what it shows and the ' +
           'look-alike it guards against). The later steps declare theirs when they are ' +
           "written. An object's `look` is its tracking.query and the description its outline " +
@@ -386,7 +381,6 @@ describe('createGeminiPlanner', () => {
   it('fails when Gemini returns no text', async () => {
     const planner = createGeminiPlanner(fakeAi(undefined), 'm');
     await expect(planner.draft({ goal: 'Refill it', images: [] })).rejects.toThrow(/empty/);
-    await expect(planner.checkStep?.(CHECK)).rejects.toThrow(/empty/);
   });
 });
 
