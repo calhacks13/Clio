@@ -255,9 +255,11 @@ export class ActionFocus {
     const action = answer.action;
     const actionId = action ? this.actionItem(action, ids) : null;
     // ER boxed the action item but not as one of the objects asked about: a new object, or one
-    // it found only as the thing to touch.
+    // it found only as the thing to touch. Its words go to jev as well as to the tracker, or the
+    // next set the tracker is sent would take them back.
     if (action && actionId && action.box && this.sure(action) && !anchored.has(actionId)) {
       const query = action.description.trim();
+      if (query) tracking.refine(actionId, query);
       anchors.anchor({ id: actionId, box: action.box, t: frameT, ...(query ? { query } : {}) });
     }
     const t = clock.now();
