@@ -245,9 +245,10 @@ optical-flow points inside it, started from where the camera's motion and the ob
 motion put them and kept by the same forward-backward check and RANSAC as the camera's, so the mask
 moves with the object itself and not only with the camera. The harness has two scenes of a part
 moving on its own, a caliper's jaw sliding along its scale and a name plate swinging on its hinge
-(`jaw-slide`, `plate-swing`); on them the follower has not yet beaten YOLOE's mask by the box
-measures: the sliding jaw's IoU was 0.493 with Small against 0.616 without a segmenter
-([Measured](#measured)). YOLOE and ByteTrack still decide which object it is. The follower's mask
+(`jaw-slide`, `plate-swing`). In the full runs of the measured table the follower did not beat
+YOLOE's mask on them by the box measures: the sliding jaw's IoU was 0.493 with Small against 0.616
+without a segmenter (a single re-run since the rules below gave 0.639; [Measured](#measured)).
+YOLOE and ByteTrack still decide which object it is. The follower's mask
 is what is drawn while it is sure of itself and its box agrees with ByteTrack's (IoU 0.3, or
 inside it as a part inside its whole), and, for an object too plain to follow by its own pixels
 (a white door), while the mask carried by the camera's motion alone still agrees; otherwise
@@ -354,17 +355,26 @@ GPU (MPS, float32), load average 2.2 to 2.6 with nothing else busy. The look was
 and by YOLOE where SAM cut nothing. The two SAM runs are of the tree with the candidate rule (below
 the table).
 
-| Set (sequences)  | Segmenter | Lost | Wrong | IoU   | Mask f2f | Swaps | Refreshes | Step, ms |
-| ---------------- | --------- | ---: | ----: | ----: | -------: | ----: | --------: | -------: |
-| `all` (7)        | none      | 1.0% |    0% | 0.880 |    0.959 |     1 |         0 |     18.2 |
-|                  | Small     | 1.7% |    0% | 0.832 |    0.952 |    20 |       117 |     25.7 |
-|                  | Large     | 4.1% |    0% | 0.897 |    0.956 |    13 |        78 |     24.4 |
-| `parts` (5)      | none      |   0% |  2.8% | 0.746 |    0.933 |    16 |         0 |     18.2 |
-|                  | Small     |   0% |  4.6% | 0.710 |    0.923 |    23 |        87 |     25.9 |
-|                  | Large     |   0% |  4.4% | 0.699 |    0.925 |    24 |        68 |     23.5 |
-| `moving` (2)     | none      |   0% |  2.4% | 0.600 |    0.920 |    10 |         0 |     18.4 |
-|                  | Small     | 0.8% |    0% | 0.589 |    0.901 |    10 |        50 |     25.7 |
-|                  | Large     | 3.2% |  3.1% | 0.596 |    0.900 |    19 |        34 |     23.6 |
+| Set (sequences)  | Segmenter | Lost | Wrong | IoU   | Mask f2f | Swaps | Refreshes | Followed          | Step, ms |
+| ---------------- | --------- | ---: | ----: | ----: | -------: | ----: | --------: | ----------------: | -------: |
+| `all` (7)        | none      | 1.0% |    0% | 0.880 |    0.959 |     1 |         0 |               n/a |     18.2 |
+|                  | Small     | 1.7% |    0% | 0.832 |    0.952 |    20 |       117 |   93.8% (caliper) |     25.7 |
+|                  | Large     | 4.1% |    0% | 0.897 |    0.956 |    13 |        78 |           not run |     24.4 |
+| `parts` (5)      | none      |   0% |  2.8% | 0.746 |    0.933 |    16 |         0 |               n/a |     18.2 |
+|                  | Small     |   0% |  4.6% | 0.710 |    0.923 |    23 |        87 |   84.9% (vernier) |     25.9 |
+|                  | Large     |   0% |  4.4% | 0.699 |    0.925 |    24 |        68 |           not run |     23.5 |
+| `moving` (2)     | none      |   0% |  2.4% | 0.600 |    0.920 |    10 |         0 |               n/a |     18.4 |
+|                  | Small     | 0.8% |    0% | 0.589 |    0.901 |    10 |        50 | 51.7% (jaw-slide) |     25.7 |
+|                  | Large     | 3.2% |  3.1% | 0.596 |    0.900 |    19 |        34 |           not run |     23.6 |
+
+`Followed` is the share of found frames whose outline was the follower's (SAM's mask carried from
+frame to frame); without a segmenter nothing follows, so there is no figure. It came after these
+runs, so it is from a short re-run of one scene per set, `caliper`, `vernier` and `jaw-slide` (12 s
+each, Small, paced), on the code with the keyframe, refresh-box and textureless-object rules
+described above, which the table's rows predate: the follower drew 93.8% of the caliper's found
+frames, 84.9% of the vernier's and 51.7% of the sliding jaw's. In that re-run their IoU was 0.936,
+0.872 and 0.639, against 0.894, 0.772 and 0.616 without a segmenter (the re-run without one gave
+those same numbers to the last digit); one run each, and Large was not re-run.
 
 By these measures SAM did not steady the answers: the whole objects' outlines changed about as
 little from frame to frame as YOLOE's (mask f2f, the IoU of each outline with the last frame's,

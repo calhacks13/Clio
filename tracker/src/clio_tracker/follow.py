@@ -21,13 +21,13 @@ A mask is measured on an older frame (jev's, or the one a refresh was asked on),
 of every frame is logged, also before there is any mask, and a mask that arrives late is
 carried by the motions since its own frame (one from before the log is ignored). A mask from
 before the current one's frame is ignored too, unless it replaces it: jev's keyframe does, also
-when a refresh of a newer frame landed while jev answered. When the
-points can't be trusted (too few survive, too few agree, the region is leaving the view) the
-follower says so and carries the mask by the camera's motion alone. It seeds no new points
-until a new mask arrives, so it never settles on the background a mask has slid onto; the
-tracker asks the segmenter for that new mask. A region whose mask holds too few corners to
-follow at all (a white door) is `sparse`: unsure only for want of texture, in view, carried by
-the camera's motion; the tracker may still draw that mask while it agrees with what YOLOE sees.
+when a refresh of a newer frame landed while jev answered. When the points can't be trusted
+(too few survive, too few agree, the region is leaving the view) the follower says so and
+carries the mask by the camera's motion alone. It seeds no new points until a new mask arrives,
+so it never settles on the background a mask has slid onto; the tracker asks the segmenter for
+that new mask. A region whose mask holds too few corners to follow at all (a white door) is
+`sparse`: unsure only for want of texture, in view, carried by the camera's motion; the tracker
+may still draw that mask while it agrees with what YOLOE sees.
 """
 
 from __future__ import annotations
