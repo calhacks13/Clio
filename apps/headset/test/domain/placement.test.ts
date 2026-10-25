@@ -88,7 +88,7 @@ describe('placeDetection', () => {
     near(placed?.center, [0, 1.2 - 0.225, -1.2]);
   });
 
-  it('passes the floor by for the table plane, so a table missing from room setup still counts', () => {
+  it('stands the object on the floor when the floor is the surface the box bottom meets', () => {
     const floor = {
       cast: (ray: Parameters<typeof intersectPlaneY>[0]) => intersectPlaneY(ray, 0),
     };
@@ -98,7 +98,8 @@ describe('placeDetection', () => {
       head,
       surfaceOrTable(floor, head),
     );
-    near(placed?.center, [0, 1.2 - 0.225, -1.2]);
+    // 1.2 m below the eye at a slope of 0.375: 3.2 m ahead, up to the box's middle (slope 0.1875).
+    near(placed?.center, [0, 1.2 - 0.6, -3.2]);
   });
 
   it('lays the contour on a plane through the object, where the camera saw it', () => {

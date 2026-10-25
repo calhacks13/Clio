@@ -130,7 +130,8 @@ export const COACH_TOOLS = {
       "Mark a step done: when you see the step's done-when state in the camera (evidence " +
       '"seen"), or when the user tells you they did it, including work off camera (evidence ' +
       '"heard"; use it whenever you know from their words rather than your eyes). Any step can ' +
-      'be completed, in any order. Name the step by its id from the plan, and give the reason.',
+      'be completed, in any order. When you see it done, ask the user whether they think so too ' +
+      'and call it once they agree. Name the step by its id from the plan, and give the reason.',
     args: z.object({
       step_id: z.string().min(1).describe('The id of the step that is done, from the plan'),
       reason: z.string().min(1).describe('Why the step is done, e.g. "cup A turned pink"'),

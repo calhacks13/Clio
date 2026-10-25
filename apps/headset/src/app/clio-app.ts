@@ -290,7 +290,10 @@ export class ClioApp {
       new WorkspacePresenter(),
       ...(widgets ? [new WidgetChipsPresenter({ source: () => widgets.snapshot() })] : []),
     ];
-    const card = new InstructionPanelPresenter(() => this.lesson.confirmByUser('Done button'));
+    const card = new InstructionPanelPresenter(
+      () => this.lesson.confirmByUser('Done button'),
+      () => this.lesson.closeByUser(),
+    );
     const dock = widgets
       ? new WidgetDockPresenter({
           source: () => widgets.snapshot(),

@@ -35,9 +35,10 @@ import type { Workspace } from './workspace';
 // Each detection is placed with the head pose of its frame: at once at the object's last measured
 // distance when it has one, while that distance is measured again in the background (depth
 // sensing first, then hit-test, along the mask's camera rays; else where it meets a surface), and
-// then steadied and drawn where the object is now. A distance measured on the object itself is
-// followed, a few times a second, by depth samples through a grid of points inside the outline:
-// the object's surface, for a shape fused after the episode. Those never hold up drawing.
+// then steadied and drawn where the object is now. Each measurement also asks along the camera
+// rays through a grid of points inside the outline: what the depth map sees there is the object's
+// surface, drawn as its relief (outline.ts: a long object lit at its own depth end to end) and,
+// a few times a second, recorded for a shape fused after the episode.
 //
 // What it says goes three ways, labelled for what it is:
 //   drawing    every placed outline, for the live glow (views()).
@@ -350,7 +351,7 @@ export class LiveObjects {
           f.depths.remember(f.id, mask, rays.point, depth, this.deps.now(), epoch);
           const measured = this.measured(d, depth);
           if (seq > f.lostSeq) this.place(d, depth, measured, seq === f.shownSeq);
-          const surface = await this.sampleSurface(d, depth, seq);
+          const surface = this.sampleSurface(d, depth, seq);
           const position = depth.kind === 'fixed' ? drawnAt : depth.center;
           this.record(f, det, frame, status, position, measured, now, surface);
         },
@@ -371,7 +372,7 @@ export class LiveObjects {
           if (draw) f.shownSeq = seq;
           this.place(d, depth, measured, draw);
         }
-        const surface = depth && (await this.sampleSurface(d, depth, seq));
+        const surface = depth && this.sampleSurface(d, depth, seq);
         const position = depth && depth.kind !== 'fixed' ? depth.center : null;
         this.record(f, det, frame, status, position, measured, now, surface);
       },
@@ -401,41 +402,28 @@ export class LiveObjects {
   }
 
   /**
-   * The object's surface on a frame whose distance was measured on the object itself: where the
-   * camera rays through a grid of points inside its outline meet the depth map, within
-   * SURFACE_REACH_M of the measured center (farther is the background behind it). At most once
-   * per SURFACE_EVERY_MS per object, never while the object is held (the hand owns it then), nor
-   * for a frame lost or dropped since, nor without a depth source. Null when none were taken.
+   * The object's surface to record, on a frame whose distance was measured on the object itself:
+   * where the camera rays through a grid of points inside its outline met the depth map in that
+   * measurement, within SURFACE_REACH_M of the measured center (farther is the background behind
+   * it). At most once per SURFACE_EVERY_MS per object, never while the object is held (the hand
+   * owns it then), nor for a frame lost or dropped since, nor without a depth map. Null when none
+   * were taken.
    */
-  private async sampleSurface(
-    d: Detected,
-    depth: ObjectDepth,
-    seq: number,
-  ): Promise<Vec3[] | null> {
-    const { f, frame, mask, model, head } = d;
+  private sampleSurface(d: Detected, depth: ObjectDepth, seq: number): Vec3[] | null {
+    const { f, frame } = d;
     if (!this.measured(d, depth) || f.retired || seq <= f.lostSeq) return null;
     if (frame.t - f.surfaceT < SURFACE_EVERY_MS) return null;
     if (this.deps.registry.get(f.id)?.heldBy) return null;
-    const probe = this.deps.depth();
-    if (!probe) return null;
-    const rays = surfaceRays(mask, model, head, SURFACE_MAX_POINTS);
-    if (rays.length === 0) return null;
+    if (!depth.samples?.length) return null;
     f.surfaceT = frame.t;
-    try {
-      const hits = await probe.measure(rays);
-      return hits.flatMap((hit) =>
-        hit && distance(hit.point, depth.center) <= SURFACE_REACH_M ? [hit.point] : [],
-      );
-    } catch (err) {
-      this.deps.failed?.(err);
-      return null;
-    }
+    return depth.samples.filter((p) => distance(p, depth.center) <= SURFACE_REACH_M);
   }
 
   private async measure({ mask, model, head }: Detected): Promise<ObjectDepth | null> {
     try {
       const surface = surfaceOrTable(this.deps.surfaces, head);
-      return await measureDepth(mask, model, head, this.deps.depth(), surface);
+      const grid = surfaceRays(mask, model, head, SURFACE_MAX_POINTS);
+      return await measureDepth(mask, model, head, this.deps.depth(), surface, grid);
     } catch (err) {
       this.deps.failed?.(err);
       return null;

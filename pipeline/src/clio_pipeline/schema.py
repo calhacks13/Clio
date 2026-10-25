@@ -204,7 +204,15 @@ def _validate_ndjson(
             problem = schemas.first_problem(schema_name, record)
             t = record.get("t") if isinstance(record, dict) else None
             if isinstance(t, int | float) and not isinstance(t, bool):
-                if problem is None and prev_t is not None and t < prev_t:
+                # Frames are a synchronous sequence. Events, object updates and observations
+                # arrive asynchronously; the loader stably sorts those channels by their own
+                # timestamps. Arrival order is not a schema error and must not rewrite time.
+                if (
+                    problem is None
+                    and file == "frames.ndjson"
+                    and prev_t is not None
+                    and t < prev_t
+                ):
                     problem = ("$.t", f"t = {t} ms is before the previous line's t = {prev_t} ms")
                 prev_t = t
         if problem is not None:

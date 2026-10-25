@@ -47,6 +47,7 @@ import {
   type ObjectMask,
   placeOutline,
   surfaceOrTable,
+  surfaceRays,
 } from '../domain/world/placement';
 import { PoseHistory } from '../domain/world/pose-history';
 import { HandsView } from '../tracking/hands';
@@ -349,19 +350,21 @@ const refind = new PrimaryLoop<Look & { asked: string }>({
 
 /**
  * How far an object seen in a frame captured from `head` is: depth sensing, else hit-test, along
- * its camera rays, answered a few XR frames later. `model` is already tuned (withCameraOffset).
+ * its camera rays, answered a few XR frames later, with its surface's relief. `model` is already
+ * tuned (withCameraOffset).
  */
 function measure(mask: ObjectMask, model: CameraModel, head: Pose): Promise<ObjectDepth | null> {
   const surface = surfaceOrTable(planesEnabled ? surfaces : null, head);
-  return measureDepth(mask, model, head, depthSource, surface);
+  const grid = surfaceRays(mask, model, head);
+  return measureDepth(mask, model, head, depthSource, surface, grid);
 }
 
 /** `source`, counting the rays it answers into depthRays[key]. */
 function counted(source: DepthSource | null, key: keyof typeof depthRays): DepthSource | null {
   if (!source) return null;
   return {
-    async measure(rays) {
-      const hits = await source.measure(rays);
+    async measure(rays, options) {
+      const hits = await source.measure(rays, options);
       depthRays[key] += hits.filter((hit) => hit !== null).length;
       return hits;
     },

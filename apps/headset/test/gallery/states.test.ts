@@ -71,13 +71,13 @@ describe('gallery panel states', () => {
     }
   });
 
-  it('covers every coach connection state and both directions of speech', () => {
+  it('covers every coach connection state, both directions of speech and thinking', () => {
     const coach = new Set(PANEL_STATES.map((s) => s.snapshot.coach));
     for (const state of ['connecting', 'ready', 'reconnecting', 'error', 'off'] as const) {
       expect(coach.has(state), state).toBe(true);
     }
     const voice = new Set(PANEL_STATES.map((s) => s.snapshot.voice));
-    expect([...voice].sort()).toEqual(['hearing', 'quiet', 'speaking']);
+    expect([...voice].sort()).toEqual(['hearing', 'quiet', 'speaking', 'thinking']);
   });
 
   it('uses no bullet, middle-dot or arrow characters in its text', () => {

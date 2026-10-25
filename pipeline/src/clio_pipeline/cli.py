@@ -7,6 +7,7 @@ import json
 import os
 import signal
 import sys
+import zipfile
 from collections import Counter
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -121,6 +122,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--fps", type=int, default=30, help="resampling rate (30)")
     p.add_argument("--overwrite", action="store_true", help="replace --out if it exists")
     p.add_argument("--no-validate", action="store_true", help="skip schema validation")
+    p.add_argument("--archive", metavar="OUT.zip", help="also package the dataset as a ZIP")
     p.add_argument(
         "--robot-profile",
         metavar="PROFILE",
@@ -505,6 +507,11 @@ def _export(args: argparse.Namespace) -> int:
     except ImportError:
         pass
     dirs = episode_dirs(args.episodes)
+    archive = Path(args.archive) if args.archive else None
+    if archive is not None and archive.exists():
+        raise CliError(f"{archive} already exists")
+    if archive is not None and archive.resolve().is_relative_to(Path(args.out).resolve()):
+        raise CliError("--archive must be outside the dataset directory")
     robot = {"robot_profile": _robot_profile(args.robot_profile)} if args.robot_profile else {}
     try:
         result = export_lerobot(
@@ -518,6 +525,21 @@ def _export(args: argparse.Namespace) -> int:
         )
     except (EpisodeValidationError, FileExistsError, ImportError, ValueError) as e:
         raise CliError(str(e)) from e
+
+    if archive is not None:
+        if result.codebase_version != "v3.0":
+            raise CliError(f"expected LeRobot v3.0, got {result.codebase_version}")
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        # Exclusive creation protects an existing download. ZIP64 supports large datasets.
+        bundle = zipfile.ZipFile(archive, "x", zipfile.ZIP_DEFLATED, allowZip64=True)
+        try:
+            with bundle:
+                for path in sorted(result.root.rglob("*")):
+                    if path.is_file():
+                        bundle.write(path, path.relative_to(result.root))
+        except Exception:
+            archive.unlink(missing_ok=True)
+            raise
 
     frames = sum(e.frames for e in result.episodes)
     count = len(result.episodes)

@@ -155,6 +155,16 @@ describe('GeminiLiveAgent', () => {
     await agent.close();
   });
 
+  it('says whether the model is still working when its turn ends', async () => {
+    const { agent } = await connected();
+    const ends: unknown[] = [];
+    agent.events.on('turnComplete', (e) => ends.push(e));
+    connection(0).send({ serverContent: { turnComplete: true, interactionStatus: 'IN_PROGRESS' } });
+    connection(0).send({ serverContent: { turnComplete: true, interactionStatus: 'IDLE' } });
+    expect(ends).toEqual([{ working: true }, {}]);
+    await agent.close();
+  });
+
   const calls = (...names: [id: string, name: string][]) => ({
     toolCall: { functionCalls: names.map(([id, name]) => ({ id, name, args: {} })) },
   });
@@ -353,6 +363,16 @@ describe('Gemini Live server messages', () => {
       { kind: 'goAway', timeLeft: '10s' },
       { kind: 'resumption', handle: 'h2' },
     ]);
+  });
+
+  it('tells a turn that ends with the model still working from one that ends idle', () => {
+    const ended = (interactionStatus?: string) =>
+      interpretServerMessage({
+        serverContent: { turnComplete: true, ...(interactionStatus ? { interactionStatus } : {}) },
+      });
+    expect(ended('IN_PROGRESS')).toEqual([{ kind: 'turnComplete', working: true }]);
+    expect(ended('IDLE')).toEqual([{ kind: 'turnComplete' }]);
+    expect(ended()).toEqual([{ kind: 'turnComplete' }]);
   });
 
   it('ignores a resumption update that is not resumable', () => {

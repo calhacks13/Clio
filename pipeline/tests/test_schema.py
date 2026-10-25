@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from clio_pipeline.schema import (
     derived_problems,
     transfer_warnings,
@@ -176,6 +178,16 @@ def test_time_going_backwards_is_reported(episode_dir):
 
     assert (issue.file, issue.line, issue.path) == ("frames.ndjson", 11, "$.t")
     assert "before the previous line" in issue.message
+
+
+@pytest.mark.parametrize("file", ["events.ndjson", "objects.ndjson", "observations.ndjson"])
+def test_async_channels_can_arrive_out_of_timestamp_order(featured_episode_dir, file):
+    path = featured_episode_dir / file
+    lines = path.read_bytes().splitlines(keepends=True)
+    assert len(lines) > 1
+    path.write_bytes(b"".join(reversed(lines)))
+
+    assert validate_episode(featured_episode_dir) == []
 
 
 def test_hand_layout_other_than_webxr_order_is_reported(episode_dir):

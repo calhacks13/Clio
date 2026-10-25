@@ -1,13 +1,15 @@
 import { DERIVED_FILE_NAME, SCENE_FILE_NAME } from "@clio/protocol";
 
-// Rules for the read-only Clio proxy at /api/clio/[...path].
+// Rules for the local Clio proxy at /api/clio/[...path].
 //
 // The browser reads the local Clio server (127.0.0.1:8787) through this
 // same-origin route, so the server needs no CORS for the viewer. The route is
 // deliberately narrow, so it can't become a general proxy into the server:
 //
-// - GET and HEAD only. Writes (episode create, batches, finish, media) never
-//   pass through.
+// - GET and HEAD, plus POST datasets/exports with a bounded, validated JSON
+//   selection. Episode writes (create, batches, finish, media) never pass.
+// - Dataset export status and its ZIP attachment can be read. No other
+//   dataset operations are reachable.
 // - Only the episode list, one episode's detail, its frames, events, objects
 //   and observations files, its compiled files (derived/<name>, a
 //   DERIVED_FILE_NAME from @clio/protocol, JSON or the room scan's GLB) and its
@@ -47,7 +49,11 @@ const EPISODE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const BYTE_OFFSET = /^\d{1,16}$/;
 
 // The only response headers the browser sees, besides cache-control.
-const FORWARD_RESPONSE_HEADERS = ["content-type", "x-next-from"];
+const FORWARD_RESPONSE_HEADERS = [
+  "content-type",
+  "x-next-from",
+  "content-disposition",
+];
 
 export type ClioProxyRequest = {
   method: string;
@@ -106,6 +112,17 @@ export function clioUpstreamOrigin(serverUrl: string | undefined): URL | null {
 // The server path for the catch-all segments, or null when it isn't one of
 // the readable episode routes.
 export function clioUpstreamPath(path: readonly string[]): string | null {
+  if (path[0] === "datasets" && path[1] === "exports") {
+    if (path.length === 2) return "/api/datasets/exports";
+    if (
+      path[2] &&
+      EPISODE_ID.test(path[2]) &&
+      (path.length === 3 || (path.length === 4 && path[3] === "download"))
+    ) {
+      return `/api/datasets/exports/${path.slice(2).join("/")}`;
+    }
+    return null;
+  }
   const [root, id, channel, name, ...rest] = path;
   if (root !== "episodes" || rest.length > 0) return null;
   if (id === undefined) return "/api/episodes";
@@ -123,7 +140,12 @@ export function clioUpstreamPath(path: readonly string[]): string | null {
 }
 
 export function planClioProxy(req: ClioProxyRequest): ClioProxyPlan {
-  if (!CLIO_PROXY_METHODS.includes(req.method.toUpperCase())) {
+  const exportPost =
+    req.method.toUpperCase() === "POST" &&
+    req.path.length === 2 &&
+    req.path[0] === "datasets" &&
+    req.path[1] === "exports";
+  if (!CLIO_PROXY_METHODS.includes(req.method.toUpperCase()) && !exportPost) {
     return { ok: false, status: 405, message: "Method not allowed" };
   }
   if (!isLoopbackHost(req.host)) {
@@ -154,7 +176,7 @@ export function planClioProxy(req: ClioProxyRequest): ClioProxyPlan {
   if (url.origin !== origin.origin || url.pathname !== upstreamPath) {
     return { ok: false, status: 404, message: "Not found" };
   }
-  const isChannel = req.path.length === 3;
+  const isChannel = req.path[0] === "episodes" && req.path.length === 3;
   if (isChannel && from[0] !== undefined) url.searchParams.set("from", from[0]);
   return { ok: true, url };
 }

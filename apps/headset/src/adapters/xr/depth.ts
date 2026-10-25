@@ -1,7 +1,7 @@
 import { createLogger } from '../../core/log';
 import { dot, madd, rotateVec, sub, type Vec3 } from '../../core/math';
 import type { Ray } from '../../domain/world/camera-model';
-import type { DepthHit, DepthSource } from '../../domain/world/depth-source';
+import type { DepthHit, DepthSource, MeasureOptions } from '../../domain/world/depth-source';
 
 // How far along a camera ray the real world is, from WebXR hit-test against the room's geometry
 // (Quest's room setup: planes and the scene mesh; IWER's synthetic room on desktop). The outline
@@ -106,7 +106,9 @@ export class XrDepthProbe implements DepthSource {
     session.addEventListener('end', () => this.close());
   }
 
-  measure(rays: readonly Ray[]): Promise<(DepthHit | null)[]> {
+  /** With `mapOnly`, nothing: hit-test is the room mesh, not a depth map. */
+  measure(rays: readonly Ray[], options?: MeasureOptions): Promise<(DepthHit | null)[]> {
+    if (options?.mapOnly) return Promise.resolve(rays.map(() => null));
     return Promise.all(rays.map((ray) => this.measureOne(ray)));
   }
 

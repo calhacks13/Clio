@@ -1,3 +1,4 @@
+import { RELIEF_MAX_SCALE, RELIEF_MIN_SCALE } from '../../../domain/world/outline';
 import { depthChunk, INTERIOR_POINTS } from './depth-occlusion';
 
 // The object's light, drawn on one quad around its silhouette. All of its softness is computed
@@ -13,6 +14,10 @@ import { depthChunk, INTERIOR_POINTS } from './depth-occlusion';
 //     within, densest at its skin, while its own markings stay readable;
 //   - a bloom: a tight gaussian plus a long exponential tail outside the boundary, like light
 //     scattering into the room. Deeper slices bloom wider, as light from inside an object would.
+// The quad lies on the object's relief (domain/world/outline.ts) when it has one: each vertex where
+// its camera ray meets the plane of the object's surface, so a long object's near end is lit as near
+// as it is. Each fragment reads the field where its camera ray crosses the outline's plane, so from
+// the camera the light covers the silhouette exactly as a flat one would.
 // The light gets bluer and deeper as it falls off and lighter where it is strongest, as emitted
 // light does. Output is premultiplied with alpha below the emitted colour, so over passthrough it
 // mostly adds light (and only slightly dims what is behind the bloom).
@@ -26,8 +31,42 @@ import { depthChunk, INTERIOR_POINTS } from './depth-occlusion';
 
 export const SLICES = 7;
 
+const float = (v: number) => v.toFixed(4);
+
+/**
+ * GLSL for both stages: the relief's uniforms, onRelief(q) (a point of the quad's plane moved to
+ * where its camera ray meets the relief, as reliefPoint in outline.ts) and fieldUv(local) (the
+ * inverse: the field's uv seen through a point of the relief). The quad's own frame has x and y in
+ * field units (the quad is scaled to the field) and z in metres.
+ */
+const reliefChunk = /* glsl */ `
+  // offset, slopeX, slopeY (m, in the outline's frame) and the camera's distance; w = 0: no relief.
+  uniform vec4 relief;
+  // Where the field lies on the outline's plane: its centre x, y and size (m).
+  uniform vec3 fieldBounds;
+
+  vec3 onRelief(vec2 q) {
+    if (relief.w <= 0.0) return vec3(q, 0.0);
+    vec2 p = fieldBounds.xy + q * fieldBounds.z;
+    float across = relief.w + relief.y * p.x + relief.z * p.y;
+    float s = across > 0.0
+      ? clamp((relief.w - relief.x) / across, ${float(RELIEF_MIN_SCALE)}, ${float(RELIEF_MAX_SCALE)})
+      : ${float(RELIEF_MAX_SCALE)};
+    return vec3((p * s - fieldBounds.xy) / fieldBounds.z, relief.w * (1.0 - s));
+  }
+
+  vec2 fieldUv(vec3 local) {
+    if (relief.w <= 0.0) return local.xy + 0.5;
+    vec2 p = fieldBounds.xy + local.xy * fieldBounds.z;
+    p *= relief.w / max(relief.w - local.z, 1e-4);
+    return (p - fieldBounds.xy) / fieldBounds.z + 0.5;
+  }
+`;
+
 export const glowVertexShader = /* glsl */ `
-  varying vec2 vUv;
+  ${reliefChunk}
+  // Where the fragment is on the object's relief, in the quad's frame.
+  varying vec3 vLocal;
   varying vec3 vEye;
   varying vec3 vWorld;
   #if GLOW_DEPTH > 0
@@ -42,8 +81,9 @@ export const glowVertexShader = /* glsl */ `
     flat varying vec3 vSurface;
   #endif
   void main() {
-    vUv = uv;
-    vWorld = (modelMatrix * vec4(position, 1.0)).xyz;
+    vec3 local = onRelief(position.xy);
+    vLocal = local;
+    vWorld = (modelMatrix * vec4(local, 1.0)).xyz;
     // The eye in the quad's own frame: x and y in field units (the quad is scaled to the field),
     // z in metres. Each stereo eye gets its own, so each sees its own parallax.
     vEye = (inverse(modelMatrix) * vec4(cameraPosition, 1.0)).xyz;
@@ -59,7 +99,7 @@ export const glowVertexShader = /* glsl */ `
       float sg = 0.0, sug = 0.0, svg = 0.0;
       for (int i = 0; i < ${INTERIOR_POINTS}; i++) {
         if (i >= interiorCount) break;
-        float gap = depthGap((modelMatrix * vec4(interior[i] - 0.5, 0.0, 1.0)).xyz);
+        float gap = depthGap((modelMatrix * vec4(onRelief(interior[i] - 0.5), 1.0)).xyz);
         if (gap <= NO_DEPTH) continue;
         valid++;
         float g = max(gap, 0.0);
@@ -88,7 +128,7 @@ export const glowVertexShader = /* glsl */ `
         vSurface = vec3(a, b, c);
       }
     #endif
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(local, 1.0);
   }
 `;
 
@@ -103,7 +143,8 @@ export const glowFragmentShader = /* glsl */ `
   uniform float spill;
   uniform float breath;
   uniform float ignite;
-  varying vec2 vUv;
+  ${reliefChunk}
+  varying vec3 vLocal;
   varying vec3 vEye;
 
   const int SLICES = ${SLICES};
@@ -223,6 +264,7 @@ export const glowFragmentShader = /* glsl */ `
   }
 
   void main() {
+    vec2 uv = fieldUv(vLocal);
     float hidden = 0.0;
     #if GLOW_DEPTH > 0
       if (vizMode == 2) {
@@ -236,16 +278,16 @@ export const glowFragmentShader = /* glsl */ `
         }
         float gap = depthGap(vWorld);
         if (gap <= NO_DEPTH) discard;
-        float rel = gap - frontAt(vUv);
+        float rel = gap - frontAt(uv);
         vec3 tint = rel > occlusionMargin ? vec3(1.0, 0.15, 0.1)
           : rel < -occlusionMargin ? vec3(0.1, 0.3, 1.0) : vec3(0.1, 1.0, 0.3);
         gl_FragColor = vec4(tint * 0.5, 0.5);
         return;
       }
-      hidden = occlusion(vWorld, frontAt(vUv));
+      hidden = occlusion(vWorld, frontAt(uv));
     #endif
     if (hidden >= 0.999) discard;
-    vec3 ray = vec3(vUv - 0.5, 0.0) - vEye;
+    vec3 ray = vLocal - vEye;
     vec2 slope = ray.xy / min(ray.z, -1e-4);
     float swell = 1.0 + 0.5 * ignite + 0.1 * breath;
     float w = edge * (1.0 + 0.3 * ignite);
@@ -257,16 +299,16 @@ export const glowFragmentShader = /* glsl */ `
       float depth = 1.0 - 1.25 * float(i) / float(SLICES - 1);
       float z = -depth * thickness;
       float weight = 1.0 - 0.45 * max(depth, 0.0);
-      light += emission(distanceAt(vUv + slope * z), w, h, max(depth, 0.0)) * weight;
+      light += emission(distanceAt(uv + slope * z), w, h, max(depth, 0.0)) * weight;
       weights += weight;
     }
     light /= weights;
-    float d = distanceAt(vUv);
+    float d = distanceAt(uv);
     float inner = smoothstep(-w, w, d);
     // Breathing and the flare when an object is found.
     light *= (0.86 + 0.14 * breath) * (1.0 + 0.6 * ignite);
     // Never a hard quad edge, however far the bloom reaches.
-    vec2 border = min(vUv, 1.0 - vUv);
+    vec2 border = min(uv, 1.0 - uv);
     light *= smoothstep(0.0, 0.08, min(border.x, border.y)) * (1.0 - hidden);
     float energy = (1.0 - exp(-1.6 * light)) * opacity;
     vec3 deep = color * vec3(0.3, 0.62, 1.0);

@@ -184,6 +184,12 @@ Writes LeRobot dataset format v3.0 (lerobot 0.6), robot type `human_hands`, one 
 Clio episode, resampled to `--fps` (positions linear, quaternions normalized lerp; a hand counts as
 missing if either neighboring frame lacks it; labels from the nearest previous frame).
 
+The visualizer's `/clio` page can select finished episodes and download this dataset as a ZIP.
+For a CLI archive, add `--archive /path/to/dataset.zip` to `clio export-lerobot`; the archive must
+be outside `--out` and must not exist. It contains `meta/` and `data/` at its root and can be
+extracted and loaded directly with `LeRobotDataset`. The exporter validates the source episodes,
+checks that the archive is v3.0, and includes `meta/clio_episodes.jsonl`. Video is not exported.
+
 | Feature                         | Shape    | Meaning                                                                                        |
 | ------------------------------- | -------- | ---------------------------------------------------------------------------------------------- |
 | `observation.state`             | (16,)    | left then right: wrist position (3), wrist quaternion xyzw (4), pinch aperture m (1)           |

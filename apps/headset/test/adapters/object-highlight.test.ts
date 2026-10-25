@@ -9,7 +9,7 @@ import {
 } from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import { ObjectHighlight } from '../../src/adapters/render/object-highlight';
-import type { ObjectOutline } from '../../src/domain/world/outline';
+import { type ObjectOutline, type Relief, reliefPoint } from '../../src/domain/world/outline';
 
 const CONTOUR: ObjectOutline = {
   shape: 'contour',
@@ -185,6 +185,46 @@ describe('ObjectHighlight', () => {
     });
     expect(Math.abs((breaths[1] ?? 0) - (breaths[0] ?? 0))).toBeLessThan(0.01);
     expect(Math.abs((breaths[2] ?? 0) - (breaths[0] ?? 0))).toBeGreaterThan(0.9);
+    highlight.dispose();
+  });
+
+  it("lies on the object's relief: the glow's quad through its uniforms, brackets in place", () => {
+    const relief: Relief = { offset: 0.01, slopeX: 0.1, slopeY: 0.8, distance: 0.5 };
+    const highlight = new ObjectHighlight();
+    highlight.setOutline({ ...CONTOUR, relief }, 'object');
+    const glow = layers(highlight)[1];
+    const u = glow.material.uniforms;
+    expect(u.relief?.value.toArray()).toEqual([0.01, 0.1, 0.8, 0.5]);
+    expect(u.fieldBounds?.value.toArray()).toEqual([
+      glow.position.x,
+      glow.position.y,
+      uniform(highlight, 'size'),
+    ]);
+    expect(highlight.surfacePoint([0.05, 0.1])).toEqual(reliefPoint(relief, [0.05, 0.1]));
+    // A box's brackets: every vertex where its camera ray meets the relief.
+    const box: ObjectOutline = {
+      shape: 'box',
+      points: [
+        [-0.05, -0.06],
+        [0.05, -0.06],
+        [0.05, 0.06],
+        [-0.05, 0.06],
+      ],
+      relief,
+    };
+    highlight.setOutline(box);
+    const positions = layers(highlight)[0].geometry.getAttribute('position');
+    let nearest = Number.NEGATIVE_INFINITY;
+    for (let i = 0; i < positions.count; i++) {
+      const [x, y, z] = [positions.getX(i), positions.getY(i), positions.getZ(i)];
+      expect(z).toBeCloseTo(relief.offset + relief.slopeX * x + relief.slopeY * y, 5);
+      nearest = Math.max(nearest, z);
+    }
+    expect(nearest).toBeGreaterThan(0.04);
+    // Without one, back on the plane.
+    highlight.setOutline(CONTOUR);
+    expect(u.relief?.value.w).toBe(0);
+    expect(highlight.surfacePoint([0.05, 0.1])).toEqual([0.05, 0.1, 0]);
     highlight.dispose();
   });
 

@@ -40,8 +40,10 @@ catalog, and the real objects are found and lit in place rather than drawn as ge
   dictation; typing is slow, so the page asks for as little as possible.
 - In AR the learner talks to the coach (Gemini Live, voice); hands are on the task. A floating
   instruction card sits just above the object the step is about and has a touchable Done button.
-  It follows lazily and smoothly: head bob and small turns leave it still, and when that object
-  leaves the view it glides to the lower edge of the view until the learner looks back.
+  It follows lazily and smoothly, always facing the learner: head bob and small turns leave it
+  still, and when that object leaves the view it glides to the lower edge of the view until the
+  learner looks back. A strip across its top shows who is talking (Clio blue, the learner yellow)
+  and when Clio is thinking (green); its red close button ends the lesson at any stage.
 - The laptop runs the server (8787), the headset app (5173), the object tracker (8790) and the
   episode visualizer (3001).
 

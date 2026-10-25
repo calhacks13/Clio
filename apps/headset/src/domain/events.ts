@@ -39,12 +39,15 @@ export type HighlightStyle = 'target' | 'attention' | 'warning';
 
 /**
  * The conversation with a coach that listens: the learner talking (hearing), Clio talking
- * (speaking), or neither (quiet). Off without one: no coach, or the scripted one, which can't hear.
+ * (speaking), Clio working out an answer it owes (thinking), or none of these (quiet). Off without
+ * one: no coach, or the scripted one, which can't hear.
  */
-export type CoachVoice = 'off' | 'quiet' | 'hearing' | 'speaking';
+export type CoachVoice = 'off' | 'quiet' | 'hearing' | 'thinking' | 'speaking';
 
 export interface InternalEvents {
   'lesson.phase': Timed<{ phase: LessonPhase; detail?: string }>;
+  /** The learner closed the lesson card: `ended` is the lesson that stopped, if one had not ended. */
+  'lesson.closed': Timed<{ ended: string | null }>;
   'plan.requested': Timed<{ goal: string; revision: boolean }>;
   'plan.ready': Timed<{
     planId: string;

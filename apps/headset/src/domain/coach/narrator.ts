@@ -191,6 +191,17 @@ export class Narrator {
       b.on('procedure.aborted', () => {
         this.heldStuck = null;
       }),
+      b.on('lesson.closed', ({ t, ended }) => {
+        const what = ended ? `the lesson (${ended})` : 'the lesson card';
+        this.say(
+          t,
+          'lesson_closed',
+          `The learner closed ${what} with its close button: no lesson is running now. Stop talking about it, and ask in a few words what they want to do.`,
+          true,
+          ended ? { ended } : undefined,
+          true,
+        );
+      }),
       b.on('plan.requested', ({ revision }) => {
         if (!revision) this.heldStuck = null;
       }),

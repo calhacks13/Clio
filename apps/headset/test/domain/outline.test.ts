@@ -11,7 +11,16 @@ import {
   type Vec3,
 } from '../../src/core/math';
 import { type CameraModel, pixelRay } from '../../src/domain/world/camera-model';
-import { billboard, boxPolygon, liftOutline, outlinePoint } from '../../src/domain/world/outline';
+import {
+  billboard,
+  boxPolygon,
+  fitRelief,
+  liftOutline,
+  outlinePoint,
+  RELIEF_MAX_SCALE,
+  type Relief,
+  reliefPoint,
+} from '../../src/domain/world/outline';
 
 const near = (a: readonly number[] | null | undefined, b: readonly number[], eps = 1e-6) =>
   !!a && a.length === b.length && a.every((v, i) => Math.abs(v - (b[i] ?? Number.NaN)) < eps);
@@ -123,5 +132,103 @@ describe('liftOutline', () => {
         [0, 0, 1],
       ),
     ).toBeNull();
+  });
+});
+
+describe('reliefPoint', () => {
+  // The camera 0.5 m in front of the outline's center; the object's top leans toward it.
+  const relief: Relief = { offset: 0.01, slopeX: 0.2, slopeY: 0.8, distance: 0.5 };
+  const camera: Vec3 = [0, 0, 0.5];
+
+  it('is the outline point itself without a relief', () => {
+    expect(reliefPoint(undefined, [0.03, -0.02])).toEqual([0.03, -0.02, 0]);
+    expect(reliefPoint({ ...relief, distance: 0 }, [0.03, -0.02])).toEqual([0.03, -0.02, 0]);
+  });
+
+  it('is where the camera ray through the outline point meets the relief', () => {
+    for (const p of [
+      [0.03, -0.02],
+      [-0.04, 0.06],
+      [0, 0],
+    ] as [number, number][]) {
+      const [x, y, z] = reliefPoint(relief, p);
+      // On the relief...
+      expect(z).toBeCloseTo(relief.offset + relief.slopeX * x + relief.slopeY * y, 9);
+      // ...and on the ray from the camera through (x, y, 0).
+      const along = normalize(sub([x, y, z], camera));
+      expect(dot(along, normalize(sub([...p, 0], camera)))).toBeCloseTo(1, 9);
+    }
+  });
+
+  it('never goes behind the camera, nor more than twice as far', () => {
+    // So steep that the ray past the top runs parallel to it.
+    const steep: Relief = { offset: 0, slopeX: 0, slopeY: -10, distance: 0.5 };
+    const [x, y, z] = reliefPoint(steep, [0, 0.1]);
+    expect(z).toBeCloseTo(0.5 * (1 - RELIEF_MAX_SCALE), 9);
+    expect([x, y]).toEqual([0, 0.1 * RELIEF_MAX_SCALE]);
+  });
+});
+
+describe('fitRelief', () => {
+  // The camera at the origin, the object 0.5 m ahead: the outline's frame is the world's, shifted.
+  const center: Vec3 = [0, 0, -0.5];
+  const eye: Vec3 = [0, 0, 0];
+  /** A 2 x 12 cm tube looked down on, its top leaning 0.8 m per m toward the camera. */
+  const tube = (lean = 0.8, offset = 0.01): Vec3[] => {
+    const out: Vec3[] = [];
+    for (let i = 0; i < 9; i++) {
+      for (const x of [-0.01, 0, 0.01]) {
+        const y = -0.06 + i * 0.015;
+        out.push([x, y, -0.5 + offset + lean * y]);
+      }
+    }
+    return out;
+  };
+
+  it('finds the lean of a long object from its surface, damped a little', () => {
+    const relief = fitRelief(tube(), center, eye);
+    if (!relief) throw new Error('no relief');
+    expect(relief.distance).toBeCloseTo(0.5, 9);
+    expect(relief.offset).toBeCloseTo(0.01, 3);
+    expect(relief.slopeY).toBeGreaterThan(0.75);
+    expect(relief.slopeY).toBeLessThanOrEqual(0.8);
+    expect(Math.abs(relief.slopeX)).toBeLessThan(1e-9);
+  });
+
+  it('leaves out the room behind the object and a few stray reads', () => {
+    const samples = tube();
+    // The wall 1 m behind through some of the rays, and two reads 4 cm off the tube.
+    samples.push([0.01, 0.02, -1.5], [-0.01, -0.03, -1.5], [0, 0.05, -1.5]);
+    samples[4] = [0, -0.045, -0.5 + 0.01 + 0.8 * -0.045 + 0.04];
+    samples[20] = [0, 0.03, -0.5 + 0.01 + 0.8 * 0.03 - 0.04];
+    const clean = fitRelief(tube(), center, eye);
+    const relief = fitRelief(samples, center, eye);
+    expect(relief?.slopeY).toBeCloseTo(clean?.slopeY ?? 0, 2);
+    expect(relief?.offset).toBeCloseTo(clean?.offset ?? 0, 3);
+  });
+
+  it('does not read a tilt across a thin object out of its noise', () => {
+    // A pen seen side on: a millimetre wide, its reads a few millimetres apart in depth.
+    const noise = [0.004, -0.003, 0.002, -0.004, 0.003, -0.002, 0.004, -0.003];
+    const pen: Vec3[] = noise.map((n, i) => [i % 2 ? 0.0005 : -0.0005, -0.04 + i * 0.01, -0.5 + n]);
+    const relief = fitRelief(pen, center, eye);
+    expect(Math.abs(relief?.slopeX ?? 1)).toBeLessThan(0.1);
+  });
+
+  it('caps a relief steeper than a surface it could draw', () => {
+    const relief = fitRelief(tube(6, 0), center, eye);
+    expect(Math.hypot(relief?.slopeX ?? 0, relief?.slopeY ?? 0)).toBeCloseTo(2.5, 9);
+  });
+
+  it('needs a handful of samples on the object', () => {
+    expect(fitRelief(tube().slice(0, 5), center, eye)).toBeNull();
+    expect(
+      fitRelief(
+        tube().map(([x, y, z]): Vec3 => [x, y, z - 1]),
+        center,
+        eye,
+      ),
+    ).toBeNull();
+    expect(fitRelief(tube(), center, center)).toBeNull();
   });
 });

@@ -1,3 +1,4 @@
+import { HAND_SAMPLE_LENGTH, jointOffset } from '@clio/protocol';
 import {
   Color,
   Matrix4,
@@ -18,6 +19,7 @@ import {
   PANEL_TOP,
 } from '../adapters/render/presenters/instruction-panel';
 import type { Pose, Vec3 } from '../core/math';
+import type { TrackedFrame } from '../domain/hands/types';
 import { billboard, outlinePoint } from '../domain/world/outline';
 import type { Placement } from '../domain/world/placement';
 import { CALIPER_OUTLINE, CALIPER_PHOTO_HEIGHT, CALIPER_PHOTO_WIDTH } from './caliper-outline';
@@ -51,6 +53,13 @@ function caliperAt(center: Vec3): Placement {
     label: outlinePoint(plane, center, [0, 0.095]),
     depth: 'fixed',
   };
+}
+
+/** A left hand whose index fingertip is at `tip` (the gallery's workspace is the world). */
+function fingertipAt(tip: Vector3, t: number): TrackedFrame {
+  const joints = new Array<number>(HAND_SAMPLE_LENGTH).fill(0);
+  joints.splice(jointOffset('index-finger-tip'), 3, tip.x, tip.y, tip.z);
+  return { t, head: HEAD, left: { joints, pinch: 0.03 }, right: null };
 }
 
 export function mountPanelCards(grid: HTMLElement, states: readonly PanelState[]): void {
@@ -93,7 +102,10 @@ export function mountPanelCards(grid: HTMLElement, states: readonly PanelState[]
     const mask = caliperAt([index % 2 === 0 ? -0.12 : 0.12, 1.48, -0.65]);
     return {
       state,
-      presenter: new InstructionPanelPresenter(() => {}),
+      presenter: new InstructionPanelPresenter(
+        () => {},
+        () => {},
+      ),
       mask,
       canvas,
       context,
@@ -191,6 +203,10 @@ export function mountPanelCards(grid: HTMLElement, states: readonly PanelState[]
       calibration: card.state.calibration ?? null,
       debug: false,
     };
+    // A fingertip comes onto the close button whenever it is not armed: one touch, never two.
+    if (card.state.closeArmed && !card.presenter.closeButton.armed) {
+      ctx.hands = fingertipAt(card.presenter.closeButtonAt(point), t);
+    }
     scene.add(card.presenter.object);
     card.presenter.update(ctx);
     const plane = billboard(card.mask.center, HEAD.p);

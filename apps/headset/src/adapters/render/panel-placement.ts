@@ -6,6 +6,7 @@ import {
   type Pose,
   type Quat,
   quatFromAxisAngle,
+  quatMultiply,
   rotateVec,
   scale,
   sub,
@@ -21,8 +22,9 @@ import type { PresentContext } from './presenter';
 // the lit objects as the eye sees them (else below, right or left of them), at their depth, and
 // always inside a comfortable view. With nothing lit in view it takes a gaze slot in the lower
 // periphery, or the upper one when the lower is blocked. The side the card is on is kept while it
-// stays clear, so it does not hop around. The card stays upright and level and only turns about
-// the vertical to face the eye. panel-motion.ts decides when the card goes there, and how smoothly.
+// stays clear, so it does not hop around. The card's face points at the eye, tilting back when it
+// is below the eye, but never rolls: its top edge stays level with the horizon. panel-motion.ts
+// decides when the card goes there, and how smoothly, and keeps it facing the eye.
 //
 // Screen positions are measured on a reference plane PANEL_DISTANCE in front of the eye. Cards
 // and objects are projected corner by corner, so perspective and depth cannot hide an overlap.
@@ -241,18 +243,28 @@ function cardCorners(width: number, height: number, top: number, pose: Pose): Ve
 }
 
 /** Upright and level, turned about the vertical to face the eye. */
-function facingEye(center: Vec3, head: Pose): Quat {
+/**
+ * A card at `center` with its face (+z) toward the eye: turned about the vertical, then tilted
+ * about its own horizontal axis, so its top edge stays level with the horizon.
+ */
+export function facingEye(center: Readonly<Vec3>, head: Pose): Quat {
   const toEye = sub(head.p, center);
-  if (Math.hypot(toEye[0], toEye[2]) < 1e-6) return yawOnly(head.q);
-  return quatFromAxisAngle([0, 1, 0], Math.atan2(toEye[0], toEye[2]));
+  const across = Math.hypot(toEye[0], toEye[2]);
+  const heading =
+    across < 1e-6 ? yawOnly(head.q) : quatFromAxisAngle([0, 1, 0], Math.atan2(toEye[0], toEye[2]));
+  return quatMultiply(heading, quatFromAxisAngle([1, 0, 0], -Math.atan2(toEye[1], across)));
+}
+
+/** The pose of a card `height` tall whose top edge is `top` above its origin, by its center. */
+export function cardAround(center: Readonly<Vec3>, q: Quat, height: number, top: number): Pose {
+  return { p: sub(center, rotateVec(q, [0, top - height / 2, 0])), q };
 }
 
 /** The card whose center the eye sees at `point` on the reference plane, `depth` metres away. */
 function cardAt(ctx: PresentContext, card: Card, point: Point, depth: number): Pose {
   const direction = normalize(rotateVec(ctx.head.q, [point[0], point[1], -PANEL_DISTANCE]));
   const center = add(ctx.head.p, scale(direction, depth));
-  // A level card's local y axis is the world's, so its origin is straight above its center.
-  return { p: sub(center, [0, card.top - card.height / 2, 0]), q: facingEye(center, ctx.head) };
+  return cardAround(center, facingEye(center, ctx.head), card.height, card.top);
 }
 
 /** How far to move `rect` so it lies inside `bounds`, centered on any axis it cannot fit. */
@@ -269,8 +281,9 @@ function intoView(rect: Rect, bounds: Rect): Point {
 
 /**
  * Starting from `start`, move the card by what `want` asks of its projected bounds, then into
- * view. A few rounds absorb the perspective of a card that is not straight ahead. A card too tall
- * to fit in front of a steeply lowered gaze goes farther away until all of it is in front.
+ * view. A few rounds absorb the perspective of a card that is not straight ahead. A card far
+ * bigger than the view has no stable fit (its corners swing toward the eye plane), so it stays at
+ * `start`; one still not wholly in front goes farther away until it is.
  */
 function fitCard(
   ctx: PresentContext,
@@ -286,7 +299,10 @@ function fitCard(
       cardCorners(card.width, card.height, card.top, cardAt(ctx, card, point, depth)),
       viewFromWorld,
     );
-    if (!projection) break;
+    if (!projection) {
+      point = start;
+      break;
+    }
     const [dx, dy] = want(projection.rect);
     const { rect } = projection;
     const moved = {
@@ -298,6 +314,10 @@ function fitCard(
     const [vx, vy] = intoView(moved, PANEL_VIEW);
     if (Math.abs(dx + vx) < 1e-6 && Math.abs(dy + vy) < 1e-6) break;
     point = [point[0] + dx + vx, point[1] + dy + vy];
+    if (Math.hypot(...point) > RUNAWAY) {
+      point = start;
+      break;
+    }
   }
   let pose = cardAt(ctx, card, point, depth);
   for (let farther = depth; farther < 4 * depth && !inFront(pose, card, viewFromWorld); ) {
@@ -311,6 +331,9 @@ const inFront = (pose: Pose, card: Card, viewFromWorld: Pose) =>
   cardCorners(card.width, card.height, card.top, pose).every(
     (p) => transformPoint(viewFromWorld, p)[2] < -NEAR - 0.02,
   );
+
+/** A fit this far off the line of sight (about 60 degrees) is running away, not converging. */
+const RUNAWAY = 1.15;
 
 const midX = (r: Rect) => (r.left + r.right) / 2;
 const midY = (r: Rect) => (r.bottom + r.top) / 2;

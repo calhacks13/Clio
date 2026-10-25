@@ -88,19 +88,25 @@ let selected = Number(params.get('case') ?? 3);
 let detail = params.get('detail') === '1';
 let jitter = params.get('jitter') === '1';
 let orbit = params.get('orbit') === '1';
+// ?lean=1: as if the object's top leaned toward the eye (a tube looked down on), the light drawn on
+// that relief, seen from the starting eye as a tracked mask is from its camera. From there it
+// covers the same silhouette; orbit to see it lean.
+let lean = params.get('lean') === '1';
+const relief = () => (lean ? { relief: { offset: 0, slopeX: 0, slopeY: 0.8, distance: 0.78 } } : {});
+const seenFrom = () => (lean ? { eye: [0, 0, 0.78] } : {});
 let glowOn = true;
 let live = null;
 const pts = () => (selected === cases.length ? live : cases[selected].points);
 const noisy = [];
 function placement(points) {
-  if (!jitter) return { center: [0, 0, 0], outline: { shape: 'contour', points } };
+  if (!jitter) return { center: [0, 0, 0], outline: { shape: 'contour', points, ...relief() }, ...seenFrom() };
   // A few millimetres of edge noise per vertex, like a segmenter's frame-to-frame wobble.
   noisy.length = points.length;
   for (let i = 0; i < points.length; i++) {
     const [x, y] = points[i];
     noisy[i] = [x + (Math.random() - 0.5) * 0.006, y + (Math.random() - 0.5) * 0.006];
   }
-  return { center: [0, 0, 0], outline: { shape: 'contour', points: noisy.slice() } };
+  return { center: [0, 0, 0], outline: { shape: 'contour', points: noisy.slice(), ...relief() }, ...seenFrom() };
 }
 function current() {
   const c = cases[selected];
@@ -130,6 +136,7 @@ for (const [i, c] of cases.entries()) buttons.push(button(c.name, () => show(i),
 buttons.push(button('Tracker mask', () => startTracker(), () => selected === cases.length));
 buttons.push(button('Jitter', () => { jitter = !jitter; renderButtons(); }, () => jitter));
 buttons.push(button('Orbit', () => { orbit = !orbit; renderButtons(); }, () => orbit));
+buttons.push(button('Lean', () => { lean = !lean; show(selected); }, () => lean));
 buttons.push(button('Close-up', () => { detail = !detail; show(selected); }, () => detail));
 buttons.push(button('Glow', () => { glowOn = !glowOn; view.object.visible = glowOn; renderButtons(); }, () => glowOn));
 buttons.push(button('Refind', () => { view.fade(); setTimeout(() => show(selected), 700); }));

@@ -1,6 +1,6 @@
 # Clio integration status
 
-This project now lives in Clio's `visualizer/` folder. Read `GOALS.md` and `INTEGRATION.md` for current ownership and goals. The text below describes the imported standalone viewer. Clio already implements its own recorder, local episode ingestion and Python export pipeline; the draft capture-v1 design does not replace those implementations. Local Clio episode loading in this Next.js viewer remains future work.
+This project now lives in Clio's `visualizer/` folder. Read `GOALS.md` and `INTEGRATION.md` for current ownership and goals. The text below describes the imported standalone viewer. Clio implements its own recorder, local episode ingestion and Python export pipeline; the draft capture-v1 design does not replace those implementations. `/clio` lists and replays local recordings. Users can select finished recordings, name a dataset, choose a frame rate (30 fps by default), and export a LeRobot v3 ZIP through the existing Python exporter. Exports contain human hand targets, tracking masks, task labels, object positions and Clio provenance. Video is not included. Nothing is published. A background export can be reopened from the Recordings page in the same browser tab; its download expires after one hour or a server restart.
 
 # Custom LeRobot Visualizer
 

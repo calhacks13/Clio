@@ -4,7 +4,7 @@ Read `GOALS.md` and `INTEGRATION.md` before working here. Clio's `../packages/pr
 
 Use Bun within `visualizer/` and pnpm for the parent Clio workspace. Do not run the parent formatter over this inherited project. The imported project guidance below still applies locally.
 
-The Clio episode viewer (`/clio`, `/clio/live`, `/clio/<id>`) lives in `src/app/clio/`, `src/components/clio/` and `src/lib/clio/`, and reads the local Clio server through the GET-only proxy `src/app/api/clio/[...path]/route.ts`. INTEGRATION.md, section "Clio episode viewer", describes it. When working on it:
+The Clio episode viewer (`/clio`, `/clio/live`, `/clio/<id>`) lives in `src/app/clio/`, `src/components/clio/` and `src/lib/clio/`, and reads the local Clio server through the loopback proxy `src/app/api/clio/[...path]/route.ts` (episode reads plus an explicit dataset export POST). INTEGRATION.md, section "Clio episode viewer", describes it. When working on it:
 
 - Run the root `pnpm install` once: `@clio/protocol` needs zod from the parent workspace.
 - Import shared code only through `@clio/protocol` and the allowed `@clio-viewer/*` modules (`capture/model`, `capture/from-clio`, `capture/clio-events`, `capture/from-package`, `api`, `event-log`, `detection-outline`). The lint rule in `eslint.config.mjs` and `src/lib/clio/__tests__/import-graph.test.ts` enforce the list; change both together.

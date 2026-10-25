@@ -178,6 +178,18 @@ describe('XrDepthProbe', () => {
     expect(second).toBeNull();
   });
 
+  it('answers nothing from the depth map alone, and takes no rays in flight for it', async () => {
+    const xr = fakeSession(0.7);
+    const probe = new XrDepthProbe(xr.session, space, { maxInFlight: 1 });
+    expect(await probe.measure([down(), down(0.3)], { mapOnly: true })).toEqual([null, null]);
+    await settle();
+    expect(xr.sources).toHaveLength(0);
+    const answer = probe.measure([down()]);
+    await settle();
+    probe.update(xr.frame);
+    expect((await answer)[0]).not.toBeNull();
+  });
+
   it('answers rays in flight with null when the session ends', async () => {
     const xr = fakeSession(0.7);
     const probe = new XrDepthProbe(xr.session, space);

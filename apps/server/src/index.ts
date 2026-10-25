@@ -11,6 +11,7 @@ import { type Config, describeSceneBuilds, loadConfig } from './config';
 import { consoleLogger, describeError, type Logger } from './log';
 import { attachGeminiRelay, type GeminiRelay } from './relay/gemini-relay';
 import { createBenchModels } from './services/bench';
+import { ProcessDatasetExporter } from './services/dataset-exporter';
 import { ProcessEpisodeCompiler } from './services/episode-compiler';
 import { createGeminiClient, isGeminiConfigured } from './services/gemini';
 import { createGeminiFocusFinder } from './services/gemini-focus';
@@ -50,6 +51,26 @@ function main(): void {
     : null;
   const benchDir = join(config.dataDir, 'bench');
   const { compiler, sceneBuilder } = createPipelineRunners(config, logger);
+  const datasetExporter = canRun('uv', ['--version'])
+    ? new ProcessDatasetExporter({
+        command: [
+          'uv',
+          'run',
+          '--isolated',
+          '--frozen',
+          '--project',
+          config.pipelineDir,
+          '--python',
+          '3.12',
+          '--extra',
+          'lerobot',
+          'clio',
+        ],
+        episodesDir: join(config.dataDir, 'episodes'),
+        exportDir: join(config.dataDir, 'exports'),
+        logger,
+      })
+    : null;
   const app = createApp({
     version: pkg.version,
     liveModel: config.liveModel,
@@ -91,6 +112,7 @@ function main(): void {
       }),
     compiler,
     sceneBuilder,
+    datasetExporter,
     logger,
   });
 
@@ -121,7 +143,7 @@ function main(): void {
     // the builds their compiles ask for.
     void compiler?.sweep().then(() => sceneBuilder?.sweep());
   });
-  stopOnSignals(server, relay, [compiler, sceneBuilder], logger);
+  stopOnSignals(server, relay, [compiler, sceneBuilder, datasetExporter], logger);
 }
 
 /**

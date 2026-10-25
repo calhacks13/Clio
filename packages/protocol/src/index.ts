@@ -4,6 +4,7 @@ export * from './bench';
 export * from './checks';
 export * from './clip';
 export * from './coach-tools';
+export * from './dataset';
 export * from './derived';
 export * from './episode';
 export * from './geometry';

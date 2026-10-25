@@ -3,7 +3,7 @@ import {
   invertPose,
   normalize,
   type Pose,
-  quatFromAxisAngle,
+  type Quat,
   sub,
   transformPoint,
   type Vec3,
@@ -11,19 +11,22 @@ import {
 import { jointPosition } from '../../domain/hands/features';
 import {
   besideObjects,
+  cardAround,
+  facingEye,
   isInstructionPanelClear,
   type PanelSlot,
-  type PanelTarget,
   panelTarget,
 } from './panel-placement';
 import type { PresentContext } from './presenter';
 
-// The card follows lazily. It rests exactly where it is while its target (panel-placement.ts) stays
-// close: within 4 degrees of its spot beside the lit objects, or 10 degrees of its gaze slot when
-// nothing lit is in view. Once the target is farther, changes side, or something covers the card,
-// it glides there on a critically damped spring, tracking the target until it arrives, then rests
-// again. Head bob and tracker jitter never move it; a step's new object or a turn of the head
-// does, smoothly. Only the first placement is a jump. Reduced motion jumps instead of gliding.
+// The card follows lazily and always faces the learner. Its center rests exactly where it is while
+// its target (panel-placement.ts) stays close: within 4 degrees of its spot beside the lit objects,
+// or 10 degrees of its gaze slot when nothing lit is in view. Once the target is farther, changes
+// side, or something covers the card, the center glides there on a critically damped spring,
+// tracking the target until it arrives, then rests again. Head bob and tracker jitter never move
+// it; a step's new object or a turn of the head does, smoothly. Whether resting or gliding, its
+// face turns to the eye every frame, about its center, without rolling. Only the first placement
+// is a jump; reduced motion jumps instead of gliding. A fingertip near the card holds it still.
 export const OBJECT_SLACK_DEG = 4;
 export const GAZE_SLACK_DEG = 10;
 /** Natural frequency of the glide: about 0.8 s to 95% of the way there. */
@@ -32,7 +35,6 @@ const OMEGA = 6;
 const DEPTH_SLACK_M = 0.1;
 const ARRIVED_M = 0.003;
 const ARRIVED_SPEED = 0.02;
-const ARRIVED_YAW = (0.5 * Math.PI) / 180;
 /** Longest frame the spring integrates, so a stalled frame does not fling the card. */
 const MAX_STEP_MS = 100;
 
@@ -42,69 +44,65 @@ export interface PanelMotionOptions {
 }
 
 export class InstructionPanelMotion {
-  private pose: Pose | null = null;
+  /** The card's center, world space. */
+  private center: Vec3 | null = null;
+  /** Its last orientation, kept while a fingertip holds it. */
+  private q: Quat = [0, 0, 0, 1];
   private slot: PanelSlot | null = null;
   private moving = false;
   private velocity: Vec3 = [0, 0, 0];
-  private yawVelocity = 0;
   private last = 0;
 
   constructor(private readonly options: PanelMotionOptions = {}) {}
 
   update(ctx: PresentContext, width: number, height: number, top: number): Pose {
     const target = panelTarget(ctx, width, height, top, this.slot);
-    if (!this.pose) {
+    const goal = cardCenter(target.pose, height, top);
+    if (!this.center) {
       this.last = ctx.t;
-      return this.arrive(target);
+      return this.arrive(ctx, goal, target.slot, height, top);
     }
     // A second call at the same timestamp (text that finished laying out) integrates nothing.
     const dt = Math.min(MAX_STEP_MS, Math.max(0, ctx.t - this.last)) / 1000;
     this.last = Math.max(this.last, ctx.t);
-    if (handNearCard(ctx, this.pose, width, height, top)) {
+    const held = cardAround(this.center, this.q, height, top);
+    if (handNearCard(ctx, held, width, height, top)) {
       this.halt();
-      return this.pose;
+      return held;
     }
-    if (!this.moving && !this.needsToMove(ctx, target, width, height, top)) return this.pose;
+    if (!this.moving && !this.needsToMove(ctx, goal, target.slot, width, height, top)) {
+      return this.facing(ctx, height, top);
+    }
     this.moving = true;
     this.slot = target.slot;
-    if (this.options.reducedMotion?.()) return this.arrive(target);
+    if (this.options.reducedMotion?.()) return this.arrive(ctx, goal, target.slot, height, top);
 
-    const goalYaw = yawOf(target.pose.q);
-    let yaw = yawOf(this.pose.q);
-    const p: Vec3 = [0, 0, 0];
+    const center: Vec3 = [0, 0, 0];
     for (const axis of [0, 1, 2] as const) {
-      const step = spring(this.pose.p[axis] - target.pose.p[axis], this.velocity[axis], dt);
-      p[axis] = target.pose.p[axis] + step.offset;
+      const step = spring(this.center[axis] - goal[axis], this.velocity[axis], dt);
+      center[axis] = goal[axis] + step.offset;
       this.velocity[axis] = step.velocity;
     }
-    const turn = spring(wrapAngle(yaw - goalYaw), this.yawVelocity, dt);
-    yaw = goalYaw + turn.offset;
-    this.yawVelocity = turn.velocity;
-    this.pose = { p, q: quatFromAxisAngle([0, 1, 0], yaw) };
-    if (
-      distance(p, target.pose.p) < ARRIVED_M &&
-      Math.hypot(...this.velocity) < ARRIVED_SPEED &&
-      Math.abs(turn.offset) < ARRIVED_YAW
-    ) {
-      return this.arrive(target);
+    this.center = center;
+    if (distance(center, goal) < ARRIVED_M && Math.hypot(...this.velocity) < ARRIVED_SPEED) {
+      return this.arrive(ctx, goal, target.slot, height, top);
     }
-    return this.pose;
+    return this.facing(ctx, height, top);
   }
 
   private needsToMove(
     ctx: PresentContext,
-    target: PanelTarget,
+    goal: Vec3,
+    slot: PanelSlot,
     width: number,
     height: number,
     top: number,
   ): boolean {
-    if (!this.pose || target.slot !== this.slot) return true;
-    const slot = this.slot;
-    if (!isInstructionPanelClear(ctx, width, height, top, this.pose, !besideObjects(slot))) {
-      return true;
-    }
-    const here = sub(cardCenter(this.pose, height, top), ctx.head.p);
-    const there = sub(cardCenter(target.pose, height, top), ctx.head.p);
+    if (!this.center || slot !== this.slot) return true;
+    const now = cardAround(this.center, facingEye(this.center, ctx.head), height, top);
+    if (!isInstructionPanelClear(ctx, width, height, top, now, !besideObjects(slot))) return true;
+    const here = sub(this.center, ctx.head.p);
+    const there = sub(goal, ctx.head.p);
     const cos = Math.min(1, Math.max(-1, dotUnit(here, there)));
     const slack = besideObjects(slot) ? OBJECT_SLACK_DEG : GAZE_SLACK_DEG;
     return (
@@ -113,17 +111,29 @@ export class InstructionPanelMotion {
     );
   }
 
-  private arrive(target: PanelTarget): Pose {
-    this.pose = { p: [...target.pose.p], q: [...target.pose.q] };
-    this.slot = target.slot;
+  /** The card at its center, turned to face the eye now. */
+  private facing(ctx: PresentContext, height: number, top: number): Pose {
+    const center = this.center ?? ctx.head.p;
+    this.q = facingEye(center, ctx.head);
+    return cardAround(center, this.q, height, top);
+  }
+
+  private arrive(
+    ctx: PresentContext,
+    goal: Vec3,
+    slot: PanelSlot,
+    height: number,
+    top: number,
+  ): Pose {
+    this.center = [...goal];
+    this.slot = slot;
     this.halt();
-    return this.pose;
+    return this.facing(ctx, height, top);
   }
 
   private halt(): void {
     this.moving = false;
     this.velocity = [0, 0, 0];
-    this.yawVelocity = 0;
   }
 }
 
@@ -143,11 +153,6 @@ function spring(
     velocity: (velocity - OMEGA * drift * dt) * decay,
   };
 }
-
-/** The heading of an upright, level card's orientation. */
-const yawOf = (q: Pose['q']) => 2 * Math.atan2(q[1], q[3]);
-
-const wrapAngle = (angle: number) => Math.atan2(Math.sin(angle), Math.cos(angle));
 
 const cardCenter = (pose: Pose, height: number, top: number) =>
   transformPoint(pose, [0, top - height / 2, 0]);

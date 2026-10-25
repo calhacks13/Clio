@@ -197,19 +197,18 @@ function expectInView(ctx: PresentContext, pose: Pose, width = WIDTH, height = H
   expect(rect.top).toBeLessThanOrEqual(PANEL_VIEW.top + 5e-4);
 }
 
-/** Upright, level, and turned to face the eye from its center. */
+/** Its face points at the eye from its center, and its top edge stays level (no roll). */
 function expectFacingEye(ctx: PresentContext, pose: Pose, height = HEIGHT, top = TOP) {
-  const up = rotateVec(pose.q, [0, 1, 0]);
   const right = rotateVec(pose.q, [1, 0, 0]);
-  expect(up[0]).toBeCloseTo(0, 10);
-  expect(up[1]).toBeCloseTo(1, 10);
-  expect(up[2]).toBeCloseTo(0, 10);
   expect(right[1]).toBeCloseTo(0, 10);
   const normal = rotateVec(pose.q, [0, 0, 1]);
   const toEye = sub(ctx.head.p, transformPoint(pose, [0, top - height / 2, 0]));
-  const horizontal = Math.hypot(toEye[0], toEye[2]);
-  expect(normal[0]).toBeCloseTo(toEye[0] / horizontal, 10);
-  expect(normal[2]).toBeCloseTo(toEye[2] / horizontal, 10);
+  const reach = Math.hypot(...toEye);
+  for (const axis of [0, 1, 2] as const) {
+    expect(normal[axis]).toBeCloseTo((toEye[axis] ?? 0) / reach, 10);
+  }
+  // Upright: its top is up, tilted back only as far as facing the eye needs.
+  expect(rotateVec(pose.q, [0, 1, 0])[1]).toBeGreaterThan(0);
 }
 
 const cardCenter = (pose: Pose, height = HEIGHT, top = TOP) =>
@@ -359,7 +358,7 @@ describe('instruction card beside the lit objects', () => {
     expect(screen(ctx, pose).bottom).toBeGreaterThan(maskScreen(ctx, worldMask).top);
   });
 
-  it('stays level and in view near a downward, rolled gaze at a table', () => {
+  it('faces the eye without rolling, in view, near a downward, rolled gaze at a table', () => {
     const ctx = context();
     ctx.head = {
       p: [0, 1.25, 0],
@@ -388,7 +387,7 @@ describe('instruction card in the gaze slots', () => {
     expectInView(ctx, pose);
   });
 
-  it('follows the gaze heading and pitch but never the head roll', () => {
+  it('follows the gaze heading and pitch, faces the eye, and never rolls with the head', () => {
     const ctx = context();
     ctx.head = {
       p: [2, 1.6, 3],

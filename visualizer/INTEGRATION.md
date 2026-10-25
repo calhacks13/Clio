@@ -50,7 +50,7 @@ For USB, Clio already uses `adb reverse tcp:5173 tcp:5173` (`pnpm quest:reverse`
 | `/clio/<id>`      | Pinned to one episode. It is followed while it grows and never switches. Server ids look like `ep-YYYYMMDD-HHMMSS-xxxx`, so `live` cannot collide.                                            |
 | `/clio/dev/scene` | Dev only (a 404 in production builds): the 3D scene on the generated fixture, without a server.                                                                                               |
 | `/clio/dev/lanes` | Dev only: the object lanes and panels on the generated fixture.                                                                                                                               |
-| `/api/clio/...`   | The read-only proxy to the Clio server (below).                                                                                                                                               |
+| `/api/clio/...`   | The loopback proxy for episode reads and explicit dataset exports (below).                                                                                                                    |
 
 The home page links to `/clio`. The HF/G1 dataset routes (`/[org]/[dataset]/[episode]`) are a separate mode; the Clio viewer does not extend `EpisodeViewer` or `URDFViewer`. A dataset org literally named `clio` is shadowed by the `/clio` routes. Add `?debug=1` (or press Debug) for ids, lag figures, duplicate and rejected counts, and the table-corner and floor labels.
 
@@ -58,14 +58,22 @@ The home page links to `/clio`. The HF/G1 dataset routes (`/[org]/[dataset]/[epi
 
 `src/app/api/clio/[...path]/route.ts` forwards to the Clio server; its rules are in `src/lib/clio/proxy-rules.ts` and tested in `src/lib/clio/__tests__/proxy-rules.test.ts`.
 
-- GET and HEAD only; any other method gets 405.
+- GET and HEAD for reads; POST is permitted only for the dataset export described below. All episode writes get 405.
 - Paths: `episodes`, `episodes/<id>`, `episodes/<id>/(frames|events|objects|observations)`, `episodes/<id>/derived/<name>` (name matching `DERIVED_FILE_NAME`) and `episodes/<id>/scene/<name>` (name matching `SCENE_FILE_NAME`), mapped to the same `/api/...` paths. The id must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`. Everything else is 404, so coach, plans, vision, clips, Gemini and every write are never reachable.
 - Only a digits-only `from` is forwarded, to the channel paths; another or repeated `from` gets 400. Other query parameters are dropped.
 - The upstream is `CLIO_SERVER_URL` (default `http://127.0.0.1:8787`), read per request. It must be a bare loopback http(s) origin, otherwise 500. A `Host` that is not loopback gets 403, which blocks DNS rebinding.
 - Upstream request headers are built from scratch (only `accept`: JSON and NDJSON first, anything else after), so the `hf_access_token` cookie, authorization, origin and referer are never forwarded. Redirects are refused, and the fetch aborts with the browser request.
-- Responses carry only `content-type`, `x-next-from` and `cache-control: no-store`, and the body is streamed unchanged, binary GLBs and JPEGs included (`proxy-route.test.ts`). Upstream status and JSON errors pass through. An unreachable server gives 502, and headers slower than 10 s give 504.
+- Responses carry only `content-type`, `x-next-from`, `content-disposition` and `cache-control: no-store`, and the body is streamed unchanged, binary GLBs, JPEGs and dataset ZIPs included (`proxy-route.test.ts`). Upstream status and JSON errors pass through. An unreachable server gives 502, and headers slower than 10 s give 504.
 
 To view a scratch server, start the visualizer with `CLIO_SERVER_URL=http://127.0.0.1:8788`.
+
+### Dataset downloads
+
+`/clio` adds a checkbox beside each recording and Select finished / Clear selection controls. Only finished recordings with frames and no known missing batches can be selected. The inline Download dataset form takes a safe local name and a frame rate (30 fps by default). It starts a background export, polls its state, and offers a ZIP attachment. The last export id is saved in sessionStorage so leaving the list and coming back in the same tab restores progress or its download; transport errors offer Retry status and Start again.
+
+The proxy has one write exception: `POST /api/clio/datasets/exports`. It requires JSON, checks the browser origin against the loopback Host, bounds the body to 16 KiB and validates it with `DatasetExportRequestSchema`. It forwards no browser credentials. `GET`/`HEAD` can read `datasets/exports/<id>` and `datasets/exports/<id>/download`; the latter streams the ZIP and preserves Content-Disposition. All other writes remain forbidden.
+
+The Clio server validates the complete selection (1–100 distinct finished episodes, with frames and no known missing batches) before creating a job. `ProcessDatasetExporter` runs the existing `clio export-lerobot` command serially, with an isolated uv environment, Python 3.12 and the lerobot extra, independent of automatic compiling. `--archive` packages a finalized v3.0 dataset with paths rooted at `meta/` and `data/`; its profile remains `human_hands`, with no video or implied robot commands. The exporter validates source schemas and preserves its regular Clio provenance sidecar. The server streams the archive from `data/exports/<export-id>/dataset.zip`; ready/failed jobs expire after one hour, old directories are swept, and a restart forgets job status. Exports have a 30-minute timeout; at most four pending and twenty retained jobs are accepted. Missing uv produces an actionable 503. The first export may download Python dependencies, but no recording content leaves the computer.
 
 ### Data flow and time
 

@@ -700,7 +700,7 @@ describe('CoachSession', () => {
       expect(voices(seen)).toEqual(['quiet', 'speaking', 'quiet', 'speaking', 'quiet']);
     });
 
-    it('hears the learner while their words arrive, until they have been quiet for 1.2 s', async () => {
+    it('hears the learner while their words arrive, then thinks until Clio answers', async () => {
       const { agent, seen, session, clock } = await setup();
       agent.events.emit('transcript', { role: 'user', text: 'Which', final: false });
       session.tick(clock.advance(1000));
@@ -709,9 +709,76 @@ describe('CoachSession', () => {
       session.tick(clock.advance(1100));
       expect(voices(seen)).toEqual(['quiet', 'hearing']);
       session.tick(clock.advance(100));
-      expect(voices(seen)).toEqual(['quiet', 'hearing', 'quiet']);
+      expect(voices(seen)).toEqual(['quiet', 'hearing', 'thinking']);
       agent.events.emit('transcript', { role: 'user', text: 'Which cup?', final: true });
-      expect(voices(seen)).toEqual(['quiet', 'hearing', 'quiet']);
+      expect(voices(seen)).toEqual(['quiet', 'hearing', 'thinking']);
+      speak(agent);
+      expect(voices(seen)).toEqual(['quiet', 'hearing', 'thinking', 'speaking']);
+    });
+
+    it('stops thinking about an unanswered question after 8 s', async () => {
+      const { agent, seen, session, clock } = await setup();
+      agent.events.emit('transcript', { role: 'user', text: 'Hmm', final: false });
+      session.tick(clock.advance(1200));
+      expect(voices(seen)).toEqual(['quiet', 'hearing', 'thinking']);
+      session.tick(clock.advance(6700));
+      expect(voices(seen)).toEqual(['quiet', 'hearing', 'thinking']);
+      session.tick(clock.advance(100));
+      expect(voices(seen)).toEqual(['quiet', 'hearing', 'thinking', 'quiet']);
+    });
+
+    it('thinks while a turn is under way with nothing said, and while it ends still working', async () => {
+      const { agent, seen, session, clock } = await setup();
+      agent.events.emit('toolCalls', { calls: [{ id: 'c1', name: 'highlight', args: {} }] });
+      await settle();
+      session.tick(clock.advance(16));
+      expect(voices(seen)).toEqual(['quiet', 'thinking']);
+      agent.events.emit('turnComplete', { working: true });
+      session.tick(clock.advance(2000));
+      expect(voices(seen)).toEqual(['quiet', 'thinking']);
+      agent.events.emit('turnComplete', {});
+      expect(voices(seen)).toEqual(['quiet', 'thinking', 'quiet']);
+    });
+
+    it('thinks while a call it made is still running', async () => {
+      let finish: (outcome: { ok: true; result: unknown }) => void = () => {};
+      const { agent, seen, session, clock } = await setup({
+        tools: { add_material: () => new Promise((resolve) => (finish = resolve)) },
+      });
+      agent.events.emit('toolCalls', {
+        calls: [{ id: 'c1', name: 'add_material', args: { name: 'salt' } }],
+      });
+      agent.events.emit('turnComplete', {});
+      session.tick(clock.advance(1000));
+      expect(voices(seen)).toEqual(['quiet', 'thinking']);
+      finish({ ok: true, result: {} });
+      await settle();
+      session.tick(clock.advance(16));
+      expect(voices(seen)).toEqual(['quiet', 'thinking', 'quiet']);
+    });
+
+    it('tells the coach, at once, when the learner closes the lesson', async () => {
+      const { agent, b, seen, session, clock } = await setup();
+      speak(agent);
+      b.emit('lesson.closed', { t: clock.now(), ended: 'add wiper fluid' });
+      await settle();
+      // Urgent: it waits for Clio to stop, not for the learner.
+      expect(narrated(seen)).toEqual([]);
+      agent.events.emit('turnComplete', {});
+      session.tick(clock.advance(100));
+      expect(narrated(seen)).toEqual([
+        '[app] The learner closed the lesson (add wiper fluid) with its close button: no lesson is running now. Stop talking about it, and ask in a few words what they want to do.',
+      ]);
+    });
+
+    it('thinks after a narration asks it to speak, until it does', async () => {
+      const { agent, b, seen, session, clock } = await setup();
+      entered(b, 'acid', 'Add vinegar to cup A.');
+      await settle();
+      session.tick(clock.advance(16));
+      expect(voices(seen)).toEqual(['quiet', 'thinking']);
+      speak(agent);
+      expect(voices(seen)).toEqual(['quiet', 'thinking', 'speaking']);
     });
 
     it('says Clio is speaking over the learner until the model gives way', async () => {
@@ -870,6 +937,20 @@ describe('CoachSession', () => {
       { kind: 'plan_slow', text: narrated(seen).join(' '), reply: true },
     ]);
     expect(narrated(seen)).toHaveLength(2);
+  });
+
+  it('holds narrations while the coach ends its turn still working, until it is idle', async () => {
+    const { agent, b, session, clock } = await setup();
+    speak(agent);
+    agent.events.emit('turnComplete', { working: true });
+    b.emit('plan.slow', { t: clock.now(), goal: 'g', elapsedMs: 12_000 });
+    session.tick(clock.advance(3000));
+    await settle();
+    expect(agent.narrations).toEqual([]);
+    agent.events.emit('toolCalls', { calls: [{ id: 'c1', name: 'highlight', args: {} }] });
+    agent.events.emit('turnComplete', {});
+    session.tick(clock.advance(100));
+    expect(agent.narrations.map((n) => n.kind)).toEqual(['plan_slow']);
   });
 
   it('sends held narrations once the oldest is 6 s old, even mid-speech', async () => {
@@ -1126,8 +1207,8 @@ describe('CoachSession', () => {
   describe('with no lesson running', () => {
     const nudge =
       '[app] No lesson is running, so what they just said starts one: call start_lesson now with a goal made from it, done with their hands, and say in one short sentence what you are starting. If they only greeted or thanked you, ask in a few words what they want to do instead.';
-    /** The learner asks something, and the coach answers in words. */
-    const answered = (agent: FakeAgent) => {
+    /** The learner asks something, and the coach answers in words (and may still be working). */
+    const answered = (agent: FakeAgent, end: { working?: boolean } = {}) => {
       agent.events.emit('transcript', { role: 'user', text: 'How does a French', final: false });
       speak(agent);
       agent.events.emit('transcript', {
@@ -1135,7 +1216,7 @@ describe('CoachSession', () => {
         text: 'How does a French press work?',
         final: true,
       });
-      agent.events.emit('turnComplete', {});
+      agent.events.emit('turnComplete', end);
     };
 
     it('tells a coach that answered in words and went quiet to start a lesson, once', async () => {
@@ -1172,6 +1253,43 @@ describe('CoachSession', () => {
       session.tick(clock.advance(1));
       await settle();
       expect(agent.narrations.map((n) => n.kind)).toEqual(['start_nudge']);
+    });
+
+    it('leaves a coach alone that ended its turn still working and then starts one', async () => {
+      const { agent, session, clock } = await setup({ plan: () => null, phase: () => 'done' });
+      answered(agent, { working: true });
+      session.tick(clock.advance(14_999));
+      await settle();
+      expect(agent.narrations).toEqual([]);
+      agent.events.emit('toolCalls', {
+        calls: [{ id: 'c1', name: 'start_lesson', args: { goal: 'brew coffee' } }],
+      });
+      agent.events.emit('turnComplete', {});
+      session.tick(clock.advance(30_000));
+      await settle();
+      expect(agent.narrations).toEqual([]);
+    });
+
+    it('nudges a coach that was still working once it is idle, or has worked too long', async () => {
+      const idle = await setup({ plan: () => null, phase: () => 'done' });
+      answered(idle.agent, { working: true });
+      idle.session.tick(idle.clock.advance(4000));
+      idle.agent.events.emit('turnComplete', {});
+      idle.session.tick(idle.clock.advance(5999));
+      await settle();
+      expect(idle.agent.narrations).toEqual([]);
+      idle.session.tick(idle.clock.advance(1));
+      await settle();
+      expect(idle.agent.narrations.map((n) => n.kind)).toEqual(['start_nudge']);
+
+      const stuck = await setup({ plan: () => null, phase: () => 'done' });
+      answered(stuck.agent, { working: true });
+      stuck.session.tick(stuck.clock.advance(14_999));
+      await settle();
+      expect(stuck.agent.narrations).toEqual([]);
+      stuck.session.tick(stuck.clock.advance(1));
+      await settle();
+      expect(stuck.agent.narrations.map((n) => n.kind)).toEqual(['start_nudge']);
     });
 
     it('counts a typed learner turn', async () => {

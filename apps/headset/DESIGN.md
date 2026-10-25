@@ -19,6 +19,18 @@ override that reference's dark palette and purple controls.
   width. Keep readable text size and padding rather than shrinking the type or forcing a square.
   Use subtly rounded corners, dark text, a dark filled Done pill and sentence-case metadata.
   Quiet listening has no label or dot. Report a disconnected voice with an actionable message.
+- The voice strip spans the whole top of the card (Peter, 2026-10-25): a row of solid rounded
+  bars, never shorter than twice their width so it never reads as a dotted line. It moves like a
+  voice, tallest mid-strip, in guidance blue `#1768D9` while Clio speaks and in golden yellow
+  `#E9A700` while the learner talks (a light yellow vanishes on white); a slow green `#1A9E6E`
+  ripple crosses it left to right while Clio thinks or plans. Quiet listening leaves it empty.
+  The card keeps its room while a coach listens, so it never resizes with the conversation.
+  Reduced motion holds the bars still in the state's shape and color.
+- Every lesson stage (planning, finding objects, the steps, done, failed) has a solid red
+  `#E5484D` circle with a white cross at the right of the top row, below the strip. A first touch
+  stretches the red into an "End lesson" pill beside the same cross for 3 seconds; a second touch
+  ends the lesson and the card asks "What can I help you with?". The idle card and calibration
+  have none.
 - Put the card where the work is (Peter, 2026-10-25: cards at random places were lost half the
   time). It sits just above the step's lit objects as the eye sees them, centered on them and at
   their depth (45–85cm). If above is blocked or off the view it goes below, then right, then left.
@@ -31,9 +43,11 @@ override that reference's dark palette and purple controls.
   tracker jitter never move it. Past that, on a change of side, or when something covers it, it
   glides on a critically damped spring (about 0.8s to settle), tracking the target until it
   arrives. Nothing teleports except the first placement; a new step's object is reached by a
-  glide that leads the eye there. Keep every card upright and level: it turns only about the
-  vertical to face the eye, never with the headset's pitch or roll. Keep a card still while a
-  fingertip is near it. Reduced motion moves the card in one step, and only when it must.
+  glide that leads the eye there. The card always faces the learner (Peter, 2026-10-25): every
+  frame its face turns to the eye about its center, tilting back when it is below the eye, but it
+  never rolls, so its top edge stays level with the horizon. Keep a card, and the way it faces,
+  still while a fingertip is near it. Reduced motion moves the card in one step, and only when it
+  must; it still turns to face the eye.
 - Keep a 6cm minimum gap at the card's actual depth from every known object, and place new slots
   2.5cm farther so tracker jitter does not trigger constant rearrangement. Include all followed
   masks, including objects not lit by this step. In the gaze slots also keep clear of detected

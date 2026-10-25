@@ -383,6 +383,8 @@ export interface RenderStats {
 /** A glow's points to probe: its quad's world matrix and interior uv points. */
 export interface ProbeTarget {
   matrixWorld: Matrix4;
+  /** Where the glow draws the field's (u, v), in its quad's frame (on the object's relief). */
+  local?: (u: number, v: number) => readonly [number, number, number];
   interior: Float32Array;
   interiorCount: number;
   maxFront: number;
@@ -575,7 +577,8 @@ class DepthProber {
       const inside = i > 0 && target !== null && i - 1 < target.interiorCount;
       const ux = inside ? (target?.interior[(i - 1) * 2] ?? 0.5) : 0.5;
       const uy = inside ? (target?.interior[(i - 1) * 2 + 1] ?? 0.5) : 0.5;
-      point.set(ux - 0.5, uy - 0.5, 0, 1);
+      const [lx, ly, lz] = target?.local?.(ux, uy) ?? [ux - 0.5, uy - 0.5, 0];
+      point.set(lx, ly, lz, 1);
       if (target) point.applyMatrix4(target.matrixWorld);
       point.applyMatrix4(u.depthFromWorld.value);
       const ok = (i === 0 || inside) && target !== null && point.w > 0;

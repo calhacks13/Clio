@@ -1,4 +1,4 @@
-import { Group, type Vector3 } from 'three';
+import { Group, Vector3 } from 'three';
 import type { Text } from 'troika-three-text';
 import { type Accent, WARNING_MS } from '../../domain/overlay/accents';
 import type { Placement } from '../../domain/world/placement';
@@ -15,10 +15,12 @@ import { makeText, setText } from './text';
 // A tracked object's light (the primary page's main object, and each object a lesson follows live,
 // presenters/live-highlights.ts), drawn like the lesson's other outlines (presenters/outlines.ts):
 // the object glows from within its silhouette, or corner brackets frame a box-only answer, on a
-// plane through the object that turns toward the viewer every frame. Its name floats just above
-// the glow's bright edge. Each new mask reshapes the light in place; a newly found object (a new
-// name, or one back after being lost) fades in quickly with a brief flare; "nothing found" fades
-// it out. A warning pulse briefly dims and brightens the light in its stop accent.
+// plane through the object that faces the camera it was seen from (the plane its outline and
+// relief were measured on; a placement that doesn't say faces the viewer), bent onto the object's
+// relief when it has one. Its name floats just above the glow's bright edge, as near as the
+// object's top. Each new mask reshapes the light in place; a newly found object (a new name, or
+// one back after being lost) fades in quickly with a brief flare; "nothing found" fades it out. A
+// warning pulse briefly dims and brightens the light in its stop accent.
 // Nothing is allocated per frame: the group turns with lookAt, whose basis (+z at the eye, x
 // level) is the outline's billboard. The light keeps the room's depth order: hands hide it
 // through their occluders (hand-occluders.ts), and real surfaces nearer than the object hide it
@@ -48,6 +50,9 @@ export class PrimaryOutlineView {
   private opacity = 0;
   private target = 0;
   private name: string | null = null;
+  /** World space: the camera the outline was seen from; null: it faces the viewer. */
+  private readonly seenFrom = new Vector3();
+  private seen = false;
   private accentOpacity = 1;
   /** Pulsing (a brief coach warning). */
   pulse = false;
@@ -89,11 +94,13 @@ export class PrimaryOutlineView {
    * Light up a found object, replacing whatever was drawn. The primary object is a whole object,
    * so by default its light spills around it.
    */
-  show({ center, outline }: Placement, name: string, mode: ObjectGlowMode = 'object'): void {
+  show({ center, outline, eye }: Placement, name: string, mode: ObjectGlowMode = 'object'): void {
     // A tracker that drops one frame must not make the light flare again.
     if (name !== this.name || this.opacity < RELIGHT_BELOW) this.highlight.ignite();
     this.name = name;
     this.object.position.set(...center);
+    this.seen = eye !== undefined;
+    if (eye) this.seenFrom.set(...eye);
     this.placed = true;
     this.highlight.setOutline(outline, mode);
     let left = Number.POSITIVE_INFINITY;
@@ -105,7 +112,9 @@ export class PrimaryOutlineView {
       if (y > top) top = y;
     }
     const gap = LABEL_GAP + (outline.shape === 'contour' ? this.highlight.reach : 0);
-    this.label.position.set((left + right) / 2, top + gap, 0.001);
+    // Over the top of the object, as near as the object is there.
+    const [x, y, z] = this.highlight.surfacePoint([(left + right) / 2, top + gap]);
+    this.label.position.set(x, y, z + 0.001);
     setText(this.label, name);
     this.target = 1;
   }
@@ -147,7 +156,7 @@ export class PrimaryOutlineView {
         : Math.max(this.target, this.opacity - step);
     this.object.visible = this.placed && this.opacity > 0;
     if (!this.object.visible) return;
-    this.object.lookAt(eye);
+    this.object.lookAt(this.seen ? this.seenFrom : eye);
     // Ease out: light comes up fast and settles, and dies away slowly.
     const shown = this.opacity * (2 - this.opacity);
     const pulse = this.pulse

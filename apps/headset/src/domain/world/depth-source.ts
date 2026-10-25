@@ -20,8 +20,17 @@ export interface DepthHit {
   sensed?: boolean;
 }
 
+export interface MeasureOptions {
+  /**
+   * Only what the depth map sees (depth sensing): a ray it can't answer is null, and a source
+   * without one answers none. Hit-test measures a few rays at a time, so a batch of many that only
+   * a depth map can use (an object's surface) never keeps it from the rays that place an object.
+   */
+  mapOnly?: boolean;
+}
+
 /** Port: hits along world-space rays. */
 export interface DepthSource {
   /** One answer per ray, in order: the nearest hit, or null where the ray meets nothing known. */
-  measure(rays: readonly Ray[]): Promise<(DepthHit | null)[]>;
+  measure(rays: readonly Ray[], options?: MeasureOptions): Promise<(DepthHit | null)[]>;
 }

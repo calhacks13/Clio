@@ -255,7 +255,7 @@ export class GeminiLiveAgent implements RealtimeAgent {
           break;
         case 'turnComplete':
           for (const t of this.transcripts.complete()) this.events.emit('transcript', t);
-          this.events.emit('turnComplete', {});
+          this.events.emit('turnComplete', ev.working ? { working: true } : {});
           break;
         case 'toolCalls':
           for (const call of ev.calls) this.openCalls.add(call.id);

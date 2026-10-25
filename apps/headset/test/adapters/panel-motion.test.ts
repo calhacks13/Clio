@@ -12,6 +12,7 @@ import {
   quatFromAxisAngle,
   quatMultiply,
   rotateVec,
+  sub,
   transformPoint,
   type Vec3,
 } from '../../src/core/math';
@@ -26,13 +27,26 @@ const turn = (degrees: number, axis: Vec3 = [0, 1, 0]) =>
   quatFromAxisAngle(axis, (degrees * Math.PI) / 180);
 const cardCenter = (pose: Pose) => transformPoint(pose, [0, TOP - HEIGHT / 2, 0]);
 
-function expectHorizonLevel(pose: Pose): void {
-  const right = rotateVec(pose.q, [1, 0, 0]);
-  const up = rotateVec(pose.q, [0, 1, 0]);
-  expect(right[1]).toBeCloseTo(0, 12);
-  expect(up[0]).toBeCloseTo(0, 12);
-  expect(up[1]).toBeCloseTo(1, 12);
-  expect(up[2]).toBeCloseTo(0, 12);
+/** Its face points at the eye from its center, and its top edge stays level (no roll). */
+function expectFacing(ctx: PresentContext, pose: Pose): void {
+  expect(rotateVec(pose.q, [1, 0, 0])[1]).toBeCloseTo(0, 12);
+  const normal = rotateVec(pose.q, [0, 0, 1]);
+  const toEye = sub(ctx.head.p, cardCenter(pose));
+  const reach = Math.hypot(...toEye);
+  for (const axis of [0, 1, 2] as const) {
+    expect(normal[axis]).toBeCloseTo((toEye[axis] ?? 0) / reach, 12);
+  }
+}
+
+function expectSamePose(actual: Pose | undefined, expected: Pose): void {
+  expect(actual).toBeDefined();
+  for (let i = 0; i < 3; i++) expect(actual?.p[i]).toBeCloseTo(expected.p[i] ?? 0, 12);
+  for (let i = 0; i < 4; i++) expect(actual?.q[i]).toBeCloseTo(expected.q[i] ?? 0, 12);
+}
+
+function expectSameCenter(actual: Pose, expected: Pose): void {
+  const [a, b] = [cardCenter(actual), cardCenter(expected)];
+  for (let i = 0; i < 3; i++) expect(a[i]).toBeCloseTo(b[i] ?? 0, 12);
 }
 
 function mask(center: Vec3, width = 0.12, height = 0.1): Placement {
@@ -129,10 +143,10 @@ function largestStep(start: Pose, poses: readonly Pose[]): number {
   let previous = start;
   let largest = 0;
   for (const pose of poses) {
-    largest = Math.max(largest, distance(pose.p, previous.p));
+    largest = Math.max(largest, distance(cardCenter(pose), cardCenter(previous)));
     previous = pose;
   }
-  return largest / distance(start.p, poses.at(-1)?.p ?? start.p);
+  return largest / distance(cardCenter(start), cardCenter(poses.at(-1) ?? start));
 }
 
 const where = (ctx: PresentContext) => panelTarget(ctx, WIDTH, HEIGHT, TOP, null);
@@ -145,12 +159,12 @@ describe('instruction card follow motion', () => {
       'pitch and roll',
       quatMultiply(turn(35), quatMultiply(turn(-32, [1, 0, 0]), turn(28, [0, 0, 1]))),
     ],
-  ] as const)('starts in place, level with the world horizon, while the head has %s', (_n, q) => {
+  ] as const)('starts in place, facing the eye without rolling, while the head has %s', (_n, q) => {
     const ctx = context();
     ctx.head = { p: [2, 1.6, -3], q: [...q] };
     const first = new InstructionPanelMotion().update(ctx, WIDTH, HEIGHT, TOP);
-    expectHorizonLevel(first);
-    expect(first).toEqual(where(ctx).pose);
+    expectFacing(ctx, first);
+    expectSamePose(first, where(ctx).pose);
   });
 
   it.each([
@@ -159,12 +173,15 @@ describe('instruction card follow motion', () => {
     ['a head tilt', { p: [0, 0, 0], q: turn(15, [0, 0, 1]) }],
     ['head bob', { p: [0, 0.03, 0], q: [0, 0, 0, 1] }],
     ['leaning', { p: [0.04, 0.01, 0.03], q: [0, 0, 0, 1] }],
-  ] as const)('rests exactly where it is through %s', (_name, head) => {
+  ] as const)('rests exactly where it is through %s, still facing the eye', (_name, head) => {
     const ctx = context();
     const motion = new InstructionPanelMotion();
     const rest = motion.update(ctx, WIDTH, HEIGHT, TOP);
     ctx.head = { p: [...head.p], q: [...head.q] };
-    for (const pose of run(motion, ctx, 3000, 100)) expect(pose).toEqual(rest);
+    for (const pose of run(motion, ctx, 3000, 100)) {
+      expectSameCenter(pose, rest);
+      expectFacing(ctx, pose);
+    }
   });
 
   it('glides after a larger turn without ever jumping, and arrives exactly in the gaze slot', () => {
@@ -173,15 +190,16 @@ describe('instruction card follow motion', () => {
     const rest = motion.update(ctx, WIDTH, HEIGHT, TOP);
     ctx.head.q = turn(30);
     const poses = run(motion, ctx, 2500);
-    expect(distance(poses[0]?.p ?? rest.p, rest.p)).toBeLessThan(0.002);
+    expect(distance(cardCenter(poses[0] ?? rest), cardCenter(rest))).toBeLessThan(0.002);
     expect(largestStep(rest, poses)).toBeLessThan(0.03);
     // About halfway after a third of a second, and there within two.
     const goal = where(ctx).pose;
     const third = poses[Math.round(330 / FRAME) - 1] ?? rest;
-    const ratio = distance(third.p, rest.p) / distance(goal.p, rest.p);
+    const ratio =
+      distance(cardCenter(third), cardCenter(rest)) / distance(cardCenter(goal), cardCenter(rest));
     expect(ratio).toBeGreaterThan(0.25);
     expect(ratio).toBeLessThan(0.75);
-    expect(poses.at(-1)).toEqual(goal);
+    expectSamePose(poses.at(-1), goal);
   });
 
   it('trails a steady head turn without losing the card from view', () => {
@@ -194,7 +212,7 @@ describe('instruction card follow motion', () => {
       const pose = motion.update(ctx, WIDTH, HEIGHT, TOP);
       const [x, , z] = transformPoint(invertPose(ctx.head), cardCenter(pose));
       expect(Math.abs(Math.atan2(x, -z))).toBeLessThan((30 * Math.PI) / 180);
-      expectHorizonLevel(pose);
+      expectFacing(ctx, pose);
     }
   });
 
@@ -208,12 +226,12 @@ describe('instruction card follow motion', () => {
     for (const [i, nudge] of [0.01, -0.012, 0.008, -0.01, 0.012].entries()) {
       light(ctx, 'cup', add(object, [nudge, -nudge / 2, nudge / 3]));
       ctx.t = (i + 1) * 100;
-      expect(motion.update(ctx, WIDTH, HEIGHT, TOP)).toEqual(rest);
+      expectSameCenter(motion.update(ctx, WIDTH, HEIGHT, TOP), rest);
     }
     light(ctx, 'cup', add(object, [0.15, 0, 0]));
     const poses = run(motion, ctx, 3000);
     expect(largestStep(rest, poses)).toBeLessThan(0.03);
-    expect(poses.at(-1)).toEqual(where(ctx).pose);
+    expectSamePose(poses.at(-1), where(ctx).pose);
     expect(cardCenter(poses.at(-1) ?? rest)[0]).toBeCloseTo(0.15, 1);
   });
 
@@ -224,9 +242,9 @@ describe('instruction card follow motion', () => {
     const rest = motion.update(ctx, WIDTH, HEIGHT, TOP);
     light(ctx, 'plate', [0.25, -0.25, -0.7]);
     const poses = run(motion, ctx, 3000);
-    expect(distance(poses[0]?.p ?? rest.p, rest.p)).toBeLessThan(0.002);
+    expect(distance(cardCenter(poses[0] ?? rest), cardCenter(rest))).toBeLessThan(0.002);
     expect(largestStep(rest, poses)).toBeLessThan(0.03);
-    expect(poses.at(-1)).toEqual(where(ctx).pose);
+    expectSamePose(poses.at(-1), where(ctx).pose);
     expect(cardCenter(poses.at(-1) ?? rest)[0]).toBeGreaterThan(0.15);
   });
 
@@ -239,10 +257,10 @@ describe('instruction card follow motion', () => {
     const away = run(motion, ctx, 2500);
     expect(largestStep(beside, away)).toBeLessThan(0.03);
     expect(where(ctx).slot).toBe('low');
-    expect(away.at(-1)).toEqual(where(ctx).pose);
+    expectSamePose(away.at(-1), where(ctx).pose);
     ctx.head.q = [0, 0, 0, 1];
     const back = run(motion, ctx, 5000);
-    expect(back.at(-1)).toEqual(beside);
+    expectSamePose(back.at(-1), beside);
   });
 
   it('does not integrate the glide more than once at the same frame timestamp', () => {
@@ -308,7 +326,7 @@ describe('instruction card follow motion', () => {
     expect(isInstructionPanelClear(ctx, 0.55, HEIGHT, TOP, pose)).toBe(true);
   });
 
-  it('holds the card under a nearby fingertip while the learner looks away', () => {
+  it('holds the card, and which way it faces, under a nearby fingertip', () => {
     const ctx = context();
     const motion = new InstructionPanelMotion();
     const rest = motion.update(ctx, WIDTH, HEIGHT, TOP);
@@ -319,7 +337,7 @@ describe('instruction card follow motion', () => {
       ...transformPoint(rest, [0, TOP - HEIGHT + 0.04, 0.02]),
     );
     ctx.hands = { t: 0, head: ctx.head, left: { joints, pinch: 0.02 }, right: null };
-    ctx.head.q = turn(40);
+    ctx.head = { p: [0.06, 0.02, 0], q: turn(40) };
     for (const pose of run(motion, ctx, 3000, 100)) expect(pose).toEqual(rest);
   });
 
@@ -331,18 +349,18 @@ describe('instruction card follow motion', () => {
     for (const pose of run(motion, ctx, 1000, 100)) expect(pose).toEqual(rest);
     ctx.head.q = turn(30);
     ctx.t += 100;
-    expect(motion.update(ctx, WIDTH, HEIGHT, TOP)).toEqual(where(ctx).pose);
+    expectSamePose(motion.update(ctx, WIDTH, HEIGHT, TOP), where(ctx).pose);
   });
 
-  it('stays horizon-level through every frame of a glide toward a pitched, rolled gaze', () => {
+  it('faces the eye without rolling through every frame of a glide toward a pitched, rolled gaze', () => {
     const ctx = context();
     ctx.head.q = quatMultiply(turn(25), quatMultiply(turn(-20, [1, 0, 0]), turn(20, [0, 0, 1])));
     const motion = new InstructionPanelMotion();
     const rest = motion.update(ctx, WIDTH, HEIGHT, TOP);
     ctx.head.q = quatMultiply(turn(95), quatMultiply(turn(-40, [1, 0, 0]), turn(-30, [0, 0, 1])));
     const poses = run(motion, ctx, 2500);
-    for (const pose of poses) expectHorizonLevel(pose);
+    for (const pose of poses) expectFacing(ctx, pose);
     expect(distance(poses.at(-1)?.p ?? rest.p, rest.p)).toBeGreaterThan(0.1);
-    expect(poses.at(-1)).toEqual(where(ctx).pose);
+    expectSamePose(poses.at(-1), where(ctx).pose);
   });
 });

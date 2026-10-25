@@ -61,6 +61,31 @@ describe('PrimaryOutlineView', () => {
     expect(label?.position.y).toBeGreaterThan(0.02);
   });
 
+  it('faces the camera the outline was seen from, its name as near as the top of the object', () => {
+    const view = new PrimaryOutlineView();
+    const seen = placement([0, 0, -0.5]);
+    seen.eye = [0.03, 0, 0];
+    seen.outline.relief = { offset: 0, slopeX: 0, slopeY: 0.8, distance: 0.5 };
+    view.show(seen, 'tube');
+    view.update(new Vector3(0, 0.2, 0), 16, 0);
+    view.object.updateMatrixWorld();
+    const facing = new Vector3(0, 0, 1).applyQuaternion(view.object.quaternion);
+    const toCamera = new Vector3(0.03, 0, 0.5).normalize();
+    expect(facing.dot(toCamera)).toBeCloseTo(1, 9);
+    const label = view.object.children[1];
+    // Above the outline's top (y 0.02), where the relief leans toward the camera.
+    expect(label?.position.y).toBeGreaterThan(0.02);
+    expect(label?.position.z).toBeGreaterThan(0.8 * 0.02);
+    // A placement that does not say faces the viewer.
+    view.show(placement([0, 0, -0.5]), 'tube');
+    view.update(new Vector3(0, 0.2, 0), 16, 0);
+    const viewer = new Vector3(0, 0.2, 0.5).normalize();
+    expect(new Vector3(0, 0, 1).applyQuaternion(view.object.quaternion).dot(viewer)).toBeCloseTo(
+      1,
+      9,
+    );
+  });
+
   it('fades out when nothing is found and hides once dark', () => {
     const view = new PrimaryOutlineView();
     const eye = new Vector3(0, 0, 1);

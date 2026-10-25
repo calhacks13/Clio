@@ -606,6 +606,17 @@ export class LessonController {
     return { ok: true, result: { ended } };
   }
 
+  /**
+   * The learner closed the card: as endLesson, and a lesson that had already ended or failed is
+   * put away too, so the card asks what they want to do. The coach hears it (Narrator).
+   */
+  closeByUser(): void {
+    const ended = this.lessonGoal();
+    this.endLesson('the learner closed it');
+    if (this.currentPhase !== 'idle') this.setPhase('idle');
+    this.deps.bus.emit('lesson.closed', { t: this.deps.clock.now(), ended });
+  }
+
   async stop(reason: string): Promise<void> {
     // Give up on a plan in flight rather than waiting for it and starting a lesson nobody sees,
     // and on the rest of a plan still being written.

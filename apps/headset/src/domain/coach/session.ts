@@ -23,9 +23,12 @@ import type { CoachToolbox } from './toolbox';
 // the plan settles and on every reconnect (the next connection starts from it), a recap after a
 // reconnect, and a notice when the model cancels a call that had already changed the plan. Every
 // message to Gemini interrupts what it is saying, so narrations wait while either side is talking
-// or the connection is down, and go out merged. What the app saw that the learner may be waiting
-// on (an urgent narration: a step done, something done wrong, a hazard) waits only for the coach,
-// not for the learner to stop. Each narration is recorded when it reaches the model.
+// or the connection is down, and go out merged. A thinking voice that ends its turn still working
+// (it said "Let's brew coffee" and is about to call start_lesson) counts as talking until it is
+// idle: a message then cuts into its reasoning, and it asks the learner to wait and makes the call
+// late, or twice. What the app saw that the learner may be waiting on (an urgent narration: a step
+// done, something done wrong, a hazard) waits only for the coach, not for the learner to stop. Each
+// narration is recorded when it reaches the model.
 //
 // A non-blocking call (look_closer, which asks the smart model) answers a second or two later, as
 // the call's result; the model says it once nobody is talking. If its connection closed meanwhile,
@@ -36,8 +39,9 @@ import type { CoachToolbox } from './toolbox';
 //
 // It publishes conversation state (coach.voice) when it changes: speaking
 // from the model's first audio until the speaker has played the turn out (or a barge-in or a
-// dropped connection cuts it), hearing while the learner's words keep arriving. A coach without a
-// microphone can't hear, so its voice stays off.
+// dropped connection cuts it), hearing while the learner's words keep arriving, and thinking while
+// Clio owes an answer it hasn't started saying. A coach without a microphone can't hear, so its
+// voice stays off.
 
 export interface CoachSessionDeps {
   agent: RealtimeAgent;
@@ -67,6 +71,13 @@ const LEARNER_QUIET_MS = 1200;
 const MAX_HOLD_MS = 6000;
 /** Remember this many tool calls, for cancellations. */
 const REMEMBERED_CALLS = 50;
+/**
+ * A voice that ended its turn still working calls its tool 2 to 4 s later and then goes idle; one
+ * that never says it is idle counts as talking for at most this long.
+ */
+const WORKING_MAX_MS = 15_000;
+/** Asked something, Clio is thinking until it answers, or for at most this long. */
+const REPLY_WAIT_MS = 8000;
 /**
  * A thinking voice says what it starts, ends its turn and calls start_lesson 1 to 4 s later, so
  * it is told to start a lesson only once it has been quiet this long since the learner spoke.
@@ -133,6 +144,10 @@ export class CoachSession {
   private lastLearnerT = Number.NEGATIVE_INFINITY;
   /** When the model last spoke or called a tool. */
   private lastCoachT = Number.NEGATIVE_INFINITY;
+  /** When the model ended its turn still working, until a turn ends with it idle. */
+  private workingSince: number | null = null;
+  /** When a narration that asks the model to speak last reached it. */
+  private askedT = Number.NEGATIVE_INFINITY;
   /** When the learner last spoke with no lesson running, until one starts or they are asked. */
   private unstarted: number | null = null;
   private held: Narration[] = [];
@@ -188,9 +203,10 @@ export class CoachSession {
         voice.stop();
         this.updateVoice();
       }),
-      events.on('turnComplete', () => {
+      events.on('turnComplete', ({ working }) => {
         this.speaking = false;
         this.lastCoachT = clock.now();
+        this.workingSince = working ? this.lastCoachT : null;
         if (this.speech === 'turn') this.speech = 'tail';
         this.updateVoice();
       }),
@@ -343,6 +359,7 @@ export class CoachSession {
     this.updateVoice();
     if (state !== 'ready') {
       this.speaking = false;
+      this.workingSince = null;
       // The next connection never made the calls still running.
       for (const call of this.calls.values()) {
         if (call.ok === undefined && isNonBlockingTool(call.name)) call.orphaned = true;
@@ -470,7 +487,22 @@ export class CoachSession {
     if (!this.hears) return 'off';
     if (this.state !== 'ready') return 'quiet';
     if (this.speech !== 'none') return 'speaking';
-    return t - this.lastLearnerT < LEARNER_QUIET_MS ? 'hearing' : 'quiet';
+    if (t - this.lastLearnerT < LEARNER_QUIET_MS) return 'hearing';
+    return this.thinking(t) ? 'thinking' : 'quiet';
+  }
+
+  /**
+   * Clio owes an answer it hasn't started saying: its turn is under way with nothing said yet, it
+   * ended a turn still reasoning, a call it made is still running, or the learner or a narration
+   * asked it something lately and it hasn't answered since.
+   */
+  private thinking(t: number): boolean {
+    if (this.speaking || this.working(t)) return true;
+    for (const call of this.calls.values()) {
+      if (call.ok === undefined && !call.orphaned) return true;
+    }
+    const asked = Math.max(this.lastLearnerT, this.askedT);
+    return asked > this.lastCoachT && t - asked < REPLY_WAIT_MS;
   }
 
   /** Closed while there is no connection or either side is talking (`learner` false: the coach). */
@@ -478,8 +510,14 @@ export class CoachSession {
     return (
       this.state !== 'ready' ||
       this.speaking ||
+      this.working(t) ||
       (learner && t - this.lastLearnerT < LEARNER_QUIET_MS)
     );
+  }
+
+  /** The model ended its turn still reasoning, lately enough that its tool call may yet come. */
+  private working(t: number): boolean {
+    return this.workingSince !== null && t - this.workingSince < WORKING_MAX_MS;
   }
 
   /** What is held may go out: an urgent narration doesn't wait for the learner to stop. */
@@ -547,7 +585,9 @@ export class CoachSession {
     });
   }
 
-  private record({ kind, text }: Narration): void {
-    this.deps.bus.emit('coach.narration', { t: this.deps.clock.now(), kind, text });
+  private record({ kind, text, reply }: Narration): void {
+    const t = this.deps.clock.now();
+    if (reply) this.askedT = t;
+    this.deps.bus.emit('coach.narration', { t, kind, text });
   }
 }

@@ -1,12 +1,4 @@
-import {
-  Group,
-  Mesh,
-  MeshBasicMaterial,
-  PlaneGeometry,
-  Shape,
-  ShapeGeometry,
-  Vector3,
-} from 'three';
+import { Group, Mesh, MeshBasicMaterial, PlaneGeometry, Vector3 } from 'three';
 import type { Text } from 'troika-three-text';
 import { rotateVec } from '../../../core/math';
 import { jointPosition } from '../../../domain/hands/features';
@@ -14,10 +6,21 @@ import { drawOnTop } from '../on-top';
 import { InstructionPanelMotion } from '../panel-motion';
 import type { PresentContext, Presenter } from '../presenter';
 import { makeText, setText } from '../text';
+import {
+  ARMED_W,
+  CLOSE_D,
+  CloseButton,
+  roundedRect,
+  STRIP_H,
+  VoiceStrip,
+  type VoiceStripState,
+} from './card-controls';
 
 // A content-fitted instruction card, placed beside the objects by panel-placement.ts. The step and
 // instruction lead; corrections appear only when the learner needs them. Conversation stays in
-// the voice channel, without a duplicate transcript or a listening indicator.
+// the voice channel, without a duplicate transcript: the voice strip across the card's top only
+// moves while someone speaks or Clio thinks (card-controls.ts). Its red close button ends the
+// lesson, whatever stage it is at, and the card asks what the learner wants instead.
 
 const TOP = 0.15;
 /** The card's fixed top edge; width and height come from its rendered content. */
@@ -44,6 +47,12 @@ const GAP_BUTTON = 0.018;
 const PAD_BOTTOM = 0.022;
 const BUTTON_W = 0.076;
 const BUTTON_H = 0.037;
+const HEADER_LINE = HEADER_SIZE * LINE;
+/** Between the step count and the close button. */
+const CONTROL_GAP = 0.008;
+/** The voice strip sits this far below the card's top edge, and this far above the top row. */
+const STRIP_MARGIN = 0.01;
+const STRIP_GAP = 0.009;
 const MOTION_PREFERENCE =
   typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
 
@@ -68,6 +77,11 @@ export class InstructionPanelPresenter implements Presenter {
   );
   private readonly button = new Group();
   private readonly buttonMaterial = new MeshBasicMaterial({ color: BUTTON_COLOR });
+  private readonly strip = new VoiceStrip();
+  private readonly close = new CloseButton();
+  /** The card keeps room for the voice strip: a coach listens, or a lesson is being planned. */
+  private stripSlot = false;
+  private readonly tips: Vector3[] = [];
   private lastPress = Number.NEGATIVE_INFINITY;
   private panelW = MIN_WIDTH;
   private panelH = 0.1;
@@ -93,8 +107,15 @@ export class InstructionPanelPresenter implements Presenter {
    */
   coveredBy: ((tip: Vector3) => boolean) | null = null;
 
-  /** @param onDone called when the learner touches the Done button. */
-  constructor(private readonly onDone: () => void) {
+  /**
+   * @param onDone called when the learner touches the Done button.
+   * @param onClose called when the learner ends the lesson with the close button; without it the
+   *   card has none.
+   */
+  constructor(
+    private readonly onDone: () => void,
+    private readonly onClose?: () => void,
+  ) {
     const buttonBg = new Mesh(roundedRect(BUTTON_W, BUTTON_H, BUTTON_H / 2), this.buttonMaterial);
     const buttonLabel = makeText({
       size: 0.014,
@@ -118,6 +139,9 @@ export class InstructionPanelPresenter implements Presenter {
     for (const measure of this.measures) measure.addEventListener('synccomplete', this.measureDone);
     this.object.visible = false;
     this.bar.position.z = 0.002;
+    this.strip.object.position.z = 0.002;
+    this.close.object.position.z = 0.003;
+    this.close.object.visible = false;
     this.object.add(
       this.background,
       this.header,
@@ -126,9 +150,11 @@ export class InstructionPanelPresenter implements Presenter {
       this.status,
       this.bar,
       this.button,
+      this.strip.object,
+      this.close.object,
     );
     // Over the glow and the hands (on-top.ts), layered by renderOrder: the card, then the bar and
-    // the text, then the button and its label.
+    // the text, then the buttons and the voice strip, then the buttons' labels.
     this.background.renderOrder = 0;
     this.bar.renderOrder = 1;
     for (const text of [this.header, this.instruction, this.detail, this.status]) {
@@ -147,6 +173,21 @@ export class InstructionPanelPresenter implements Presenter {
 
   get panelHeight(): number {
     return this.panelH;
+  }
+
+  /** What the voice strip shows now, and each bar's height (m). */
+  get voiceStrip(): { state: VoiceStripState; levels: readonly number[] } {
+    return { state: this.strip.showing, levels: this.strip.levels };
+  }
+
+  /** Where the close button's circle is, world space (written into `out`). */
+  closeButtonAt(out: Vector3): Vector3 {
+    return this.close.object.getWorldPosition(out);
+  }
+
+  /** Whether the close button shows, and whether its next touch ends the lesson. */
+  get closeButton(): { visible: boolean; armed: boolean } {
+    return { visible: this.close.object.visible, armed: this.close.armed };
   }
 
   update(ctx: PresentContext): void {
@@ -170,8 +211,17 @@ export class InstructionPanelPresenter implements Presenter {
     }
 
     const withButton = !!s.instruction && !ctx.calibration;
-    if (this.button.visible !== withButton) {
+    const withClose = !!this.onClose && !ctx.calibration && s.phase !== 'idle';
+    const stripSlot = s.voice !== 'off' || s.phase === 'planning';
+    if (
+      this.button.visible !== withButton ||
+      this.close.object.visible !== withClose ||
+      this.stripSlot !== stripSlot
+    ) {
       this.button.visible = withButton;
+      this.close.object.visible = withClose;
+      if (!withClose) this.close.disarm();
+      this.stripSlot = stripSlot;
       this.layout();
     }
     const missing = s.missing.length
@@ -192,7 +242,17 @@ export class InstructionPanelPresenter implements Presenter {
     this.progress = Math.max(0, Math.min(1, s.instruction?.progress ?? 0));
     this.layout();
     this.follow(ctx);
+    const voice: VoiceStripState =
+      s.voice === 'speaking' || s.voice === 'hearing'
+        ? s.voice
+        : s.voice === 'thinking' || s.phase === 'planning'
+          ? 'thinking'
+          : null;
+    this.strip.update(stripSlot ? voice : null, ctx.t, ctx.dt, MOTION_PREFERENCE?.matches ?? false);
     if (withButton && this.object.visible) this.pressCheck(ctx);
+    if (withClose && this.object.visible) this.closeCheck(ctx);
+    // Armed, the close button's pill takes the top row.
+    this.header.visible = !this.close.armed;
   }
 
   /** Choose a wrap measure from real unwrapped glyph area, never a character-count estimate. */
@@ -223,11 +283,22 @@ export class InstructionPanelPresenter implements Presenter {
   }
 
   private layout(): void {
+    // The voice strip across the top, then the top row: the step count, and the close button on
+    // the right.
+    const rowTop = this.stripSlot ? TOP - STRIP_MARGIN - STRIP_H - STRIP_GAP : HEADER_Y;
     const headerHeight = measuredHeight(this.header);
-    let y = HEADER_Y - (headerHeight > 0 ? Math.max(headerHeight, HEADER_SIZE * LINE) : 0);
+    const headerLine = headerHeight > 0 ? Math.max(headerHeight, HEADER_LINE) : 0;
+    const withClose = this.close.object.visible;
+    const rowHeight = Math.max(headerLine, withClose ? CLOSE_D : 0);
+    const controls = withClose ? CLOSE_D : 0;
+    const rowCenter = rowTop - rowHeight / 2;
+    this.header.position.y = rowCenter + headerLine / 2;
+    let y = rowTop - rowHeight;
     const instruction = measuredHeight(this.instruction);
     if (instruction > 0) {
-      const gap = headerHeight > 0 ? GAP_HEADER : 0;
+      // A row taller than the step count keeps the text's spacing, not the controls'.
+      const gap =
+        rowHeight > 0 ? Math.max(0.006, GAP_HEADER - Math.max(0, rowHeight - HEADER_LINE) / 2) : 0;
       this.instruction.position.y = y - gap;
       y -= gap + instruction;
     }
@@ -246,7 +317,14 @@ export class InstructionPanelPresenter implements Presenter {
     const height = TOP - bottom;
     const minWidth = this.button.visible ? MIN_WIDTH : MIN_PHASE_WIDTH;
     const lines = [this.header, this.instruction, this.detail, this.status];
-    const width = Math.max(minWidth, ...lines.map(measuredWidth).map((w) => w + PAD * 2));
+    const headerWidth = measuredWidth(this.header);
+    const row = headerWidth + controls + (headerWidth > 0 && controls > 0 ? CONTROL_GAP * 2 : 0);
+    const width = Math.max(
+      minWidth,
+      ...lines.map(measuredWidth).map((w) => w + PAD * 2),
+      row + PAD * 2,
+      withClose ? ARMED_W + PAD * 2 : 0,
+    );
     const resized = Math.abs(width - this.panelW) > 1e-6 || Math.abs(height - this.panelH) > 1e-6;
     if (resized) {
       this.background.geometry.dispose();
@@ -262,6 +340,10 @@ export class InstructionPanelPresenter implements Presenter {
       bottom + PAD_BOTTOM + BUTTON_H / 2,
       0.003,
     );
+    const closeX = this.panelW / 2 - PAD - CLOSE_D / 2;
+    this.close.object.position.set(closeX, rowCenter, 0.003);
+    this.strip.setWidth(this.panelW - PAD * 2);
+    this.strip.object.position.set(0, TOP - STRIP_MARGIN - STRIP_H / 2, 0.002);
     this.bar.visible = this.progress > 0;
     this.bar.scale.x = Math.max(0.0001, this.progress * (this.panelW - PAD * 2));
     this.bar.position.x = left + (this.progress * (this.panelW - PAD * 2)) / 2;
@@ -302,7 +384,23 @@ export class InstructionPanelPresenter implements Presenter {
     }
   }
 
+  /** Fingertips (either hand) on the close button: the first touch arms it, the next ends. */
+  private closeCheck(ctx: PresentContext): void {
+    this.tips.length = 0;
+    for (const hand of [ctx.hands?.left, ctx.hands?.right]) {
+      if (!hand) continue;
+      const tip = jointPosition(hand, 'index-finger-tip');
+      const w = ctx.worldFromWorkspace;
+      const r = rotateVec(w.q, tip);
+      this.tips.push(new Vector3(w.p[0] + r[0], w.p[1] + r[1], w.p[2] + r[2]));
+    }
+    const covered = (tip: Vector3) => this.coveredBy?.(tip) ?? false;
+    if (this.close.update(ctx.t, this.tips, covered)) this.onClose?.();
+  }
+
   dispose(): void {
+    this.strip.dispose();
+    this.close.dispose();
     for (const text of [this.header, this.instruction, this.detail, this.status]) {
       text.removeEventListener('synccomplete', this.relayout);
       text.dispose();
@@ -325,24 +423,6 @@ export function stepHeader(index: number, total: number): string {
   return `Step ${Math.min(index + 1, total)} of ${total}`;
 }
 
-/** Centered planar surface with a measured radius, including pill buttons. */
-function roundedRect(width: number, height: number, radius: number): ShapeGeometry {
-  const x = -width / 2;
-  const y = -height / 2;
-  const r = Math.min(radius, width / 2, height / 2);
-  const shape = new Shape();
-  shape.moveTo(x + r, y);
-  shape.lineTo(x + width - r, y);
-  shape.quadraticCurveTo(x + width, y, x + width, y + r);
-  shape.lineTo(x + width, y + height - r);
-  shape.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
-  shape.lineTo(x + r, y + height);
-  shape.quadraticCurveTo(x, y + height, x, y + height - r);
-  shape.lineTo(x, y + r);
-  shape.quadraticCurveTo(x, y, x + r, y);
-  return new ShapeGeometry(shape, 10);
-}
-
 /** A completed result belongs to a specific text and wrap width, not the latest request. */
 function currentLayout(text: Text): boolean {
   const info = text.textRenderInfo;
@@ -361,7 +441,7 @@ function measuredHeight(text: Text): number {
 }
 
 const PHASE_TEXT: Partial<Record<string, string>> = {
-  idle: 'What do you want to do?',
+  idle: 'What can I help you with?',
   planning: 'Planning your lesson…',
   locating: 'Looking for the objects…',
   calibrating: 'Setting up…',

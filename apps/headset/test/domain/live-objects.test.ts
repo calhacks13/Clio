@@ -419,7 +419,8 @@ describe('LiveObjects', () => {
     live.handle(frame(2, 940, [detection('cap')]));
     live.handle(frame(3, 980, [detection('cap')]));
     await flush();
-    expect(table.asked).toHaveLength(1);
+    // One measurement running: its two rays and its grid.
+    expect(table.asked.map((rays) => rays.length > 2)).toEqual([false, true]);
     expect(samples.map((s) => [s.observedT, s.position])).toEqual([[940, null]]);
     table.release();
     await flush();
@@ -464,7 +465,7 @@ describe('LiveObjects', () => {
     const { live, samples, table } = setup();
     live.handle(frame(1, 900, [detection('cap')]));
     await flush();
-    // The two placement rays first, then one batch through the outline.
+    // The two placement rays, then the grid through the outline (from the depth map only).
     expect(table.asked).toHaveLength(2);
     const rays = table.asked[1]?.length ?? 0;
     expect(rays).toBeGreaterThan(1);
@@ -510,7 +511,8 @@ describe('LiveObjects', () => {
       [1450, true, true],
       [2000, false, false],
     ]);
-    expect(table.asked.filter((rays) => rays.length > 2)).toHaveLength(2);
+    // The grid goes with every distance measured (for the light's relief); two were recorded.
+    expect(table.asked.filter((rays) => rays.length > 2)).toHaveLength(4);
   });
 
   it('takes no surface samples for an object in hand, or without a depth source', async () => {
@@ -521,7 +523,8 @@ describe('LiveObjects', () => {
     await flush();
     expect(held.samples[0]).toMatchObject({ status: 'measured', positionMeasured: true });
     expect(held.samples[0]).not.toHaveProperty('surface');
-    expect(held.table.asked.map((rays) => rays.length)).toEqual([2]);
+    // Measured, grid and all (the light's relief still follows it), but nothing recorded.
+    expect(held.table.asked.map((rays) => rays.length > 2)).toEqual([false, true]);
 
     const blind = setup({ depth: false });
     blind.live.handle(frame(1, 900, [detection('cap')]));

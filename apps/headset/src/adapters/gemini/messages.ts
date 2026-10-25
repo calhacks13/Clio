@@ -11,6 +11,8 @@ export interface ServerMessageLike {
     outputTranscription?: { text?: string };
     interrupted?: boolean;
     turnComplete?: boolean;
+    /** Sent with turnComplete: IN_PROGRESS while the model is still reasoning, IDLE once done. */
+    interactionStatus?: string;
   };
   toolCall?: { functionCalls?: { id?: string; name?: string; args?: Record<string, unknown> }[] };
   toolCallCancellation?: { ids?: string[] };
@@ -23,7 +25,7 @@ export type Interpreted =
   | { kind: 'audio'; data: string; sampleRate: number }
   | { kind: 'transcript'; role: 'user' | 'coach'; text: string }
   | { kind: 'interrupted' }
-  | { kind: 'turnComplete' }
+  | { kind: 'turnComplete'; working?: true }
   | { kind: 'toolCalls'; calls: ToolCall[] }
   | { kind: 'toolCancel'; ids: string[] }
   | { kind: 'goAway'; timeLeft: string }
@@ -50,7 +52,11 @@ export function interpretServerMessage(msg: ServerMessageLike): Interpreted[] {
       out.push({ kind: 'transcript', role: 'coach', text: content.outputTranscription.text });
     }
     if (content.interrupted) out.push({ kind: 'interrupted' });
-    if (content.turnComplete) out.push({ kind: 'turnComplete' });
+    if (content.turnComplete) {
+      // A thinking model can end its spoken turn and go on reasoning to a tool call.
+      const working = content.interactionStatus === 'IN_PROGRESS';
+      out.push({ kind: 'turnComplete', ...(working ? { working } : {}) });
+    }
   }
   const calls = msg.toolCall?.functionCalls ?? [];
   if (calls.length > 0) {

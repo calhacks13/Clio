@@ -76,6 +76,14 @@ calling `start_lesson` or `end_lesson`, `CoachSession` tells it once, as an `[ap
 (`start_nudge`), to start one from what they said, or to ask what they want if they only greeted
 or thanked it.
 
+A turn that ends with more to come says so: Live sends `interactionStatus: IN_PROGRESS` with its
+`turnComplete` while the voice is still reasoning toward a call, and `IDLE` once it is done. Until
+then (at most 15 s) the voice counts as talking, so neither the nudge nor any other narration cuts
+in. A message sent into that reasoning derailed it in the desk lab after a finished lesson: the
+voice said "Let's place that pen on the book", the nudge came 6 s later, it answered "Please wait
+a moment while I finish up the previous request" and called `start_lesson` 25 s after the
+learner spoke, or went quiet for 20 s and then started the lesson twice.
+
 Measured on gemini-3.8-live-extended-thinking with ten spoken questions, twice each, no lesson
 running and no camera frame: the earlier wording ("ask one short question only when there is no
 plausible goal") started a lesson in 4 of 20 and otherwise answered in words or called

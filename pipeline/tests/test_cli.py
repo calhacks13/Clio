@@ -5,6 +5,7 @@ import signal
 import subprocess
 import sys
 import time
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -116,6 +117,37 @@ def test_export_lerobot_writes_a_dataset(episode_dir, tmp_path, capsys):
     info = json.loads((out / "meta" / "info.json").read_text())
     assert (info["fps"], info["total_frames"], info["total_episodes"]) == (15, 45, 1)
     assert "v3.0" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(not HAS_LEROBOT, reason="lerobot not installed")
+def test_export_archive_loads_as_a_v3_dataset(episode_dir, tmp_path):
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    out, archive = tmp_path / "dataset", tmp_path / "download.zip"
+    args = [
+        "export-lerobot",
+        str(episode_dir),
+        "--out",
+        str(out),
+        "--repo-id",
+        "local/test",
+        "--archive",
+        str(archive),
+    ]
+    assert main(args) == 0
+    with zipfile.ZipFile(archive) as bundle:
+        assert "meta/info.json" in bundle.namelist()
+        assert "meta/clio_episodes.jsonl" in bundle.namelist()
+        assert any(
+            name.startswith("data/") and name.endswith(".parquet") for name in bundle.namelist()
+        )
+        bundle.extractall(tmp_path / "unzipped")
+    ds = LeRobotDataset("local/test", root=tmp_path / "unzipped")
+    assert (ds.num_episodes, len(ds), ds.fps) == (1, 90, 30)
+    assert ds.meta.info.codebase_version == "v3.0"
+    before = archive.read_bytes()
+    assert main(args) == 1
+    assert archive.read_bytes() == before
 
 
 @pytest.mark.skipif(not HAS_LEROBOT, reason="lerobot not installed")

@@ -12,8 +12,16 @@ import {
   OneMinusSrcAlphaFactor,
   PlaneGeometry,
   ShaderMaterial,
+  Vector3,
+  Vector4,
 } from 'three';
-import type { ObjectOutline } from '../../domain/world/outline';
+import type { Vec3 } from '../../core/math';
+import {
+  type ObjectOutline,
+  type Point2,
+  type Relief,
+  reliefPoint,
+} from '../../domain/world/outline';
 import { frameGuard } from './frame-guard';
 import {
   DepthVariant,
@@ -35,6 +43,9 @@ import { cornerBrackets, mergeStrokes, type Stroke, strokePolyline } from './str
 // glow. A new mask only rebuilds that field; the quad, material and texture are reused. The light
 // breathes slowly and flares briefly when an object is found. A box alone does not identify a
 // surface: it gets honest corner brackets instead.
+//
+// Both lie on the object's relief when its outline has one (domain/world/outline.ts): a long
+// object's light is as near as each part of it, from end to end.
 //
 // The light keeps the room's depth order: it depth-tests (hand occluders hide it), and in an XR
 // session with a gpu-optimized depth map each eye's map fades it where a real surface is nearer
@@ -70,6 +81,8 @@ export class ObjectHighlight extends Group {
     interior: { value: this.mask.interior },
     interiorCount: { value: 0 },
     maxFront: { value: 0 },
+    relief: { value: new Vector4() },
+    fieldBounds: { value: new Vector3(0, 0, 1) },
   };
   private readonly edge = new Mesh(
     new BufferGeometry(),
@@ -106,6 +119,7 @@ export class ObjectHighlight extends Group {
   /** Off until set (the primary demo sets it; the lesson's targets draw as before). */
   private occlusion: XrDepthOcclusion | null = null;
   private readonly paths: (readonly [number, number][])[] = [[]];
+  private relief: Relief | null = null;
   /** performance.now() when the light was last lit; -Infinity until the first outline. */
   private ignitedAt = Number.NEGATIVE_INFINITY;
   private hasEdges = false;
@@ -148,6 +162,7 @@ export class ObjectHighlight extends Group {
 
   setOutline(outline: ObjectOutline, mode: ObjectGlowMode = 'surface'): void {
     const { points } = outline;
+    this.setRelief(outline.relief ?? null);
     if (outline.shape !== 'contour') {
       this.glow.visible = false;
       this.setBrackets(points);
@@ -181,8 +196,14 @@ export class ObjectHighlight extends Group {
       MAX_FRONT_M,
       MAX_FRONT_SHARE * Math.max(right - left, top - bottom),
     );
+    u.fieldBounds.value.set(bounds.x, bounds.y, bounds.size);
     this.glow.position.set(bounds.x, bounds.y, 0);
     this.glow.scale.set(bounds.size, bounds.size, 1);
+  }
+
+  /** Where outline point `p` is drawn: on the relief, in this group's frame (x, y, z in meters). */
+  surfacePoint(p: Point2): Vec3 {
+    return reliefPoint(this.relief, p);
   }
 
   /**
@@ -200,6 +221,11 @@ export class ObjectHighlight extends Group {
     const { glow, mask, glowUniforms } = this;
     return {
       matrixWorld: glow.matrixWorld,
+      local: (u, v) => {
+        const [bx, by, size] = glowUniforms.fieldBounds.value.toArray();
+        const [x, y, z] = this.surfacePoint([bx + (u - 0.5) * size, by + (v - 0.5) * size]);
+        return [(x - bx) / size, (y - by) / size, z];
+      },
       interior: mask.interior,
       get interiorCount() {
         return glowUniforms.interiorCount.value;
@@ -243,12 +269,26 @@ export class ObjectHighlight extends Group {
     super.dispose();
   }
 
+  private setRelief(relief: Relief | null): void {
+    this.relief = relief;
+    const r = relief ?? { offset: 0, slopeX: 0, slopeY: 0, distance: 0 };
+    this.glowUniforms.relief.value.set(r.offset, r.slopeX, r.slopeY, r.distance);
+  }
+
   private setBrackets(points: readonly [number, number][]): void {
     const strokes = cornerBrackets(points, BRACKET_SHARE).map((path) =>
       strokePolyline(path, { width: EDGE_M, closed: false }),
     );
+    const stroke = mergeStrokes(strokes);
+    const { positions } = stroke;
+    for (let i = 0; i < positions.length; i += 3) {
+      const [x, y, z] = this.surfacePoint([positions[i] as number, positions[i + 1] as number]);
+      positions[i] = x;
+      positions[i + 1] = y;
+      positions[i + 2] = z;
+    }
     this.edge.geometry.dispose();
-    this.edge.geometry = geometryFor(mergeStrokes(strokes));
+    this.edge.geometry = geometryFor(stroke);
     this.edge.visible = true;
     this.hasEdges = true;
   }

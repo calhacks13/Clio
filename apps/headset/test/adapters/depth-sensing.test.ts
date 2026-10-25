@@ -850,6 +850,14 @@ describe('preferDepthSensing', () => {
     expect(hitTest.asked).toEqual([1]);
   });
 
+  it('asks hit-test nothing for rays only a depth map can use', async () => {
+    const sensing = source([hit(-0.5), null]);
+    const hitTest = source([hit(-1.9)]);
+    const both = preferDepthSensing(sensing, hitTest);
+    expect(await both?.measure(rays, { mapOnly: true })).toEqual([hit(-0.5), null]);
+    expect(hitTest.asked).toEqual([]);
+  });
+
   it('uses whichever exists', () => {
     const only = source([]);
     expect(preferDepthSensing(null, only)).toBe(only);

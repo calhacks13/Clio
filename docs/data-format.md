@@ -25,8 +25,8 @@ data/
 ├── episodes/<episodeId>/
 │   ├── meta.json        EpisodeMeta: written once when the episode is created
 │   ├── frames.ndjson    one FrameRecord per line, in time order
-│   ├── events.ndjson    one EpisodeEvent per line, in time order
-│   ├── objects.ndjson   one ObjectTrackRecord per tracker update, in time order
+│   ├── events.ndjson    one EpisodeEvent per line, in arrival order
+│   ├── objects.ndjson   one ObjectTrackRecord per tracker update, in arrival order
 │   ├── observations.ndjson  one ObjectObservation per 2D object-finder answer (optional)
 │   ├── finish.json      EpisodeFinish: written when the headset finishes the episode
 │   ├── batches.json     server bookkeeping: {"received": [seq…], "gaps": [seq…]}
@@ -39,6 +39,11 @@ data/
 
 Episode ids look like `ep-20261024-031502-k3f9` (UTC timestamp plus a random suffix), so they sort
 by creation time.
+
+Frames must be in timestamp order. Events, object updates and observations can arrive out of
+order from asynchronous callbacks. The Python loader stably sorts these channels by recorded `t`,
+preserving file order for equal timestamps. Validation checks every record's schema without
+rejecting delayed arrivals; raw files and timestamps remain unchanged.
 
 ## `meta.json`: `EpisodeMeta`
 

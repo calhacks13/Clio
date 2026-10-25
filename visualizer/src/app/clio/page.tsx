@@ -15,6 +15,7 @@ import Link from "next/link";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { LuChevronRight, LuRadio } from "react-icons/lu";
 import { ClioBrand } from "@/components/clio-brand";
+import { DatasetExport } from "@/components/clio/dataset-export";
 import { Spinner, ThemeToggle } from "@/components/ui";
 import { missingBatches } from "@/lib/clio/lanes";
 import { LIVE_GROWTH_MS, STATUS_EVERY_MS } from "@/lib/clio/source";
@@ -65,6 +66,7 @@ interface Row {
   startedAtMs: number;
   status: EpisodeStatus;
   missing: number;
+  exportable: boolean;
 }
 
 const changed = (a: EpisodeSummary, b: EpisodeSummary) =>
@@ -123,6 +125,12 @@ function rowOf(known: Known, nowMs: number): Row {
     startedAtMs: Date.parse(summary.createdAt),
     status,
     missing: missingBatches(batches),
+    exportable:
+      !!detail?.finish &&
+      summary.frameCount > 0 &&
+      (!detail.batches ||
+        (detail.batches.gaps.length === 0 &&
+          detail.batches.received === detail.finish.batches)),
   };
 }
 
@@ -214,6 +222,11 @@ function StatusPill({ status }: { status: EpisodeStatus }) {
 
 export default function ClioRecordingsPage() {
   const { rows, failed, retry } = useRecordings();
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const eligible = rows?.filter((row) => row.exportable) ?? [];
+  const selectedIds = eligible
+    .filter((row) => selected.has(row.id))
+    .map((row) => row.id);
   return (
     <div className="min-h-screen bg-bg text-fg">
       <header className="workspace-header">
@@ -237,6 +250,7 @@ export default function ClioRecordingsPage() {
             Follow live
           </Link>
         </div>
+        <DatasetExport episodeIds={selectedIds} disabled={failed} />
         {failed && (
           <div
             role="alert"
@@ -260,40 +274,88 @@ export default function ClioRecordingsPage() {
           <p className="mt-8 text-sm text-fg-muted">No recordings yet</p>
         )}
         {rows !== null && rows.length > 0 && (
-          <ul className="mt-6" aria-label="Recordings">
-            {rows.map((row) => (
-              <li key={row.id}>
-                <Link
-                  href={`/clio/${encodeURIComponent(row.id)}`}
-                  className="dataset-row"
+          <>
+            <div className="mt-6 flex items-center gap-3 text-sm">
+              <button
+                type="button"
+                className="btn"
+                disabled={eligible.length === 0}
+                onClick={() =>
+                  setSelected(new Set(eligible.map((row) => row.id)))
+                }
+              >
+                Select finished
+              </button>
+              {selectedIds.length > 0 && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => setSelected(new Set())}
                 >
-                  <span className="flex min-w-0 flex-wrap items-baseline gap-x-4 gap-y-1">
-                    <span className="min-w-0 break-words font-medium">
-                      {row.title ?? " "}
-                    </span>
-                    <span className="text-xs text-fg-muted tabular">
-                      {startFormat.format(row.startedAtMs)}
-                    </span>
-                  </span>
-                  <span className="flex shrink-0 items-center gap-3">
-                    {row.missing > 0 && (
-                      <span className="text-xs font-medium text-flag-fg tabular">
-                        {row.missing === 1
-                          ? "1 batch missing"
-                          : `${row.missing} batches missing`}
-                      </span>
-                    )}
-                    <StatusPill status={row.status} />
-                    <LuChevronRight
-                      size={16}
-                      className="text-fg-muted"
-                      aria-hidden="true"
+                  Clear selection
+                </button>
+              )}
+            </div>
+            <ul className="mt-6" aria-label="Recordings">
+              {rows.map((row) => (
+                <li key={row.id} className="flex items-center gap-3">
+                  <label
+                    className="flex min-h-11 w-11 shrink-0 items-center justify-center"
+                    title={
+                      row.exportable
+                        ? "Include in dataset"
+                        : "Finish this recording and resolve missing batches before exporting"
+                    }
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.includes(row.id)}
+                      disabled={!row.exportable}
+                      aria-label={`Include ${row.title ?? "recording"} ${startFormat.format(row.startedAtMs)} in dataset`}
+                      className="h-4 w-4 accent-[var(--fg)]"
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setSelected((previous) => {
+                          const next = new Set(previous);
+                          if (checked) next.add(row.id);
+                          else next.delete(row.id);
+                          return next;
+                        });
+                      }}
                     />
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
+                  </label>
+                  <Link
+                    href={`/clio/${encodeURIComponent(row.id)}`}
+                    className="dataset-row min-w-0 flex-1 flex-wrap gap-y-2"
+                  >
+                    <span className="flex min-w-0 flex-wrap items-baseline gap-x-4 gap-y-1">
+                      <span className="min-w-0 break-words font-medium">
+                        {row.title ?? " "}
+                      </span>
+                      <span className="text-xs text-fg-muted tabular">
+                        {startFormat.format(row.startedAtMs)}
+                      </span>
+                    </span>
+                    <span className="flex shrink-0 items-center gap-3">
+                      {row.missing > 0 && (
+                        <span className="text-xs font-medium text-flag-fg tabular">
+                          {row.missing === 1
+                            ? "1 batch missing"
+                            : `${row.missing} batches missing`}
+                        </span>
+                      )}
+                      <StatusPill status={row.status} />
+                      <LuChevronRight
+                        size={16}
+                        className="text-fg-muted"
+                        aria-hidden="true"
+                      />
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </>
         )}
       </main>
     </div>

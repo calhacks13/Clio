@@ -1,5 +1,6 @@
 import { dot, madd, sub } from '../../core/math';
 import type { Ray } from './camera-model';
+import type { Relief } from './outline';
 import type { DepthKind, ObjectDepth, ObjectMask } from './placement';
 
 // The tracker's masks come 20 to 30 times a second, and measuring an object's distance with
@@ -10,6 +11,7 @@ import type { DepthKind, ObjectDepth, ObjectMask } from './placement';
 // frame. A new target (a new name, or found again after it was lost) is measured first, and so is
 // a mask more than twice MOVE_SHARE from the one last measured: the target moved far, or the
 // tracker moved it to another object of the same name, and the old distance would misplace it.
+// The object's relief (its surface about the outline's plane, outline.ts) is reused with it.
 
 export interface DepthMemoryOptions {
   /** Measure the target again this often (ms). */
@@ -33,6 +35,7 @@ interface Measured {
   /** Meters along the mask's point ray. */
   distance: number;
   kind: DepthKind;
+  relief: Relief | null;
   /** The box of the mask measured. */
   box: Box | null;
   t: number;
@@ -73,7 +76,8 @@ export class DepthMemory {
     const box = boxOf(mask);
     const maxMove = this.options.reuseMoveShare ?? 2 * MOVE_SHARE;
     if (box !== null && m.box !== null && moved(box, m.box) > maxMove) return null;
-    return { center: madd(pointRay.origin, pointRay.direction, m.distance), kind: m.kind };
+    const center = madd(pointRay.origin, pointRay.direction, m.distance);
+    return m.relief ? { center, kind: m.kind, relief: m.relief } : { center, kind: m.kind };
   }
 
   /** Whether to measure `target` in `mask` now; true counts as asking. */
@@ -105,7 +109,14 @@ export class DepthMemory {
   ): void {
     const distance = dot(sub(depth.center, pointRay.origin), pointRay.direction);
     if (epoch !== this.forgotten || !(distance > 0)) return;
-    this.measured = { target, distance, kind: depth.kind, box: boxOf(mask), t: now };
+    this.measured = {
+      target,
+      distance,
+      kind: depth.kind,
+      relief: depth.relief ?? null,
+      box: boxOf(mask),
+      t: now,
+    };
   }
 
   /** The target was lost or replaced: measure the next one first. */

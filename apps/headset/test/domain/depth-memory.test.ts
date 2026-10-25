@@ -49,6 +49,32 @@ describe('DepthMemory', () => {
     expect(depth?.center[2]).toBeCloseTo(-0.8 * 0.5);
   });
 
+  it('reuses the relief measured with the distance', () => {
+    const memory = new DepthMemory();
+    const relief = { offset: 0.01, slopeX: 0, slopeY: 0.8, distance: 0.5 };
+    memory.remember(
+      'tube',
+      mask(BOX),
+      forward,
+      { center: [0, 1.2, -0.5], kind: 'point', relief, samples: [[0, 1.2, -0.5]] },
+      0,
+      memory.epoch,
+    );
+    const depth = memory.reuse('tube', mask(BOX), forward, 50);
+    expect(depth?.relief).toEqual(relief);
+    // The samples belong to their own frame.
+    expect(depth).not.toHaveProperty('samples');
+    memory.remember(
+      'tube',
+      mask(BOX),
+      forward,
+      { center: [0, 1.2, -0.5], kind: 'point' },
+      60,
+      memory.epoch,
+    );
+    expect(memory.reuse('tube', mask(BOX), forward, 70)).not.toHaveProperty('relief');
+  });
+
   it('measures first when the mask moved far from the one measured', () => {
     const memory = new DepthMemory();
     const near: ObjectDepth = { center: [0, 1.2, -0.4], kind: 'contact' };

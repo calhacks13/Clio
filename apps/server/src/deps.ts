@@ -1,5 +1,6 @@
 import { consoleLogger, type Logger } from './log';
 import type { BenchModels } from './services/bench';
+import type { DatasetExporter } from './services/dataset-exporter';
 import type { EpisodeCompiler } from './services/episode-compiler';
 import type { FocusFinder } from './services/focus';
 import type { RestMode } from './services/plan-service';
@@ -80,6 +81,7 @@ export interface AppDeps {
   primary?: PrimaryObjectFinder | null;
   /** Compiles finished episodes in the background: null (or absent) when compiling is off. */
   compiler?: EpisodeCompiler | null;
+  datasetExporter?: DatasetExporter | null;
   /** Builds compiled episodes' scenes in the background: null (or absent) when that is off. */
   sceneBuilder?: SceneBuilder | null;
   now?: () => Date;
@@ -98,6 +100,7 @@ type OptionalServices =
   | 'bench'
   | 'primary'
   | 'compiler'
+  | 'datasetExporter'
   | 'sceneBuilder';
 
 export interface ServerDeps extends Required<Omit<AppDeps, 'limits' | OptionalServices>> {
@@ -111,6 +114,7 @@ export interface ServerDeps extends Required<Omit<AppDeps, 'limits' | OptionalSe
   bench: BenchDeps | null;
   primary: PrimaryObjectFinder | null;
   compiler: EpisodeCompiler | null;
+  datasetExporter: DatasetExporter | null;
   sceneBuilder: SceneBuilder | null;
   limits: BodyLimits;
 }
@@ -128,6 +132,7 @@ export function resolveDeps(deps: AppDeps): ServerDeps {
     bench: deps.bench ?? null,
     primary: deps.primary ?? null,
     compiler: deps.compiler ?? null,
+    datasetExporter: deps.datasetExporter ?? null,
     sceneBuilder: deps.sceneBuilder ?? null,
     now: deps.now ?? (() => new Date()),
     logger: deps.logger ?? consoleLogger,

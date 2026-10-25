@@ -1,4 +1,4 @@
-import { composePose, dot, madd, type Pose, sub, type Vec3 } from '../../core/math';
+import { composePose, dot, length, madd, type Pose, sub, type Vec3 } from '../../core/math';
 import {
   type CameraModel,
   intersectPlaneY,
@@ -8,7 +8,15 @@ import {
 } from './camera-model';
 import type { DepthHit, DepthSource } from './depth-source';
 import type { SurfaceRaycaster } from './grounding';
-import { billboard, boxPolygon, liftOutline, type ObjectOutline, outlinePoint } from './outline';
+import {
+  billboard,
+  boxPolygon,
+  fitRelief,
+  liftOutline,
+  type ObjectOutline,
+  outlinePoint,
+  type Relief,
+} from './outline';
 import { workspaceInFrontOf } from './workspace';
 
 // Where the main object is in the room. The camera saw it along rays from where it was at capture
@@ -16,8 +24,8 @@ import { workspaceInFrontOf } from './workspace';
 // object's real distance along those rays, or it lines up only for the eye next to the camera.
 //
 // Distance, best first:
-//   contact  hit-test along the ray through the mask's contact point (where the object meets the
-//            table) lands on an upward-facing surface: the object stands there. If the inner
+//   contact  the ray through the mask's contact point (where the object meets the table or the
+//            floor) lands on an upward-facing surface: the object stands there. If the inner
 //            point's ray lands on that same surface, the object is lying flat (it is not in the
 //            scene mesh, and the table shows under its middle): its middle is there. If the point's
 //            ray stops nearer, the object is in front of that surface: its middle is that hit.
@@ -25,18 +33,16 @@ import { workspaceInFrontOf } from './workspace';
 //            object itself, at any distance), or hit-test along it lands on something within reach
 //            and no farther than the planes below it (the object itself in the scene mesh). A small
 //            object usually isn't in the mesh, so a far hit-test hit is the wall or shelf behind it.
-//   surface  the contact ray meets a detected plane, else the level plane a table would be on.
+//   surface  the contact ray meets a detected plane, else the level plane a table would be on
+//            (45 cm below the head): a guess for a room without a scan, the last resort but one.
 //   fixed    a set distance along the point's ray.
+// The floor is a surface like any other: a lesson on the carpet stands its objects on it.
 // The outline goes on a plane through the object that faces the camera, every vertex on its own
 // camera ray, so from the camera (and from both eyes, now that the depth is right) it covers the
-// object.
+// object. Asked for, the rays through a grid inside the outline are measured in the same frame,
+// from the depth map only: where it sees the object's surface along them, the outline gets that
+// surface's relief (outline.ts), so a long object is lit at its own depth from end to end.
 
-/**
- * Hits lower than this (m above the floor; local-floor puts it at y = 0) are the floor, which
- * every room setup has. The demo object sits on a table, so a ray that misses the room's tables
- * and reaches the floor means the table isn't in room setup, not that the object is on the floor.
- */
-const FLOOR_CLEARANCE_M = 0.3;
 /** A hit whose normal is within this of straight up is something an object can stand on. */
 const SUPPORT_COS = Math.cos((30 * Math.PI) / 180);
 /** The last resort's distance along the point's ray (m): about arm's length. */
@@ -70,30 +76,33 @@ export interface ObjectDepth {
   /** World space. */
   center: Vec3;
   kind: DepthKind;
+  /** Its surface about the outline's plane, where the depth map saw it through the grid rays. */
+  relief?: Relief;
+  /** World space: where each grid ray asked along met something (any hit); with grid rays only. */
+  samples?: Vec3[];
 }
 
 export interface Placement {
   /** World space: the object, and the center of its outline's plane. */
   center: Vec3;
-  /** The outline on that plane (x right, y up as seen from the camera). */
+  /** The outline on that plane (x right, y up as seen from the camera), with its relief. */
   outline: ObjectOutline;
   /** World space: the outline's vertices, each on its camera ray at the object's distance. */
   points: Vec3[];
   /** World space: the top center of the outline, where the name goes (just above). */
   label: Vec3;
   depth: DepthKind;
+  /** World space: the camera the outline was seen from (its plane faces it). */
+  eye?: Vec3;
 }
 
 /**
- * Real surfaces above the floor first, else the plane the lesson's default workspace sits on
- * (level, about 45 cm below the head at capture time).
+ * Real surfaces first, the floor among them, else the plane the lesson's default workspace sits
+ * on (level, about 45 cm below the head at capture time).
  */
 export function surfaceOrTable(surfaces: SurfaceRaycaster | null, head: Pose): SurfaceCast {
   const tableY = workspaceInFrontOf(head).p[1];
-  return (ray) => {
-    const hit = surfaces?.cast(ray);
-    return hit && hit[1] >= FLOOR_CLEARANCE_M ? hit : intersectPlaneY(ray, tableY);
-  };
+  return (ray) => surfaces?.cast(ray) ?? intersectPlaneY(ray, tableY);
 }
 
 const boxCenter = ([x0, y0, x1, y1]: NonNullable<ObjectMask['box']>): Uv => [
@@ -171,12 +180,9 @@ function standingAt(ray: Ray, base: Readonly<Vec3>): Vec3 {
   return [base[0], madd(ray.origin, ray.direction, s)[1], base[2]];
 }
 
-const aboveFloor = (hit: DepthHit | null): hit is DepthHit =>
-  hit !== null && hit.point[1] >= FLOOR_CLEARANCE_M;
-
-/** Something to stand on: above the floor and facing up. */
+/** Something to stand on: facing up (a table, a shelf, the floor). */
 const isSupport = (hit: DepthHit | null): hit is DepthHit =>
-  aboveFloor(hit) && hit.normal[1] >= SUPPORT_COS;
+  hit !== null && hit.normal[1] >= SUPPORT_COS;
 
 /**
  * From hit-test answers along the contact and point rays, or null when neither will do. A point
@@ -194,13 +200,13 @@ export function depthFromHits(
     }
     const standing = standingAt(rays.point, contact.point);
     const along = dot(sub(standing, rays.point.origin), rays.point.direction);
-    if (aboveFloor(point) && point.distance < along - IN_FRONT_M) {
+    if (point && point.distance < along - IN_FRONT_M) {
       return { center: point.point, kind: 'point' };
     }
     return { center: standing, kind: 'contact' };
   }
   // The depth map sees the object itself at any distance; the room mesh's far hits are behind it.
-  if (aboveFloor(point) && (point.sensed || point.distance <= reach)) {
+  if (point && (point.sensed || point.distance <= reach)) {
     return { center: point.point, kind: 'point' };
   }
   return null;
@@ -220,7 +226,9 @@ export function depthFromSurface(
 
 /**
  * How far the object in `mask` is, measured along its camera rays with hit-test (when there is a
- * probe), else from `surface`. Null only when the mask has no geometry.
+ * probe), else from `surface`. Null only when the mask has no geometry. `grid` (surfaceRays) is
+ * measured alongside, from the depth map only: a distance measured on the object then comes with
+ * the grid's hits (`samples`) and the relief of what the depth map saw of its surface.
  */
 export async function measureDepth(
   mask: ObjectMask,
@@ -228,12 +236,19 @@ export async function measureDepth(
   head: Pose,
   probe: DepthSource | null,
   surface: SurfaceCast,
+  grid: readonly Ray[] = [],
 ): Promise<ObjectDepth | null> {
   const rays = maskRays(mask, model, head);
   if (!rays) return null;
   if (probe) {
     const asked = rays.contact ? [rays.contact, rays.point] : [rays.point];
-    const hits = await probe.measure(asked);
+    // In the same frame, so both are answered from one depth map.
+    const [hits, gridHits] = await Promise.all([
+      probe.measure(asked),
+      grid.length > 0
+        ? probe.measure(grid, { mapOnly: true })
+        : Promise.resolve<(DepthHit | null)[]>([]),
+    ]);
     const contact = rays.contact ? (hits[0] ?? null) : null;
     const point = hits[asked.length - 1] ?? null;
     const below = surface(rays.point);
@@ -241,6 +256,13 @@ export async function measureDepth(
       ? Math.min(POINT_REACH_M, Math.hypot(...sub(below, rays.point.origin)) + POINT_PAST_SURFACE_M)
       : POINT_REACH_M;
     const measured = depthFromHits(rays, contact, point, reach);
+    if (measured && grid.length > 0) {
+      const found = gridHits.filter((hit): hit is DepthHit => hit !== null);
+      // Only the depth map sees a small object itself; the room mesh's hits are the room behind.
+      const seen = found.flatMap((hit) => (hit.sensed ? [hit.point] : []));
+      const relief = fitRelief(seen, measured.center, rays.point.origin);
+      return { ...measured, ...(relief ? { relief } : {}), samples: found.map((hit) => hit.point) };
+    }
     if (measured) return measured;
   }
   return depthFromSurface(rays, surface);
@@ -259,16 +281,26 @@ export function placeOutline(
 ): Placement | null {
   const polygon = mask.outline ?? (mask.box && boxPolygon([...mask.box]));
   const points2 = polygon && liftOutline(polygon, model, head, depth.center);
-  const plane = billboard(depth.center, composePose(head, model.headFromCamera).p);
+  const eye = composePose(head, model.headFromCamera).p;
+  const plane = billboard(depth.center, eye);
   if (!points2 || !plane) return null;
   const xs = points2.map(([x]) => x);
   const top = Math.max(...points2.map(([, y]) => y));
+  // A relief measured on another frame (a distance reused) is seen from this frame's camera.
+  const relief = depth.relief && { ...depth.relief, distance: length(sub(eye, depth.center)) };
+  const outline: ObjectOutline = {
+    points: points2,
+    shape: mask.outline ? 'contour' : 'box',
+    ...(relief ? { relief } : {}),
+  };
+  const labelAt: [number, number] = [(Math.min(...xs) + Math.max(...xs)) / 2, top];
   return {
     center: depth.center,
-    outline: { points: points2, shape: mask.outline ? 'contour' : 'box' },
-    points: points2.map((p) => outlinePoint(plane, depth.center, p)),
-    label: outlinePoint(plane, depth.center, [(Math.min(...xs) + Math.max(...xs)) / 2, top]),
+    outline,
+    points: points2.map((p) => outlinePoint(plane, depth.center, p, relief)),
+    label: outlinePoint(plane, depth.center, labelAt, relief),
     depth: depth.kind,
+    eye,
   };
 }
 

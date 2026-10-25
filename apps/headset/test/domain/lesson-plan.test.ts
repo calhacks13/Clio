@@ -1778,6 +1778,42 @@ describe('ending a lesson without another', () => {
     ).toEqual({ error: 'No lesson is running. Call start_lesson first.' });
   });
 
+  it('ends whatever lesson there is when the learner closes the card, and the coach hears so', async () => {
+    const live = setup();
+    const closed: (string | null)[] = [];
+    live.bus.on('lesson.closed', ({ ended }) => closed.push(ended));
+    await live.begin();
+    live.lesson.closeByUser();
+    expect(live.lesson.phase).toBe('idle');
+    expect(live.lesson.procedure).toBeNull();
+    expect(closed).toEqual(['add wiper fluid']);
+    await live.lesson.settled();
+    expect(live.sink.only().finish?.outcome).toBe('aborted');
+
+    // A finished lesson is put away too, so the card asks what they want to do.
+    const finished = setup();
+    finished.bus.on('lesson.closed', ({ ended }) => closed.push(ended));
+    await finished.begin();
+    for (let i = 0; i < 20 && finished.lesson.phase !== 'done'; i++) {
+      finished.lesson.confirmByUser('Done button');
+    }
+    expect(finished.lesson.phase).toBe('done');
+    finished.lesson.closeByUser();
+    expect(finished.lesson.phase).toBe('idle');
+    expect(closed).toEqual(['add wiper fluid', null]);
+
+    // One still being planned is dropped.
+    let answer: (r: PlanResponse) => void = () => {};
+    const held = setup({ planner: { plan: () => new Promise((r) => (answer = r)) } });
+    await held.tool('start_lesson', { goal: 'add wiper fluid' });
+    expect(held.lesson.phase).toBe('planning');
+    held.lesson.closeByUser();
+    expect(held.lesson.phase).toBe('idle');
+    answer({ planId: 'refill-fluid', procedure: plan, warnings: [] });
+    await held.lesson.settled();
+    expect(held.lesson.procedure).toBeNull();
+  });
+
   it("closes the coach's widgets as an abort does, also for a lesson still being planned", async () => {
     /** A board on the lesson's bus, its tools, and what it shows and has closed. */
     const widgetsOn = ({ bus, clock, lesson, annotations }: ReturnType<typeof setup>) => {

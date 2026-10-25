@@ -45,7 +45,11 @@ export interface AgentEvents {
   transcript: { role: 'user' | 'coach'; text: string; final: boolean };
   toolCalls: { calls: ToolCall[] };
   cancelledTools: { ids: string[] };
-  turnComplete: Record<string, never>;
+  /**
+   * The model's turn is over. `working`: it is still reasoning (a thinking Gemini voice), and a
+   * tool call or more speech may follow a few seconds later.
+   */
+  turnComplete: { working?: boolean };
 }
 
 export interface AgentSetup {

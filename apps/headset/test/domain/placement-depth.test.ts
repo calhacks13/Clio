@@ -21,6 +21,7 @@ import {
   placeDetection,
   placeOutline,
   surfaceOrTable,
+  surfaceRays,
 } from '../../src/domain/world/placement';
 
 // A Quest 3-like rig: the passthrough camera sits in front of the right eye (3.2 cm right, 2 cm
@@ -48,11 +49,14 @@ function pixel(pose: Pose, p: Readonly<Vec3>): [number, number] {
   return [intrinsics.cx + (intrinsics.fx * x) / -z, intrinsics.cy - (intrinsics.fy * y) / -z];
 }
 
-/** Normalized image coordinates in the passthrough camera. */
-function uv(p: Readonly<Vec3>): [number, number] {
-  const [px, py] = pixel(camera, p);
+/** Normalized image coordinates in a passthrough camera at `from`. */
+function uvFrom(from: Pose, p: Readonly<Vec3>): [number, number] {
+  const [px, py] = pixel(from, p);
   return [px / intrinsics.width, py / intrinsics.height];
 }
+
+/** Normalized image coordinates in the passthrough camera. */
+const uv = (p: Readonly<Vec3>): [number, number] => uvFrom(camera, p);
 
 /** Worst pixel distance between where two point sets appear to `pose`. */
 function worstPx(pose: Pose, a: readonly Vec3[], b: readonly Vec3[]): number {
@@ -136,7 +140,8 @@ describe('maskRays', () => {
 
 /**
  * A probe over fixed geometry: the table, and the object as a vertical card facing +z. `sensed`
- * answers as depth sensing does (the depth map), else as hit-test does (the room mesh).
+ * answers as depth sensing does (the depth map), else as hit-test does (the room mesh, which
+ * answers nothing asked of the depth map only).
  */
 function sceneProbe(
   objects: { min: Vec3; max: Vec3 }[],
@@ -161,7 +166,10 @@ function sceneProbe(
     }
     return best;
   };
-  return { measure: async (rays) => rays.map(cast) };
+  return {
+    measure: async (rays, options) =>
+      rays.map((ray) => (options?.mapOnly && !sensed ? null : cast(ray))),
+  };
 }
 
 describe('measureDepth', () => {
@@ -197,6 +205,57 @@ describe('measureDepth', () => {
     // The outline plane faces the camera, so the card's corners sit a little off it.
     expect(worstPx(eyes.left, placed.points, corners)).toBeLessThan(6);
     expect(worstPx(eyes.right, placed.points, corners)).toBeLessThan(6);
+  });
+
+  it('lines the card up end to end with its relief, from the depth map along a grid', async () => {
+    // Looked down on, the card's top is nearer than its foot: on one plane its corners are off for
+    // the eyes; on the relief fitted to what the depth map sees through the grid, they are not.
+    const probe = sceneProbe([card], TABLE_Y, true);
+    const grid = surfaceRays(mask, model, head);
+    const depth = await measureDepth(mask, model, head, probe, noSurfaces, grid);
+    expect(depth?.kind).toBe('contact');
+    expect(depth?.samples).toHaveLength(grid.length);
+    const relief = depth?.relief;
+    if (!depth || !relief) throw new Error('no relief');
+    // The top leans toward the camera.
+    expect(relief.slopeY).toBeGreaterThan(0.3);
+    const flat = placeOutline(mask, head, model, { center: depth.center, kind: depth.kind });
+    const placed = placeOutline(mask, head, model, depth);
+    if (!flat || !placed) throw new Error('not placed');
+    expect(placed.outline.relief?.distance).toBeCloseTo(Math.hypot(...sub(camera.p, middle)), 9);
+    near(placed.eye, camera.p);
+    expect(worstPx(camera, placed.points, flat.points)).toBeLessThan(0.01);
+    for (const eye of [eyes.left, eyes.right]) {
+      expect(worstPx(eye, placed.points, corners)).toBeLessThan(
+        worstPx(eye, flat.points, corners) / 4,
+      );
+      expect(worstPx(eye, placed.points, corners)).toBeLessThan(1);
+    }
+  });
+
+  it('asks for the grid from the depth map only, alongside the rays that place the object', async () => {
+    const asked: { rays: number; mapOnly: boolean }[] = [];
+    const probe: DepthSource = {
+      measure: async (rays, options) => {
+        asked.push({ rays: rays.length, mapOnly: options?.mapOnly === true });
+        return rays.map(() => null);
+      },
+    };
+    const grid = surfaceRays(mask, model, head);
+    await measureDepth(mask, model, head, probe, noSurfaces, grid);
+    expect(asked).toEqual([
+      { rays: 2, mapOnly: false },
+      { rays: grid.length, mapOnly: true },
+    ]);
+  });
+
+  it('has no relief without a depth map: the room mesh leaves small objects out', async () => {
+    const grid = surfaceRays(mask, model, head);
+    const probe = sceneProbe([card], TABLE_Y);
+    const depth = await measureDepth(mask, model, head, probe, noSurfaces, grid);
+    expect(depth?.kind).toBe('contact');
+    expect(depth?.relief).toBeUndefined();
+    expect(depth?.samples).toEqual([]);
   });
 
   it('is what the table guess got wrong: off by many pixels for the left eye', () => {
@@ -303,12 +362,6 @@ describe('measureDepth', () => {
     near(depth?.center, held);
   });
 
-  it('passes over floor hits', async () => {
-    // Nothing but the floor in the scene: every hit is too low, so the planes decide.
-    const depth = await measureDepth(mask, model, head, sceneProbe([], 0), noSurfaces);
-    expect(depth?.kind).toBe('surface');
-  });
-
   it('falls back to detected planes, then the table guess, when hit-test finds nothing', async () => {
     const empty: DepthSource = { measure: async (rays) => rays.map(() => null) };
     const table = { cast: (ray: Ray) => intersectPlaneY(ray, TABLE_Y) };
@@ -350,5 +403,82 @@ describe('measureDepth', () => {
   it('returns null for a mask with no geometry', async () => {
     const none: ObjectMask = { point: null, box: null, outline: null };
     expect(await measureDepth(none, model, head, null, noSurfaces)).toBeNull();
+  });
+});
+
+describe('measureDepth: on the floor', () => {
+  // Standing, eyes at 1.65 m and looking 30° down: the camera looks 45° down, at the floor about
+  // 1.6 m ahead. The table guess (45 cm below the head) is 1.2 m up, a quarter of the way there.
+  const standing: Pose = { p: [0, 1.65, 0], q: quatFromAxisAngle([1, 0, 0], -30 * DEG) };
+  const lens = composePose(standing, model.headFromCamera);
+  // A 10 x 4 cm case on the carpet 1.5 m ahead, its front a card facing the learner.
+  const redCase = { min: [0, 0, -1.5] as Vec3, max: [0.1, 0.04, -1.5] as Vec3 };
+  const middle: Vec3 = [0.05, 0.02, -1.5];
+  const caseMask: ObjectMask = {
+    point: uvFrom(lens, middle),
+    box: null,
+    outline: [
+      [0, 0, -1.5],
+      [0.1, 0, -1.5],
+      [0.1, 0.04, -1.5],
+      [0, 0.04, -1.5],
+    ].map((p) => uvFrom(lens, p as Vec3)),
+    contact: uvFrom(lens, [0.05, 0, -1.5]),
+  };
+  const noSurfaces = surfaceOrTable(null, standing);
+  const floorPlane = { cast: (ray: Ray) => intersectPlaneY(ray, 0) };
+
+  it('stands an object on the floor where the depth map sees the floor under it', async () => {
+    const probe = sceneProbe([redCase], 0, true);
+    const depth = await measureDepth(caseMask, model, standing, probe, noSurfaces);
+    expect(depth?.kind).toBe('contact');
+    near(depth?.center, middle);
+  });
+
+  it("stands it on the room mesh's floor when there is no depth map", async () => {
+    const probe = sceneProbe([redCase], 0);
+    const depth = await measureDepth(caseMask, model, standing, probe, noSurfaces);
+    expect(depth?.kind).toBe('contact');
+    near(depth?.center, middle);
+  });
+
+  it('puts papers lying on the carpet where the floor is under their middle', async () => {
+    const papers: Vec3 = [-0.1, 0, -1.7];
+    const flat: ObjectMask = {
+      point: uvFrom(lens, papers),
+      box: null,
+      outline: [
+        [-0.2, 0, -1.6],
+        [0, 0, -1.6],
+        [0, 0, -1.8],
+        [-0.2, 0, -1.8],
+      ].map((p) => uvFrom(lens, p as Vec3)),
+      contact: uvFrom(lens, [-0.1, 0, -1.6]),
+    };
+    const depth = await measureDepth(flat, model, standing, sceneProbe([], 0, true), noSurfaces);
+    expect(depth?.kind).toBe('contact');
+    near(depth?.center, papers);
+  });
+
+  it("falls back to the room scan's floor plane when nothing measures the rays", async () => {
+    const empty: DepthSource = { measure: async (rays) => rays.map(() => null) };
+    const depth = await measureDepth(
+      caseMask,
+      model,
+      standing,
+      empty,
+      surfaceOrTable(floorPlane, standing),
+    );
+    expect(depth?.kind).toBe('surface');
+    near(depth?.center, middle);
+  });
+
+  it('guesses the table only without a room scan, far short of the case', async () => {
+    const depth = await measureDepth(caseMask, model, standing, null, noSurfaces);
+    expect(depth?.kind).toBe('surface');
+    // The contact ray meets the guessed table at 1.2 m; the case's middle stands above that.
+    expect(depth?.center[1]).toBeGreaterThan(1.2);
+    const reach = (p: Readonly<Vec3>) => Math.hypot(...sub(p, lens.p));
+    expect(reach(depth?.center ?? lens.p)).toBeLessThan(reach(middle) / 2);
   });
 });

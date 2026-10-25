@@ -58,7 +58,9 @@ pnpm visualizer:dev        # loopback :3001, currently the public G1 LeRobot dem
 pnpm visualizer:check      # independent Bun/Next.js checks
 ```
 
-Private episode inspection is intended to stay local. This import adds no Supabase, cloud ingest
-or automatic publishing. A Clio episode reader for this particular viewer is future work; existing
-headset/server/viewer work is preserved. The visualizer has its own Bun dependencies and checks,
+Open `/clio` for local recordings and replay. Select finished episodes, choose a dataset name and
+frame rate, then export and download a LeRobot v3 ZIP (human hand targets, tasks and object positions;
+no video yet). The local server needs uv; export installs the pipeline's LeRobot extra as needed.
+Private episode inspection and exports stay local, with no automatic publishing.
+The visualizer has its own Bun dependencies and checks,
 separate from the pnpm workspace.

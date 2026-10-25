@@ -393,6 +393,52 @@ describe('OutlineMotion', () => {
     expect(twice.at(40)?.placement.center).toEqual(b);
   });
 
+  it('leans the relief into place, and back onto the plane when a sample has none', () => {
+    const motion = new OutlineMotion(options({ predictMs: 0, glideMs: 0 }));
+    const leaning = (center: Vec3): Placement => {
+      const p = placement(center);
+      p.outline.relief = { offset: 0.01, slopeX: 0, slopeY: 0.8, distance: 0.6 };
+      return p;
+    };
+    motion.add({ key: 'tube', placement: placement([0, 0, -0.6]), t: 0, eye: EYE });
+    expect(motion.at(0)?.placement.outline.relief).toBeUndefined();
+    const slopes: number[] = [];
+    for (let i = 1; i <= 10; i++) {
+      motion.add({ key: 'tube', placement: leaning([0, 0, -0.6]), t: i * 40, eye: EYE });
+      slopes.push(motion.at(i * 40)?.placement.outline.relief?.slopeY ?? 0);
+    }
+    // Rising steadily toward the measured lean, without passing it.
+    for (let i = 1; i < slopes.length; i++) {
+      expect(slopes[i]).toBeGreaterThan(slopes[i - 1] as number);
+    }
+    expect(slopes[0]).toBeLessThan(0.4);
+    expect(slopes[9]).toBeGreaterThan(0.7);
+    expect(slopes[9]).toBeLessThan(0.8);
+    const frame = motion.at(400);
+    // Seen from the camera it was measured from; the outline's points lie on the relief.
+    expect(frame?.placement.eye).toEqual(EYE);
+    expect(frame?.placement.outline.relief?.distance).toBeCloseTo(0.6, 9);
+    const ys = frame?.placement.outline.points.map(([, y]) => y) ?? [];
+    const top = frame?.placement.points[ys.indexOf(Math.max(...ys))] as Vec3;
+    const bottom = frame?.placement.points[ys.indexOf(Math.min(...ys))] as Vec3;
+    // The top nearer the camera than the plane, the foot farther.
+    expect(top[2]).toBeGreaterThan(-0.6 + 0.03);
+    expect(bottom[2]).toBeLessThan(-0.6 - 0.02);
+    // Without a relief, back toward the plane.
+    motion.add({ key: 'tube', placement: placement([0, 0, -0.6]), t: 440, eye: EYE });
+    expect(motion.at(440)?.placement.outline.relief?.slopeY).toBeLessThan(slopes[9] as number);
+  });
+
+  it("starts a new object with its own relief, not the last one's", () => {
+    const motion = new OutlineMotion(options());
+    const p = placement([0, 0, -0.6]);
+    p.outline.relief = { offset: 0, slopeX: 0.5, slopeY: 0, distance: 0.6 };
+    motion.add({ key: 'tube', placement: p, t: 0, eye: EYE });
+    expect(motion.at(0)?.placement.outline.relief?.slopeX).toBe(0.5);
+    motion.add({ key: 'rack', placement: placement([0, 0, -0.6]), t: 40, eye: EYE });
+    expect(motion.at(40)?.placement.outline.relief).toBeUndefined();
+  });
+
   it('turning the head moves nothing: the outline is smoothed in the room', () => {
     const motion = new OutlineMotion(options());
     for (let i = 0; i < 20; i++) {

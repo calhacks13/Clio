@@ -1,5 +1,5 @@
 import { dot, length, madd, scale, sub, type Vec3 } from '../../core/math';
-import { billboard, type ObjectOutline, outlinePoint, type Point2 } from './outline';
+import { billboard, type ObjectOutline, outlinePoint, type Point2, type Relief } from './outline';
 import type { DepthKind, Placement } from './placement';
 
 // The tracked object's outline, steadied and brought up to date before it is drawn. The tracker
@@ -16,6 +16,9 @@ import type { DepthKind, Placement } from './placement';
 // - It is drawn where the object is now: the anchor moved on by its velocity for the time since
 //   its frame was captured plus the filter's own lag, at most `predictMs` and `maxSpeed`. The
 //   velocity counts only as far as it stands out from its noise, so a still object stays put.
+// - Its relief (the object's surface about the outline's plane, outline.ts) is a low-pass of the
+//   reliefs measured, so a long object's light leans into place rather than jumping; a sample
+//   without one leans it back toward the plane.
 // - A loss is held: the last outline stays (its prediction coasting to a stop) for `holdMs`, and
 //   only then fades, so a few missed frames don't blink it.
 // - A new sample moves that place a little; the light doesn't step there. It goes on where it was
@@ -47,6 +50,8 @@ export interface MotionSmoothingOptions {
   shapeBeta: number;
   /** A contour is resampled to this many points. */
   points: number;
+  /** Relief: cutoff of its low-pass (Hz). */
+  reliefCutoff: number;
   /** Most the outline is drawn ahead of its frame (ms); 0 turns prediction off. */
   predictMs: number;
   /** Fastest the outline is predicted to move (m/s). */
@@ -70,6 +75,7 @@ export const DEFAULT_MOTION_OPTIONS: Readonly<MotionSmoothingOptions> = Object.f
   shapeMinCutoff: 1.0,
   shapeBeta: 20,
   points: 64,
+  reliefCutoff: 2,
   predictMs: 60,
   maxSpeed: 1.0,
   holdMs: 400,
@@ -80,8 +86,9 @@ export const DEFAULT_MOTION_OPTIONS: Readonly<MotionSmoothingOptions> = Object.f
 
 /**
  * ?smooth=0 turns smoothing off (null); ?minCutoff=, ?beta=, ?dCutoff=, ?depthMinCutoff=,
- * ?depthBeta=, ?shapeMinCutoff=, ?shapeBeta=, ?points=, ?predictMs=, ?maxSpeed=, ?holdMs=, ?snapM=,
- * ?resetAfterMs= and ?glideMs= replace the defaults. A value that isn't a non-negative number is ignored.
+ * ?depthBeta=, ?shapeMinCutoff=, ?shapeBeta=, ?points=, ?reliefCutoff=, ?predictMs=, ?maxSpeed=,
+ * ?holdMs=, ?snapM=, ?resetAfterMs= and ?glideMs= replace the defaults. A value that isn't a
+ * non-negative number is ignored.
  */
 export function motionOptionsFromParams(params: URLSearchParams): MotionSmoothingOptions | null {
   if (params.get('smooth') === '0') return null;
@@ -298,6 +305,8 @@ interface Track {
   shapeVelocity: Point2[];
   shapeSpeed: number;
   shapeNoise: number;
+  /** Filtered relief (its distance is worked out where it is drawn); null: on the plane. */
+  relief: Relief | null;
   /** Cutoffs used by the last update (Hz), for prediction lag and stats. */
   cutoffLateral: number;
   cutoffRadial: number;
@@ -313,6 +322,7 @@ const copyTrack = (t: Track): Track => ({
   shape: t.shape.map(([x, y]): Point2 => [x, y]),
   rawShape: t.rawShape.map(([x, y]): Point2 => [x, y]),
   shapeVelocity: t.shapeVelocity.map(([x, y]): Point2 => [x, y]),
+  relief: t.relief && { ...t.relief },
 });
 
 /** Split `v` into its part along unit `u` and the rest. */
@@ -368,6 +378,7 @@ export class OutlineMotion {
       shapeKind: placement.outline.shape,
       anchor,
       relative,
+      relief: placement.outline.relief ?? null,
     };
 
     const previous = this.track;
@@ -513,6 +524,7 @@ export class OutlineMotion {
     shapeKind: ObjectOutline['shape'];
     anchor: Vec3;
     relative: Point2[];
+    relief: Relief | null;
   }): Track {
     const { options } = this;
     return {
@@ -531,6 +543,7 @@ export class OutlineMotion {
       shapeVelocity: s.relative.map((): Point2 => [0, 0]),
       shapeSpeed: 0,
       shapeNoise: 0,
+      relief: s.relief && { ...s.relief },
       cutoffLateral: options.minCutoff,
       cutoffRadial: options.depthMinCutoff,
       cutoffShape: options.shapeMinCutoff,
@@ -545,6 +558,7 @@ export class OutlineMotion {
       kind: DepthKind;
       anchor: Vec3;
       relative: Point2[];
+      relief: Relief | null;
     },
   ): Track {
     const { options } = this;
@@ -604,6 +618,19 @@ export class OutlineMotion {
     });
     track.rawShape = shape;
 
+    // Relief: toward the new one, or back toward the plane when this sample has none.
+    if (s.relief || track.relief) {
+      const from = track.relief ?? { offset: 0, slopeX: 0, slopeY: 0, distance: 0 };
+      const to = s.relief ?? { offset: 0, slopeX: 0, slopeY: 0, distance: 0 };
+      const r = oneEuroAlpha(options.reliefCutoff, dt);
+      track.relief = {
+        offset: from.offset + r * (to.offset - from.offset),
+        slopeX: from.slopeX + r * (to.slopeX - from.slopeX),
+        slopeY: from.slopeY + r * (to.slopeY - from.slopeY),
+        distance: 0,
+      };
+    }
+
     track.t = s.t;
     track.eye = s.eye;
     track.kind = s.kind;
@@ -618,11 +645,13 @@ function sightLine(p: Readonly<Vec3>, eye: Readonly<Vec3>): Vec3 {
   return l > 1e-9 ? scale(d, 1 / l) : [0, 0, -1];
 }
 
-/** The track's shape around `center`, on the plane facing its camera. */
+/** The track's shape around `center`, on the plane facing its camera, with its relief. */
 function placementAt(center: Vec3, track: Track): Placement {
+  const relief = track.relief && { ...track.relief, distance: length(sub(track.eye, center)) };
   const outline: ObjectOutline = {
     points: track.shape.map(([x, y]): Point2 => [x, y]),
     shape: track.shapeKind,
+    ...(relief ? { relief } : {}),
   };
   const plane = billboard(center, track.eye);
   const xs = outline.points.map(([x]) => x);
@@ -631,8 +660,9 @@ function placementAt(center: Vec3, track: Track): Placement {
   return {
     center,
     outline,
-    points: plane ? outline.points.map((p) => outlinePoint(plane, center, p)) : [],
-    label: plane ? outlinePoint(plane, center, labelAt) : center,
+    points: plane ? outline.points.map((p) => outlinePoint(plane, center, p, relief)) : [],
+    label: plane ? outlinePoint(plane, center, labelAt, relief) : center,
     depth: track.kind,
+    eye: [...track.eye],
   };
 }

@@ -8,6 +8,7 @@ import type { Logger } from './log';
 import { benchRoutes } from './routes/bench';
 import { clipRoutes } from './routes/clips';
 import { coachRoutes } from './routes/coach';
+import { datasetRoutes } from './routes/datasets';
 import { episodeRoutes } from './routes/episodes';
 import { healthRoutes } from './routes/health';
 import { planRoutes } from './routes/plans';
@@ -36,6 +37,7 @@ export function createApp({ corsOrigins = DEFAULT_CORS_ORIGINS, ...deps }: AppOp
   app.route('/', visionRoutes(d));
   app.route('/', sceneRoutes(d));
   app.route('/', episodeRoutes(d));
+  app.route('/', datasetRoutes(d));
   app.route('/', clipRoutes(d));
   app.route('/', benchRoutes(d));
 

@@ -149,7 +149,10 @@ export function mountPanelMotionPreview(host: HTMLElement): void {
     backdrop.visible = true;
   });
 
-  let presenter = new InstructionPanelPresenter(() => {});
+  let presenter = new InstructionPanelPresenter(
+    () => {},
+    () => {},
+  );
   scene.add(presenter.object);
   const context: PresentContext = {
     t: performance.now(),
@@ -213,7 +216,10 @@ export function mountPanelMotionPreview(host: HTMLElement): void {
     setRoll(0);
     scene.remove(presenter.object);
     presenter.dispose();
-    presenter = new InstructionPanelPresenter(() => {});
+    presenter = new InstructionPanelPresenter(
+      () => {},
+      () => {},
+    );
     scene.add(presenter.object);
   }
 

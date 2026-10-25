@@ -79,6 +79,8 @@ export interface PanelState {
   name: string;
   snapshot: OverlaySnapshot;
   calibration?: PresentContext['calibration'];
+  /** The close button after a first touch, waiting for the second. */
+  closeArmed?: true;
 }
 
 const QUIET: OverlaySnapshot = {
@@ -145,6 +147,8 @@ export const PANEL_STATES: PanelState[] = [
       caption: { role: 'coach', text: syringeTip },
     }),
   },
+  { name: 'Thinking', snapshot: lessonStep(ph, 0, { voice: 'thinking' }) },
+  { name: 'Ending the lesson', snapshot: lessonStep(ph, 0), closeArmed: true },
   { name: 'Planning', snapshot: { ...QUIET, phase: 'planning' } },
   { name: 'Long detail', snapshot: lessonStep(SHIRT_FOLD, 3, {}, { progress: 0.7 }) },
   {

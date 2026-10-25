@@ -2,7 +2,7 @@
 // covers only test/), so point the typecheck at them.
 /// <reference path="../../src/adapters/render/troika.d.ts" />
 import { HAND_SAMPLE_LENGTH, jointOffset } from '@clio/protocol';
-import { type Group, type Mesh, type MeshBasicMaterial, Object3D } from 'three';
+import { type Group, type Mesh, type MeshBasicMaterial, Object3D, Vector3 } from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import type { TextOptions } from '../../src/adapters/render/text';
 
@@ -115,6 +115,7 @@ vi.mock('../../src/adapters/render/text', () => ({
 
 import * as panelPlacement from '../../src/adapters/render/panel-placement';
 import type { PresentContext } from '../../src/adapters/render/presenter';
+import { CLOSE_D, STRIP_H } from '../../src/adapters/render/presenters/card-controls';
 import {
   InstructionPanelPresenter,
   PANEL_TOP,
@@ -187,6 +188,8 @@ function parts(panel: InstructionPanelPresenter) {
     bar: children[5] as Mesh,
     button,
     buttonBg: button.children[0] as Mesh,
+    strip: children[7] as Group,
+    close: children[8] as Group,
   };
 }
 
@@ -230,14 +233,14 @@ describe('InstructionPanelPresenter minimal content', () => {
     expect(parts(panel).header.text).toBe('Step 1 of 3');
   });
 
-  it('has no listening label, coach mark or duplicate conversational caption', () => {
+  it('has no listening label or duplicate conversational caption', () => {
     const panel = new InstructionPanelPresenter(() => {});
-    for (const voice of ['quiet', 'hearing', 'speaking'] as const) {
+    for (const voice of ['quiet', 'hearing', 'thinking', 'speaking'] as const) {
       update(
         panel,
         context(snapshot({ voice, caption: { role: 'coach', text: 'Open the cap.' } })),
       );
-      expect(panel.object.children).toHaveLength(7);
+      expect(panel.object.children).toHaveLength(9);
       expect(parts(panel).status.text).toBe('');
       expect(parts(panel).header.text).toBe('Step 1 of 3');
     }
@@ -328,10 +331,14 @@ describe('InstructionPanelPresenter layout', () => {
 
   for (const [name, over, calibration] of cases) {
     it(`fits ${name} without text or button overlap`, () => {
-      const panel = new InstructionPanelPresenter(() => {});
-      update(panel, context(snapshot(over), 0, calibration ?? null));
+      const panel = new InstructionPanelPresenter(
+        () => {},
+        () => {},
+      );
+      update(panel, context(snapshot({ voice: 'speaking', ...over }), 0, calibration ?? null));
       text.flush();
-      const { header, instruction, detail, status, background, button, bar } = parts(panel);
+      const { header, instruction, detail, status, background, button, bar, strip, close } =
+        parts(panel);
       const box = meshBox(background);
       expect(box.top).toBeCloseTo(PANEL_TOP, 6);
       expect(box.height).toBeGreaterThan(0.04);
@@ -356,6 +363,28 @@ describe('InstructionPanelPresenter layout', () => {
       }
       expect(bar.position.y).toBeGreaterThan(box.bottom);
       expect(bar.position.y).toBeLessThan(box.bottom + 0.01);
+      // The voice strip spans the top inside the padding; below it the top row holds the close
+      // button in the corner, clear of the step count; the text starts below both.
+      expect(strip.position.x).toBeCloseTo(0, 9);
+      expect(strip.position.y + STRIP_H / 2).toBeLessThan(box.top - 0.005);
+      expect(panel.voiceStrip.levels.length).toBeGreaterThan(30);
+      const idle = over.phase === 'idle';
+      expect(close.visible).toBe(!idle && !calibration);
+      const stripBottom = strip.position.y - STRIP_H / 2;
+      const head = extent(header);
+      if (close.visible) {
+        expect(close.position.x + CLOSE_D / 2).toBeLessThanOrEqual(panel.panelWidth / 2 - 0.02);
+        expect(close.position.y + CLOSE_D / 2).toBeLessThan(stripBottom - 0.005);
+        if (!head.empty) expect(head.right).toBeLessThan(close.position.x - CLOSE_D / 2);
+      }
+      if (!head.empty) expect(head.top).toBeLessThan(stripBottom - 0.005);
+      const body = [instruction, detail, status].map(extent).find((b) => !b.empty);
+      const rowBottom = Math.min(
+        stripBottom,
+        close.visible ? close.position.y - CLOSE_D / 2 : Infinity,
+        head.empty ? Infinity : head.bottom,
+      );
+      if (body) expect(body.top).toBeLessThan(rowBottom);
     });
   }
 
@@ -500,5 +529,155 @@ describe('InstructionPanelPresenter layout', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/** A frame with the left index fingertip at `at` (world; the test workspace is the world). */
+function touch(panel: InstructionPanelPresenter, ctx: PresentContext, at: Vector3, t: number) {
+  const joints = new Array<number>(HAND_SAMPLE_LENGTH).fill(0);
+  joints.splice(jointOffset('index-finger-tip'), 3, ...at.toArray());
+  update(panel, {
+    ...ctx,
+    t,
+    hands: { t, head: ctx.head, left: { joints, pinch: 0.03 }, right: null },
+  });
+}
+
+describe('InstructionPanelPresenter voice strip', () => {
+  const color = (panel: InstructionPanelPresenter) =>
+    ((parts(panel).strip.children[0] as Mesh).material as MeshBasicMaterial).color.getHex();
+  /** A few frames, so the bars grow in or shrink away. */
+  const frames = (panel: InstructionPanelPresenter, over: Partial<OverlaySnapshot>, t: number) => {
+    for (let i = 0; i < 20; i++) update(panel, context(snapshot(over), t + i * 16));
+  };
+
+  it('moves blue while Clio speaks, yellow while the learner talks, green while it thinks', () => {
+    const panel = new InstructionPanelPresenter(() => {});
+    frames(panel, { voice: 'quiet' }, 0);
+    expect(panel.voiceStrip.state).toBeNull();
+    frames(panel, { voice: 'speaking' }, 1000);
+    expect(panel.voiceStrip.state).toBe('speaking');
+    expect(color(panel)).toBe(0x1768d9);
+    frames(panel, { voice: 'hearing' }, 2000);
+    expect(panel.voiceStrip.state).toBe('hearing');
+    expect(color(panel)).toBe(0xe9a700);
+    frames(panel, { voice: 'thinking' }, 3000);
+    expect(panel.voiceStrip.state).toBe('thinking');
+    expect(color(panel)).toBe(0x1a9e6e);
+    frames(panel, { voice: 'quiet' }, 4000);
+    expect(panel.voiceStrip.state).toBeNull();
+    frames(panel, { voice: 'off', phase: 'planning', instruction: null }, 5000);
+    expect(panel.voiceStrip.state).toBe('thinking');
+    frames(panel, { voice: 'off' }, 6000);
+    expect(panel.voiceStrip.state).toBeNull();
+  });
+
+  it('spans the whole top of the card and moves while speaking', () => {
+    const panel = new InstructionPanelPresenter(() => {});
+    const levels = (t: number) => {
+      frames(panel, { voice: 'speaking' }, t);
+      return [...panel.voiceStrip.levels];
+    };
+    const first = levels(0);
+    expect(first.length * 0.0052).toBeGreaterThan(panel.panelWidth - 0.05);
+    expect(Math.max(...first)).toBeLessThanOrEqual(STRIP_H + 1e-9);
+    expect(levels(400)).not.toEqual(first);
+  });
+
+  it('sends a ripple across while thinking', () => {
+    const panel = new InstructionPanelPresenter(() => {});
+    const peak = (t: number) => {
+      frames(panel, { voice: 'thinking' }, t);
+      const levels = panel.voiceStrip.levels;
+      return levels.indexOf(Math.max(...levels)) / levels.length;
+    };
+    // The crest moves rightward as time passes (within one ripple period).
+    const early = peak(1000);
+    const later = peak(1200);
+    expect((later - early + 1) % 1).toBeGreaterThan(0);
+    expect((later - early + 1) % 1).toBeLessThan(0.5);
+  });
+
+  it('keeps no room for the strip when no coach listens', () => {
+    const listening = new InstructionPanelPresenter(() => {});
+    const deaf = new InstructionPanelPresenter(() => {});
+    update(listening, context(snapshot({ phase: 'idle', instruction: null, voice: 'quiet' })));
+    update(deaf, context(snapshot({ phase: 'idle', instruction: null, voice: 'off' })));
+    expect(listening.panelHeight).toBeGreaterThan(deaf.panelHeight);
+  });
+});
+
+describe('InstructionPanelPresenter close button', () => {
+  const closeAt = (panel: InstructionPanelPresenter) =>
+    parts(panel).close.getWorldPosition(new Vector3());
+
+  it('ends the lesson on a second touch, never on one touch or a resting finger', () => {
+    const onClose = vi.fn();
+    const panel = new InstructionPanelPresenter(() => {}, onClose);
+    const ctx = context(snapshot());
+    update(panel, ctx);
+    expect(panel.closeButton).toEqual({ visible: true, armed: false });
+    const at = closeAt(panel);
+    const away = at.clone().add(new Vector3(0, 0, 0.2));
+    touch(panel, ctx, at, 100);
+    expect(panel.closeButton.armed).toBe(true);
+    expect(parts(panel).header.visible).toBe(false);
+    touch(panel, ctx, at, 600);
+    expect(onClose).not.toHaveBeenCalled();
+    touch(panel, ctx, away, 700);
+    touch(panel, ctx, at, 800);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(panel.closeButton.armed).toBe(false);
+    expect(parts(panel).header.visible).toBe(true);
+  });
+
+  it('forgets a first touch after three seconds', () => {
+    const onClose = vi.fn();
+    const panel = new InstructionPanelPresenter(() => {}, onClose);
+    const ctx = context(snapshot());
+    update(panel, ctx);
+    const at = closeAt(panel);
+    const away = at.clone().add(new Vector3(0, 0, 0.2));
+    touch(panel, ctx, at, 100);
+    touch(panel, ctx, away, 3200);
+    expect(panel.closeButton.armed).toBe(false);
+    touch(panel, ctx, at, 3300);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(panel.closeButton.armed).toBe(true);
+  });
+
+  it('ignores a touch on a widget drawn over it', () => {
+    const panel = new InstructionPanelPresenter(() => {}, vi.fn());
+    const ctx = context(snapshot());
+    update(panel, ctx);
+    panel.coveredBy = () => true;
+    touch(panel, ctx, closeAt(panel), 100);
+    expect(panel.closeButton.armed).toBe(false);
+  });
+
+  it('shows at every stage of a lesson, but not when idle, calibrating or without a handler', () => {
+    const panel = new InstructionPanelPresenter(() => {}, vi.fn());
+    for (const phase of ['planning', 'locating', 'lesson', 'done', 'failed'] as const) {
+      update(
+        panel,
+        context(snapshot({ phase, instruction: phase === 'lesson' ? undefined : null })),
+      );
+      expect(panel.closeButton.visible, phase).toBe(true);
+    }
+    update(panel, context(snapshot({ phase: 'idle', instruction: null })));
+    expect(panel.closeButton.visible).toBe(false);
+    update(
+      panel,
+      context(snapshot({ phase: 'idle', instruction: null }), 0, {
+        step: 'first',
+        text: 'Pinch the far-left corner.',
+        error: null,
+        firstCorner: null,
+      }),
+    );
+    expect(panel.closeButton.visible).toBe(false);
+    const without = new InstructionPanelPresenter(() => {});
+    update(without, context(snapshot()));
+    expect(without.closeButton.visible).toBe(false);
   });
 });

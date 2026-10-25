@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { NextRequest } from "next/server";
-import { GET, HEAD } from "@/app/api/clio/[...path]/route";
+import { GET, HEAD, POST } from "@/app/api/clio/[...path]/route";
 
 // The proxy route itself, with the upstream behind a mocked fetch: binary
 // files (the room scan, the object models, their crops) come back byte for
@@ -38,6 +38,27 @@ function call(method: "GET" | "HEAD", path: string[]) {
 }
 
 describe("binary files through the proxy", () => {
+  test("a dataset ZIP retains the attachment filename and binary bytes", async () => {
+    serve(
+      () =>
+        new Response(BINARY, {
+          headers: {
+            "content-type": "application/zip",
+            "content-disposition": 'attachment; filename="lessons.zip"',
+          },
+        }),
+    );
+    const res = await call("GET", [
+      "datasets",
+      "exports",
+      "export-test",
+      "download",
+    ]);
+    expect(res.headers.get("content-disposition")).toBe(
+      'attachment; filename="lessons.zip"',
+    );
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(BINARY);
+  });
   test("a scene model and the room scan stream through unchanged", async () => {
     for (const [path, type] of [
       [["episodes", ID, "scene", "model-syringe.glb"], "model/gltf-binary"],
@@ -87,6 +108,68 @@ describe("binary files through the proxy", () => {
     const upstream = serve(() => new Response(BINARY));
     const res = await call("GET", ["episodes", ID, "scene", "splat.ply"]);
     expect(res.status).toBe(404);
+    expect(upstream).not.toHaveBeenCalled();
+  });
+});
+
+describe("explicit dataset exports through the proxy", () => {
+  const path = ["datasets", "exports"];
+  const valid = { name: "my-lessons", episodeIds: [ID], fps: 30 };
+  function post(
+    body: unknown,
+    headers: Record<string, string> = {},
+    segments = path,
+  ) {
+    return POST(
+      new NextRequest(`http://127.0.0.1:3001/api/clio/${segments.join("/")}`, {
+        method: "POST",
+        headers: {
+          host: "127.0.0.1:3001",
+          "content-type": "application/json",
+          ...headers,
+        },
+        body: JSON.stringify(body),
+      }),
+      { params: Promise.resolve({ path: segments }) },
+    );
+  }
+
+  test("forwards only validated export JSON, with no browser credentials", async () => {
+    const upstream = serve(() =>
+      Response.json({ id: "export-test", state: "queued" }, { status: 202 }),
+    );
+    const res = await post(
+      { ...valid, extra: "discard" },
+      {
+        origin: "http://127.0.0.1:3001",
+        cookie: "secret",
+        authorization: "Bearer secret",
+      },
+    );
+    expect(res.status).toBe(202);
+    const [url, init] = upstream.mock.calls[0];
+    expect(String(url)).toBe("http://127.0.0.1:8787/api/datasets/exports");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(init?.body as string)).toEqual(valid);
+    expect(new Headers(init?.headers).get("cookie")).toBeNull();
+    expect(new Headers(init?.headers).get("authorization")).toBeNull();
+  });
+
+  test("refuses cross-origin exports, malformed input, oversized requests and other writes", async () => {
+    const upstream = serve(() => new Response("unexpected"));
+    expect((await post(valid, { origin: "https://example.com" })).status).toBe(
+      403,
+    );
+    expect((await post(valid, { "sec-fetch-site": "cross-site" })).status).toBe(
+      403,
+    );
+    expect((await post({ ...valid, episodeIds: ["../escape"] })).status).toBe(
+      400,
+    );
+    expect((await post({ name: "x".repeat(17_000) })).status).toBe(413);
+    expect((await post(valid, {}, ["episodes", ID, "finish"])).status).toBe(
+      405,
+    );
     expect(upstream).not.toHaveBeenCalled();
   });
 });

@@ -863,8 +863,8 @@ export function createDepthSampler(
 }
 
 /**
- * Depth sensing first, hit-test for the rays it can't answer: one port for measureDepth().
- * Either may be null; null when both are.
+ * Depth sensing first, hit-test for the rays it can't answer (none with `mapOnly`): one port for
+ * measureDepth(). Either may be null; null when both are.
  */
 export function preferDepthSensing(
   sensing: DepthSource | null,
@@ -873,8 +873,9 @@ export function preferDepthSensing(
   if (!sensing) return fallback;
   if (!fallback) return sensing;
   return {
-    async measure(rays) {
-      const sensed = await sensing.measure(rays);
+    async measure(rays, options) {
+      const sensed = await sensing.measure(rays, options);
+      if (options?.mapOnly) return sensed;
       const missing = rays.flatMap((_, i) => (sensed[i] ? [] : [i]));
       if (missing.length === 0) return sensed;
       const filled = await fallback.measure(missing.map((i) => rays[i] as Ray));

@@ -83,7 +83,7 @@ def test_events_out_of_order_on_disk_are_sorted_keeping_ties_in_file_order(new_e
     b.step_completed(100.0, "a", 0)
     b.step_entered(100.0, "b", 1, "Do B.")
     b.event(50.0, "annotation", label="early")
-    ep = load_episode(b.write())
+    ep = load_episode(b.write(), validate=True)
 
     assert [(e["t"], e["type"]) for e in ep.events] == [
         (50.0, "annotation"),
