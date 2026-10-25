@@ -49,11 +49,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     p.add_argument(
         "--pace",
-        action="store_true",
-        help="play each frame for at least 1/25 s, as the headset's stream does (use with "
-        "--segmenter: the refresher spaces its calls by wall clock)",
+        action=argparse.BooleanOptionalAction,
+        help="play each frame for at least 1/25 s, as the headset's stream does (the default "
+        "with a segmenter: the refresher spaces its calls by wall clock)",
     )
     p.set_defaults(run=_jitter)
+    jitter = p
     for p in (parser, *sub.choices.values()):
         p.add_argument(
             "--model",
@@ -65,8 +66,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         p.add_argument(
             "--segmenter",
             choices=SEGMENTER_CHOICES,
-            help="what cuts the outline: SAM 2.1 small or large, or none for YOLOE's own mask"
-            " (default auto)",
+            help="what cuts the outline: SAM 2.1 small or large (auto is small), or none for "
+            "YOLOE's own mask (default "
+            + ("none, whatever CLIO_TRACKER_SEGMENTER says)" if p is jitter else "auto)"),
         )
     for p in (parser, serve):
         p.add_argument("--port", type=int, help="8790 by default, which Clio's server expects")
@@ -222,18 +224,31 @@ def _health(finder, vision, segmenter) -> dict:
 
 
 def _segmenter(settings: Settings):
-    """The configured segmenter, loaded and warmed up with one encode, or None."""
+    """The configured segmenter, loaded and warmed up with one encode and one cut, or None.
+    Under `auto` a segmenter that fails to load or to warm up is one warning, and the tracker
+    starts without one; one named on purpose (`sam2.1-small`, `sam2.1-large`) still stops it."""
     import numpy as np
 
     from .segment import load_segmenter
 
     log = logging.getLogger("clio_tracker")
     started = time.perf_counter()
-    segmenter = load_segmenter(settings.segmenter, settings.device)
-    if segmenter is None:
+    try:
+        segmenter = load_segmenter(settings.segmenter, settings.device)
+        if segmenter is None:
+            return None
+        loaded = time.perf_counter()
+        enc = segmenter.encode(np.full((480, 640, 3), 128, dtype=np.uint8))
+        segmenter.mask_in_box(enc, np.array([160.0, 120.0, 480.0, 360.0]))
+    except Exception as error:
+        if settings.segmenter != "auto":
+            raise
+        log.warning(
+            "The segmenter (auto: sam2.1-small) did not load: %r. The tracker starts without "
+            "one, with YOLOE's outlines (CLIO_TRACKER_SEGMENTER=none skips it).",
+            error,
+        )
         return None
-    loaded = time.perf_counter()
-    segmenter.encode(np.full((480, 640, 3), 128, dtype=np.uint8))
     log.info(
         "%s on %s: loaded in %.1f s, warmed up in %.1f s",
         segmenter.name,
@@ -306,8 +321,11 @@ def _bench(settings: Settings, args: argparse.Namespace) -> int:
 
 
 def _jitter(settings: Settings, args: argparse.Namespace) -> int:
+    """The harness compares runs, so its segmenter is the command line's alone (none by
+    default), and a segmenter is paced unless --no-pace says otherwise."""
     from .jitter import run
 
+    segmenter = args.segmenter or "none"
     return run(
         settings.model,
         settings.backend,
@@ -317,6 +335,6 @@ def _jitter(settings: Settings, args: argparse.Namespace) -> int:
         args.json,
         args.set,
         args.flag_parts,
-        segmenter=settings.segmenter,
-        pace=args.pace,
+        segmenter=segmenter,
+        pace=args.pace if args.pace is not None else segmenter != "none",
     )

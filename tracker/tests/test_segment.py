@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
+from clio_tracker import cli, segment
 from clio_tracker.config import ConfigError, load_settings
 from clio_tracker.segment import (
     candidate_bounds,
@@ -188,3 +192,24 @@ def test_settings_segmenter_default_and_validation():
     assert load_settings({"CLIO_TRACKER_SEGMENTER": "sam2.1-large"}).segmenter == "sam2.1-large"
     with pytest.raises(ConfigError):
         load_settings({"CLIO_TRACKER_SEGMENTER": "sam3"})
+
+
+def test_auto_starts_without_a_segmenter_when_it_fails_to_load(monkeypatch, caplog):
+    def broken(name: str, device: str = "auto"):
+        raise OSError("no SAM 2.1 weights in the cache, and no network")
+
+    monkeypatch.setattr(segment, "load_segmenter", broken)
+    settings = replace(load_settings({}), segmenter="auto")
+    with caplog.at_level(logging.INFO, logger="clio_tracker"):
+        assert cli._segmenter(settings) is None
+    assert [r.levelno for r in caplog.records] == [logging.WARNING]
+    assert "no SAM 2.1 weights in the cache" in caplog.text
+    with pytest.raises(OSError):  # named on purpose: it still stops the tracker
+        cli._segmenter(replace(settings, segmenter="sam2.1-small"))
+
+
+def test_the_segmenter_is_warmed_up_with_an_encode_and_a_cut(monkeypatch, segmenter):
+    monkeypatch.setattr(segment, "load_segmenter", lambda name, device="auto": segmenter)
+    assert cli._segmenter(replace(load_settings({}), segmenter="sam2.1-small")) is segmenter
+    ((width, height, _),) = segmenter.calls
+    assert (width, height) == (640, 480)

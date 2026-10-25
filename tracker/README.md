@@ -20,7 +20,7 @@ headset lesson ────────── ws /track, objects mode ───�
 
 | Endpoint                  | Who calls it                                                    | What it does                                                                                                                                                  |
 | ------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /locate`            | Clio's primary-object route (`CLIO_PRIMARY_FINDER_URL`)         | One jev call for the frame, then YOLOE outlines each box jev found (`model`: `jev-1.14.0+yoloe-26l-seg` without a segmenter, `...+sam2.1-small` with one). One request at a time; another gets 503. |
+| `POST /locate`            | Clio's primary-object route (`CLIO_PRIMARY_FINDER_URL`)         | One jev call for the frame, then SAM 2.1 outlines each box jev found, YOLOE where SAM finds nothing or without a segmenter (`model`: `jev-1.14.0+yoloe-26l-seg+sam2.1-small`, without the `+sam2.1-small` when there is no segmenter). One request at a time; another gets 503. |
 | `POST /locate` + `session` | Clio's locate route (`CLIO_VISION_URL`), for lesson outlines   | Answers at once from tracking state, with `refreshMs: 50` so the headset sends the next frame soon; jev looks again about once a second.                    |
 | `WS /track`               | `apps/headset/primary.html`                                     | Frames in, one mask per frame out; the page forwards each primary answer's box as the target. Protocol: [TRACK.md](TRACK.md).                              |
 | `WS /track`, objects mode | the headset's lesson                                            | Frames and the lesson's objects in words in, every object's outline per frame out; jev about once a second, as with a session. [TRACK.md](TRACK.md#objects-mode). |
@@ -45,7 +45,9 @@ pnpm dev                           # Vite on 5173, Clio server on 8787
 
 # The tracker, in a second terminal
 pnpm tracker                       # 127.0.0.1:8790; the first run downloads YOLOE-26L (79 MB)
-                                   # and converts it for the Neural Engine (about a minute, once)
+                                   # and converts it for the Neural Engine (about a minute, once),
+                                   # and SAM 2.1 Small, which cuts the outlines (the default,
+                                   # auto, is sam2.1-small; CLIO_TRACKER_SEGMENTER=none: no SAM)
 
 # The Quest, once per USB connection
 pnpm quest:reverse                 # adb reverse tcp:5173 tcp:5173
@@ -60,22 +62,29 @@ adb shell pm grant com.oculus.browser horizonos.permission.HEADSET_CAMERA
 adb shell pm grant com.oculus.browser android.permission.CAMERA
 ```
 
-`curl 127.0.0.1:8790/health` should answer `{"ok":true,...,"model":"jev-1.14.0+yoloe-26l-seg",
-"backend":"coreml-ane"}` without a segmenter (with SAM 2.1 the model ends in `+sam2.1-small`).
+`curl 127.0.0.1:8790/health` should answer `{"ok":true,...,"model":"jev-1.14.0+yoloe-26l-seg+sam2.1-small",
+"backend":"coreml-ane"}` (`jev-1.14.0+yoloe-26l-seg` without a segmenter).
 Without a jev key, `pnpm tracker --fake-jev` answers every object at one fixed box (no cost), and
 `CLIO_TRACKER_IDENTIFIER_URL=http://127.0.0.1:8787/api/vision/locate` uses Gemini's locator in jev's
 place (only while Clio's `CLIO_VISION_URL` is unset: otherwise Clio would send the request straight
 back here).
 
-`pnpm tracker --segmenter sam2.1-small` outlines with SAM 2.1 instead of YOLOE's masks (about
-180 MB, downloaded on first use; `auto`, the default, already picks it when `transformers` is
-installed, and `--segmenter none` turns it off). `/health` then also says
-`"segmenter":"sam2.1-small"` (null without one) and `/locate`'s `model` ends in `+sam2.1-small`.
-In the log, `Outline: sam2.1-small's mask, carried to every frame by the object's own pixels`
-and `sam2.1-small on mps: loaded in ... s, warmed up in ... s` appear at start-up; the
-`Stream: ... frames/s, ... ms each` line every 3 s shows what a frame costs with SAM running (24
-to 26 ms in the harness against 18 without); and `sam2.1-small: <error>. Tracking continues.` is
-the one line a failing SAM writes (`sam2.1-small answers again` when it recovers).
+`pnpm tracker` outlines with SAM 2.1 Small instead of YOLOE's masks: the default segmenter,
+`auto`, is `sam2.1-small` (`transformers` is one of the tracker's dependencies; the weights, about
+180 MB, download on first use). `--segmenter sam2.1-large` picks Large, and
+`CLIO_TRACKER_SEGMENTER=none` (or `--segmenter none`) turns SAM off. Under `auto`, a SAM that
+fails to load is one warning and the tracker starts without it; a size named on purpose stops it.
+`/health` says `"segmenter":"sam2.1-small"` (null without one) and `/locate`'s `model` ends in
+`+sam2.1-small`. In the log, `Outline: sam2.1-small's mask, carried to every frame by the
+object's own pixels` and `sam2.1-small on mps: loaded in ... s, warmed up in ... s` appear at
+start-up. The `Stream: ... frames/s, ... ms each (...)` line every 3 s shows what a frame costs
+with SAM running (24 to 26 ms in the harness against 18 without), and with SAM it ends in
+`follower N%, segmenter: K calls, M ms, E empty`: the share of found frames whose outline was
+SAM's mask carried by the follower, then the boxes SAM cut since the last line, their mean time
+and how many held nothing (objects mode's `Objects:` line counts every object's answers). A
+failing SAM writes `sam2.1-small: <error>. Tracking continues.` once per stream or session as it
+starts failing and `sam2.1-small answers again` as it recovers, and `/locate` without a session
+writes its own `sam2.1-small: <error>. YOLOE outlines jev's boxes meanwhile.`
 
 For lesson outlines that follow objects live, also set `CLIO_VISION_URL=http://127.0.0.1:8790/locate`
 in `.env` and restart `pnpm dev`. The lesson needs no flag: the tracker's `refreshMs` sets the
@@ -107,7 +116,7 @@ From the environment, then `tracker/.env`, then the repo's `.env`.
 | `--fake-jev [L,T,R,B]`                | `0.3,0.3,0.7,0.7`       | Every object present at this box; no key, no cost.                                      |
 | `CLIO_TRACKER_MODEL`, `--model`       | `l`                     | The size: `s`, `m` or `l` (also `n`, `x`, or a name such as `yoloe-26s-seg`). See below. |
 | `CLIO_TRACKER_BACKEND`, `--backend`   | `auto`                  | `coreml` (Apple Neural Engine) or `torch` (MPS, CUDA or CPU).                           |
-| `CLIO_TRACKER_SEGMENTER`, `--segmenter` | `auto` | `sam2.1-small` when `transformers` is installed, else `none`; `sam2.1-large`. `none` is today's tracker, with YOLOE's masks. |
+| `CLIO_TRACKER_SEGMENTER`, `--segmenter` | `auto` | `auto` is `sam2.1-small` (`transformers` is a dependency), or no segmenter when it fails to load; `sam2.1-large`; `none` turns SAM off: YOLOE's masks. `clio-tracker jitter` takes only `--segmenter` (default `none`). |
 | `CLIO_TRACKER_IDENTIFY_INTERVAL_MS`   | `1000`                  | With a session or in objects mode: how often jev looks again at each object.            |
 | `CLIO_TRACKER_IDENTIFY_MAX_IN_FLIGHT` | `1`                     | jev calls in flight. jev's client never overlaps billed calls.                          |
 | `CLIO_TRACKER_JEV_TIMEOUT_S`          | `12`                    | The whole jev call. Clio gives up on the finder at 15 s.                                |

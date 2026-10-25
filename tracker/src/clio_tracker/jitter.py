@@ -41,9 +41,12 @@ own and are left out of `parts`, which stays comparable with earlier runs.
 `--segmenter` (`auto`, `none` or a SAM 2.1 size; `run` also takes `fake`, a segmenter that fills
 each box, for tests) gives the tracker a segmenter and a refresher as `/track` has them, and has
 the look outlined by the segmenter, and by YOLOE where it cuts nothing. A `--baseline` copy
-gets neither. `--pace` holds each frame to at least 1 / FPS of wall time, as the headset's stream
-is (40 to 75 ms a frame; the harness alone takes about 20): the refresher spaces its calls by wall
+gets neither. The harness's segmenter is `none` unless `--segmenter` says otherwise on the
+command line (`CLIO_TRACKER_SEGMENTER` is the service's), so a before/after table compares like
+with like. `--pace` holds each frame to at least 1 / FPS of wall time, as the headset's stream is
+(40 to 75 ms a frame; the harness alone takes about 20): the refresher spaces its calls by wall
 clock, so an unpaced run gives a real segmenter about half the refreshes per frame it has live.
+A segmenter is paced unless `--no-pace` says otherwise.
 
 `--baseline DIR` loads another copy of the package (a directory holding a `clio_tracker`
 package, e.g. `git archive HEAD tracker/src | tar -x -C /tmp/base`) and runs it on the same

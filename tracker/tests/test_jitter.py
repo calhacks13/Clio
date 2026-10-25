@@ -468,9 +468,24 @@ def test_a_frame_slower_than_the_stream_is_not_slowed_further(monkeypatch):
     assert sleeps == []  # 100 ms in `step` already outlasts a 40 ms frame
 
 
-def test_the_jitter_command_paces_only_when_asked(monkeypatch):
+def test_the_jitter_command_runs_without_a_segmenter_unless_given_one_and_paces_one(monkeypatch):
+    # CLIO_TRACKER_SEGMENTER is the service's; the harness compares runs, so it is told on the
+    # command line, and a segmenter is paced unless --no-pace says otherwise.
     seen = []
     monkeypatch.setattr(jitter, "run", lambda *args, **kwargs: seen.append(kwargs) or 0)
-    assert cli.main(["jitter", "--segmenter", "sam2.1-small", "--pace"]) == 0
-    assert cli.main(["jitter", "--segmenter", "sam2.1-small"]) == 0
-    assert [k["pace"] for k in seen] == [True, False]
+    monkeypatch.setenv("CLIO_TRACKER_SEGMENTER", "sam2.1-small")
+    for argv in (
+        [],
+        ["--segmenter", "none"],
+        ["--pace"],
+        ["--segmenter", "sam2.1-small"],
+        ["--segmenter", "auto", "--no-pace"],
+    ):
+        assert cli.main(["jitter", *argv]) == 0
+    assert [(k["segmenter"], k["pace"]) for k in seen] == [
+        ("none", False),
+        ("none", False),
+        ("none", True),
+        ("sam2.1-small", True),
+        ("auto", False),
+    ]

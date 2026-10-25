@@ -209,15 +209,12 @@ class Sam2Segmenter:
 
 
 def load_segmenter(name: str, device: str = "auto") -> Segmenter | None:
-    """`sam2.1-small` or `sam2.1-large`; `none` for no segmenter. `auto` is SAM 2.1 small when
-    transformers is installed, else none."""
+    """`sam2.1-small` or `sam2.1-large`; `none` for no segmenter. `auto` is SAM 2.1 small
+    (transformers is a dependency); the service starts without a segmenter when `auto` fails
+    to load (cli.py)."""
     if name == "none":
         return None
     if name == "auto":
-        try:
-            import transformers  # noqa: F401
-        except ImportError:
-            return None
         name = "sam2.1-small"
     if name not in SEGMENTERS:
         raise ValueError(

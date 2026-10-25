@@ -525,9 +525,9 @@ class _Summary:
     """Every few seconds, a log line: frames answered, how often each state was answered and the
     mean time in the tracker, so a slow or lossy stream shows in the log, not only on the
     headset. With a segmenter it adds the share of found answers whose outline the follower drew
-    (`follower 82%`) and what the segmenter did since the last line (`segmenter: 12 calls, 140
-    ms, 1 empty`: boxes cut, their mean time, and how many held nothing), so a mask that is
-    rarely drawn shows too."""
+    (`follower N%`) and what the segmenter did since the last line (`segmenter: K calls, M ms, E
+    empty`: boxes cut, their mean time, and how many held nothing), so a mask that is rarely
+    drawn shows too."""
 
     def __init__(self, what: str):
         self.what = what
