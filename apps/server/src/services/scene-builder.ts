@@ -55,6 +55,7 @@ export const DEFAULT_SCENE_TIMEOUT_MS = 10 * 60_000;
 /** `clio scene` as a child process, one episode per run, on its own queue (EpisodeJobQueue). */
 export class ProcessSceneBuilder extends EpisodeJobQueue implements SceneBuilder {
   private readonly episodesDir: string;
+  private readonly logger: Logger | undefined;
 
   constructor(options: ProcessSceneBuilderOptions) {
     const { episodesDir, derivedDir, scenesDir, compiler } = options;
@@ -77,7 +78,7 @@ export class ProcessSceneBuilder extends EpisodeJobQueue implements SceneBuilder
           const ids = (await compiledEpisodes(episodesDir, derivedDir)).filter(
             (id) => (compiler?.state(id) ?? 'idle') === 'idle',
           );
-          return ids.filter((id) => recordedScan(episodesDir, id));
+          return ids.filter((id) => recordedScan(episodesDir, id, options.logger));
         },
         what: 'compiled episodes with a room scan or keyframes',
       },
@@ -88,6 +89,7 @@ export class ProcessSceneBuilder extends EpisodeJobQueue implements SceneBuilder
       logger: options.logger,
     });
     this.episodesDir = episodesDir;
+    this.logger = options.logger;
   }
 
   /**
@@ -95,21 +97,25 @@ export class ProcessSceneBuilder extends EpisodeJobQueue implements SceneBuilder
    * the sweep compiled waits in the background, so a lesson finished since is built first.
    */
   afterCompile(id: string, run: { background: boolean }): void {
-    if (recordedScan(this.episodesDir, id)) this.enqueue(id, { background: run.background });
+    if (recordedScan(this.episodesDir, id, this.logger)) {
+      this.enqueue(id, { background: run.background });
+    }
   }
 }
 
 /**
  * Whether the episode recorded a room scan or keyframes (?scan=1 on the headset). Read at once, so
- * builds keep the order their compiles ended in.
+ * builds keep the order their compiles ended in. A media/ that cannot be read counts as none.
  */
-function recordedScan(episodesDir: string, id: string): boolean {
+function recordedScan(episodesDir: string, id: string, logger?: Logger): boolean {
   let names: string[];
   try {
     names = readdirSync(join(episodesDir, id, 'media'));
   } catch (error) {
-    if (isMissing(error)) return false;
-    throw error;
+    if (!isMissing(error)) {
+      logger?.warn(`Scene build of ${id}: cannot list its media (${String(error)})`);
+    }
+    return false;
   }
   return names.some((n) => ROOM_SCAN_MEDIA.test(n) || KEYFRAME_MEDIA.test(n));
 }

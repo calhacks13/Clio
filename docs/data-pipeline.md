@@ -179,7 +179,7 @@ written. A scene is stale when `meta.json`, `events.ndjson`, `observations.ndjso
 the compile's `manifest.json`, `tracks.json` or `shapes.json`, the `--models` backend or the
 pipeline version changed: every compile writes a new `manifest.json`, so it makes the scene stale.
 `scene.json`'s `compiledAt` is the manifest's. The server runs `clio scene --if-stale` after each
-compile; an up-to-date scene is left untouched.
+compile of an episode recorded with `?scan=1`; an up-to-date scene is left untouched.
 
 ## Where the object tracker plugs in
 

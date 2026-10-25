@@ -214,16 +214,16 @@ describe('describeSceneBuilds', () => {
   it('says which models scene builds make, and how to set TripoSR up when it is not', () => {
     const models = (sceneModels: string) => loadConfig({ CLIO_SCENE_MODELS: sceneModels }, '/r');
     expect(describeSceneBuilds(models('primitive'), on)).toBe(
-      'on (object models: primitive, offline)',
+      'on for ?scan=1 episodes (object models: primitive, offline)',
     );
     expect(describeSceneBuilds(models('triposr'), on)).toBe(
-      'on (object models: TripoSR, on this machine)',
+      'on for ?scan=1 episodes (object models: TripoSR, on this machine)',
     );
     expect(describeSceneBuilds(models(''), { ...on, triposr: false })).toBe(
-      'on (object models: triposr, but TripoSR is not set up, so primitives: run pipeline/tools/triposr/setup.sh)',
+      'on for ?scan=1 episodes (object models: triposr, but TripoSR is not set up, so primitives: run pipeline/tools/triposr/setup.sh)',
     );
     expect(describeSceneBuilds(models('command'), on)).toBe(
-      'on (object models: command, which runs CLIO_MODEL_COMMAND)',
+      'on for ?scan=1 episodes (object models: command, which runs CLIO_MODEL_COMMAND)',
     );
   });
 

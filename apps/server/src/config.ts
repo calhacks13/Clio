@@ -203,7 +203,7 @@ export function loadConfig(
   };
 }
 
-/** For the startup log: what a scene build after each compile will do. */
+/** For the startup log: what a scene build after the compile of a ?scan=1 episode will do. */
 export function describeSceneBuilds(
   config: Config,
   ready: { triposr: boolean; scene: boolean },
@@ -213,13 +213,13 @@ export function describeSceneBuilds(
   }
   switch (config.sceneModels) {
     case 'primitive':
-      return 'on (object models: primitive, offline)';
+      return 'on for ?scan=1 episodes (object models: primitive, offline)';
     case 'triposr':
       return ready.triposr
-        ? 'on (object models: TripoSR, on this machine)'
-        : 'on (object models: triposr, but TripoSR is not set up, so primitives: run pipeline/tools/triposr/setup.sh)';
+        ? 'on for ?scan=1 episodes (object models: TripoSR, on this machine)'
+        : 'on for ?scan=1 episodes (object models: triposr, but TripoSR is not set up, so primitives: run pipeline/tools/triposr/setup.sh)';
     case 'command':
-      return 'on (object models: command, which runs CLIO_MODEL_COMMAND)';
+      return 'on for ?scan=1 episodes (object models: command, which runs CLIO_MODEL_COMMAND)';
   }
 }
 

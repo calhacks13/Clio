@@ -9,8 +9,6 @@ import {
   Texture,
   Vector3,
 } from "three";
-import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 import { W_TO_ROS_QUAT } from "@/lib/clio/scene-display";
 
 // GLB files the Clio scene draws (the room scan, the generated object models): parsing with
@@ -18,8 +16,16 @@ import { W_TO_ROS_QUAT } from "@/lib/clio/scene-display";
 // sit in, and the layer that draws the room behind the measured data. Draco-compressed files are not read: their decoder is not bundled, so
 // such a model reads as invalid and is left out.
 
-/** The GLB's default scene. Meshopt-compressed buffers are decoded; textures load from the file. */
+/**
+ * The GLB's default scene. Meshopt-compressed buffers are decoded; textures load from the file.
+ * The loader and the decoder (which starts its WebAssembly when imported) load on the first parse,
+ * so an episode with no room scan or models never fetches them.
+ */
 export async function parseGlb(bytes: ArrayBuffer): Promise<Group> {
+  const [{ GLTFLoader }, { MeshoptDecoder }] = await Promise.all([
+    import("three/addons/loaders/GLTFLoader.js"),
+    import("three/addons/libs/meshopt_decoder.module.js"),
+  ]);
   const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
   const gltf = await loader.parseAsync(bytes, "");
   return gltf.scene;
