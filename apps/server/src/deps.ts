@@ -1,6 +1,7 @@
 import { consoleLogger, type Logger } from './log';
 import type { BenchModels } from './services/bench';
 import type { EpisodeCompiler } from './services/episode-compiler';
+import type { RestMode } from './services/plan-service';
 import type { Planner } from './services/planner';
 import type { PrimaryObjectFinder } from './services/primary-object';
 import type { SceneAsker } from './services/scene';
@@ -59,6 +60,8 @@ export interface AppDeps {
   /** Gemini-backed services: null (or absent) when GEMINI_API_KEY is unset, so routes answer 503. */
   tokenMinter?: TokenMinter | null;
   planner?: Planner | null;
+  /** How the planner writes stage rest; null (or absent) for the default, in parallel. */
+  planRest?: RestMode | null;
   /** The step watcher's model: step checks and criteria. */
   checker?: StepChecker | null;
   locator?: VisionLocator | null;
@@ -78,6 +81,7 @@ export interface AppDeps {
 type OptionalServices =
   | 'tokenMinter'
   | 'planner'
+  | 'planRest'
   | 'checker'
   | 'locator'
   | 'scene'
@@ -88,6 +92,7 @@ type OptionalServices =
 export interface ServerDeps extends Required<Omit<AppDeps, 'limits' | OptionalServices>> {
   tokenMinter: TokenMinter | null;
   planner: Planner | null;
+  planRest: RestMode | null;
   checker: StepChecker | null;
   locator: VisionLocator | null;
   scene: SceneAsker | null;
@@ -102,6 +107,7 @@ export function resolveDeps(deps: AppDeps): ServerDeps {
     ...deps,
     tokenMinter: deps.tokenMinter ?? null,
     planner: deps.planner ?? null,
+    planRest: deps.planRest ?? null,
     checker: deps.checker ?? null,
     locator: deps.locator ?? null,
     scene: deps.scene ?? null,

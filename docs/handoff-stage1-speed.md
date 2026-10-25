@@ -7,16 +7,18 @@
 
 ## Where things are
 
-| Branch                         | State                                                                                    |
-| ------------------------------ | ---------------------------------------------------------------------------------------- |
-| `feat/coach-plan-robotics-er2` | Green (852 tests). Robotics-ER 2 everywhere, two-stage plans, step watcher, voice bridge |
-| `er2/stage1-card`              | The first stage writes a short "card" (WIP commit 46d2696, now in `feat/coach-plan`)     |
-| integration (`int/*` streams)  | `feat/coach-plan` merged with `feat/tracking-and-viewer`, finished in parallel streams   |
+| Branch                             | State                                                                                    |
+| ---------------------------------- | ---------------------------------------------------------------------------------------- |
+| `feat/coach-plan-robotics-er2`     | Green (852 tests). Robotics-ER 2 everywhere, two-stage plans, step watcher, voice bridge |
+| `er2/stage1-card`                  | The first stage writes a short "card" (WIP commit 46d2696, now in `feat/coach-plan`)     |
+| integration (`int/*` streams)      | `feat/coach-plan` merged with `feat/tracking-and-viewer`, finished in parallel streams   |
+| `worktree-agent-a97f24cb49b733494` | From `feat/coach-plan` at 82c5666: stage rest in parallel, the card reads the scene      |
 
 The integration started from `a45a84e` and its coordinator merged the streams: s1 finished the
 card on the server, s2 the headset's start path, s3 measured stage first's thinking (this page,
 the timing script, the docs), a follow-up took stage rest's upgraded objects to the headset, and
-another made the outline cover the whole goal, so stage first thinks at minimal again.
+another made the outline cover the whole goal, so stage first thinks at minimal again. Then the
+planner's work was split into calls that run at once (Done, item 6).
 
 ## Where the time goes (measured)
 
@@ -53,6 +55,8 @@ each object has a phrase.
 
 `plan-schema.ts` (`kind === 'first'`), `plan-build.ts` (`buildFirstStageCandidate`, `cardObject`,
 `cardStep`, `outlineStep`), `plan-prompt.ts` (`firstStageText`). The answer is:
+- `done`, `todo` (added in item 6): what the views show done and what is left, read before the
+  outline; they stay out of the plan;
 - `title`, `summary`;
 - `outline`: every step as `{ id, instruction }` only (no done-when, no targets), 1 to 10 lines;
 - `objects`: only the first step's objects and look-alikes, at most 8, each `{ id, label,
@@ -93,6 +97,20 @@ second view from the first so both show the same scene. They live in `data/bench
   a white YOGURT DRINK bottle with a pink cap touching a slightly taller MILK bottle with a blue
   cap. Expectations: step 1 takes the yogurt drink, not the milk; says how to tell them apart; a
   mistake for the milk; doesn't ask to open the fridge; done-when states are looks, not actions.
+
+The parallel-planning work (Done, item 6) ran in a worktree with a different set, made again with
+`apps/server/scripts/bench-scene.ts` from the specs in `apps/server/scripts/bench-scenes/`
+([planner-bench.md](planner-bench.md), "Synthetic scenes"), 5 expectations each:
+- `fridge-yogurt-drink-beside-the-milk`, as above.
+- `ph-photo-cup-a-pink-cups-b-and-c-purple`: the photo pH scene above (its base expectation now
+  reads "a step adds the base to a cup of purple indicator", as a judge read "tests the base too,
+  not only the acid" as testing the acid again).
+- `ph-lesson-cup-a-already-pink-knife-on-the-table`, the main checkout's drawn scene with the same
+  id: one view, cups A pink, B purple, C empty, labeled bottles, and "I already started this
+  earlier".
+- `tv-remote-one-old-battery-still-in-aaa-look`, goal "Replace the batteries in the TV remote":
+  the cover off, one old black-and-gold battery still in, the other on the desk, two new blue
+  batteries in a tray and a loose blue one meant to be a thinner AAA.
 
 ## Done
 
@@ -195,32 +213,86 @@ Read from the cards (3 fridge, 7 pH):
   colors" step, which the system instruction says is not a step, and stage rest wrote them in full
   with a done-when like "the learner has observed all three cups". One pH plan had only 2 steps.
 
+6. **Planner work in parallel** (this branch): stage rest is split into calls that run at once,
+   and the card reads the scene before its outline ([coach-plan.md](coach-plan.md), "Who writes
+   the first draft"):
+   - `plan-rest.ts`: a review of the outline (thinking low) reads what is done and left and the
+     control, fixes the lines and names the new objects; meanwhile the card's objects are written
+     in full with the warnings; then every line is written in full at once (thinking minimal),
+     each checked alone and retried once, a failed one kept as its outline line. Without a
+     review, the single call. `planRest: 'single'` in the server deps, or `pnpm bench --rest
+     single`, keeps the old way.
+   - The card starts with `done` and `todo`; the outline does the todo parts only.
+   - The bench counts calls and tokens a lesson, p90 times and the judge's other issues, prints
+     each part's time and the review's reading, and `scripts/bench-scene.ts` makes scenes.
+
+### Measured with the planner in parallel
+
+Four scenes, 5 expectations each, judged by `gemini-pro-latest`; "start" is the whole stage
+first call, "complete" adds stage rest; median / p90; directional (2 or 3 runs a scene):
+
+| Four scenes                                           | Runs | Met   | Start         | Complete        | Calls, tokens a lesson              |
+| ----------------------------------------------------- | ---- | ----- | ------------- | --------------- | ----------------------------------- |
+| before: the card, rest in one call                    | 12   | 48/60 | 4.1 s / 5.3 s | 20.6 s / 29.5 s | 2; 9.7k in, 2.3k out, 2.3k thought  |
+| the card, rest in parallel (medium review, low steps) | 8    | 34/40 | 4.1 s / 4.7 s | 21.5 s / 27.7 s | 5; 19.7k in, 2.3k out, 3.6k thought |
+| reading card, parallel (low review, minimal steps)    | 12   | 53/60 | 4.1 s / 5.2 s | 14.5 s / 23.1 s | 5; 25k in, 2.8k out, 1.1k thought   |
+| the same, review told to keep its reading (now)       | 8    | 37/40 | 3.9 s / 6.1 s | 13.1 s / 20.6 s | 5; 23k in, 2.7k out, 1.1k thought   |
+
+By scene, before and now: fridge 15/15 and 10/10; photo pH 9/15 and 10/10; drawn pH 12/15 and
+9/10; remote 12/15 and 8/10. Read from the plans and the judge:
+- **The control cup is kept**: the photo pH plans put the base in cup B and leave cup C purple in
+  8 of 9 runs with the reading card, against 0 of 3. The card's `done` says "the acid test: cup A
+  is already pink", which it said when asked alone (2.2 s at minimal) but not when planning.
+- **The knife is placed**: "left of cup A" in 7 of 9 photo pH plans, against 0 of 3, since the
+  objects call places each hazard by the nearest object of the task.
+- **No looking-only steps** in the parallel plans' later steps: the review drops "observe the
+  color change" lines, which every pH plan before had.
+- **The review at low first contradicted its own reading** (the acid test both done and to do,
+  indicator into a cup already purple). Told that `todo` leaves out what is done and nothing gets
+  what it already has, it met 19 of 20 on the two pH scenes at low, as at medium, in 13.1 s
+  against 20.5 s.
+- **Not fixed**: no model here sees the remote's loose battery as the thinner one (0 of 10;
+  gemini-3.8-flash doesn't either); a remote card once read two old batteries in the remote; and
+  steps that need a cap off or a bottle picked up first still go missing. The judge names 0.75
+  other issues a plan now, against 1.0.
+- **Hedging stage first** (two identical calls, the first answer wins) was estimated from 22
+  single calls: 3.9 s / 4.4 s instead of 4.1 s / 5.1 s, for twice the stage-first tokens, and it
+  takes the shorter card. Not kept.
+
 ## Left to do
 
-1. **Real scenes**: the two scenes here are generated. Capture them on bench.html (or copy the
-   original folders) and run the bench again.
-2. **The pH control cup**: the outline now reaches the whole goal (the base too), but when the
-   scene is half done the plan should finish the lesson's design from there (the acid is done in
-   cup A, so the base goes in cup B and cup C stays purple), not redo the acid in a fresh cup.
-   No level and no wording tried so far keeps cup C; it may need low thinking, or a real scene
-   where the learner says what cup A is. Stage rest should also drop or rewrite outline steps
-   whose outcome is already in view (one outline redid cup A, before s1) and looking steps
-   ("observe the color change"), which minimal outlines keep writing.
-3. **Drop `sightings` from stage 1** unless something uses them early (only the bench overlay
+1. **Real scenes**: the scenes here are generated. Capture them on bench.html (or copy the
+   original folders) and run the bench again, `--rest single` beside the default.
+2. **A critic after the merge**: the review fixes the outline, but the written steps are not
+   read together again. The judge's issues left are cross-step ones (a bottle poured from before
+   it is picked up or uncapped, the base poured into an empty cup before the indicator). A call
+   that reads the merged plan and sends the steps it flags back to their writers would cost about
+   5 to 8 s more; nobody waits for stage rest, but step 2 should still land before step 1 ends.
+3. **Start stage rest on the server**: the headset asks for it after the lesson has started and
+   it has captured new frames. The server could start it the moment stage first is saved, with
+   the same frames, and the headset's request join it when its base is the same plan. The bench
+   asks for stage rest at once, so it can't show the gain; time it on the Quest first (item 8).
+4. **Look-alikes the planner can't see**: on the remote, every plan used the loose blue battery.
+   Asking about look-alikes alone didn't help either. Try a real scene with a clear AAA, or a
+   closer look (`look_closer`-style crop) at the candidates before the step that takes them.
+5. **Cost**: each call sends the views again, so a lesson reads about 23k input tokens instead
+   of 9.7k. Gemini's implicit cache already served 6.4k of 30k in the one lesson metered for it
+   (the bench prints cached input in brackets). One view for the step writers, or explicit
+   caching of the views and the system instruction across the parallel calls, would cut more.
+6. **Drop `sightings` from stage 1** unless something uses them early (only the bench overlay
    does today): they are 18 to 22% of the card's characters at minimal (about 90 to 190 tokens,
    0.3 to 0.7 s).
-4. **One camera view for stage 1** instead of two: ~1,000 fewer input tokens (small, maybe 0.2 s).
-5. **On the Quest**: time `start_lesson` to the step-1 briefing with `lesson.first_step` and
+7. **One camera view for stage 1** instead of two: ~1,000 fewer input tokens (small, maybe 0.2 s).
+8. **On the Quest**: time `start_lesson` to the step-1 briefing with `lesson.first_step` and
    `lesson.first_locate`, and measure the 1024 px encode and what the planning-frame buffer costs
    (the synchronous `toDataURL` took about 17 ms at 640x480 there; the asynchronous encoders take
    about 4 s at any size).
-6. **The live tracker on a Quest**: test `/track` following each step's objects on the headset.
+9. **The live tracker on a Quest**: test `/track` following each step's objects on the headset.
 
 ## More ideas, roughly by gain
 
 - **Stream stage 1 and start on the first step** as soon as `firstStep` closes: the card puts it
   last, so this gains little now; worth it only if the card grows again.
-- **Start stage rest sooner**: it waits for stage 1's answer (it revises that plan).
 - **Reuse the card's phrase in stage rest's show items**: tracking restarts when an object's
   phrase changes from step to step.
 - **Cache the planner's system instruction** (1,645 tokens): cuts cost, not time (measured).
@@ -228,8 +300,9 @@ Read from the cards (3 fridge, 7 pH):
 ## How to check quality quickly
 
 ```bash
-pnpm bench --staged --repeat 3                          # judged, both scenes, stage first minimal
-pnpm bench --staged --thinking first=low --repeat 3     # the same at low, to compare
+pnpm bench --staged --repeat 3                          # judged, every scene, as the headset plans
+pnpm bench --staged --rest single --repeat 3            # stage rest in one call, to compare
+pnpm bench --staged --thinking first=low --repeat 3     # stage first at low, to compare
 pnpm bench --checks --repeat 3                          # the milk watcher test still says "wrong"
 pnpm check
 ```

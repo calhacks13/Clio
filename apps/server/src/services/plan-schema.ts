@@ -9,8 +9,12 @@ import { ACTION_VERB_NAMES } from '@clio/protocol';
 // enforced afterwards by safeParseProcedure, or asked for in the prompt.
 
 export type JsonSchema = { [keyword: string]: unknown };
-/** plan: a whole plan. first: an outline and its first step as a card. revision: the rest of one. */
-export type PlanSchemaKind = 'plan' | 'first' | 'revision';
+/**
+ * plan: a whole plan. first: an outline and its first step as a card. revision: the rest of one.
+ * review, step, objects: the parts of a stage rest written in parallel (plan-rest.ts): the
+ * outline checked, one step in full, the card's objects in full.
+ */
+export type PlanSchemaKind = 'plan' | 'first' | 'revision' | 'review' | 'step' | 'objects';
 
 const described = (schema: JsonSchema, description?: string): JsonSchema =>
   description ? { ...schema, description } : schema;
@@ -282,6 +286,52 @@ const cardStep = obj(
   ['id', 'instruction', 'doneWhen', 'targets', 'action', 'show', 'mistakes'],
 );
 
+// A parallel stage rest (plan-rest.ts) checks the outline first, in one call that thinks: it
+// reads the scene and the goal before it writes the lines, so a part already done or a control
+// shows up as a field rather than a hunch. Then every line is written in full at once, each by
+// its own call, from the checked outline and one table of objects so the ids agree.
+
+/** A checked outline line: what the step does and ends in, and the objects it involves. */
+const reviewLine = obj(
+  {
+    id: str('The outline id when the step stays the same; otherwise a new lowercase slug'),
+    instruction: str('One imperative sentence, at most 15 words'),
+    doneWhen: str(
+      'The finished state as a camera would see it, one sentence that names how the right ' +
+        'object looks, e.g. "the liquid in cup B has turned green"',
+    ),
+    uses: arr(str(), {
+      description: 'Ids of the objects the step touches, shows or guards against',
+    }),
+  },
+  ['id', 'instruction', 'doneWhen', 'uses'],
+);
+
+const review = obj(
+  {
+    done: arr(str(), {
+      description:
+        'Each part of the goal the views show already done, with what shows it; [] if none',
+    }),
+    todo: arr(str(), {
+      description: 'Each part of the goal still to do, in the order the goal names them',
+    }),
+    control: str(
+      'In an experiment, the sample the setup keeps untouched for comparison, and why; "" otherwise',
+    ),
+    outline: arr(reviewLine, {
+      max: 9,
+      description: 'The steps after the step under way, in order',
+    }),
+    objects: arr(cardObject, {
+      max: 8,
+      description: 'Only NEW objects the outline uses, not the declared ones; [] if none',
+    }),
+    summary: str('One sentence: what the learner will do in the whole lesson, as it now goes'),
+  },
+  ['done', 'todo', 'control', 'outline', 'objects', 'summary'],
+);
+
 /** What every new plan starts with: what it is about, the scene, and the hazards in it. */
 const PLAN_HEAD: Record<string, JsonSchema> = {
   title: str('Short lesson title'),
@@ -302,6 +352,35 @@ const PLAN_HEAD_REQUIRED = ['title', 'summary', 'workspace', 'objects', 'sightin
 const coach = obj({ persona: str(), notes: str() }, []);
 
 export function buildPlanJsonSchema(kind: PlanSchemaKind): JsonSchema {
+  if (kind === 'review') return review;
+  if (kind === 'step') {
+    return {
+      ...obj(
+        {
+          step: ref('step'),
+          objects: arr(ref('object'), {
+            description: 'Only the objects the request asks to declare in full; [] if none',
+          }),
+        },
+        ['step', 'objects'],
+      ),
+      $defs: DEFS,
+    };
+  }
+  if (kind === 'objects') {
+    return {
+      ...obj(
+        {
+          objects: arr(ref('object'), {
+            description: 'Each object the request lists, again in full, with its id and label',
+          }),
+          warnings,
+        },
+        ['objects', 'warnings'],
+      ),
+      $defs: { object: DEFS.object as JsonSchema },
+    };
+  }
   if (kind === 'revision') {
     return {
       ...obj(
@@ -328,6 +407,13 @@ export function buildPlanJsonSchema(kind: PlanSchemaKind): JsonSchema {
     return {
       ...obj(
         {
+          done: arr(str(), {
+            description:
+              'Each part of the goal the views show already done, and what shows it; [] if none',
+          }),
+          todo: arr(str(), {
+            description: 'Each part of the goal still to do, in the order the goal names them',
+          }),
           title: PLAN_HEAD.title as JsonSchema,
           summary: PLAN_HEAD.summary as JsonSchema,
           outline: arr(outlineLine, {
@@ -344,7 +430,17 @@ export function buildPlanJsonSchema(kind: PlanSchemaKind): JsonSchema {
           warnings,
           firstStep: cardStep,
         },
-        ['title', 'summary', 'outline', 'objects', 'sightings', 'warnings', 'firstStep'],
+        [
+          'done',
+          'todo',
+          'title',
+          'summary',
+          'outline',
+          'objects',
+          'sightings',
+          'warnings',
+          'firstStep',
+        ],
       ),
       $defs: { action: DEFS.action as JsonSchema },
     };

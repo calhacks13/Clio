@@ -67,30 +67,47 @@ recital and in the recorded snapshots, not in the `Procedure`.
 2. **The planner** (`POST /api/plans`), in two stages. It sees sharper frames than the coach (2
    at 1024 px) and writes the AR fields the coach shouldn't have to think about: outline
    descriptions, action verbs, objects, mistakes. Its schema requires `doneWhen`.
-   - **Stage `first`** writes a short card, because every token of it is time the learner
-     waits: the whole lesson as an `outline` (an id and an instruction per step); only the
-     objects the first step uses and the look-alikes it guards against, each with a spoken
-     label, a short phrase for the object detector, a one-sentence `look` that finds it in a
-     frame and whether it moves; where it saw them (`sightings`); every hazard in view
-     (`warnings`); and last, the first step as a card: instruction, done-when, targets, action,
-     the ids of the objects it shows, and up to two mistakes, each naming the object it is made
-     with. `plan-build.ts` expands the card into an ordinary `Procedure`, so the contract and its
-     JSON Schema stay as they are: an object's look becomes its `tracking.query` and the
-     description of every outline that shows it; a mistake becomes a `hand_near` rule on its
-     object (dropped when that object isn't declared or is one the step itself uses); the first
-     step is confirmed by its done-when; and the other outline lines become steps confirmed by
-     their instruction, which outline nothing yet. The lesson starts on it 3 to 4 s (median)
-     after the request on the bench. The server gives it 40 s, a retry included, and the headset
-     gives up at 45 s.
+   - **Stage `first`** writes a short card, because every token of it is time the learner waits:
+     first a reading of the scene (`done`, the parts of the goal the views show done and what shows
+     it; `todo`, the parts left, in the goal's order), which stays out of the plan; then the whole
+     lesson as an `outline` (an id and an instruction per step) that does only the parts left; only
+     the objects the first step uses and the look-alikes it guards against, each with a spoken
+     label, a short phrase for the object detector, a one-sentence `look` that finds it in a frame
+     and whether it moves; where it saw them (`sightings`); every hazard in view (`warnings`); and
+     last, the first step as a card: instruction, done-when, targets, action, the ids of the objects
+     it shows, and up to two mistakes, each naming the object it is made with. `plan-build.ts`
+     expands the card into an ordinary `Procedure`, so the contract and its JSON Schema stay as they
+     are: an object's look becomes its `tracking.query` and the description of every outline that
+     shows it; a mistake becomes a `hand_near` rule on its object (dropped when that object isn't
+     declared or is one the step itself uses); the first step is confirmed by its done-when; and the
+     other outline lines become steps confirmed by their instruction, which outline nothing yet. The
+     lesson starts on it 3 to 4 s (median) after the request on the bench. The server gives it 40 s,
+     a retry included, and the headset gives up at 45 s.
    - **Stage `rest`** is asked at once, with fresh frames, while the lesson starts: a revision
-     of the first stage's plan from `outlineFrom` that writes steps 2 to n in full, with time to
-     think (60 s on the server, as nobody waits for it). It also writes the card's objects again
-     in full: their kind, size, description and where to look replace the card's defaults, and
-     their ids and labels stay, as the learner may have heard them. When it lands it replaces
-     the outline steps nobody has started; the focused step and finished ones stay as they are,
-     so nothing restarts, and a step skipped meanwhile stays skipped. The coach hears "Plan
-     refined" with the recital, without being asked to speak. It is dropped when the plan moved
-     on without it: a new lesson, a `revise_plan`, or the coach adding or rewording a step.
+     of the first stage's plan from `outlineFrom` that writes steps 2 to n in full (60 s on the
+     server, as nobody waits for it). It is written in parallel (`plan-rest.ts`), in calls that
+     each do one thing:
+     - a **review** of the outline against the scene and the goal (thinking low): what the views
+       show done, what is left, and in an experiment the sample kept as the control, then the
+       lines as they should be (no looking-only step, no part done twice, nothing added that a
+       thing already has), the objects each line uses, the new objects as cards, and a new
+       summary;
+     - at the same time, the card's **objects** written again in full, with the warnings
+       (thinking low): their kind, size, description and where to look replace the card's
+       defaults, and their ids and labels stay, as the learner may have heard them;
+     - once the review is in, every line written in full **at once**, each by its own call
+       (thinking minimal), from the whole checked outline, the review's reading and one table of
+       objects, so the steps fit together and share ids; each new object is declared by the
+       first line that uses it.
+
+     Each written step is checked as a plan of its own and asked again once with its errors; one
+     that still fails stays an outline line, confirmed by its done-when. A mistake on an object the
+     step itself uses is dropped, as on the card. Without a usable review (two tries, 30 s), one
+     call writes the rest as it did before. The answer is one plan, as before. When it lands it
+     replaces the outline steps nobody has started; the focused step and finished ones stay as they
+     are, so nothing restarts, and a step skipped meanwhile stays skipped. The coach hears "Plan
+     refined" with the recital, without being asked to speak. It is dropped when the plan moved on
+     without it: a new lesson, a `revise_plan`, or the coach adding or rewording a step.
    - `stage: full` (the default) writes the whole plan in one call, for the bench and
      `revise_plan`.
 
@@ -104,10 +121,12 @@ recital and in the recorded snapshots, not in the `Procedure`.
    (sharp, hot, electrical, glass, chemicals, machinery), each named by how it looks and where it
    is, because hazard labels alone are unreliable.
 
-   Thinking per stage (`PLAN_THINKING` in `gemini-planner.ts`) was picked with `pnpm bench`
-   ([planner-bench.md](planner-bench.md)) on two synthetic scenes, the pH lesson with cup A
-   already pink and a knife on the table and a fridge with a yogurt drink beside the milk, 3 runs
-   each per setting, judged by `gemini-pro-latest` against 9 expectations. Medians; directional:
+   Thinking per stage (`PLAN_THINKING` in `gemini-planner.ts`, and `REST_PART_THINKING` for the
+   parts of stage rest) was picked with `pnpm bench` ([planner-bench.md](planner-bench.md)) on
+   two synthetic scenes, the pH lesson with cup A already pink and a knife on the table and a
+   fridge with a yogurt drink beside the milk, 3 runs each per setting, judged by
+   `gemini-pro-latest` against 9 expectations (the last rows: four scenes, below). Medians;
+   directional:
 
    | Robotics-ER 2                                 | Lesson starts | Plan complete | Met       |
    | --------------------------------------------- | ------------- | ------------- | --------- |
@@ -123,7 +142,10 @@ recital and in the recorded snapshots, not in the `Procedure`.
    | the card's first version: first low           | 6.2 s         | 21.0 s        | 24/27     |
    | the card, before the whole-goal rule: minimal | 3.8 s         | 20.1 s        | 23/27     |
    | the card, before the whole-goal rule: low, pH | 6.5 s         | 24.4 s        | unjudged  |
-   | the card now: first minimal (default)         | 3.5 s         | 18.7 s        | 24/27     |
+   | the card: first minimal, rest in one call     | 3.5 s         | 18.7 s        | 24/27     |
+   | four scenes: the card, rest in one call       | 4.1 s         | 20.6 s        | 48/60     |
+   | four scenes: the card, rest in parallel       | 4.1 s         | 21.5 s        | 34/40     |
+   | four scenes: the card reads, rest in parallel | 3.9 s         | 13.1 s        | 37/40     |
 
    Most of the gain is the prompt; more thinking is not better on its own. The first stage at
    high takes over 20 s for no better plan. The rest at high was no better than medium here, but
@@ -155,6 +177,41 @@ recital and in the recorded snapshots, not in the `Procedure`.
    23 s. So stage first thinks at minimal again. The control is still not kept: every pH plan
    puts vinegar in cup B and the base in cup C, reading cup A's pink as setup rather than as the
    acid already tested, and no level kept cup C before the rule either.
+
+   The last rows are on four scenes, 20 expectations, judged as above: the fridge and the photo
+   pH scene made again from written specs (`apps/server/scripts/bench-scenes/`), this laptop's
+   drawn pH scene (cup C empty) and a half-done TV remote with a look-alike battery; 2 or 3 runs
+   a scene, so compare them with each other; directional. Two changes made the difference:
+   - **The card reads the scene first.** Asked on its own what the views show done (2 s at
+     minimal), Robotics-ER 2 said "the acid test: cup A is already pink" and left only the base
+     to do; asked for a plan, it planned both tests anyway. With `done` and `todo` written before
+     the outline, the photo pH plans put the base in cup B and kept cup C as the control in 8 of
+     9 runs, against 0 of 3 before (and 7 of 7 cards in the handoff). The lesson still starts
+     after 4.0 s (median of 32 cards, p90 5.4 s), against 4.2 s (p90 5.1 s); the remote's
+     longer reading takes about 1 s more.
+   - **Stage rest in parallel.** The plan is complete 13.1 s after the request (p90 20.6 s)
+     against 20.6 s (p90 29.5 s, up to 49 s), so step 2 is written about 9 s after the lesson
+     starts. On the old card, the parallel rest with the review at medium was no faster (21.5
+     s): the review is the one part that waits for another, and at medium it took 5 to 15 s.
+     After the review was told that its `todo` leaves out what is done and that nothing gets
+     what it already has, it met as many expectations at low as at medium on the two pH scenes
+     (19 of 20 each) in 13.1 s against 20.5 s, so it thinks at low. The step writers at minimal
+     take 2 to 8 s each, all at once. Placing each hazard by the nearest object of the task got
+     the knife "left of cup A" in 7 of 9 photo pH plans, against 0 of 3.
+
+   The judge also names other serious problems beside the expectations: 0.75 a plan now (6 in 8),
+   against 1.0 (12 in 12). What is left: no planner model sees the remote's loose battery as the
+   thinner one (0 of 10 in all), steps that need a cap off or a bottle picked up first, and on the
+   drawn pH scene the base sometimes poured into the empty cup before the indicator. A lesson
+   now makes 5 planner calls (4 to 7) instead of 2, with about 23k input tokens instead of 9.7k
+   (each call sends the views again) and about 3.8k output and thought tokens instead of 4.6k.
+
+   Tried and not kept, measured on the same scenes: two identical stage-first calls at once,
+   taking the first answer, would start the lesson at 3.9 s (p90 4.4 s) instead of 4.1 s (p90
+   5.1 s), estimated from 22 single calls, for twice the stage-first tokens, and the first answer
+   is the shorter card. Several cards to choose from with a critic would choose among the same
+   mistake: the pH cards put vinegar in cup B every time. Writing the steps before the review
+   lands, to keep those it leaves alone, would rarely pay: the review rewords most lines.
 3. **The coach itself.** If the planner fails or times out, the coach is told to write the steps
    with `add_step`. The lesson starts on the first `add_step`, and until then the HUD keeps its
    planning text. New steps go at the end of the list unless the coach says otherwise.

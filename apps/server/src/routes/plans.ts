@@ -19,6 +19,7 @@ import { limitBody, parseBody, safeId } from './request';
 
 export function planRoutes({
   planner,
+  planRest,
   checker,
   procedures,
   now,
@@ -32,7 +33,10 @@ export function planRoutes({
     const body = await parseBody(c, PlanRequestSchema, 'plan request');
     if (body.revise) safeId(body.revise.planId, 'plan id');
     const started = now().getTime();
-    const plan = await generatePlan({ planner, procedures, now }, body);
+    const plan = await generatePlan(
+      { planner, procedures, now, ...(planRest ? { rest: planRest } : {}) },
+      body,
+    );
     const ms = Math.max(0, now().getTime() - started);
     const steps = plan.procedure.steps.length;
     const stage = body.stage === 'full' ? '' : ` (stage ${body.stage})`;

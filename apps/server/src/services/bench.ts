@@ -14,7 +14,8 @@ import type { GenerateContentApi, ModelListApi } from './gemini';
 import { createGeminiJudge } from './gemini-judge';
 import { createGeminiPlanner, type GeminiPlannerOptions } from './gemini-planner';
 import { createGeminiStepChecker, type GeminiStepCheckerOptions } from './gemini-step-check';
-import { generatePlan, type PlanRequestBody } from './plan-service';
+import type { RestPartReport } from './plan-rest';
+import { generatePlan, type PlanRequestBody, type RestMode } from './plan-service';
 import type { Planner } from './planner';
 import type { StepChecker } from './step-check';
 
@@ -82,6 +83,9 @@ export interface BenchPlanDeps {
   rand?: () => number;
   /** More time than the headset's 40 s, for slow models. */
   budgetMs?: number;
+  /** How stage rest is written, to compare one call with the parallel parts. */
+  rest?: RestMode;
+  onRestPart?: (report: RestPartReport) => void;
 }
 
 /**
@@ -94,7 +98,14 @@ export async function benchPlan(deps: BenchPlanDeps, body: PlanRequestBody): Pro
   let result: BenchRunResult;
   try {
     const plan = await generatePlan(
-      { planner, procedures: deps.plans, now: deps.now, budgetMs: deps.budgetMs },
+      {
+        planner,
+        procedures: deps.plans,
+        now: deps.now,
+        budgetMs: deps.budgetMs,
+        rest: deps.rest,
+        onRestPart: deps.onRestPart,
+      },
       body,
     );
     const { planId, procedure, warnings, outlineFrom, sightings } = plan;

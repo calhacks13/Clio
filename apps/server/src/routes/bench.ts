@@ -38,8 +38,10 @@ import { limitBody, parseBody, safeId } from './request';
 // (watcher tests). Plans here never reach the headset's lesson list, and nothing here is
 // recorded in episodes.
 
-export function benchRoutes({ bench, now, logger, limits }: ServerDeps): Hono {
+export function benchRoutes({ bench, planRest, now, logger, limits }: ServerDeps): Hono {
   const app = new Hono();
+  // Stage rest as the headset's plans have it written.
+  const restMode = planRest ? { rest: planRest } : {};
   const on = (): BenchDeps => {
     if (!bench) throw new ApiError(503, 'bench_off', 'The planner bench is not set up');
     return bench;
@@ -81,7 +83,7 @@ export function benchRoutes({ bench, now, logger, limits }: ServerDeps): Hono {
     if (body.revise) safeId(body.revise.planId, 'plan id');
     const planner = models.planner(model ?? models.plannerModel);
     const run = withStage(
-      await benchPlan({ planner, plans: on().plans, now, budgetMs }, body),
+      await benchPlan({ planner, plans: on().plans, now, budgetMs, ...restMode }, body),
       body,
     );
     logRun(run);
@@ -165,7 +167,7 @@ export function benchRoutes({ bench, now, logger, limits }: ServerDeps): Hono {
     const planner = models.planner(model ?? models.plannerModel);
     const body = staged(scenarioPlanRequest(scenario, images), stage, revise);
     const run = withStage(
-      await benchPlan({ planner, plans: on().plans, now, budgetMs }, body),
+      await benchPlan({ planner, plans: on().plans, now, budgetMs, ...restMode }, body),
       body,
     );
     await on().store.addRun(scenario.id, run);

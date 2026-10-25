@@ -23,6 +23,7 @@ import { describe, expect, it } from 'vitest';
 import type { BenchDeps } from '../src/deps';
 import { type BenchModels, restPlanRequest } from '../src/services/bench';
 import type { BenchJudge, JudgeRequest } from '../src/services/bench-judge';
+import type { RestMode } from '../src/services/plan-service';
 import type { Planner, PlannerRequest } from '../src/services/planner';
 import type { StepChecker } from '../src/services/step-check';
 import { BenchCheckStore } from '../src/storage/bench-check-store';
@@ -98,6 +99,7 @@ function fakeModels(
 
 async function benchHarness(
   models: BenchModels | null = fakeModels(),
+  { planRest }: { planRest?: RestMode } = {},
 ): Promise<Harness & { benchDir: string }> {
   const root = await tempDir();
   const benchDir = join(root, 'bench');
@@ -112,7 +114,11 @@ async function benchHarness(
     }),
     models,
   };
-  const h = await harness({ bench, now: steppingClock('2026-10-24T03:15:02.000Z', 1_000) });
+  const h = await harness({
+    bench,
+    ...(planRest ? { planRest } : {}),
+    now: steppingClock('2026-10-24T03:15:02.000Z', 1_000),
+  });
   return Object.assign(h, { benchDir });
 }
 
@@ -266,7 +272,7 @@ describe('POST /api/bench/plan', () => {
     const models = fakeModels({
       plans: [JSON.stringify(modelFirstStage()), JSON.stringify(modelRestStage())],
     });
-    const h = await benchHarness(models);
+    const h = await benchHarness(models, { planRest: 'single' });
     const body = { goal: 'Refill the washer fluid', images: [IMAGE], stage: 'first' as const };
     const first = BenchRunSchema.parse(await json(h.request('POST', BenchPaths.plan, body)));
     expect(first.request).toEqual({ goal: 'Refill the washer fluid', stage: 'first', views: 1 });

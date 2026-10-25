@@ -213,3 +213,54 @@ export const modelRestStage = () => {
   const revision = modelRevision();
   return { ...revision, objects: [washerCap, fluidJug, ...revision.objects] };
 };
+
+// A parallel stage rest on top of modelFirstStage (plan-rest.ts): the review's checked outline,
+// each step writer's answer, and the card objects written again in full.
+
+/** The review: the outline kept, done-whens and objects named, and the jug as a new object. */
+export const modelReview = () => ({
+  done: [],
+  todo: ['open the reservoir', 'fill it with washer fluid', 'close it'],
+  control: '',
+  outline: [
+    {
+      id: 'pour-fluid',
+      instruction: 'Pour the fluid into the reservoir.',
+      doneWhen: 'The blue fluid reaches the top mark on the reservoir.',
+      uses: ['fluid_jug', 'washer_cap'],
+    },
+    {
+      id: 'close-cap',
+      instruction: 'Close the washer fluid cap.',
+      doneWhen: 'The blue cap is shut flat on the reservoir.',
+      uses: ['washer_cap'],
+    },
+  ],
+  objects: [
+    {
+      id: 'fluid_jug',
+      label: 'fluid jug',
+      phrase: 'washer fluid jug',
+      look: 'Blue plastic jug of washer fluid on the ground, right of the car',
+      moves: true,
+    },
+  ],
+});
+
+/** Step writer answers, by outline line: the pour declares the jug, the close declares nothing. */
+export const modelWrittenStep = (index: number) => {
+  const { objects, steps } = modelPlan();
+  const [, pour, close] = steps;
+  return index === 0
+    ? { step: pour, objects: objects.filter((o) => o.id === 'fluid_jug') }
+    : { step: close, objects: [] };
+};
+
+/** The card's objects written again in full, with the warnings. */
+export const modelRestObjects = () => {
+  const [washerCap, coolantCap] = modelPlan().objects;
+  return {
+    objects: [washerCap, coolantCap],
+    warnings: ['Make sure the engine is off and cool.', 'Wipe up any spilled fluid.'],
+  };
+};

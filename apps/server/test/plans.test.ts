@@ -15,7 +15,15 @@ import { describe, expect, it } from 'vitest';
 import type { Planner, PlannerRequest } from '../src/services/planner';
 import type { StepChecker } from '../src/services/step-check';
 import { type Harness, harness, steppingClock } from './harness';
-import { modelFirstStage, modelPlan, modelRestStage, modelRevision } from './plan-fixtures';
+import {
+  modelFirstStage,
+  modelPlan,
+  modelRestObjects,
+  modelRestStage,
+  modelReview,
+  modelRevision,
+  modelWrittenStep,
+} from './plan-fixtures';
 import { procedureInput, writeJson } from './procedure-fixtures';
 
 function scriptedPlanner(
@@ -483,7 +491,11 @@ describe('POST /api/plans in two stages', () => {
 
   it('writes the outline in full as a revision, with a minute to think and retry', async () => {
     const planner = scriptedPlanner(FIRST, JSON.stringify(modelRestStage()));
-    const h = await planHarness(planner);
+    const h = await harness({
+      planner,
+      planRest: 'single',
+      now: steppingClock('2026-10-24T03:15:02.123Z'),
+    });
     const started = PlanResponseSchema.parse((await postPlan(h, first)).body);
     const { res, body } = await postPlan(h, {
       goal: 'Refill the washer fluid',
@@ -551,6 +563,148 @@ describe('POST /api/plans in two stages', () => {
     });
     expect(revising.res.status).toBe(400);
     expect(ApiErrorSchema.parse(revising.body).error.code).toBe('invalid_stage');
+  });
+});
+
+describe('POST /api/plans stage rest in parallel', () => {
+  const FIRST = JSON.stringify(modelFirstStage());
+  type Answer = string | Error;
+  /** Answers each call by what it asks for: stage first, a part of stage rest, or the rest whole. */
+  function partPlanner(answers: {
+    review?: Answer[];
+    objects?: Answer;
+    step?: (index: number, attempt: number) => Answer;
+    rest?: Answer;
+  }): Planner & { requests: PlannerRequest[] } {
+    const requests: PlannerRequest[] = [];
+    const tries = new Map<string, number>();
+    return {
+      model: 'planner-test',
+      requests,
+      async draft(request) {
+        requests.push(request);
+        const { part } = request;
+        const key = part?.kind === 'step' ? `step-${part.index}` : (part?.kind ?? request.stage);
+        const attempt = tries.get(String(key)) ?? 0;
+        tries.set(String(key), attempt + 1);
+        const answer = !part
+          ? request.stage === 'first'
+            ? FIRST
+            : (answers.rest ?? new Error('no rest'))
+          : part.kind === 'review'
+            ? (answers.review?.[Math.min(attempt, (answers.review?.length ?? 1) - 1)] ??
+              JSON.stringify(modelReview()))
+            : part.kind === 'objects'
+              ? (answers.objects ?? JSON.stringify(modelRestObjects()))
+              : (answers.step?.(part.index, attempt) ??
+                JSON.stringify(modelWrittenStep(part.index)));
+        if (answer instanceof Error) throw answer;
+        return answer;
+      },
+    };
+  }
+
+  async function staged(planner: Planner) {
+    const h = await planHarness(planner);
+    const started = PlanResponseSchema.parse(
+      (await postPlan(h, { goal: 'Refill the washer fluid', images: [IMAGE], stage: 'first' }))
+        .body,
+    );
+    const rest = await postPlan(h, {
+      goal: 'Refill the washer fluid',
+      images: [IMAGE],
+      stage: 'rest',
+      revise: {
+        planId: started.planId,
+        fromStepIndex: 1,
+        reason: 'Write the outline in full',
+        base: started.procedure,
+      },
+    });
+    return { h, started, ...rest };
+  }
+
+  it('checks the outline, then writes each line and the card objects at once', async () => {
+    const planner = partPlanner({});
+    const { res, body, started } = await staged(planner);
+    expect(res.status).toBe(200);
+    const plan = PlanResponseSchema.parse(body);
+    expect(plan.planId).toBe('refill-the-washer-fluid-r1');
+    expect(plan.procedure.steps[0]).toEqual(started.procedure.steps[0]);
+    expect(plan.procedure.steps.map((s) => [s.id, s.success.type])).toEqual([
+      ['open-cap', 'confirm'],
+      ['pour-fluid', 'confirm'],
+      ['close-cap', 'hand_near'],
+    ]);
+    expect(plan.procedure.steps[1]?.show.map((item) => item.object)).toEqual([
+      'fluid_jug',
+      'washer_cap',
+    ]);
+    expect(plan.procedure.objects.map((o) => [o.id, o.placement])).toEqual([
+      ['washer_cap', { method: 'detect', hint: 'front left of the engine bay' }],
+      ['coolant_cap', { method: 'detect' }],
+      ['fluid_jug', { method: 'detect' }],
+    ]);
+    expect(plan.warnings).toEqual(modelRestObjects().warnings);
+    const parts = planner.requests.slice(1).map((r) => r.part);
+    expect(parts.map((p) => p?.kind).sort()).toEqual(['objects', 'review', 'step', 'step']);
+    // The review and the objects go first, together; the writers see the checked outline and
+    // every object, and each new object is declared by the first line that uses it.
+    expect(parts.slice(0, 2).map((p) => p?.kind)).toEqual(['objects', 'review']);
+    const writers = parts.filter((p) => p?.kind === 'step');
+    expect(writers.map((p) => [p.index, p.declare, p.objects.map((o) => o.id)])).toEqual([
+      [0, ['fluid_jug'], ['washer_cap', 'coolant_cap', 'fluid_jug']],
+      [1, [], ['washer_cap', 'coolant_cap', 'fluid_jug']],
+    ]);
+    expect(planner.requests[1]).toMatchObject({ stage: 'rest', revision: { fromStepIndex: 1 } });
+  });
+
+  it('asks a writer again with its errors, and keeps its line as an outline step if it fails twice', async () => {
+    const broken = JSON.stringify({ step: { ...modelPlan().steps[2], targets: ['ghost'] } });
+    const planner = partPlanner({
+      step: (index) => (index === 1 ? broken : JSON.stringify(modelWrittenStep(index))),
+    });
+    const { body } = await staged(planner);
+    const plan = PlanResponseSchema.parse(body);
+    expect(plan.procedure.steps[2]).toMatchObject({
+      id: 'close-cap',
+      doneWhen: 'The blue cap is shut flat on the reservoir.',
+      success: { type: 'confirm', prompt: 'The blue cap is shut flat on the reservoir.' },
+      show: [],
+    });
+    const retries = planner.requests.filter((r) => r.part?.kind === 'step' && r.retry);
+    expect(retries).toHaveLength(1);
+    expect(retries[0]?.retry?.errors).toMatch(/Unknown object "ghost"/);
+  });
+
+  it('keeps the card objects as they are when the objects call fails', async () => {
+    const planner = partPlanner({ objects: new Error('503 overloaded') });
+    const { body, started } = await staged(planner);
+    const plan = PlanResponseSchema.parse(body);
+    expect(plan.procedure.objects.slice(0, 2)).toEqual(started.procedure.objects);
+    expect(plan.warnings).toEqual([]);
+  });
+
+  it('writes the rest in one call when the outline cannot be checked', async () => {
+    const planner = partPlanner({
+      review: ['{"todo": []}', '{"still": "no outline"}'],
+      rest: JSON.stringify(modelRestStage()),
+    });
+    const { res, body } = await staged(planner);
+    expect(res.status).toBe(200);
+    const plan = PlanResponseSchema.parse(body);
+    expect(plan.procedure.steps.map((s) => s.id)).toEqual([
+      'open-cap',
+      'open-cap-2',
+      'pour-slowly',
+    ]);
+    const reviews = planner.requests.filter((r) => r.part?.kind === 'review');
+    expect(reviews.map((r) => r.retry?.errors)).toEqual([
+      undefined,
+      'The answer has no `outline` array',
+    ]);
+    expect(planner.requests.at(-1)).toMatchObject({ stage: 'rest' });
+    expect(planner.requests.at(-1)).not.toHaveProperty('part');
   });
 });
 
