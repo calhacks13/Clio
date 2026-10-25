@@ -12,6 +12,7 @@ import { attachGeminiRelay, type GeminiRelay } from './relay/gemini-relay';
 import { createBenchModels } from './services/bench';
 import { ProcessEpisodeCompiler } from './services/episode-compiler';
 import { createGeminiClient, isGeminiConfigured } from './services/gemini';
+import { createGeminiFocusFinder } from './services/gemini-focus';
 import { createGeminiPlanner } from './services/gemini-planner';
 import { createGeminiSceneAsker } from './services/gemini-scene';
 import { createGeminiStepChecker } from './services/gemini-step-check';
@@ -62,6 +63,8 @@ function main(): void {
     locator: config.visionUrl
       ? createHttpLocator({ url: config.visionUrl, token: config.visionToken })
       : gemini && createGeminiLocator(gemini, config.visionModel),
+    // Robotics-ER corrects the tracker, so it never goes to the finder at CLIO_VISION_URL.
+    focus: gemini && createGeminiFocusFinder(gemini, config.visionModel),
     scene: gemini && createGeminiSceneAsker(gemini, config.sceneModel),
     bench: {
       store: new BenchStore(benchDir, { logger }),
@@ -144,6 +147,7 @@ function logStartup(
     `  Object finder: ${
       config.visionUrl ?? (geminiReady ? `Gemini ${config.visionModel}` : 'off')
     }`,
+    `  Action focus: ${geminiReady ? `Gemini ${config.visionModel}` : 'off'}`,
     `  Primary object: ${
       geminiReady ? `Gemini ${config.visionModel}, then ${config.primaryFinderUrl}` : 'off'
     }`,

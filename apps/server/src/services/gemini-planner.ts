@@ -1,6 +1,11 @@
 import type { PlanStage } from '@clio/protocol';
 import type { GenerateContentParameters } from '@google/genai';
-import { type GenerateContentApi, type Thinking, thinkingConfig } from './gemini';
+import {
+  GeminiTimeoutError,
+  type GenerateContentApi,
+  type Thinking,
+  thinkingConfig,
+} from './gemini';
 import { PLANNER_SYSTEM_INSTRUCTION, plannerContents } from './plan-prompt';
 import { buildPlanJsonSchema, type PlanSchemaKind } from './plan-schema';
 import type { Planner, PlannerRequest, RestPart } from './planner';
@@ -86,9 +91,7 @@ export async function generateJson(
       config: { ...params.config, abortSignal },
     }));
   } catch (error) {
-    if (abortSignal.aborted) {
-      throw new Error(`Gemini did not answer within ${Math.round(timeoutMs / 1000)} s`);
-    }
+    if (abortSignal.aborted) throw new GeminiTimeoutError(timeoutMs);
     throw error;
   }
   if (!text) throw new Error('Gemini returned an empty response');

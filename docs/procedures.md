@@ -110,16 +110,23 @@ and outlines what it finds in AR. The finder is Gemini, or jev or another model 
 on, is outlined in cyan; the rest, where it goes, in amber. While the step runs, Clio looks again
 every few seconds, so the outlines follow objects that get moved. It skips objects in the
 learner's hand, because hand tracking already follows them.
-- `phrase`: 2 to 5 words naming the thing, like a label on a box. Detectors that take category
-  prompts (SAM 3, Grounding DINO) use it.
-- `description`: one sentence of 15 to 35 words that finds the object in a single frame with no
-  other context. It names one particular thing, never a kind: say what it is, its color,
-  material, shape and size, any text or symbols on it, which one it is among similar things
-  ("the second shelf from the top", "the leftmost of the three beakers", left and right as the
-  camera sees them), and where it is next to large things that stay put. Describe its state at
-  that point in the task ("the cap is off", "the cup is now pink"). A place a step uses (a shelf,
-  a drawer) is singled out the same way, in the instruction too. `tracking.query` follows the
-  same rule, because the finder gets only that sentence; `placement.hint` never replaces it.
+- `phrase`: 2 to 5 words, the subject a detector looks for: color or material, then a concrete
+  noun ("blue plastic cap", "white yogurt bottle"). It names what stays true all lesson (a cup's
+  own color, not its contents'), because the tracker starts an object's track over when its
+  phrase changes. Never a position, a verb, or a word as bare as "item", "object" or
+  "container". jev and other detectors that take category prompts use it.
+- `description`: one standalone sentence of 15 to 35 words that finds the object in a single
+  frame with no other context. It names one particular thing, never a kind: say what it is, its
+  color, material, shape, size next to a hand and any text or symbols on it, which one it is
+  among similar things ("the second shelf from the top", "the leftmost of the three beakers",
+  left and right as the camera sees them), and where it is next to large things that stay put
+  and to its neighbors, enough to tell it from every look-alike in view. Describe its state at
+  that point in the task ("the cap is off", "the cup is now pink"), never an action or a step.
+  A place a step uses (a shelf, a drawer) is singled out the same way, in the instruction too.
+  `tracking.query` follows the same rule, because the finder gets only that sentence;
+  `placement.hint` never replaces it. While a step is focused, Robotics-ER 2's action focus
+  rewrites what jev is told about each object from a sharp frame
+  ([robotics-er.md](robotics-er.md)).
 - At most 4 items, most important first. Every `object` must be declared.
 
 The planner writes `show` for every step. A step without it outlines nothing and only looks for
