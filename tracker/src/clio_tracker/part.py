@@ -23,15 +23,38 @@ therefore never matched to a track; it is a box carried by motion:
   like any outline (smooth.py).
 - **jev re-seeds it.** Each answer puts the part box where jev put it (carried to now by the
   camera) and measures it against the parent again; nothing is snapped to the parent's box.
+
+With a segmenter (segment.py) the part gets a mask of its own: cut out on jev's frame, and again
+whenever asked, then carried to every frame by a RegionFollower (follow.py) on the part's own
+pixels. While the follower is confident, its box is the part box and its mask the outline, also
+where the parent's motion would never take it (a door swinging out of the fridge's box, a jaw
+sliding off the caliper's). It is measured, not predicted: "tracking", also while the parent
+coasts or none is in sight, with the parent's confidence while it is in sight, else a flat 0.5.
+The parent is still followed on every frame, since it is what finds the whole object again. A
+textureless part gives the follower no corners to be sure of: its mask, carried by the camera
+alone, is the outline at the ridden part box while the two overlap by IoU 0.5, as the parent's
+mask would be. Otherwise the part rides, coasts and is outlined as above. After two frames of
+doubt (a textureless part's included), or while there is no mask yet, it asks to be cut out
+again (`wants_refresh`): around the follower's box when the follower is unsure, else the part
+box (`refresh_box`). An answer from jev that puts the part box more than its own size away
+(another part), or says the part is not in view, drops the old part's mask. Another part is
+told on jev's own frame, against the part box the tracker had then: the part may have moved on
+its own since. An answer about the same part while the follower is confident leaves the part
+box on the follower's: jev's box is loose and from an older frame. The keyframe cut from it then
+re-anchors the mask through the follower's log of motion, also over a refresh of a newer frame,
+and puts the part box where that mask is carried to, sure follower or not: jev's correction
+wins. A refresh's mask only re-anchors the follower.
 """
 
 from __future__ import annotations
 
 import math
+from collections import deque
 from dataclasses import dataclass, field
 
 import numpy as np
 
+from .follow import Followed, RegionFollower
 from .geometry import iou, nms, valid_box
 from .motion import warp_box
 from .smooth import Stabilizer, _sample
@@ -39,6 +62,7 @@ from .tracking import ObjectTracker, Sighting, TrackerParams, _inside
 from .vision import Encoding, MaskCrop, YoloeVision
 
 EDGE = 0.01  # a box side within this share of the frame of its edge is cut by it
+OWN_PIXELS = 0.5  # the confidence of a part followed on its own pixels with no parent in sight
 
 
 def is_part(box: np.ndarray, whole: np.ndarray, params: TrackerParams) -> bool:
@@ -81,13 +105,15 @@ def find_parent(
 
 @dataclass
 class PartTracker:
-    """Follows one part of an object between jev's answers; `step` and `identified` like an
-    ObjectTracker's, except that jev's frame (`enc`) comes with each answer."""
+    """Follows one part of an object between jev's answers; `step`, `identified`, `refreshed`,
+    `wants_refresh` and `refresh_box` like an ObjectTracker's, except that jev's frame (`enc`)
+    comes with each answer."""
 
     object_id: str
     phrase: str | None
     params: TrackerParams = field(default_factory=TrackerParams)
-    parent: ObjectTracker | None = None
+    follower: RegionFollower | None = None  # carries the segmenter's mask of the part
+    parent: ObjectTracker | None = None  # followed without a follower: it keeps the identity
     absent: bool = False  # jev's last answer: not in view
 
     def __post_init__(self) -> None:
@@ -96,13 +122,38 @@ class PartTracker:
         self._seen_t = 0.0  # jev's last answer, or the parent's last sighting
         self._applied_seq = -1
         self._smooth = Stabilizer(self.params.smooth)
+        self._followed: Followed | None = None  # the follower's answer on the last frame
+        self._shown = False  # the part was shown on the last frame
+        self._follow_doubt = 0  # consecutive frames the follower could not stand for the part
+        self._history: deque[tuple[int, float, np.ndarray]] = deque()  # (seq, t, the part box)
+        self._rebox = False  # jev's keyframe was taken: the next step puts the part box on it
 
     @property
     def box(self) -> np.ndarray | None:
         """The part on the newest frame, frame pixels (unsmoothed)."""
         return None if self._box is None else self._box.copy()
 
-    # --- jev -------------------------------------------------------------------------------
+    @property
+    def wants_refresh(self) -> bool:
+        """The segmenter should cut the part out again: while it is shown, the follower has no
+        mask yet, or has been in doubt for `refresh_after_frames` frames."""
+        if self.follower is None or not self._shown:
+            return False
+        return not self.follower.active or self._follow_doubt >= self.params.refresh_after_frames
+
+    @property
+    def refresh_box(self) -> np.ndarray | None:
+        """The box to prompt the segmenter with: the follower's on the last frame when it was
+        unsure of itself, else the part box (which is the follower's when it was sure). None
+        while the part is not shown: not in sight on the last frame, or right after an answer
+        that dropped the old part's mask."""
+        if not self._shown:
+            return None
+        f = self._followed
+        box = f.box if f is not None and not f.confident else self._box
+        return None if box is None else box.copy()
+
+    # --- jev and the segmenter -------------------------------------------------------------
 
     def identified(
         self,
@@ -113,9 +164,64 @@ class PartTracker:
         enc: Encoding,
         vision: YoloeVision,
         carry: np.ndarray | None = None,
+        mask: MaskCrop | None = None,
     ) -> str:
         """jev's box around the part on frame `seq` (encoded as `enc`); `carry` is how the
-        camera moved from that frame to the newest. Returns what changed, for the log."""
+        camera moved from that frame to the newest. `mask` is the segmenter's cut of jev's box
+        on that frame, for the follower. Returns what changed, for the log."""
+        before, then = self._box, self._box_on(seq)
+        sure = self._followed is not None and self._followed.confident
+        change = self._identify(seq, t, present, box, enc, vision, carry)
+        if self.follower is None or change == "stale":
+            return change
+        if before is None or self._box is None:
+            another = True
+        elif then is not None:  # on jev's frame: the part may have moved on its own since
+            another = _moved_off(then, np.asarray(box, dtype=np.float32))
+        else:  # no part box remembered on jev's frame: on the newest, jev's box carried to it
+            another = _moved_off(before, self._box)
+        if another:
+            # Another part, or none: forget the old one's mask. The cut of jev's box comes from
+            # jev's older frame, and must not lose to a refresh of the old part. Until the next
+            # frame nothing is asked, around the old part's box least of all.
+            self.follower.clear()
+            self._followed, self._shown, self._follow_doubt = None, False, 0
+            self._rebox = False
+        elif sure:
+            # The same part, followed on its own pixels: the follower's box stands. jev's box is
+            # loose and from an older frame; the keyframe cut from it re-anchors the mask.
+            self._box = before
+        if mask is not None and self._box is not None:
+            self.follower.set_reference(seq, mask)
+        return change
+
+    def refreshed(self, seq: int, crop: MaskCrop | None, keyframe: bool = False) -> None:
+        """The segmenter's answer about frame `seq`: its mask of the part, or None when it found
+        nothing (a frame of doubt). A mask ends the doubt. The follower ignores a refresh's mask
+        from before the mask it has, but not a `keyframe` (jev's box cut out of jev's frame),
+        and a keyframe also puts the part box where its mask is carried to on the next frame:
+        jev's correction wins over a follower sure of a box jev has just moved."""
+        if self.follower is None:
+            return
+        if crop is None:
+            self._follow_doubt += 1
+        else:
+            self.follower.set_reference(seq, crop, replace=keyframe)
+            self._follow_doubt = 0
+            if self.follower.reference_seq == seq:  # taken: the newest mask taken decides
+                self._rebox = keyframe
+
+    def _identify(
+        self,
+        seq: int,
+        t: float,
+        present: bool,
+        box: np.ndarray | None,
+        enc: Encoding,
+        vision: YoloeVision,
+        carry: np.ndarray | None,
+    ) -> str:
+        """`identified`, apart from the follower."""
         if seq < self._applied_seq:
             return "stale"
         self._applied_seq = seq
@@ -170,10 +276,19 @@ class PartTracker:
         t: float,
         vision: YoloeVision,
         camera: np.ndarray | None = None,
+        gray: np.ndarray | None = None,
     ) -> Sighting:
+        """Follow the part on frame `seq`. `camera` is how the picture moved since the frame
+        before (a 2x3 transform, motion.py), when known. `gray` is the frame in 8-bit gray for
+        the follower, which steps on every frame it is given."""
         p = self.params
         size = (enc.letterbox.width, enc.letterbox.height)
         self._smooth.moved(camera)
+        self._followed, self._shown = None, False
+        rebox = False
+        if self.follower is not None and gray is not None:
+            self._followed = self.follower.step(seq, gray, camera, t)
+            rebox, self._rebox = self._rebox, False
         parent = self.parent.step(enc, seq, t, vision, camera) if self.parent else None
         if self._box is None:
             return Sighting(False, state="absent" if self.absent else "unknown")
@@ -196,30 +311,79 @@ class PartTracker:
             self._held_by = now.copy()
         else:
             self._held_by = None
+        f = self._followed
+        followed = f if f is not None and f.confident else None
+        if followed is not None:
+            # The part's own pixels say where it is, also where the parent's motion would never
+            # take it (a door swinging out of the fridge's box).
+            box = followed.box.astype(np.float32)
+        elif rebox and f is not None:
+            box = f.box.astype(np.float32)  # jev's keyframe, carried to this frame
         self._box = box
+        self._remember(seq, t, box)
         age = t - self._seen_t
         if _inside(box, size) < p.in_view or age > p.part_hold_s:
             return Sighting(False, state="lost")
+        self._shown = True
+        if f is not None:
+            self._follow_doubt = 0 if followed is not None else self._follow_doubt + 1
+        if followed is not None:
+            # Measured on its own pixels, not predicted: tracking, whatever the parent does.
+            crop = followed.crop
+            shown, shape = self._smooth.sighted(t, box, crop, size)
+            confidence, track_id = OWN_PIXELS, None
+            if held:
+                assert parent is not None
+                confidence, track_id = parent.confidence, parent.track_id
+            return Sighting(True, shown, shape, confidence, "tracking", track_id, box.copy(), crop,
+                            "follower")  # fmt: skip
+        if f is not None and f.sparse and float(iou(f.box, box)[0, 0]) >= p.part_carried_iou:
+            # A textureless part: its mask, carried by the camera alone, agrees with the ridden
+            # part box, so it is drawn there (a frame of doubt all the same: it is cut again).
+            crop = f.crop
+            shown, shape = self._smooth.sighted(t, box, crop, size)
+            if held:
+                assert parent is not None
+                return Sighting(True, shown, shape, parent.confidence, parent.state,
+                                parent.track_id, box.copy(), crop, "follower")  # fmt: skip
+            confidence = round(0.5 * (1 - 0.5 * age / p.part_hold_s), 3)
+            return Sighting(True, shown, shape, confidence, "coasting", None, box.copy(), crop,
+                            "follower")  # fmt: skip
         if held:
             assert parent is not None
             crop = parent.crop
             if crop is not None and _fill(crop, box) >= p.part_fill:
                 shown, shape = self._smooth.sighted(t, box, crop, size)
                 return Sighting(True, shown, shape, parent.confidence, parent.state,
-                                parent.track_id, box.copy(), crop)  # fmt: skip
+                                parent.track_id, box.copy(), crop, "yoloe")  # fmt: skip
             if parent.state == "coasting":
                 shown, shape = self._smooth.coasting(t, box, size)
                 if shape is not None:
                     return Sighting(True, shown, shape, parent.confidence, "coasting",
-                                    parent.track_id, box.copy())  # fmt: skip
+                                    parent.track_id, box.copy(), source="part-box")  # fmt: skip
         crop = rounded_crop(box)
         shown, shape = self._smooth.sighted(t, box, crop, size)
         if held:
             assert parent is not None
             return Sighting(True, shown, shape, parent.confidence, parent.state,
-                            parent.track_id, box.copy(), crop)  # fmt: skip
+                            parent.track_id, box.copy(), crop, "part-box")  # fmt: skip
         confidence = round(0.5 * (1 - 0.5 * age / p.part_hold_s), 3)
-        return Sighting(True, shown, shape, confidence, "coasting", None, box.copy(), crop)
+        return Sighting(True, shown, shape, confidence, "coasting", None, box.copy(), crop,
+                        "part-box")  # fmt: skip
+
+    def _remember(self, seq: int, t: float, box: np.ndarray) -> None:
+        self._history.append((seq, t, box.copy()))
+        while self._history and t - self._history[0][1] > self.params.history_s:
+            self._history.popleft()
+
+    def _box_on(self, seq: int) -> np.ndarray | None:
+        """The part box on frame `seq`, if there was one and it is still remembered."""
+        for s, _, box in reversed(self._history):
+            if s == seq:
+                return box
+            if s < seq:
+                return None
+        return None
 
     def _ride(
         self,
@@ -281,6 +445,13 @@ def rounded_crop(box: np.ndarray, radius: float = 0.25, cells: int = 48) -> Mask
 def _fill(crop: MaskCrop, box: np.ndarray) -> float:
     """The share of `box` the crop's mask covers."""
     return float((_sample(crop, np.asarray(box, dtype=np.float32), (24, 24)) > 0.5).mean())
+
+
+def _moved_off(before: np.ndarray, after: np.ndarray) -> bool:
+    """`after` lies more than `before`'s own size away from it: its centre moved farther than
+    `before`'s width along x, or its height along y."""
+    shift = np.abs(_centre(after) - _centre(before))
+    return bool(shift[0] > before[2] - before[0] or shift[1] > before[3] - before[1])
 
 
 def _centre(box: np.ndarray) -> np.ndarray:

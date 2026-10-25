@@ -13,6 +13,17 @@ In objects mode (an `objects` message, for a lesson), the page names several obj
 instead and gets one `detections` answer per frame. jev places them about once a second, in one
 call for all that are due, and each is followed as `POST /locate` with a session follows it
 (session.py), in a TrackerSession of the connection's own.
+
+With a segmenter (segment.py), each target's outline is its mask: jev's box is cut out of jev's
+frame as a keyframe, and again around the target whenever its tracker doubts the mask it has,
+off the frame thread (refresh.py), and a region follower (follow.py) carries the latest mask to
+every frame. The stream has one follower, stepped from the first frame, before there is any
+target, so the motion since the frame jev looked at is known when its box arrives; each tracker
+the stream makes (an object, a part, a part's object made the target again) gets it in turn,
+cleared. A refresh asked before jev's newest box arrived, and a keyframe older than that box,
+are dropped when they come back: they cut out what jev may since have replaced. jev's keyframe
+itself replaces the follower's mask even when a refresh of a newer frame landed while jev
+answered. Objects mode has the same, per object, in its TrackerSession.
 """
 
 from __future__ import annotations
@@ -22,7 +33,7 @@ import logging
 import math
 import re
 import struct
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from time import perf_counter
@@ -30,11 +41,14 @@ from time import perf_counter
 import cv2
 import numpy as np
 
+from .follow import RegionFollower
 from .geometry import iou, normalize_box
 from .identify import FrameImage, Query
 from .motion import CameraMotion, warp_box
 from .part import PartTracker, is_part
-from .session import TrackerSession
+from .refresh import Refreshed, Refresher
+from .segment import Segmenter
+from .session import TrackerSession, outdated
 from .tracking import ObjectTracker, Sighting, TrackerParams
 from .vision import YoloeVision
 
@@ -158,11 +172,24 @@ def _object_set(objects) -> ObjectSet:
 
 
 class StreamTracker:
-    """One stream's tracking state. `command` and `step` are called one at a time."""
+    """One stream's tracking state. `command` and `step` are called one at a time. A segmenter
+    comes with the Refresher that calls it off the frame thread."""
 
-    def __init__(self, vision: YoloeVision, params: TrackerParams | None = None):
+    def __init__(
+        self,
+        vision: YoloeVision,
+        params: TrackerParams | None = None,
+        segmenter: Segmenter | None = None,
+        refresher: Refresher | None = None,
+    ):
+        if (refresher.segmenter if refresher is not None else None) is not segmenter:
+            raise ValueError("Pass a segmenter with a Refresher of it, or neither.")
         self.vision = vision
         self.params = params or TrackerParams()
+        self.refresher = refresher  # None without a segmenter, or once its executor has stopped
+        # The stream's one follower, handed to each tracker it makes.
+        self.follower = RegionFollower(self.params.follow) if refresher is not None else None
+        self._keyframe: tuple[int, int] | None = None  # jev's frame, and the newest frame then
         self.label = vision.model
         self.name: str | None = None
         self.object: ObjectTracker | None = None
@@ -171,6 +198,8 @@ class StreamTracker:
         self.waiting: TargetBox | None = None  # a target whose frame hasn't arrived
         self.t = 0.0  # the newest frame's capture time (s, page clock)
         self.camera = CameraMotion()  # how the picture moved since the frame before
+        # Found answers by what drew the outline (Sighting.source), over the stream's life.
+        self.drawn: Counter[str | None] = Counter()
         self._summary = _Summary("Stream")
 
     def command(self, target: TargetBox | None) -> None:
@@ -179,12 +208,14 @@ class StreamTracker:
             if self.name:
                 log.info("Track: clear %s", self.name)
             self.object, self.part, self.name, self.waiting = None, None, None, None
+            self._clear_follower()
             return
         if self.object is None or _norm(target.name) != _norm(self.name):
             # Another object was named: follow it from scratch.
-            self.object = ObjectTracker("target", target.name, self.params)
+            self.object = ObjectTracker("target", target.name, self.params, follower=self.follower)
             self.part = None
             self.name = target.name
+            self._clear_follower()
         jpeg = self.frames.get(target.seq)
         if jpeg is None:
             self.waiting = target  # applied to the next frame, as if measured on it
@@ -193,7 +224,7 @@ class StreamTracker:
             rgb = decode_jpeg(jpeg)
         except BadMessage:
             return
-        self._identify(target, self.vision.encode(rgb), target.seq)
+        self._identify(target, self.vision.encode(rgb), target.seq, rgb)
 
     def reset(self) -> None:
         """As on connecting: no target, no frames kept, no camera motion (objects mode ran)."""
@@ -217,21 +248,52 @@ class StreamTracker:
         # on a frame from a second or two ago, carried to now by this.
         camera = self.camera.update(rgb, header.seq)
         ms["decode"] = _ms(started)
+        # The follower's flow is on gray pixels, once a frame, and only with a segmenter.
+        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY) if self.refresher is not None else None
         if self.object is None:
+            if gray is not None:
+                # No tracker steps the follower yet: the stream does, so that its log of the
+                # picture's motion reaches back to the frame jev's first box is on.
+                assert self.follower is not None
+                self.follower.step(header.seq, gray, camera, self.t)
             return self._answer(header, None, ms, started)
         segmenting = perf_counter()
         enc = self.vision.encode(rgb)
         if self.waiting is not None:
-            self._identify(self.waiting, enc, header.seq)
+            self._identify(self.waiting, enc, header.seq, rgb)
             self.waiting = None
-        follower = self.part or self.object
-        sighting = follower.step(enc, header.seq, self.t, self.vision, camera)
+        tracker = self.part or self.object
+        if gray is None:
+            sighting = tracker.step(enc, header.seq, self.t, self.vision, camera)
+        else:
+            sighting = self._follow(tracker, enc, header.seq, camera, rgb, gray)
         ms["segment"] = _ms(segmenting)
         return self._answer(
             header, sighting, ms, started, (enc.letterbox.width, enc.letterbox.height)
         )
 
-    def _identify(self, target: TargetBox, enc, seq: int) -> None:
+    def _follow(
+        self,
+        tracker: ObjectTracker | PartTracker,
+        enc,
+        seq: int,
+        camera: np.ndarray | None,
+        rgb: np.ndarray,
+        gray: np.ndarray,
+    ) -> Sighting:
+        """A step with the segmenter: the masks it has cut since the last frame first, then the
+        step, which carries the latest one to this frame, then a refresh if the tracker doubts
+        the mask it has."""
+        for r in self._segmenter(Refresher.drain) or []:
+            if not outdated(r, self._keyframe):
+                tracker.refreshed(r.seq, r.crop, keyframe=r.keyframe)
+        sighting = tracker.step(enc, seq, self.t, self.vision, camera, gray=gray)
+        box = tracker.refresh_box if tracker.wants_refresh else None
+        if box is not None:
+            self._segmenter(Refresher.submit, "target", seq, rgb, box)
+        return sighting
+
+    def _identify(self, target: TargetBox, enc, seq: int, rgb: np.ndarray) -> None:
         assert self.object is not None
         lb = enc.letterbox
         size = np.array([lb.width, lb.height, lb.width, lb.height], dtype=np.float32)
@@ -240,16 +302,47 @@ class StreamTracker:
         carry = self.camera.since(seq)
         if target.part or self._is_part(seq, box, carry, enc, appearance):
             if self.part is None:
-                self.part = PartTracker("target", target.name, self.params)
+                self.part = PartTracker("target", target.name, self.params, follower=self.follower)
+                self._clear_follower()  # it followed the whole object
             change = self.part.identified(seq, self.t, True, box, enc, self.vision, carry)
         else:
             if self.part is not None:
                 # The whole object again: what followed the object holding the part goes on.
                 if self.part.parent is not None:
                     self.object = self.part.parent
+                    self.object.follower = self.follower
                 self.part = None
+                self._clear_follower()  # it followed the part
             change = self.object.identified(seq, self.t, True, box, appearance, carry)
         log.info("Track: %s on frame %d: %s", self.name or "the target", target.seq, change)
+        if self.refresher is not None and change != "stale":
+            # jev's box, cut out of jev's frame; the mask reaches the tracker through `drain`
+            # on a later frame.
+            newest = next(reversed(self.frames))
+            if self._segmenter(Refresher.submit, "target", seq, rgb, box, True):
+                self._keyframe = (seq, newest)
+
+    def _clear_follower(self) -> None:
+        """Another tracker takes the follower over, or none: the mask it carried is not theirs.
+        Its log of the picture's motion stays."""
+        if self.follower is not None:
+            self.follower.clear()
+
+    def _segmenter(self, call: Callable, *args) -> bool | list[Refreshed] | None:
+        """`call(refresher, *args)`, unless the Refresher's executor has been shut down (the
+        service is stopping): then one warning, and the stream goes on without the segmenter."""
+        if self.refresher is None:
+            return None
+        try:
+            return call(self.refresher, *args)
+        except RuntimeError as e:
+            log.warning(
+                "Track: %s takes no more calls (%s); outlines are YOLOE's from now on",
+                self.refresher.segmenter.name,
+                e,
+            )
+            self.refresher = None
+            return None
 
     def _is_part(self, seq: int, box: np.ndarray, carry, enc, appearance: np.ndarray) -> bool:
         """A box not flagged as a part is one when it would land on something it is a part of."""
@@ -280,9 +373,12 @@ class StreamTracker:
     ) -> dict:
         ms["total"] = _ms(started)
         state = sighting.state if sighting else "idle"
-        self._summary.add([state], ms["total"])
         if sighting is None or not sighting.found or sighting.box is None or size is None:
             sighting = None
+        source = sighting.source if sighting else None
+        if sighting is not None:
+            self.drawn[source] += 1
+        self._summary.add([state], ms["total"], [source], self.refresher)
         shape = sighting.shape if sighting else None
         return {
             "type": "mask",
@@ -343,13 +439,21 @@ class ObjectsTracker:
         sightings, size, _ = self.session.follow(image, self.objects)
         ms["track"] = _ms(tracking)
         detections = [_tracked(q.id, s, size) for q, s in zip(self.objects, sightings, strict=True)]
-        return self._answer(header, detections, ms, started)
+        found = [d["found"] for d in detections]
+        sources = [s.source if f else None for s, f in zip(sightings, found, strict=True)]
+        return self._answer(header, detections, ms, started, sources)
 
     def _answer(
-        self, header: FrameHeader, detections: list[dict], ms: dict, started: float
+        self,
+        header: FrameHeader,
+        detections: list[dict],
+        ms: dict,
+        started: float,
+        sources: list[str | None] | None = None,
     ) -> dict:
         ms["total"] = _ms(started)
-        self._summary.add([f"{d['id']} {d['state']}" for d in detections] or ["idle"], ms["total"])
+        states = [f"{d['id']} {d['state']}" for d in detections] or ["idle"]
+        self._summary.add(states, ms["total"], sources or [], self.session.refresher)
         return {
             "type": "detections",
             "seq": header.seq,
@@ -420,34 +524,51 @@ class Modes:
 class _Summary:
     """Every few seconds, a log line: frames answered, how often each state was answered and the
     mean time in the tracker, so a slow or lossy stream shows in the log, not only on the
-    headset."""
+    headset. With a segmenter it adds the share of found answers whose outline the follower drew
+    (`follower N%`) and what the segmenter did since the last line (`segmenter: K calls, M ms, E
+    empty`: boxes cut, their mean time, and how many held nothing), so a mask that is rarely
+    drawn shows too."""
 
     def __init__(self, what: str):
         self.what = what
         self._states: dict[str, int] = {}
         self._frames = 0
         self._ms = 0.0
+        self._found = 0  # found answers, and those the follower drew
+        self._followed = 0
         self._start = perf_counter()
 
-    def add(self, states: Iterable[str], total_ms: float) -> None:
+    def add(
+        self,
+        states: Iterable[str],
+        total_ms: float,
+        sources: Iterable[str | None] = (),
+        refresher: Refresher | None = None,
+    ) -> None:
+        """One frame: each answer's state, the frame's time, and what drew each found answer's
+        outline (None for an answer not found). `refresher` is the segmenter's, if any."""
         for state in states:
             self._states[state] = self._states.get(state, 0) + 1
+        for source in sources:
+            self._found += source is not None
+            self._followed += source == "follower"
         self._frames += 1
         self._ms += total_ms
         elapsed = perf_counter() - self._start
         if elapsed < 3:
             return
         counts = ", ".join(f"{k} {v}" for k, v in sorted(self._states.items()))
-        log.info(
-            "%s: %.1f frames/s, %.1f ms each (%s)",
-            self.what,
-            self._frames / elapsed,
-            self._ms / self._frames,
-            counts,
-        )
+        line = "%s: %.1f frames/s, %.1f ms each (%s)"
+        args: list = [self.what, self._frames / elapsed, self._ms / self._frames, counts]
+        if refresher is not None:
+            calls, mean_s, empty = refresher.tally()
+            line += "; follower %.0f%%, segmenter: %d calls, %.0f ms, %d empty"
+            args += [100 * self._followed / max(self._found, 1), calls, 1000 * mean_s, empty]
+        log.info(line, *args)
         self._states.clear()
         self._frames = 0
         self._ms = 0.0
+        self._found = self._followed = 0
         self._start = perf_counter()
 
 

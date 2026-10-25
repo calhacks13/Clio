@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import struct
 import threading
 
@@ -13,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from clio_tracker.cli import _health
 from clio_tracker.finder import Finder
 from clio_tracker.identify import JevIdentifier
 from clio_tracker.server import create_app
@@ -207,3 +209,95 @@ def test_track_refuses_a_foreign_origin_or_host(setup):
 def test_scene_jpeg_reads_back_as_its_scene():
     rgb = cv2.imdecode(np.frombuffer(scene_jpeg(3), np.uint8), cv2.IMREAD_COLOR)
     assert round(float(rgb.mean()) / 10) == 3
+
+
+# --- the segmenter -----------------------------------------------------------------------------
+
+LOOSE = (90.0, 290.0, 230.0, 470.0)  # jev's box around BOX, a little loose: the fake mask
+
+
+def bounds(outline: list[list[float]]) -> list[float]:
+    xs, ys = zip(*outline, strict=True)
+    return [min(xs), min(ys), max(xs), max(ys)]
+
+
+@pytest.fixture
+def outlined(vision, fake_jev, segmenter):
+    """The service as `clio-tracker serve` builds it with a segmenter, jev placing BOX loosely."""
+    fake_jev.box = norm_box(LOOSE)
+    finder = Finder(JevIdentifier(fake_jev.client()), vision, segmenter)
+    sessions = Sessions(lambda: TrackerSession(vision, FakeIdentifier(), ManualExecutor()))
+    app = create_app(
+        sessions,
+        finder,
+        lambda: StreamTracker(vision),
+        50,
+        lambda: _health(finder, vision, segmenter),
+    )
+    vision.world[3] = [Thing(BOX, A)]
+    yield TestClient(app), segmenter, finder
+    finder.close()
+
+
+def test_health_reports_segmenter(outlined, vision):
+    client, _, finder = outlined
+    assert client.get("/health").json() == {
+        "ok": True,
+        "sessions": 0,
+        "model": "jev-1.14.0+fake-yoloe+fake-segmenter",
+        "backend": "fake",
+        "segmenter": "fake-segmenter",
+    }
+    plain = Finder(finder.identifier, vision)
+    assert _health(plain, vision, None) == {
+        "model": "jev-1.14.0+fake-yoloe",
+        "backend": "fake",
+        "segmenter": None,
+    }
+    plain.close()
+
+
+def test_without_a_session_the_segmenter_outlines_jevs_box(outlined):
+    client, segmenter, _ = outlined
+    answer = client.post("/locate", json=request(session=None)).json()
+    assert answer["model"] == "jev-1.14.0+fake-yoloe+fake-segmenter"
+    (d,) = answer["detections"]
+    # The fake mask fills jev's box; YOLOE would outline BOX, 10 pixels inside it.
+    assert d["found"] and d["confidence"] == 0.9
+    assert d["box"] == pytest.approx(list(norm_box(LOOSE)), abs=1e-3)
+    assert bounds(d["outline"]) == pytest.approx(list(norm_box(LOOSE)), abs=1 / 960)
+    x0, y0, x1, y1 = norm_box(LOOSE)
+    assert x0 < d["point"][0] < x1 and y0 < d["point"][1] < y1
+    ((width, height, box),) = segmenter.calls
+    assert (width, height) == (960, 720) and box == pytest.approx(LOOSE, abs=0.01)
+
+
+def test_without_a_session_yoloe_outlines_what_the_segmenter_cannot(outlined, monkeypatch):
+    client, segmenter, _ = outlined
+    monkeypatch.setattr(segmenter, "mask_in_box", lambda enc, box: None)
+    (d,) = client.post("/locate", json=request(session=None)).json()["detections"]
+    assert d["found"] and d["box"] == pytest.approx(list(norm_box(BOX)), abs=1e-3)
+    assert bounds(d["outline"]) == pytest.approx(list(norm_box(BOX)), abs=1e-3)
+
+
+@pytest.mark.parametrize("broken", ["encode", "mask_in_box"])
+def test_without_a_session_yoloe_outlines_while_the_segmenter_fails(outlined, caplog, broken):
+    client, segmenter, _ = outlined
+
+    def fail(*args):
+        raise RuntimeError("MPS backend out of memory")
+
+    setattr(segmenter, broken, fail)
+    with caplog.at_level(logging.INFO, logger="clio_tracker"):
+        for _ in range(2):
+            r = client.post("/locate", json=request(session=None))
+            assert r.status_code == 200
+            (d,) = r.json()["detections"]
+            assert d["found"] and d["box"] == pytest.approx(list(norm_box(BOX)), abs=1e-3)
+            assert bounds(d["outline"]) == pytest.approx(list(norm_box(BOX)), abs=1e-3)  # YOLOE's
+        delattr(segmenter, broken)  # it answers again
+        (d,) = client.post("/locate", json=request(session=None)).json()["detections"]
+    assert bounds(d["outline"]) == pytest.approx(list(norm_box(LOOSE)), abs=1 / 960)
+    messages = [r.message for r in caplog.records]
+    assert sum("out of memory" in m for m in messages) == 1  # once for the outage
+    assert sum("answers again" in m for m in messages) == 1

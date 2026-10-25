@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from collections import deque
+
 import numpy as np
 import pytest
 
+from clio_tracker.follow import Followed, RegionFollower
 from clio_tracker.geometry import iou
 from clio_tracker.tracking import ObjectTracker
-from conftest import Thing, appearance, blend, unit  # noqa: F401
+from clio_tracker.vision import MaskCrop
+from conftest import H, Thing, W, appearance, blend, unit  # noqa: F401
 
 A = appearance(1)
 B = blend(A, appearance(2), 0.85)  # a look-alike: same kind of thing, another instance
@@ -364,3 +368,430 @@ def test_old_views_still_score_after_a_poor_one(vision):
     for _ in range(3):
         s = run.frame(Thing(at(100), A), Thing(at(500), B))
     assert s.found and s.state == "tracking" and s.track_id == run.tracker.target_id
+
+
+# --- the follower's mask (follow.py): shown when confident and agreeing with ByteTrack --------
+
+GRAY = np.zeros((H, W), np.uint8)
+
+
+class FakeFollower:
+    """Stands in for RegionFollower: each `step` returns the next scripted answer (None once
+    the script is used up) and every `set_reference` is recorded."""
+
+    def __init__(self) -> None:
+        self.answers: deque[Followed | None] = deque()
+        self.references: list[tuple[int, MaskCrop]] = []
+        self.replacing: list[bool] = []  # each reference's `replace`
+        self.steps: list[int] = []
+        self._seq: int | None = None
+
+    @property
+    def active(self) -> bool:
+        return self._seq is not None
+
+    @property
+    def reference_seq(self) -> int | None:
+        return self._seq
+
+    def set_reference(self, seq: int, crop: MaskCrop, replace: bool = False) -> None:
+        self.references.append((seq, crop))
+        self.replacing.append(replace)
+        self._seq = seq
+
+    def step(self, seq: int, gray: np.ndarray, camera, t: float) -> Followed | None:
+        self.steps.append(seq)
+        return self.answers.popleft() if self.answers else None
+
+    def clear(self) -> None:
+        self._seq = None
+
+
+def followed(box, confident: bool = True) -> Followed:
+    """A follower's answer: `box` filled, at one frame pixel per mask pixel."""
+    b = np.asarray(box, dtype=np.float32)
+    rows, cols = int(np.ceil(b[3] - b[1])), int(np.ceil(b[2] - b[0]))
+    crop = MaskCrop(np.full((rows, cols), 10.0, np.float32), (float(b[0]), float(b[1])), 1.0)
+    return Followed(b, crop, 40 if confident else 3, 0.9 if confident else 0.2, confident)
+
+
+class FollowRun(MovingRun):
+    """A MovingRun that hands the tracker a gray frame each time, for its follower, and jev's
+    mask with jev's answer."""
+
+    def __init__(self, vision, follower=None, tracker: ObjectTracker | None = None):
+        super().__init__(vision, tracker or ObjectTracker("cup", "blue cup", follower=follower))
+
+    def frame(self, *things: Thing, camera=None):
+        self.seq += 1
+        self.t += 1 / FPS
+        enc = self.vision.encode(scene=list(things))
+        self.encodings[self.seq] = enc
+        return self.tracker.step(enc, self.seq, self.t, self.vision, camera, gray=GRAY)
+
+    def jev(self, seq: int, box, present: bool = True, carry=None, mask=None) -> str:
+        enc = self.encodings[seq]
+        box = np.asarray(box, dtype=np.float32)
+        look = self.vision.prompts(enc, box)[0]
+        return self.tracker.identified(seq, self.t, present, box, look, carry, mask=mask)
+
+
+def locked_following(vision, follower) -> FollowRun:
+    """Locked on the cup at at(100), the follower holding the segmenter's cut of jev's box."""
+    run = FollowRun(vision, follower)
+    run.frame(Thing(at(100), A), Thing(at(500), B))
+    run.jev(1, at(100), mask=followed(at(100)).crop)
+    for _ in range(3):
+        run.frame(Thing(at(100), A), Thing(at(500), B))
+    assert run.tracker.target_id is not None
+    return run
+
+
+def yoloe_crop(s) -> bool:
+    """The sighting's mask is YOLOE's (FakeVision's: the tracked box at 2 pixels a cell)."""
+    origin = (float(s.measured[0]), float(s.measured[1]))
+    return s.crop is not None and s.crop.scale == 2.0 and s.crop.origin == origin
+
+
+def test_confident_follower_mask_replaces_yoloe_crop(vision):
+    follower = FakeFollower()
+    run = FollowRun(vision, follower)
+    run.frame(Thing(at(100), A), Thing(at(500), B))
+    keyframe = followed(at(100)).crop
+    assert run.jev(1, at(100), mask=keyframe) == "placed"
+    answer = followed(at(103, 302, 116, 150))  # the segmenter's tighter cut, inside YOLOE's box
+    follower.answers.append(answer)
+    s = run.frame(Thing(at(100), A), Thing(at(500), B))
+    assert s.found and s.state == "tracking"
+    assert s.crop is answer.crop
+    np.testing.assert_array_equal(s.measured, answer.box)
+    np.testing.assert_allclose(s.box, answer.box)  # the first sighting: nothing to smooth from
+    assert s.shape is not None and s.shape.outline is not None
+    assert not run.tracker.wants_refresh
+
+
+def test_doubting_follower_falls_back_and_wants_refresh(vision):
+    follower = FakeFollower()
+    run = locked_following(vision, follower)
+    assert not run.tracker.wants_refresh
+    for k in range(2):
+        unsure = followed(at(102), confident=False)
+        follower.answers.append(unsure)
+        s = run.frame(Thing(at(100), A), Thing(at(500), B))
+        assert s.state == "tracking" and yoloe_crop(s)
+        np.testing.assert_array_equal(s.measured, at(100))
+        assert run.tracker.wants_refresh == (k == 1)
+    np.testing.assert_array_equal(run.tracker.refresh_box, unsure.box)
+    sure = followed(at(101))
+    follower.answers.append(sure)
+    s = run.frame(Thing(at(100), A), Thing(at(500), B))
+    assert s.crop is sure.crop and not run.tracker.wants_refresh  # confident again: no doubt
+    run.tracker.refreshed(run.seq, None)  # the segmenter found nothing: one frame of doubt...
+    assert not run.tracker.wants_refresh
+    follower.answers.append(followed(at(102), confident=False))
+    run.frame(Thing(at(100), A), Thing(at(500), B))
+    assert run.tracker.wants_refresh  # ...and the next frame's makes two
+
+
+def test_follower_disagreeing_with_bytetrack_is_doubted(vision):
+    follower = FakeFollower()
+    run = locked_following(vision, follower)
+    for k in range(2):
+        follower.answers.append(followed(at(500)))  # confident, but on the look-alike
+        s = run.frame(Thing(at(100), A), Thing(at(500), B))
+        assert s.state == "tracking" and yoloe_crop(s)
+        np.testing.assert_array_equal(s.measured, at(100))
+        assert iou(s.box, at(100))[0, 0] > 0.9
+        assert run.tracker.wants_refresh == (k == 1)
+    # The follower is on the wrong object: the refresh re-anchors on the one ByteTrack holds.
+    np.testing.assert_array_equal(run.tracker.refresh_box, at(100))
+
+
+def test_follower_inside_the_tracked_box_agrees(vision):
+    """In objects mode a part is followed as an object: ByteTrack holds the whole, the
+    segmenter's mask is the part. A follower box inside the tracked box agrees with it, as a
+    part inside its whole does; one as small cut by the box's edge does not, nor a sliver of
+    it (IoU under 0.15), nor one grown around it (the mask spilled onto what holds it)."""
+    follower = FakeFollower()
+    run = locked_following(vision, follower)
+    tracked = at(100)  # (100, 300, 220, 460)
+    inside = followed((130, 340, 190, 404))  # a fifth of the tracked box, IoU 0.2
+    follower.answers.append(inside)
+    s = run.frame(Thing(tracked, A), Thing(at(500), B))
+    assert s.crop is inside.crop
+    np.testing.assert_array_equal(s.measured, inside.box)
+    for box in (
+        (190, 340, 250, 404),  # the same size, half outside the tracked box
+        (140, 360, 180, 408),  # inside it, but a tenth of it: IoU 0.1
+        (40, 220, 280, 540),  # around it: the tracked box is a quarter of it, IoU 0.25
+    ):
+        follower.answers.append(followed(box))
+        s = run.frame(Thing(tracked, A), Thing(at(500), B))
+        assert yoloe_crop(s), box
+        np.testing.assert_array_equal(s.measured, tracked)
+
+
+def test_coasting_follower_away_from_the_prediction_is_doubted(vision):
+    """A confident follower on another object (the look-alike) while YOLOE misses the cup on
+    every other frame: the missed frames coast on the cup's predicted box as without a
+    follower, they count as doubt, and the refresh is asked around the cup."""
+    follower = FakeFollower()
+    run = locked_following(vision, follower)
+    for k in range(4):
+        follower.answers.append(followed(at(500)))
+        cup = [Thing(at(100), A)] if k % 2 else []  # missed on frames 0 and 2
+        s = run.frame(*cup, Thing(at(500), B))
+        assert s.found and s.track_id == run.tracker.target_id
+        if k % 2:
+            assert s.state == "tracking" and yoloe_crop(s)
+        else:
+            assert s.state == "coasting" and s.crop is None
+        np.testing.assert_allclose(s.measured, at(100), atol=2.0)
+        assert iou(s.box, at(100))[0, 0] > 0.9
+        assert run.tracker.wants_refresh == (k >= 1)
+        np.testing.assert_allclose(run.tracker.refresh_box, s.measured)
+
+
+def test_moving_the_target_forgets_the_last_frames_follower(vision):
+    """Between jev's answer and the next frame, nothing is asked around the old object."""
+    follower = FakeFollower()
+    run = locked_following(vision, follower)
+    follower.answers.extend([followed(at(101, 300)), followed(at(101, 300), confident=False)])
+    run.frame(Thing(at(100), A), Thing(at(500), B))
+    run.frame(Thing(at(100), A), Thing(at(500), B))
+    run.tracker.refreshed(run.seq, None)
+    assert run.tracker.wants_refresh  # two frames of doubt, the old object's box to cut
+    np.testing.assert_array_equal(run.tracker.refresh_box, at(101, 300))
+    assert run.jev(run.seq, at(500)).startswith("moved from track")
+    assert not run.tracker.wants_refresh and run.tracker.refresh_box is None
+    run.frame(Thing(at(100), A), Thing(at(500), B))
+    assert run.tracker.wants_refresh  # the new target, with no mask yet: around its box
+    np.testing.assert_array_equal(run.tracker.refresh_box, at(500))
+
+
+def test_refresh_answer_ends_the_doubt(vision):
+    follower = FakeFollower()
+    run = locked_following(vision, follower)
+    for _ in range(2):
+        follower.answers.append(followed(at(102), confident=False))
+        run.frame(Thing(at(100), A), Thing(at(500), B))
+    assert run.tracker.wants_refresh
+    crop = followed(at(100)).crop
+    run.tracker.refreshed(run.seq, crop)
+    assert follower.reference_seq == run.seq and not run.tracker.wants_refresh
+
+
+def test_jev_moving_the_target_lets_its_keyframe_in(vision):
+    """jev's mask comes from jev's frame, older than a refresh of the old object that came back
+    meanwhile: moving the target forgets the old object's mask, so jev's is taken."""
+    follower = RegionFollower()
+    run = locked_following(vision, follower)
+    crop = MaskCrop(np.full((20, 30), 10.0, np.float32), (100.0, 100.0), 2.0)
+    for _ in range(2):
+        run.frame(Thing(at(100), A), Thing(at(500), B))
+    jev_seq = run.seq - 1
+    run.tracker.refreshed(run.seq, crop)  # a refresh of the old object, on a newer frame
+    run.frame(Thing(at(100), A), Thing(at(500), B))
+    assert follower.reference_seq == run.seq - 1
+    assert run.jev(jev_seq, at(500)).startswith("moved from track")
+    run.tracker.refreshed(jev_seq, crop)  # jev's keyframe, a moment later
+    assert follower.reference_seq == jev_seq
+    run.frame(Thing(at(100), A), Thing(at(500), B))
+    assert run.jev(run.seq, at(500)) == "confirmed"  # the same object: the mask stays
+    assert follower.reference_seq == jev_seq
+    assert run.tracker.identified(run.seq, run.t, False, None, None) == "absent"
+    assert not follower.active
+
+
+def test_identified_with_mask_sets_reference(vision):
+    follower = FakeFollower()
+    run = FollowRun(vision, follower)
+    for _ in range(3):
+        run.frame(Thing(at(100), A), Thing(at(500), B))
+    crop = followed(at(100)).crop
+    run.jev(2, at(100), mask=crop)
+    assert len(follower.references) == 1
+    seq, given = follower.references[0]
+    assert seq == 2 and given is crop
+    assert follower.steps == [1, 2, 3]  # stepped on every frame, also before it had a mask
+
+
+def test_identified_with_none_mask_keeps_yoloe_outline(vision):
+    follower = FakeFollower()
+    run = FollowRun(vision, follower)
+    run.frame(Thing(at(100), A), Thing(at(500), B))
+    run.jev(1, at(100), mask=None)
+    s = [run.frame(Thing(at(100), A), Thing(at(500), B)) for _ in range(2)][-1]
+    assert follower.references == [] and not follower.active
+    assert s.state == "tracking" and yoloe_crop(s)
+    assert run.tracker.wants_refresh  # a target and no mask yet: ask for one...
+    np.testing.assert_array_equal(run.tracker.refresh_box, at(100))  # ...on the tracked box
+
+
+def test_refreshed_older_than_reference_is_ignored(vision):
+    follower = RegionFollower()
+    run = FollowRun(vision, follower)
+    for _ in range(7):
+        run.frame(Thing(at(100), A), Thing(at(500), B))
+    crop = MaskCrop(np.full((20, 30), 10.0, np.float32), (100.0, 100.0), 2.0)
+    run.jev(7, at(100), mask=crop)
+    assert follower.reference_seq == 7
+    run.frame(Thing(at(100), A), Thing(at(500), B))
+    run.tracker.refreshed(3, crop)  # asked before jev's frame, answered after jev
+    assert follower.reference_seq == 7
+    run.frame(Thing(at(100), A), Thing(at(500), B))
+    assert follower.reference_seq == 7
+    run.tracker.refreshed(run.seq, crop)  # a newer one does take over
+    assert follower.reference_seq == run.seq
+
+
+def test_an_unsure_follower_off_the_tracked_box_refreshes_around_bytetracks(vision):
+    """While the follower is unsure, only the camera's motion has carried its box: if the
+    object moved, that is the old spot. The refresh is prompted with ByteTrack's box, sighted
+    on this frame, unless the follower's box lies inside it (a part of it, in objects mode)."""
+    follower = FakeFollower()
+    run = locked_following(vision, follower)
+    for _ in range(2):
+        follower.answers.append(followed(at(140), confident=False))  # left behind, off the cup
+        run.frame(Thing(at(100), A), Thing(at(500), B))
+    assert run.tracker.wants_refresh
+    np.testing.assert_array_equal(run.tracker.refresh_box, at(100))
+    inside = followed((120, 330, 200, 430), confident=False)
+    follower.answers.append(inside)
+    run.frame(Thing(at(100), A), Thing(at(500), B))
+    np.testing.assert_array_equal(run.tracker.refresh_box, inside.box)
+
+
+def test_a_textureless_object_is_outlined_by_its_mask_carried_by_the_camera(vision):
+    """A flat object (a white door) gives the follower no corners, so it is never sure of
+    itself. While its mask, carried by the camera's motion alone, agrees with ByteTrack's box,
+    that mask is the outline; each such frame still counts as doubt, so the segmenter keeps
+    cutting it out again. Once the object moves on its own, away from it, YOLOE's is drawn."""
+    run = FollowRun(vision, RegionFollower())  # the gray frames are flat
+    run.frame(Thing(at(100), A), Thing(at(500), B))
+    run.jev(1, at(100), mask=followed((104, 304, 216, 456)).crop)  # SAM's cut, inside the box
+    for k in range(1, 6):
+        s = run.frame(Thing(at(100 + 6 * k), A), Thing(at(500 + 6 * k), B), camera=pan(6))
+        assert s.found and s.state == "tracking" and s.source == "follower"
+        assert not yoloe_crop(s)
+        np.testing.assert_allclose(s.measured, (104 + 6 * k, 304, 216 + 6 * k, 456), atol=1e-3)
+        assert run.tracker.wants_refresh == (k >= 2)
+    for x in (170, 210, 250):  # it slides on its own; the camera is still
+        s = run.frame(Thing(at(x), A), Thing(at(530), B), camera=pan(0))
+    assert s.found and yoloe_crop(s) and s.source == "yoloe"
+    assert run.tracker.wants_refresh
+
+
+def test_the_last_sighting_is_bytetracks_box_not_the_followers(vision):
+    """What a missed target coasts from, carried by the camera, is ByteTrack's box: the
+    follower's (a part inside it, in objects mode) must not become the whole's predicted box."""
+    follower = FakeFollower()
+    run = locked_following(vision, follower)
+    inside = followed((130, 340, 190, 404))
+    follower.answers.append(inside)
+    s = run.frame(Thing(at(100), A), Thing(at(500), B))
+    np.testing.assert_array_equal(s.measured, inside.box)
+    np.testing.assert_array_equal(run.tracker._fresh.box, at(100))
+    s = run.frame(Thing(at(500), B), camera=pan(10))  # missed, the follower silent: it coasts
+    assert s.state == "coasting"
+    np.testing.assert_allclose(run.tracker._fresh.box, at(110))
+
+
+def test_jevs_keyframe_replaces_a_refresh_of_a_newer_frame(vision):
+    """jev confirms the object about a frame from before a refresh that has landed since (the
+    refresh may have cut the wrong thing): its keyframe, cut on jev's older frame, still takes
+    over, carried to now by the motion logged since. A refresh that old does not."""
+    follower = RegionFollower()
+    run = locked_following(vision, follower)
+    crop = MaskCrop(np.full((20, 30), 10.0, np.float32), (100.0, 100.0), 2.0)
+    for _ in range(2):
+        run.frame(Thing(at(100), A), Thing(at(500), B))
+    jev_seq = run.seq - 1
+    run.tracker.refreshed(run.seq, crop)  # a refresh, on a newer frame than jev's
+    run.frame(Thing(at(100), A), Thing(at(500), B))
+    assert follower.reference_seq == run.seq - 1
+    assert run.jev(jev_seq, at(100)) == "confirmed"
+    run.tracker.refreshed(jev_seq, crop)  # a refresh about jev's frame: older, ignored
+    assert follower.reference_seq == run.seq - 1
+    run.tracker.refreshed(jev_seq, crop, keyframe=True)  # jev's keyframe, a moment later
+    assert follower.reference_seq == jev_seq
+
+
+def test_coasting_with_confident_follower_keeps_mask(vision):
+    follower = FakeFollower()
+    run = locked_following(vision, follower)
+    answer = followed(at(104))
+    follower.answers.append(answer)
+    s = run.frame(Thing(at(500), B))  # YOLOE misses the cup on this frame
+    assert s.found and s.state == "tracking" and s.track_id == run.tracker.target_id
+    assert s.crop is answer.crop
+    np.testing.assert_array_equal(s.measured, answer.box)
+    assert not run.tracker.wants_refresh
+    for k in range(2):
+        follower.answers.append(followed(at(104), confident=False))
+        s = run.frame(Thing(at(500), B))  # the follower is unsure too: it coasts as without one
+        assert s.found and s.state == "coasting" and s.crop is None
+        assert run.tracker.wants_refresh == (k == 1)
+    gone = [run.frame(Thing(at(500), B)) for _ in range(8)]
+    assert gone[-1].state == "lost" and not run.tracker.wants_refresh  # nothing in sight to cut
+
+
+def test_each_sighting_says_what_drew_its_outline(vision):
+    plain = locked(vision)
+    assert plain.frame(Thing(at(100), A), Thing(at(500), B)).source == "yoloe"
+    follower = FakeFollower()
+    run = locked_following(vision, follower)
+    follower.answers.append(followed(at(101)))
+    assert run.frame(Thing(at(100), A), Thing(at(500), B)).source == "follower"
+    follower.answers.append(followed(at(101), confident=False))
+    assert run.frame(Thing(at(100), A), Thing(at(500), B)).source == "yoloe"
+    follower.answers.append(followed(at(104)))
+    s = run.frame(Thing(at(500), B))  # YOLOE misses it; the follower is sure
+    assert (s.state, s.source) == ("tracking", "follower")
+    s = run.frame(Thing(at(500), B))  # and now neither: it coasts
+    assert (s.state, s.source) == ("coasting", "yoloe")
+    gone = [run.frame(Thing(at(500), B)) for _ in range(10)]
+    assert not gone[-1].found and gone[-1].source is None
+
+
+def same(a, b) -> None:
+    assert (a.found, a.state, a.track_id, a.confidence, a.shape) == (
+        b.found,
+        b.state,
+        b.track_id,
+        b.confidence,
+        b.shape,
+    )
+    for x, y in ((a.box, b.box), (a.measured, b.measured)):
+        assert (x is None) == (y is None)
+        if x is not None:
+            np.testing.assert_array_equal(x, y)
+    assert (a.crop is None) == (b.crop is None)
+    if a.crop is not None:
+        np.testing.assert_array_equal(a.crop.logits, b.crop.logits)
+        assert (a.crop.origin, a.crop.scale) == (b.crop.origin, b.crop.scale)
+
+
+def test_no_follower_is_identical_to_before(vision):
+    """Without a follower the new arguments change nothing: the gray frames, jev's masks and
+    the refresh answers are ignored, and nothing asks for a refresh."""
+    before = MovingRun(vision)
+    after = FollowRun(vision, tracker=ObjectTracker("cup", "blue cup", follower=None))
+    crop = followed(at(100)).crop
+
+    def both(*things: Thing, camera=None) -> None:
+        same(before.frame(*things, camera=camera), after.frame(*things, camera=camera))
+        assert not after.tracker.wants_refresh
+
+    both(Thing(at(100), A), Thing(at(500), B))
+    assert before.jev(1, at(100)) == after.jev(1, at(100), mask=crop)
+    for i in range(6):
+        both(Thing(at(100 + 5 * i), A), Thing(at(500), B))
+    after.tracker.refreshed(after.seq, crop)
+    after.tracker.refreshed(after.seq, None)
+    for _ in range(3):
+        both(Thing(at(500), B))  # missed: it coasts
+    both(Thing(at(165), A), Thing(at(540), B), camera=pan(40))
+    assert before.jev(before.seq, at(165)) == after.jev(after.seq, at(165), mask=crop)
+    for _ in range(3):
+        both(Thing(at(165), A), Thing(at(540), B))

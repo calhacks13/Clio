@@ -13,6 +13,7 @@ from pathlib import Path
 from . import __version__
 from .bench import valid_box
 from .config import HOST, MODELS, ConfigError, Settings, load_settings, model_name
+from .segment import SEGMENTER_CHOICES
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -46,7 +47,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="NAME=VALUE",
         help="try a TrackerParams setting (smooth.NAME for SmoothParams)",
     )
+    p.add_argument(
+        "--pace",
+        action=argparse.BooleanOptionalAction,
+        help="play each frame for at least 1/25 s, as the headset's stream does (the default "
+        "with a segmenter: the refresher spaces its calls by wall clock)",
+    )
     p.set_defaults(run=_jitter)
+    jitter = p
     for p in (parser, *sub.choices.values()):
         p.add_argument(
             "--model",
@@ -55,6 +63,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         p.add_argument("--backend", choices=["auto", "coreml", "torch"])
         p.add_argument("--device", help="torch device: auto, mps, cuda or cpu")
+        p.add_argument(
+            "--segmenter",
+            choices=SEGMENTER_CHOICES,
+            help="what cuts the outline: SAM 2.1 small or large (auto is small), or none for "
+            "YOLOE's own mask (default "
+            + ("none, whatever CLIO_TRACKER_SEGMENTER says)" if p is jitter else "auto)"),
+        )
     for p in (parser, serve):
         p.add_argument("--port", type=int, help="8790 by default, which Clio's server expects")
         p.add_argument(
@@ -72,7 +87,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ConfigError as e:
         print(f"clio-tracker: {e}", file=sys.stderr)
         return 1
-    overrides = {k: getattr(args, k, None) for k in ("model", "backend", "device", "port")}
+    overrides = {
+        k: getattr(args, k, None) for k in ("model", "backend", "device", "segmenter", "port")
+    }
     settings = Settings(**{**settings.__dict__, **{k: v for k, v in overrides.items() if v}})
     return getattr(args, "run", _serve)(settings, args)
 
@@ -108,6 +125,7 @@ def _serve(settings: Settings, args: argparse.Namespace) -> int:
     import uvicorn
 
     from .finder import Finder
+    from .refresh import Refresher
     from .server import create_app
     from .session import Sessions, SessionSettings, TrackerSession
     from .track import StreamTracker
@@ -138,24 +156,49 @@ def _serve(settings: Settings, args: argparse.Namespace) -> int:
         loaded - started,
         time.perf_counter() - loaded,
     )
+    segmenter = _segmenter(settings)
     session_settings = SessionSettings(
         identify_interval_s=settings.identify_interval_ms / 1000,
         identify_max_in_flight=settings.identify_max_in_flight,
     )
     executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="identify")
-    sessions = Sessions(lambda: TrackerSession(vision, identifier, executor, session_settings))
-    finder = Finder(identifier, vision)
+    # One segmenter for the service, called one at a time (each stream's and session's
+    # Refresher keeps one call of its own in flight at most).
+    segmenting = ThreadPoolExecutor(max_workers=1, thread_name_prefix="segment")
 
-    def health() -> dict:
-        return {"model": finder.model, "backend": vision.backend}
+    def refresher() -> Refresher | None:
+        return None if segmenter is None else Refresher(segmenter, segmenting)
 
-    app = create_app(sessions, finder, lambda: StreamTracker(vision), settings.refresh_ms, health)
+    def session() -> TrackerSession:
+        return TrackerSession(
+            vision,
+            identifier,
+            executor,
+            session_settings,
+            segmenter=segmenter,
+            refresher=refresher(),
+        )
+
+    def stream() -> StreamTracker:
+        return StreamTracker(vision, segmenter=segmenter, refresher=refresher())
+
+    sessions = Sessions(session)
+    finder = Finder(identifier, vision, segmenter)
+    app = create_app(
+        sessions, finder, stream, settings.refresh_ms, lambda: _health(finder, vision, segmenter)
+    )
+    outline = (
+        "YOLOE's mask (no segmenter)"
+        if segmenter is None
+        else f"{segmenter.name}'s mask, carried to every frame by the object's own pixels"
+    )
     log.info(
         "\n".join(
             [
                 f"Clio tracker {__version__}: {finder.model}",
                 f"  http://{HOST}:{settings.port}/locate and ws://{HOST}:{settings.port}/track",
                 f"  Vision: {vision.model} on {vision.backend}",
+                f"  Outline: {outline}",
                 f"  Names the target: {identifier.name}; with a session or in objects mode, "
                 f"every {settings.identify_interval_ms} ms per object",
             ]
@@ -166,8 +209,54 @@ def _serve(settings: Settings, args: argparse.Namespace) -> int:
     finally:
         finder.close()
         executor.shutdown(wait=False, cancel_futures=True)
+        segmenting.shutdown(wait=False, cancel_futures=True)
         getattr(identifier, "close", lambda: None)()
     return 0
+
+
+def _health(finder, vision, segmenter) -> dict:
+    """What /health adds to its own fields: the models answering, and the segmenter (or null)."""
+    return {
+        "model": finder.model,
+        "backend": vision.backend,
+        "segmenter": segmenter.name if segmenter is not None else None,
+    }
+
+
+def _segmenter(settings: Settings):
+    """The configured segmenter, loaded and warmed up with one encode and one cut, or None.
+    Under `auto` a segmenter that fails to load or to warm up is one warning, and the tracker
+    starts without one; one named on purpose (`sam2.1-small`, `sam2.1-large`) still stops it."""
+    import numpy as np
+
+    from .segment import load_segmenter
+
+    log = logging.getLogger("clio_tracker")
+    started = time.perf_counter()
+    try:
+        segmenter = load_segmenter(settings.segmenter, settings.device)
+        if segmenter is None:
+            return None
+        loaded = time.perf_counter()
+        enc = segmenter.encode(np.full((480, 640, 3), 128, dtype=np.uint8))
+        segmenter.mask_in_box(enc, np.array([160.0, 120.0, 480.0, 360.0]))
+    except Exception as error:
+        if settings.segmenter != "auto":
+            raise
+        log.warning(
+            "The segmenter (auto: sam2.1-small) did not load: %r. The tracker starts without "
+            "one, with YOLOE's outlines (CLIO_TRACKER_SEGMENTER=none skips it).",
+            error,
+        )
+        return None
+    log.info(
+        "%s on %s: loaded in %.1f s, warmed up in %.1f s",
+        segmenter.name,
+        getattr(segmenter, "device", "its device"),
+        loaded - started,
+        time.perf_counter() - loaded,
+    )
+    return segmenter
 
 
 def _warm_up(vision) -> None:
@@ -232,8 +321,11 @@ def _bench(settings: Settings, args: argparse.Namespace) -> int:
 
 
 def _jitter(settings: Settings, args: argparse.Namespace) -> int:
+    """The harness compares runs, so its segmenter is the command line's alone (none by
+    default), and a segmenter is paced unless --no-pace says otherwise."""
     from .jitter import run
 
+    segmenter = args.segmenter or "none"
     return run(
         settings.model,
         settings.backend,
@@ -243,4 +335,7 @@ def _jitter(settings: Settings, args: argparse.Namespace) -> int:
         args.json,
         args.set,
         args.flag_parts,
+        segmenter=segmenter,
+        pace=args.pace if args.pace is not None else segmenter != "none",
+        device=settings.device,
     )

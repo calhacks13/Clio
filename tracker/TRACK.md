@@ -129,10 +129,17 @@ to a track (`part.py`):
   scale when the parent, wholly in view, grows alike in width and height. While the parent
   coasts or none is in sight, the camera alone carries it (`state: "coasting"`, for up to 6 s
   after jev's last answer or the parent's last sighting).
-- `outline` is the parent's mask inside the part box, so it follows the object's edges where the
-  part meets them; when that mask hardly covers the part box, the part box as a rounded
-  rectangle. `point` and `contact` are the part's. `box` is the part box.
+- Without a segmenter, `outline` is the parent's mask inside the part box, so it follows the
+  object's edges where the part meets them; when that mask hardly covers the part box, the part
+  box as a rounded rectangle. `point` and `contact` are the part's. `box` is the part box.
 - Each new answer re-seeds the part box where jev put it; it is never snapped to the parent.
+
+With a segmenter (the default, `--segmenter`, [README.md](README.md#how-it-works)), the part's
+outline is SAM 2.1's mask of it, carried to every frame by the part's own pixels, also where the
+parent's motion would never take it (a jaw sliding along its caliper). A part on its own pixels
+reports `tracking` (it is measured, not predicted), at the parent's score while the parent is in
+sight, else 0.5. The mask cut from jev's next box puts the part box where jev says, even over a
+follower sure of another place. The mask message is unchanged.
 
 ## Between jev's answers
 
@@ -143,7 +150,10 @@ resemble jev's view. A target ByteTrack misses continues on a weaker candidate o
 box; otherwise it coasts at its predicted box for 0.5 s (1 s when it was at the frame's edge or
 filled it), then reads as lost, and at once when the prediction leaves the view. Its track
 survives 3 s, so after a glance away it comes back as the same object; a target with no track is
-found again by appearance, not by whichever look-alike scores highest.
+found again by appearance, not by whichever look-alike scores highest. With a segmenter (the
+default), SAM 2.1's latest mask for the target is carried from frame to frame by the motion of
+points inside it (`follow.py`), or by the camera's motion alone for an object too plain to
+follow, and the segmenter is asked to cut the object out again after two frames of doubt.
 
 The `box`, `outline`, `point` and `contact` sent back are steadied over frames in the scene's
 frame of reference (`smooth.py`): the camera's motion is followed exactly, the object's own
