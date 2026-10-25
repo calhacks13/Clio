@@ -480,6 +480,22 @@ describe('InstructionPanelPresenter layout', () => {
       joints[offset] = (joints[offset] ?? 0) + 0.2;
       update(panel, { ...ctx, t: 5200 });
       expect(onDone).toHaveBeenCalledTimes(2);
+
+      // On a widget drawn over the button, a touch is the widget's: Done stays unpressed.
+      joints[offset] = (joints[offset] ?? 0) - 0.2;
+      const covered: number[][] = [];
+      panel.coveredBy = (at) => {
+        covered.push(at.toArray());
+        return true;
+      };
+      update(panel, { ...ctx, t: 7000 });
+      expect(onDone).toHaveBeenCalledTimes(2);
+      expect(covered[0]?.map((v) => Number(v.toFixed(6)))).toEqual(
+        center.toArray().map((v) => Number(v.toFixed(6))),
+      );
+      panel.coveredBy = () => false;
+      update(panel, { ...ctx, t: 7100 });
+      expect(onDone).toHaveBeenCalledTimes(3);
       vi.runAllTimers();
     } finally {
       vi.useRealTimers();

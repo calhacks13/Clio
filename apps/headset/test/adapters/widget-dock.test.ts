@@ -6,6 +6,7 @@ import { SWITCH_DWELL_MS, WidgetDockPresenter } from '../../src/adapters/render/
 import { checklist, choices, timer, value } from '../../src/adapters/render/widgets/fixtures';
 import { dockOffset, dockYaw, dockYawFloor } from '../../src/adapters/render/widgets/placement';
 import { FakeTextObject, fakeText } from '../../src/adapters/render/widgets/text-port';
+import { WIDGET_THEME } from '../../src/adapters/render/widgets/theme';
 import { WidgetView } from '../../src/adapters/render/widgets/views/view';
 import type { Vec3 } from '../../src/core/math';
 import type { Widget, WidgetIntent, WidgetSnapshot } from '../../src/domain/widgets/types';
@@ -262,6 +263,24 @@ describe('WidgetDockPresenter', () => {
     }
     expect(intents).toEqual([]);
     expect(dock.isFrozen).toBe(false);
+  });
+
+  it('says a fingertip is over its cards only on them, at about their depth', () => {
+    const { dock } = setup([checklist(T)]);
+    const off = new Vector3(0, 1.4, -0.6);
+    expect(dock.covers(off)).toBe(false);
+    for (let t = T; t <= T + 600; t += 100) dock.update(context(t, 100));
+    dock.column.updateWorldMatrix(true, false);
+    const at = (x: number, y: number, z: number) => dock.column.localToWorld(new Vector3(x, y, z));
+    const width = WIDGET_THEME.size.dockWidth;
+    expect(dock.covers(targetPoint(dock, 'checklist', 1, 0.01))).toBe(true);
+    expect(dock.covers(at(0, -dock.columnHeight / 2, 0))).toBe(true);
+    // Beside it, where the card sits, above or below it, or well in front or behind: not over it.
+    expect(dock.covers(at(-width / 2 - 0.01, -0.02, 0))).toBe(false);
+    expect(dock.covers(at(0, 0.01, 0))).toBe(false);
+    expect(dock.covers(at(0, -dock.columnHeight - 0.01, 0))).toBe(false);
+    expect(dock.covers(at(0, -0.02, 0.2))).toBe(false);
+    expect(dock.covers(at(0, -0.02, -0.1))).toBe(false);
   });
 
   it("copies the card group's pose every frame", () => {

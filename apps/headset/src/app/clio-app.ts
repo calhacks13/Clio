@@ -280,18 +280,19 @@ export class ClioApp {
       ...(widgets ? [new WidgetChipsPresenter({ source: () => widgets.snapshot() })] : []),
     ];
     const card = new InstructionPanelPresenter(() => this.lesson.confirmByUser('Done button'));
+    const dock = widgets
+      ? new WidgetDockPresenter({
+          source: () => widgets.snapshot(),
+          onIntent: (intent) => widgets.touch(intent),
+          anchor: card,
+        })
+      : null;
+    // A poke on a widget drawn over the card is the widget's, not Done's.
+    if (dock) card.coveredBy = (tip) => dock.covers(tip);
     this.worldPresenters = [
       card,
       // Right after the card: the dock hangs off the card's pose and width, set this frame.
-      ...(widgets
-        ? [
-            new WidgetDockPresenter({
-              source: () => widgets.snapshot(),
-              onIntent: (intent) => widgets.touch(intent),
-              anchor: card,
-            }),
-          ]
-        : []),
+      ...(dock ? [dock] : []),
       new HudPresenter(),
       new CalibrationMarkerPresenter(),
       ...(this.live ? [this.live.presenter] : []),

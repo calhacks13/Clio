@@ -87,6 +87,12 @@ export class InstructionPanelPresenter implements Presenter {
   /** Text lays itself out asynchronously; each finished layout re-stacks the panel. */
   private readonly relayout = () => this.layout();
 
+  /**
+   * Whether a fingertip (world space) is on something drawn over the card (the widgets' column),
+   * so touching there does not press Done. Null: nothing is.
+   */
+  coveredBy: ((tip: Vector3) => boolean) | null = null;
+
   /** @param onDone called when the learner touches the Done button. */
   constructor(private readonly onDone: () => void) {
     const buttonBg = new Mesh(roundedRect(BUTTON_W, BUTTON_H, BUTTON_H / 2), this.buttonMaterial);
@@ -286,7 +292,7 @@ export class InstructionPanelPresenter implements Presenter {
       const w = ctx.worldFromWorkspace;
       const r = rotateVec(w.q, tip);
       const world = new Vector3(w.p[0] + r[0], w.p[1] + r[1], w.p[2] + r[2]);
-      if (world.distanceTo(center) < BUTTON_TOUCH) {
+      if (world.distanceTo(center) < BUTTON_TOUCH && !this.coveredBy?.(world)) {
         this.lastPress = ctx.t;
         this.buttonMaterial.color.setHex(0x24303d);
         setTimeout(() => this.buttonMaterial.color.setHex(BUTTON_COLOR), 300);

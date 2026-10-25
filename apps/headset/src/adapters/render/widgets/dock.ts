@@ -149,8 +149,9 @@ export class WidgetDockPresenter implements Presenter {
   private readonly pose: Pose = { p: [0, 0, 0], q: [0, 0, 0, 1] };
   private readonly at = new Vector3();
   private readonly turn = new Quaternion();
-  private readonly normal = new Vector3();
   private readonly inverse = new Matrix4();
+  private readonly coverInverse = new Matrix4();
+  private readonly coverLocal = new Vector3();
   private readonly columnWorld = new Vector3();
   private readonly workspaceQ = new Quaternion();
   private readonly tipWorld = new Vector3();
@@ -197,6 +198,21 @@ export class WidgetDockPresenter implements Presenter {
   /** The side of the card the column is on, or is moving to. */
   get side(): DockSide {
     return this.leaveAt === null ? this.sideNow : this.arriveSide;
+  }
+
+  /**
+   * A fingertip (world space) over the cards the column shows, at about their depth. The column
+   * draws over the step card, and while held for a touch the card can glide under it, so a poke
+   * there is the widget's and never the card's Done. Beside the card, as it sits, it never is.
+   */
+  covers(tip: Vector3): boolean {
+    if (!this.object.visible || !this.showing || this.height <= 0) return false;
+    this.column.updateWorldMatrix(true, false);
+    this.coverInverse.copy(this.column.matrixWorld).invert();
+    const { x, y, z } = this.coverLocal.copy(tip).applyMatrix4(this.coverInverse);
+    return (
+      Math.abs(x) <= W / 2 && y <= 0 && y >= -this.height && z >= FREEZE_BEHIND && z <= FREEZE_FRONT
+    );
   }
 
   update(ctx: PresentContext): void {
@@ -661,8 +677,7 @@ export class WidgetDockPresenter implements Presenter {
       this.occluder = new FingertipOccluder();
       this.object.add(this.occluder.object);
     }
-    this.normal.set(0, 0, 1).transformDirection(this.column.matrixWorld);
-    this.occluder.setPlane(this.normal, this.columnWorld);
+    this.occluder.setColumn(this.column.matrixWorld, W / 2, this.height);
     const pose = ctx.worldFromWorkspace;
     this.occluder.place(
       slot,

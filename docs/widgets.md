@@ -448,8 +448,9 @@ degrees), a glide back would sweep across the card or an object, so the column i
 where it was held (160 ms), takes the card's pose and a side as in [Choosing a
 side](#choosing-a-side), and fades in (200 ms), like a side switch; a card that jumps that far
 during a glide back does the same. Nothing in it can be touched until it has faded in. If the card
-moves while the column is held, a brief overlap during a touch is possible; the hand is usually in
-front of both.
+moves while the column is held, a brief overlap during a touch is possible. A fingertip over the
+column's cards then never presses the card's Done (`covers`): the column draws over the card, so
+the poke is the widget's.
 
 ### Retuned for the restyled card
 
@@ -522,7 +523,8 @@ poking it. Widgets draw on top of everything, so a depth-only occluder can no lo
 instead two capsules per hand (index intermediate to distal, distal to tip, radius 9 mm) draw after
 the widgets and the card and write transparent black, which in immersive-ar shows passthrough: the
 real finger. Only the part of the finger in front of the column's plane punches (behind it the
-widget is nearer). A hand's capsules show while its fingertip is within 0.15 m of a target and no
+widget is nearer), and only where the eye sees it over the column, so it never cuts into the step
+card, the glow or anything else beside the column. A hand's capsules show while its fingertip is within 0.15 m of a target and no
 deeper behind the column than a press counts (`behindZ`), so the finger stays visible through a
 press that pushes through the card.
 

@@ -3,6 +3,7 @@ import { HAND_SAMPLE_LENGTH, type HandSample, jointOffset } from '@clio/protocol
 import {
   Group,
   type Material,
+  Matrix4,
   type Mesh,
   NoBlending,
   type Object3D,
@@ -179,9 +180,14 @@ describe('widget layering', () => {
     expect(material.depthTest).toBe(false);
     expect(material.depthWrite).toBe(false);
     expect(material.fragmentShader).toContain('gl_FragColor = vec4(0.0)');
-    // Only what is in front of the column's plane: the plane through a point, facing the eye.
-    punch.setPlane(new Vector3(0, 0, 1), new Vector3(0, 0, -0.6));
-    expect(material.uniforms.uPlane?.value.toArray()).toEqual([0, 0, 1, 0.6]);
+    // Only what is in front of the column and, seen from the eye, over it: never over the card.
+    const column = new Matrix4().makeTranslation(0.3, 1.2, -0.6);
+    punch.setColumn(column, 0.08, 0.25);
+    const toColumn = material.uniforms.uColumn?.value as Matrix4;
+    expect(new Vector3(0.3, 1.2, -0.6).applyMatrix4(toColumn).toArray()).toEqual([0, 0, 0]);
+    expect(material.uniforms.uSize?.value.toArray()).toEqual([0.08, 0.25]);
+    expect(material.fragmentShader).toContain('cameraPosition');
+    expect(material.fragmentShader).toContain('abs(seen.x) > uSize.x');
     punch.dispose();
   });
 

@@ -6,8 +6,8 @@ import {
   Quaternion,
   ShaderMaterial,
   SphereGeometry,
+  Vector2,
   Vector3,
-  Vector4,
 } from 'three';
 import { ON_TOP_ORDER } from '../on-top';
 import { onTopGroup } from './layering';
@@ -18,8 +18,9 @@ import { onTopGroup } from './layering';
 // widgets and write a colour of (0, 0, 0, 0) with no blending and no depth test. In immersive-ar
 // the compositor shows passthrough wherever the framebuffer's alpha is 0, so the real finger shows
 // through the hole. Only the part of the finger in front of the column's plane punches (behind it
-// the widget is nearer, and drawn), and a hand's capsules show only while its fingertip is near a
-// touch target (dock.ts). In the desktop preview the hole shows the page behind the canvas.
+// the widget is nearer, and drawn), and only where the eye sees it over the column: over the step
+// card beside it, or anything else, the finger punches nothing. A hand's capsules show only while
+// its fingertip is near a touch target (dock.ts).
 
 /** Capsule radius (m). */
 export const FINGERTIP_RADIUS = 0.009;
@@ -41,11 +42,21 @@ void main() {
 }
 `;
 
+// In the column's frame (origin at its top centre, x right, y up, z toward the eye): a fragment
+// behind the plane is hidden by the widget; one in front punches only if the eye's ray through it
+// meets the plane inside the column, x within ±uSize.x and y from -uSize.y to 0.
 const FRAGMENT = /* glsl */ `
-uniform vec4 uPlane;
+uniform mat4 uColumn;
+uniform vec2 uSize;
 varying vec3 vWorld;
 void main() {
-  if (dot(uPlane.xyz, vWorld) + uPlane.w < 0.0) discard;
+  vec3 p = (uColumn * vec4(vWorld, 1.0)).xyz;
+  if (p.z < 0.0) discard;
+  vec3 eye = (uColumn * vec4(cameraPosition, 1.0)).xyz;
+  vec3 ray = p - eye;
+  if (ray.z >= 0.0) discard;
+  vec2 seen = eye.xy - ray.xy * (eye.z / ray.z);
+  if (abs(seen.x) > uSize.x || seen.y > 0.0 || seen.y < -uSize.y) discard;
   gl_FragColor = vec4(0.0);
 }
 `;
@@ -58,10 +69,12 @@ const q = new Quaternion();
 
 export class FingertipOccluder {
   readonly object = onTopGroup();
-  /** The column's plane in world space (normal toward the eye, offset); only its front punches. */
-  private readonly plane = new Vector4(0, 0, 1, 0);
+  /** World to the column's frame; only the finger in front of the column, over it, punches. */
+  private readonly columnFromWorld = new Matrix4();
+  /** The column's half width and height (m). */
+  private readonly size = new Vector2();
   readonly material = new ShaderMaterial({
-    uniforms: { uPlane: { value: this.plane } },
+    uniforms: { uColumn: { value: this.columnFromWorld }, uSize: { value: this.size } },
     vertexShader: VERTEX,
     fragmentShader: FRAGMENT,
     blending: NoBlending,
@@ -92,9 +105,13 @@ export class FingertipOccluder {
     this.hide(1);
   }
 
-  /** The plane through `point` facing `normal` (unit, world space): the column's surface. */
-  setPlane(normal: Vector3, point: Vector3): void {
-    this.plane.set(normal.x, normal.y, normal.z, -normal.dot(point));
+  /**
+   * The column the finger punches through: its world matrix (origin at its top centre, x right,
+   * y up, z toward the eye), half its width and its height (m).
+   */
+  setColumn(columnWorld: Matrix4, halfWidth: number, height: number): void {
+    this.columnFromWorld.copy(columnWorld).invert();
+    this.size.set(halfWidth, height);
   }
 
   /**
