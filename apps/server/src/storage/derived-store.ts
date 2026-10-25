@@ -1,6 +1,11 @@
 import { join } from 'node:path';
-import { type CompileManifest, CompileManifestSchema, DERIVED_FILE_NAME } from '@clio/protocol';
-import { isSafeId } from '../ids';
+import {
+  type CompileManifest,
+  CompileManifestSchema,
+  DERIVED_FILE_NAME,
+  ROOM_SCAN_MEDIA,
+} from '@clio/protocol';
+import { isSafeId, isSafeMediaName } from '../ids';
 import type { Logger } from '../log';
 import { DocReader, type OpenedFile, openFile } from './files';
 
@@ -9,7 +14,10 @@ import { DocReader, type OpenedFile, openFile } from './files';
 // server only reads them: a compile replaces them, and the whole directory can be deleted and
 // rebuilt from the raw episode.
 
-/** Raw episode files a compile reads. Its manifest lists the ones that existed, with their sizes. */
+/**
+ * Raw episode files a compile reads. Its manifest lists the ones that existed, with their sizes,
+ * and the room scans in media/ (ROOM_SCAN_MEDIA) beside them.
+ */
 export const COMPILE_INPUTS = [
   'meta.json',
   'frames.ndjson',
@@ -20,15 +28,41 @@ export const COMPILE_INPUTS = [
   'batches.json',
 ] as const;
 
+/** Where a compile's media inputs live in the episode: its room scans, as "media/room-scan-1.glb". */
+const MEDIA = 'media/';
+
+/**
+ * The episode files `isStale` needs the sizes of, as paths inside the episode: the compile inputs,
+ * the media files `manifest` lists, and every room scan among `media` (the names in media/), read
+ * by that compile or not. Keyframes are not compile inputs.
+ */
+export function inputsToCheck(manifest: CompileManifest, media: readonly string[]): string[] {
+  const names = new Set<string>(COMPILE_INPUTS);
+  for (const { name } of manifest.inputs) {
+    // One this server cannot stat stays unmeasured, so it counts as vanished.
+    if (name.startsWith(MEDIA) && isSafeMediaName(name.slice(MEDIA.length))) names.add(name);
+  }
+  for (const name of media) if (ROOM_SCAN_MEDIA.test(name)) names.add(MEDIA + name);
+  return [...names];
+}
+
 /**
  * Pure: whether the raw files changed since `manifest` was compiled, given the current `sizes` of
- * the compile inputs that exist. Cheap on purpose: a file that appeared, vanished or changed size
- * makes it stale. Raw files only grow, so this catches every late batch; a rewrite that keeps the
+ * the files `inputsToCheck` names that exist. Cheap on purpose: a compile input or a listed media
+ * file that appeared, vanished or changed size makes it stale, and so does a room scan the compile
+ * did not read. Raw files only grow, so this catches every late batch; a rewrite that keeps the
  * size (a second finish with same-length values) needs the manifest's hashes to notice.
  */
 export function isStale(manifest: CompileManifest, sizes: ReadonlyMap<string, number>): boolean {
   const listed = new Map(manifest.inputs.map((input) => [input.name, input.bytes]));
-  return COMPILE_INPUTS.some((name) => listed.get(name) !== sizes.get(name));
+  if (COMPILE_INPUTS.some((name) => listed.get(name) !== sizes.get(name))) return true;
+  for (const [name, bytes] of listed) {
+    if (name.startsWith(MEDIA) && sizes.get(name) !== bytes) return true;
+  }
+  return [...sizes.keys()].some(
+    (name) =>
+      name.startsWith(MEDIA) && ROOM_SCAN_MEDIA.test(name.slice(MEDIA.length)) && !listed.has(name),
+  );
 }
 
 /**

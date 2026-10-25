@@ -3,8 +3,8 @@
 //   node fake-clio-cli.mjs [--log FILE] [--control DIR] [--ignore-term]
 //     compile <episode dir> --out <derived dir> [--fps N] [--retarget FILE]... [--if-stale] --json
 //
-// It writes <out>/<id>/manifest.json (a valid CompileManifest listing the raw inputs with sizes and
-// hashes) and <out>/<id>/tracks.json, then prints the real CLI's --json line. With --if-stale it
+// It writes <out>/<id>/manifest.json (a valid CompileManifest listing the raw inputs and the room
+// scans in media/ with sizes and hashes) and <out>/<id>/tracks.json, then prints the real CLI's --json line. With --if-stale it
 // skips an episode whose manifest lists the same inputs and prints `"skipped": true`. --log appends
 // one JSON line when a run starts and one when it ends. Files in the --control dir steer a run,
 // named by its episode id: `gate` makes every run wait until it exists; `<id>.fail` is printed to
@@ -16,6 +16,7 @@ import {
   appendFileSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
   writeFileSync,
@@ -31,6 +32,7 @@ const INPUTS = [
   'finish.json',
   'batches.json',
 ];
+const ROOM_SCAN = /^room-scan-[0-9]{1,4}\.glb$/;
 
 const argv = process.argv.slice(2);
 const split = argv.indexOf('compile');
@@ -111,11 +113,15 @@ function compile(dir, id, inputs) {
 }
 
 function inputsOf(dir) {
-  return INPUTS.filter((name) => existsSync(join(dir, name))).map((name) => {
-    const bytes = readFileSync(join(dir, name));
-    const sha256 = createHash('sha256').update(bytes).digest('hex');
-    return { name, bytes: bytes.length, sha256 };
-  });
+  const media = existsSync(join(dir, 'media')) ? readdirSync(join(dir, 'media')) : [];
+  const scans = media.filter((name) => ROOM_SCAN.test(name)).map((name) => `media/${name}`);
+  return [...INPUTS, ...scans.sort()]
+    .filter((name) => existsSync(join(dir, name)))
+    .map((name) => {
+      const bytes = readFileSync(join(dir, name));
+      const sha256 = createHash('sha256').update(bytes).digest('hex');
+      return { name, bytes: bytes.length, sha256 };
+    });
 }
 
 function upToDate(out, inputs) {

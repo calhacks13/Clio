@@ -16,7 +16,7 @@ import type { z } from 'zod';
 import type { ServerDeps } from '../deps';
 import { ApiError, invalidName, notFound, payloadTooLarge } from '../errors';
 import { isSafeMediaName } from '../ids';
-import { COMPILE_INPUTS, isStale } from '../storage/derived-store';
+import { inputsToCheck, isStale } from '../storage/derived-store';
 import { NDJSON_FILES, type NdjsonFile } from '../storage/episode-store';
 import { limitBody, parseBody, safeId } from './request';
 
@@ -45,7 +45,8 @@ export function episodeRoutes({ episodes, derived, compiler, limits }: ServerDep
     // Compiled, but by a pipeline whose manifest this server cannot read, or damaged: recompile it.
     if (read.status === 'invalid') return { state: 'stale', manifest, error };
     if (manifest) {
-      const stale = isStale(manifest, await episodes.fileSizes(id, COMPILE_INPUTS));
+      const inputs = inputsToCheck(manifest, await episodes.listMedia(id));
+      const stale = isStale(manifest, await episodes.fileSizes(id, inputs));
       return { state: stale ? 'stale' : 'ok', manifest, error };
     }
     return { state: error === null ? 'none' : 'failed', manifest, error };
@@ -85,7 +86,8 @@ export function episodeRoutes({ episodes, derived, compiler, limits }: ServerDep
     const result = await episodes.writeMedia(id, name, c.req.raw.body, limits.mediaBytes);
     if (result.status === 'not_found') throw missing(id);
     if (result.status === 'too_large') throw payloadTooLarge(limits.mediaBytes);
-    // No compile: media is not a compile input (COMPILE_INPUTS).
+    // No compile: the headset uploads room scans (compile inputs) before the finish, and the
+    // finish's compile reads them. Other media is not a compile input.
     return c.json({ ok: true, name, bytes: result.bytes });
   });
 
