@@ -17,6 +17,7 @@ from clio_tracker.track import FrameHeader, Modes, ObjectSet, StreamTracker
 from conftest import (
     Clock,
     FakeIdentifier,
+    FakeSegmenter,
     ManualExecutor,
     Thing,
     appearance,
@@ -363,3 +364,58 @@ def test_the_session_carries_on_without_the_segmenter_once_its_executor_is_shut_
     assert answers[0] == answers[1] and answers[0][-1]["found"]
     assert sessions[0].refresher is None
     assert sum("fake-segmenter" in r.message for r in caplog.records) == 1
+
+
+THREE = {"a": at(100), "b": at(400), "c": at(700)}
+
+
+def several(vision, segmenter, ids: str):
+    """A session over things a, b and c (those in `ids` asked about), jev answering at once and
+    the segmenter's calls run after every frame."""
+    clock, jev, executor = Clock(), FakeIdentifier(), ManualExecutor(run_now=True)
+    segmenting = ManualExecutor()
+    refresher = Refresher(segmenter, segmenting, clock=clock)
+    session = TrackerSession(
+        vision, jev, executor, SessionSettings(), clock, segmenter=segmenter, refresher=refresher
+    )
+    queries = [Query(k, f"thing {k}", f"thing {k}") for k in ids]
+    things = [Thing(box, appearance(10 + i)) for i, box in enumerate(THREE.values())]
+    image = FrameImage(b"jpeg", "image/jpeg", texture())
+
+    def frame() -> None:
+        clock.t += 1 / 15
+        vision.scenes.append(list(things))
+        session.locate(image, queries)
+        segmenting.run_all()
+
+    jev.answers.append({k: (0.9, norm_box(THREE[k])) for k in ids})
+    return session, frame
+
+
+def test_three_objects_placed_by_one_jev_answer_each_get_a_keyframe(vision, segmenter):
+    session, frame = several(vision, segmenter, "abc")
+    for _ in range(6):
+        frame()
+    assert [call[2][0] for call in segmenter.calls[:3]] == pytest.approx([100, 400, 700])
+    assert [session._objects[k].follower.reference_seq for k in "abc"] == [1, 1, 1]
+
+
+def test_an_object_the_segmenter_keeps_failing_on_does_not_starve_another(vision, segmenter):
+    misses = {100.0: 1000, 400.0: 1}  # nothing in a's box, ever; nothing in b's the first time
+
+    def picky(enc, box):
+        crop = FakeSegmenter.mask_in_box(segmenter, enc, box)
+        x0 = float(box[0])
+        if misses.get(x0, 0):
+            misses[x0] -= 1
+            return None
+        return crop
+
+    segmenter.mask_in_box = picky
+    session, frame = several(vision, segmenter, "ab")
+    for _ in range(14):  # under a second: jev is asked once
+        frame()
+    asked = [call[2][0] for call in segmenter.calls]
+    assert asked[:2] == pytest.approx([100, 400])  # the two keyframes, both empty
+    assert asked.count(400.0) == 2  # then b's turn came, between a's
+    assert session._objects["b"].follower.active and not session._objects["a"].follower.active

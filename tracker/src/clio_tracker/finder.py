@@ -8,7 +8,8 @@ becomes a visual prompt and the candidate that fills it is outlined.
 With a segmenter (segment.py), the frame also goes through its image encoder while jev answers,
 in the same thread, and each box jev found is cut out by the segmenter instead: its mask is the
 outline, jev's box the box. A box the segmenter finds nothing in is outlined by YOLOE, as
-without one. There is nothing to follow here, so no region follower.
+without one, and so is every box while the segmenter fails (logged once, as it starts failing,
+and once as it answers again). There is nothing to follow here, so no region follower.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from time import perf_counter
 
 import numpy as np
 
-from .geometry import mask_shape
+from .geometry import Letterbox, Shape, mask_shape
 from .identify import FrameImage, Identification, Identifier, Query
 from .images import decode_frame
 from .segment import SegEncoding, Segmenter
@@ -64,6 +65,8 @@ class Finder:
         self.segmenter = segmenter
         self.encoder = ThreadPoolExecutor(max_workers=1, thread_name_prefix="encode")
         self.busy = threading.Lock()
+        self._down = False  # the segmenter failed, and has not answered since
+        self._failed = False  # it failed on this request
 
     @property
     def model(self) -> str:
@@ -82,6 +85,7 @@ class Finder:
     def _locate(self, mime_type: str, data: str, queries: list[Query]) -> tuple[dict, Timings]:
         timings = Timings()
         started = perf_counter()
+        self._failed = False
         frame = decode_frame(mime_type, data)  # checks the image; 422 when it can't be used
         rgb = np.asarray(frame.image)
         # The identifier gets the frame as sent and fits it for jev itself; its boxes come back in
@@ -103,6 +107,10 @@ class Finder:
         ]
         timings.outline_ms = _ms(outlining)
         timings.total_ms = _ms(started)
+        if seg is not None and self._down and not self._failed:
+            assert self.segmenter is not None
+            self._down = False
+            log.info("%s answers again", self.segmenter.name)
         found = sum(d["found"] for d in detections)
         log.info(
             "locate: %d of %d found: decode %.0f ms, %s %.0f ms, encode %.0f ms, outline %.0f ms",
@@ -119,7 +127,12 @@ class Finder:
     def _encode(self, rgb: np.ndarray) -> tuple[Encoding, SegEncoding | None, float]:
         started = perf_counter()
         enc = self.vision.encode(rgb)
-        seg = self.segmenter.encode(rgb) if self.segmenter is not None else None
+        seg = None
+        if self.segmenter is not None:
+            try:
+                seg = self.segmenter.encode(rgb)
+            except Exception as error:  # YOLOE outlines this request's boxes
+                self._segmenter_failed(error)
         return enc, seg, _ms(started)
 
     def _detection(
@@ -133,19 +146,11 @@ class Finder:
         lb = enc.letterbox
         size = np.array([lb.width, lb.height, lb.width, lb.height], dtype=np.float32)
         jev_box = np.asarray(answer.box, dtype=np.float32) * size
-        if seg is not None:
-            assert self.segmenter is not None
-            crop = self.segmenter.mask_in_box(seg, jev_box)
-            if crop is not None:
-                shape = mask_shape(
-                    crop.logits > 0, crop.origin, crop.scale, lb.width, lb.height, jev_box
-                )
-                if shape.outline is not None:
-                    return {"id": query.id, "found": True, "point": shape.point,
-                            "box": [round(float(v), 4) for v in answer.box],
-                            "outline": shape.outline, "confidence": present}  # fmt: skip
-            name = self.segmenter.name
-            log.info("%s: %s finds nothing in jev's box; YOLOE outlines it", query.id, name)
+        cut = self._cut(query, seg, jev_box, lb) if seg is not None else None
+        if cut is not None:
+            return {"id": query.id, "found": True, "point": cut.point,
+                    "box": [round(float(v), 4) for v in answer.box], "outline": cut.outline,
+                    "confidence": present}  # fmt: skip
         outlined = self.vision.outline_in_box(enc, jev_box)
         if outlined is None or outlined[1].outline is None:
             # YOLOE has nothing that fills jev's box: keep the box, Clio draws corner brackets.
@@ -162,6 +167,31 @@ class Finder:
             "outline": shape.outline,
             "confidence": present,
         }
+
+    def _cut(self, query: Query, seg: SegEncoding, box: np.ndarray, lb: Letterbox) -> Shape | None:
+        """The segmenter's outline of jev's box; None when YOLOE is to outline it instead."""
+        assert self.segmenter is not None
+        try:
+            crop = self.segmenter.mask_in_box(seg, box)
+        except Exception as error:
+            self._segmenter_failed(error)
+            return None
+        shape = None
+        if crop is not None:
+            shape = mask_shape(crop.logits > 0, crop.origin, crop.scale, lb.width, lb.height, box)
+        if shape is None or shape.outline is None:
+            name = self.segmenter.name
+            log.info("%s: %s finds nothing in jev's box; YOLOE outlines it", query.id, name)
+            return None
+        return shape
+
+    def _segmenter_failed(self, error: Exception) -> None:
+        """The segmenter raised: YOLOE outlines instead, and the outage is logged as it starts."""
+        assert self.segmenter is not None
+        self._failed = True
+        if not self._down:
+            self._down = True
+            log.warning("%s: %r. YOLOE outlines jev's boxes meanwhile.", self.segmenter.name, error)
 
     def close(self) -> None:
         self.encoder.shutdown(wait=True)

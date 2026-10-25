@@ -181,11 +181,10 @@ class StreamTracker:
         segmenter: Segmenter | None = None,
         refresher: Refresher | None = None,
     ):
-        if (segmenter is None) != (refresher is None):
-            raise ValueError("A segmenter is called through a Refresher: pass both, or neither.")
+        if (refresher.segmenter if refresher is not None else None) is not segmenter:
+            raise ValueError("Pass a segmenter with a Refresher of it, or neither.")
         self.vision = vision
         self.params = params or TrackerParams()
-        self.segmenter = segmenter
         self.refresher = refresher  # None without a segmenter, or once its executor has stopped
         # The stream's one follower, handed to each tracker it makes.
         self.follower = RegionFollower(self.params.follow) if refresher is not None else None
@@ -300,7 +299,7 @@ class StreamTracker:
         carry = self.camera.since(seq)
         if target.part or self._is_part(seq, box, carry, enc, appearance):
             if self.part is None:
-                self.part = self._part_tracker(target.name)
+                self.part = PartTracker("target", target.name, self.params, follower=self.follower)
                 self._clear_follower()  # it followed the whole object
             change = self.part.identified(seq, self.t, True, box, enc, self.vision, carry)
         else:
@@ -319,11 +318,6 @@ class StreamTracker:
             newest = next(reversed(self.frames))
             if self._segmenter(Refresher.submit, "target", seq, rgb, box, True):
                 self._keyframe = (seq, newest)
-
-    def _part_tracker(self, name: str | None) -> PartTracker:
-        if self.follower is None:
-            return PartTracker("target", name, self.params)  # as before there was a segmenter
-        return PartTracker("target", name, self.params, follower=self.follower)
 
     def _clear_follower(self) -> None:
         """Another tracker takes the follower over, or none: the mask it carried is not theirs.

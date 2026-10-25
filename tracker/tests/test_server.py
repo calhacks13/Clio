@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import struct
 import threading
 
@@ -277,3 +278,26 @@ def test_without_a_session_yoloe_outlines_what_the_segmenter_cannot(outlined, mo
     (d,) = client.post("/locate", json=request(session=None)).json()["detections"]
     assert d["found"] and d["box"] == pytest.approx(list(norm_box(BOX)), abs=1e-3)
     assert bounds(d["outline"]) == pytest.approx(list(norm_box(BOX)), abs=1e-3)
+
+
+@pytest.mark.parametrize("broken", ["encode", "mask_in_box"])
+def test_without_a_session_yoloe_outlines_while_the_segmenter_fails(outlined, caplog, broken):
+    client, segmenter, _ = outlined
+
+    def fail(*args):
+        raise RuntimeError("MPS backend out of memory")
+
+    setattr(segmenter, broken, fail)
+    with caplog.at_level(logging.INFO, logger="clio_tracker"):
+        for _ in range(2):
+            r = client.post("/locate", json=request(session=None))
+            assert r.status_code == 200
+            (d,) = r.json()["detections"]
+            assert d["found"] and d["box"] == pytest.approx(list(norm_box(BOX)), abs=1e-3)
+            assert bounds(d["outline"]) == pytest.approx(list(norm_box(BOX)), abs=1e-3)  # YOLOE's
+        delattr(segmenter, broken)  # it answers again
+        (d,) = client.post("/locate", json=request(session=None)).json()["detections"]
+    assert bounds(d["outline"]) == pytest.approx(list(norm_box(LOOSE)), abs=1 / 960)
+    messages = [r.message for r in caplog.records]
+    assert sum("out of memory" in m for m in messages) == 1  # once for the outage
+    assert sum("answers again" in m for m in messages) == 1

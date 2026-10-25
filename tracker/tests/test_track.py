@@ -597,6 +597,69 @@ def test_clear_drops_the_followers_mask(segmented):
     assert seg_step(s, 2)["state"] == "idle"
 
 
+FRIDGE = (100.0, 300.0, 300.0, 500.0)
+DOOR = (120.0, 320.0, 170.0, 370.0)  # one part of it
+
+
+def part_target(seq: int, box, part: bool = True) -> str:
+    x0, y0, x1, y1 = box
+    return json.dumps(
+        {
+            "type": "target",
+            "seq": seq,
+            "box": [x0 / 960, y0 / 720, x1 / 960, y1 / 720],
+            "name": "door of the fridge",
+            "part": part,
+        }
+    )
+
+
+def follow_the_door(s) -> dict:
+    """A part target on frame 0, its keyframe cut, and five frames followed."""
+    s.vision.scenes.extend([[Thing(FRIDGE, A)]] * 20)
+    seg_step(s, 0)
+    s.tracker.command(parse_command(part_target(0, DOOR)))
+    s.executor.run_all()
+    for seq in range(1, 6):
+        answer = seg_step(s, seq)
+    return answer
+
+
+def test_a_part_target_gets_the_streams_follower_and_its_keyframe_outlines_the_part(segmented):
+    s = segmented
+    answer = follow_the_door(s)
+    part = s.tracker.part
+    assert part is not None and part.follower is s.tracker.follower
+    assert part.parent is not None and part.parent.follower is None  # the whole has none
+    ((_, _, box),) = s.segmenter.calls
+    assert box == pytest.approx(DOOR)
+    assert s.tracker.follower.reference_seq == 0
+    assert answer["found"] and answer["state"] == "tracking"
+    assert bounds(answer["outline"]) == pytest.approx(list(norm_box(DOOR)), abs=2 / 960)
+
+
+def test_the_whole_object_again_takes_the_follower_cleared_and_its_keyframe_outlines_it(
+    segmented,
+):
+    s = segmented
+    follow_the_door(s)
+    parent = s.tracker.part.parent
+    s.tracker.command(parse_command(part_target(5, FRIDGE, part=False)))
+    assert s.tracker.part is None and s.tracker.object is parent
+    assert parent.follower is s.tracker.follower
+    assert not s.tracker.follower.active  # the door's mask is not the fridge's
+    # The fridge's keyframe is still being cut: YOLOE's outline of the fridge meanwhile.
+    answer = seg_step(s, 6)
+    assert bounds(answer["outline"]) == pytest.approx(list(norm_box(FRIDGE)), abs=2 / 960)
+    s.executor.run_all()
+    for seq in range(7, 13):
+        answer = seg_step(s, seq)
+    assert s.tracker.follower.reference_seq == 5
+    assert [call[2] for call in s.segmenter.calls] == [pytest.approx(DOOR), pytest.approx(FRIDGE)]
+    assert answer["state"] == "tracking"
+    assert bounds(answer["outline"]) == pytest.approx(list(norm_box(FRIDGE)), abs=2 / 960)
+
+
 def test_a_refresh_of_the_old_object_never_beats_jevs_keyframe(segmented):
     s = segmented
     s.vision.scenes.extend([[Thing(CUP, A), Thing(OTHER, C)]] * 20)

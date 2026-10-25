@@ -15,9 +15,10 @@ objects mode (TRACK.md) has one of its own and steps it on every frame it stream
 With a segmenter (segment.py), each object's outline is its mask. The frame jev looks at is
 kept whole too, so jev's box is cut out of that very frame as a keyframe when the answer comes;
 between answers a tracker that doubts the mask it has asks for its object to be cut out of the
-newest frame again, one object at a time. Each object's region follower (follow.py), made with
-its tracker and kept as long as it, carries the latest mask to every frame. The segmenter runs
-off the frame thread (refresh.py), and a mask is applied on the first frame after it is ready.
+newest frame again, one object at a time and the objects in turn. Each object's region follower
+(follow.py), made with its tracker and kept as long as it, carries the latest mask to every
+frame. The segmenter runs off the frame thread (refresh.py), and a mask is applied on the first
+frame after it is ready.
 A refresh asked before jev's newest box for the object arrived, and a keyframe older than that
 box, are dropped when they come back: they cut out what jev may since have replaced.
 """
@@ -86,12 +87,11 @@ class TrackerSession:
         segmenter: Segmenter | None = None,
         refresher: Refresher | None = None,
     ):
-        if (segmenter is None) != (refresher is None):
-            raise ValueError("A segmenter is called through a Refresher: pass both, or neither.")
+        if (refresher.segmenter if refresher is not None else None) is not segmenter:
+            raise ValueError("Pass a segmenter with a Refresher of it, or neither.")
         self.vision = vision
         self.identifier = identifier
         self.settings = settings or SessionSettings()
-        self.segmenter = segmenter
         self.refresher = refresher  # None without a segmenter, or once its executor has stopped
         self._executor = executor
         self._clock = clock
@@ -105,6 +105,7 @@ class TrackerSession:
         self._in_flight: dict[str, int] = {}
         self._frames: dict[int, tuple[Encoding, np.ndarray]] = {}  # frames jev is looking at
         self._keyframes: dict[str, tuple[int, int]] = {}  # jev's frame, and the newest then
+        self._refreshed_last: str | None = None  # the object the last refresh was for
         self._done: queue.SimpleQueue[_Ask] = queue.SimpleQueue()
         self._failures = 0  # failed calls since jev last answered
         self._wait_s = 0.0  # and the wait they set before the next call
@@ -160,17 +161,24 @@ class TrackerSession:
     ) -> list[Sighting]:
         """The steps with the segmenter: the masks it has cut since the last frame first, then
         each tracker's step, which carries its object's latest mask to this frame, then a
-        refresh for the first object whose tracker doubts the mask it has."""
+        refresh for one object whose tracker doubts the mask it has: the objects take turns,
+        from the one after the object that had the last refresh, so one the segmenter keeps
+        finding nothing in doesn't hold the others up."""
         gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
         for r in self._segmenter(Refresher.drain) or []:
             tr = self._objects.get(r.key)
             if tr is not None and not outdated(r, self._keyframes.get(r.key)):
                 tr.refreshed(r.seq, r.crop)
         sightings = [tr.step(enc, seq, now, self.vision, camera, gray) for tr in trackers]
-        for q, tr in zip(queries, trackers, strict=True):
+        pairs = list(zip(queries, trackers, strict=True))
+        turn = next((i + 1 for i, (q, _) in enumerate(pairs) if q.id == self._refreshed_last), 0)
+        for q, tr in pairs[turn:] + pairs[:turn]:
             box = tr.refresh_box if tr.wants_refresh else None
-            if box is not None and self._segmenter(Refresher.submit, q.id, seq, rgb, box):
-                break
+            if box is None:
+                continue
+            if self._segmenter(Refresher.submit, q.id, seq, rgb, box):
+                self._refreshed_last = q.id
+            break  # taken or not, the Refresher takes no other refresh on this frame
         return sightings
 
     def _segmenter(self, call: Callable, *args) -> bool | list[Refreshed] | None:

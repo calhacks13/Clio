@@ -211,6 +211,77 @@ def test_non_keyframe_does_not_jump_a_pending_keyframe():
     assert [r.seq for r in refresher.drain()] == [2]
 
 
+def test_keyframes_for_other_keys_all_wait_and_go_oldest_first():
+    refresher, segmenter, executor, _ = make()
+    refresher.submit("a", 1, frame(), BOX)
+    for i, key in enumerate("xyz"):  # one jev answer about three objects
+        assert refresher.submit(key, 2, frame(), BOX + i, keyframe=True)
+
+    done = []
+    for _ in range(4):
+        executor.run_all()
+        done += refresher.drain()
+
+    assert [(r.key, r.keyframe) for r in done] == [
+        ("a", False),
+        ("x", True),
+        ("y", True),
+        ("z", True),
+    ]
+    assert [call[2] for call in segmenter.calls] == [tuple(BOX + i) for i in (0, 0, 1, 2)]
+
+
+def test_a_newer_keyframe_replaces_its_keys_pending_one_in_its_place():
+    refresher, segmenter, executor, _ = make()
+    refresher.submit("a", 1, frame(), BOX)
+    refresher.submit("x", 2, frame(), BOX, keyframe=True)
+    refresher.submit("y", 3, frame(), BOX, keyframe=True)
+    refresher.submit("x", 4, frame(), BOX, keyframe=True)  # x's newer view
+
+    done = []
+    for _ in range(4):
+        executor.run_all()
+        done += refresher.drain()
+
+    assert [(r.key, r.seq) for r in done] == [("a", 1), ("x", 4), ("y", 3)]
+    assert len(segmenter.calls) == 3  # x on frame 2 never ran
+
+
+def test_non_keyframe_is_refused_while_any_keyframe_waits():
+    refresher, _, executor, clock = make()
+    refresher.submit("a", 1, frame(), BOX)
+    refresher.submit("x", 2, frame(), BOX, keyframe=True)
+    refresher.submit("y", 2, frame(), BOX, keyframe=True)
+    executor.run_all()
+    refresher.drain()  # x goes
+    executor.run_all()  # x is done, y still waits
+    clock.t += 1.0
+
+    assert not refresher.submit("a", 3, frame(), BOX)
+    refresher.drain()  # y goes
+    executor.run_all()
+    refresher.drain()
+    clock.t += 1.0
+    assert refresher.submit("a", 4, frame(), BOX)
+
+
+def test_a_keyframe_when_idle_goes_after_those_already_waiting():
+    refresher, segmenter, executor, _ = make()
+    refresher.submit("a", 1, frame(), BOX)
+    refresher.submit("x", 2, frame(), BOX + 1, keyframe=True)
+    executor.run_all()  # nothing in flight now, but x waits for the next drain
+
+    assert refresher.submit("y", 3, frame(), BOX + 2, keyframe=True)
+    assert refresher.in_flight == 1  # x went at once, y waits behind it
+    done = refresher.drain()
+    for _ in range(2):
+        executor.run_all()
+        done += refresher.drain()
+
+    assert [r.key for r in done] == ["a", "x", "y"]
+    assert [call[2] for call in segmenter.calls] == [tuple(BOX + i) for i in (0, 1, 2)]
+
+
 def test_keyframe_when_idle_goes_at_once():
     refresher, segmenter, executor, _ = make()
     assert refresher.submit("t", 1, frame(), BOX, keyframe=True)

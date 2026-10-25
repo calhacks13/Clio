@@ -5,10 +5,11 @@ SAM 2.1 Small takes about 120 ms a frame on this Mac with the cache cleared (see
 a box to the executor and returns at once; `drain`, once per frame, returns what has finished.
 At most one call is in flight, and calls start at least `min_interval_s` apart: a segmenter that
 is behind only falls further behind when asked more often. A keyframe (jev has just named the
-object, so this box is worth cutting out now) ignores the interval; if a call is in flight it
-waits as `pending` and goes at the next `drain` after that call, a newer keyframe replacing an
-older one. A segmenter error is logged once per outage and its result dropped; the caller goes on
-with the outline it has.
+object, so this box is worth cutting out now) ignores the interval and is never refused. While a
+call is in flight keyframes wait, one per object (one jev answer may name several), a newer one
+for an object replacing its older one in its place; the oldest waiting goes at the first `drain`
+with nothing in flight, and no refresh is taken while any waits. A segmenter error is logged once
+per outage and its result dropped; the caller goes on with the outline it has.
 
 `submit` and `drain` are for one thread, the frame thread. Only the executor's worker runs the
 segmenter.
@@ -21,6 +22,7 @@ import math
 import queue
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import Executor
 from dataclasses import dataclass
@@ -67,7 +69,7 @@ class Refresher:
         self._lock = threading.Lock()  # the worker and the frame thread share these two
         self._in_flight = 0
         self._down = False
-        self._pending: _Job | None = None
+        self._pending: OrderedDict[str, _Job] = OrderedDict()  # keyframes waiting, by key
         self._last_submit = -math.inf
         self._done: queue.SimpleQueue[Refreshed] = queue.SimpleQueue()
 
@@ -79,37 +81,40 @@ class Refresher:
         self, key: str, seq: int, rgb: np.ndarray, box: np.ndarray, keyframe: bool = False
     ) -> bool:
         """Ask for `box` to be cut out of `rgb`. False, and nothing done, when a call is in flight
-        or another waits as pending, or when the last call started under `min_interval_s` ago;
-        a keyframe is never refused: it goes now, or waits for the call in flight."""
+        or a keyframe waits, or when the last call started under `min_interval_s` ago. A
+        keyframe is never refused: it waits behind the keyframes already waiting (replacing one
+        for the same key), and the oldest goes now if nothing is in flight."""
         now = self._clock()
         if not keyframe and (
-            self._in_flight
-            or self._pending is not None
-            or now - self._last_submit < self.min_interval_s
+            self._in_flight or self._pending or now - self._last_submit < self.min_interval_s
         ):
             return False
         # The caller reuses its frame buffer and box while the segmenter works.
         job = _Job(key, seq, np.ascontiguousarray(rgb).copy(), np.array(box, np.float32), keyframe)
-        if self._in_flight:
-            self._pending = job
-        else:
-            self._pending = None
+        if not keyframe:
             self._start(job, now)
+            return True
+        self._pending[key] = job
+        self._next(now)
         return True
 
     def drain(self) -> list[Refreshed]:
-        """What has finished since the last drain, oldest first. Then the pending keyframe goes,
-        if nothing is in flight any more."""
+        """What has finished since the last drain, oldest first. Then the oldest waiting
+        keyframe goes, if nothing is in flight any more."""
         finished = []
         while True:
             try:
                 finished.append(self._done.get_nowait())
             except queue.Empty:
                 break
-        if self._pending is not None and not self._in_flight:
-            job, self._pending = self._pending, None
-            self._start(job, self._clock())
+        self._next(self._clock())
         return finished
+
+    def _next(self, now: float) -> None:
+        """Start the oldest waiting keyframe, if any, when nothing is in flight."""
+        if self._pending and not self._in_flight:
+            _, job = self._pending.popitem(last=False)
+            self._start(job, now)
 
     def _start(self, job: _Job, now: float) -> None:
         with self._lock:
