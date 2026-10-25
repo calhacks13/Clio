@@ -157,3 +157,23 @@ an optional target amount; the overlay model turns role, coach style and source 
 from this table; the outlines presenter reads that accent; the level band is cut from the
 tracker's mask in the renderer. The tracker (`tracker/`) sends geometry only and knows nothing
 about color.
+
+## Coach widgets
+
+The coach's widgets (a timer, a count, a checklist, the answers to its question, a value, a
+caution) are small cards beside the step card. [docs/widgets.md](../../docs/widgets.md) is their
+reference and `src/adapters/render/widgets/theme.ts` holds every value. What a headset designer
+needs from it:
+- They use the card's light theme: white `#FFFFFF` surfaces, ink `#0F1117`, secondary `#5B6472`
+  and inset `#F4F6FA`, navy-tinted hairlines, soft shadows, Inter and Inter Tight, sentence case,
+  no middle dot, no emoji. Nothing beside the card outweighs its instruction.
+- Signal colours mean state, never decoration, and only on dots, rings, strokes and small state
+  text: citrus `#FF7B3D` for what is live (a running timer, a lasting hazard), mint for done.
+  Guidance blue is absent: blue means AR guidance, and widgets are information.
+- They hang in a column beside the card, its top level with the card's top edge, and move with the
+  room-anchored card. They draw on top like it (no depth test, after everything else), so a raised
+  hand or the glow never hides them; a hole punch keeps the real finger visible on a card it
+  touches.
+- Never over an object when a side is clear: the column keeps the card's 6cm gap from every known
+  object, and when one is behind it, it fades out and back in on the card's other side, never
+  sweeping over the card.

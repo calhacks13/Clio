@@ -227,7 +227,8 @@ All arguments are flat, and every tool but `look_closer` answers in milliseconds
 (planning, re-planning) reports back as an `[app]` message; `look_closer` is non-blocking, so the
 voice keeps going until its answer arrives. Plan tools return `plan`, the recital, and tools that
 move the focus also return `now`, the briefing for the new focused step, so the coach never hears a
-step twice.
+step twice. Widget tools return `on_screen`, what the learner's widgets show
+([Widgets](#widgets)).
 
 | Tool                                                               | What it does                                             |
 | ------------------------------------------------------------------ | -------------------------------------------------------- |
@@ -241,6 +242,13 @@ step twice.
 | `show_demo(step_id?)`                                              | plays the ghost-hand demonstration                       |
 | `flag_mistake(kind, message)`                                      | a correction, shown and labeled                          |
 | `look_closer(question)`                                            | asks the smart model about a fresh frame (non-blocking)  |
+| `show_timer(seconds, label, object_id?)`                           | a countdown beside the step card; restarts by label      |
+| `show_progress(label, value, total, unit?)`                        | a count or amount toward a target, within the step       |
+| `show_checklist(title, items, done?)`                              | 2 to 5 things to gather or check, tickable by touch      |
+| `show_choices(question, options)`                                  | 2 or 3 answers to the question it asked, as buttons      |
+| `show_value(label, value, whole_lesson?)`                          | one number or setting to keep in view                    |
+| `show_caution(text)`                                               | a hazard that lasts, in one short sentence               |
+| `clear_widget(widget_id)`                                          | takes widgets off: an id, a kind, a label or `all`       |
 
 `update_step` with `status`:
 - `skipped`: the step isn't needed or can't be done;
@@ -260,6 +268,60 @@ step completed meanwhile stays done. A new `start_lesson` replaces a re-plan tha
 `complete_step` replaces `advance_step`. Its `step_id` is required, so the coach always says which
 step it means. Work the learner did off camera is a completion with evidence `heard`, not a skip.
 Errors list the valid ids so the coach can correct itself.
+
+### Widgets
+
+Beside the step card the voice can show small widgets; [widgets.md](widgets.md) is the reference
+for the catalogue, how they look and where they go. The app owns them. Each kind has one show tool,
+which upserts it: calling it again updates the widget rather than adding another, so a repeat after
+a barge-in or a compressed context never doubles one up (though a timer's repeat restarts it). A
+widget is named by its kind (`timer-2` for a second timer), the name `clear_widget` takes and the
+one results use.
+
+| Kind        | For                                                 | Closes                                                      |
+| ----------- | --------------------------------------------------- | ----------------------------------------------------------- |
+| `timer`     | a wait or a timed hold                              | 10 s after it runs out; it outlives steps and the lesson    |
+| `progress`  | a count or amount toward a target within the step   | 4 s after it reaches the target, or when the step changes   |
+| `checklist` | 2 to 5 things to gather or check within the step    | 4 s after all are ticked, or when the step changes          |
+| `choices`   | 2 or 3 answers to the question the voice just asked | 1.5 s after an answer, after 90 s, or when the step changes |
+| `value`     | one number or setting to keep in view               | when the step changes, or the lesson with `whole_lesson`    |
+| `caution`   | a hazard that lasts, after it was said out loud     | when the lesson ends                                        |
+
+The board keeps them to these rules:
+- **Scopes.** A step widget belongs to the focused step. It closes when another step takes focus
+  (a finished one 1.2 s later, so its done state is seen; meanwhile it takes no touch, stays if
+  its own step takes focus again, and a show call gives it to the new step afresh) or when its
+  step leaves the plan, and one shown with no step in focus belongs to the next step that takes
+  it. When the lesson ends, aborts or another starts, everything closes but a running timer:
+  nothing silently stops the learner's clock. A revision closes nothing by itself.
+- **Caps.** One of each kind, at most two timers and three widgets in all. A fourth replaces the
+  least recently changed widget that can go (a value, a progress, a checklist, a finished timer or
+  an answered question), and the result says which in `replaced`. A running timer, an open
+  question and the caution never go, so with only those up the call fails and asks the coach to
+  clear one. A third timer while two run fails the same way; one with the label of a timer on
+  screen restarts it.
+- **Narrations.** A timer running out (`Timer "Glue sets" is up (2:00).`), an answer touched
+  (`They touched "Phillips" for your question "…". Reply as if they had said it.`) and everything
+  ticked ask the voice to speak; a single tick or untick is context. They go through the gate like
+  any narration and are not perception, so a trusted coach hears them.
+- **Voice match.** When the learner says an answer instead of touching it, the card shows it as
+  chosen and the voice is not told, as it heard it. The match is conservative, because a wrong one
+  would show an answer they never gave and a missed one only leaves the buttons up: a final
+  transcript of at most 8 words that names exactly one option, by its words or as "the second
+  one" or "last", with no negation before it ("not the Phillips"). It must have begun after the
+  question went up: Gemini finalises the learner's words when the coach's turn ends, so the words
+  that led to the question arrive after it.
+- **Stuck nudges** wait for timers: a two-minute wait is not being stuck. One that comes while a
+  timer runs goes out 20 s after the last timer ends, if the learner is still on that step; a step
+  change or the lesson ending drops it.
+- **Text.** Everything the coach writes is cleaned before it shows: no emoji or banned symbols
+  (`→` reads "to"), only characters every bundled font has (a number or unit keeps its meaning:
+  `⅓` reads `1/3`, `≥` "at least"), and shouting in sentence case. A field with nothing readable
+  left fails with `<field> needs letters or numbers.`, and one that cleaning made longer than its
+  limit fails as a text too long does, so the coach writes it shorter.
+
+`?widgets=0` builds no board: the voice is given no widget tools, and its instructions leave out
+the widget item.
 
 ## Keeping the coach in sync
 
@@ -285,15 +347,22 @@ Errors list the valid ids so the coach can correct itself.
    resumption starts with the current plan.
 3. **Reconnects.** While the connection is down, `CoachSession` holds narrations (the Gemini
    adapter also queues any that reach it in the gap). When it's back, they go out in one message
-   that ends with "[app] Reconnected." plus the recital.
+   that ends with "[app] Reconnected." plus the recital and, while any widget shows, what is on
+   screen.
 4. **One gate for narrations.** Every message to the model interrupts what it's saying, so
    `CoachSession` holds narrations while the coach is speaking or calling tools, or the learner is
    talking, and merges what piled up into one message. A hold ends after 6 s at most while the
    connection is up. A briefing for a step that lost focus while it waited is dropped, and so is
    a briefing that arrives together with "Plan revised", whose recital already has the new step.
 5. **Cancelled calls.** When the learner barges in and Gemini cancels a tool call that already
-   changed the plan, the coach is told the call was applied, with the recital. A call that had
-   failed is not reported.
+   changed the plan or a widget, the coach is told the call was applied: with the recital for a
+   plan call, and with what is on screen for a widget call, so calling it again doesn't restart a
+   timer. A call that had failed is not reported.
+6. **What the widgets show.** Every widget tool's result carries `on_screen`, one line of at most
+   600 characters naming each widget with what it shows, e.g. `timer "Glue sets" 1:52 left;
+   checklist "Gather" 1 of 3 done, left: rag, washer fluid`, or `nothing`. The coach never has to
+   guess the time left or remember a checklist. The system instruction has no widget section and
+   is not rebuilt when a widget changes, so the plan stays its last section.
 
 ## The smart model
 
@@ -436,9 +505,11 @@ trusted positions, and the coach hears only:
 It never hears positions, distances, pinches, detections, missing or registered objects, or whether
 an object has been found. It is told only what the learner can see: whether a highlight or a
 demonstration is showing, so it doesn't point at an outline that isn't there. `highlight` answers
-`shown: false` while the object has no position yet. Under local authority (the scripted coach, no
-coach, `record_demo`, or a Gemini connection that is down), checks see everything, as on main. A
-Gemini coach isn't told rule mistakes then, because those rules saw untrusted positions.
+`shown: false` while the object has no position yet. It hears what the widgets say, never whether or
+where one is drawn: the dock beside the step card always shows them all. Under local authority (the
+scripted coach, no coach, `record_demo`, or a Gemini connection that is down), checks see
+everything, as on main. A Gemini coach isn't told rule mistakes then, because those rules saw
+untrusted positions.
 
 The AR side still reads the focused step to know what to outline, so the dependency runs one way:
 the plan feeds perception, and perception never feeds a Gemini coach. The live tracker works the
@@ -463,6 +534,14 @@ changing it.
   quick look. A failed look records `error`.
 - A step's criteria are an `annotation` with label `step.criteria` and data `{ stepId, criteria,
   model, latencyMs }`, recorded when they arrive; when asking fails, `{ stepId, error }`.
+- Every change to the learner's widgets is an `annotation` with label `widget.updated` and data
+  `{ op, id, seq, kind, by, stepId, callId?, reason?, item?, hand?, via?, widget }`. `op` is
+  `show`, `update`, `done`, `choose`, `tick`, `untick` or `close`, `by` is `coach`, `learner`,
+  `app` or `debug`, and a close has a `reason` (`coach`, `step`, `lesson`, `done`, `expired`,
+  `evicted` or `stale`). `widget` is the whole widget after the change (null after a close) with
+  no absolute times: a timer records `remainingMs` as of the annotation. `seq` tells instances
+  apart, so folding the annotations gives what the learner saw at any frame. The calls themselves
+  are `coach.tool_call` and `coach.tool_result` as for every tool.
 - Every narration is a `coach.narration` event, recorded when it reaches the model, not when it's
   queued. A stale briefing dropped at delivery is an `annotation` with label
   `coach.narration_dropped`.
@@ -490,16 +569,18 @@ changing it.
 
 ## Failures
 
-| Failure                         | What happens                                                               |
-| ------------------------------- | -------------------------------------------------------------------------- |
-| Planner slow                    | after 12 s the coach is told, so it can keep the learner company           |
-| Planner fails or times out      | the coach writes the steps with `add_step`                                 |
-| Step watcher down or not set up | no suggestions; the coach and the Done button still complete steps         |
-| Closer look slow or failing     | after 8 s the voice is told there was no closer look, and asks the learner |
-| Connection drops during a look  | the answer goes to the next connection as an `[app]` narration             |
-| Gemini reconnecting             | local authority until it's back; queued narrations and a recap on return   |
-| Gemini gives up reconnecting    | local authority for the rest of the lesson: checks and the Done button     |
-| No Gemini at all                | the scripted coach, curated lessons, checks and the Done button, as today  |
+| Failure                                    | What happens                                                               |
+| ------------------------------------------ | -------------------------------------------------------------------------- |
+| Planner slow                               | after 12 s the coach is told, so it can keep the learner company           |
+| Planner fails or times out                 | the coach writes the steps with `add_step`                                 |
+| Step watcher down or not set up            | no suggestions; the coach and the Done button still complete steps         |
+| Closer look slow or failing                | after 8 s the voice is told there was no closer look, and asks the learner |
+| Connection drops during a look             | the answer goes to the next connection as an `[app]` narration             |
+| Gemini reconnecting                        | local authority until it's back; queued narrations and a recap on return   |
+| Gemini gives up reconnecting               | local authority for the rest of the lesson: checks and the Done button     |
+| No Gemini at all                           | the scripted coach, curated lessons, checks and the Done button, as today  |
+| Widget text with characters the fonts lack | mapped or dropped, never fetched                                           |
+| `?widgets=0`                               | no widget tools and no prompt item                                         |
 
 ## Later
 

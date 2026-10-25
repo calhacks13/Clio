@@ -11,7 +11,8 @@ robot-ready dataset.
 This is the map of the system. Read it before you write code, and update it when you change a
 boundary. The exact data formats are in [data-format.md](data-format.md), the plan language is in
 [procedures.md](procedures.md), how the coach keeps the plan is in [coach-plan.md](coach-plan.md),
-and setup is in [dev-setup.md](dev-setup.md).
+the widgets it can show are in [widgets.md](widgets.md), and setup is in
+[dev-setup.md](dev-setup.md).
 
 ---
 
@@ -106,15 +107,18 @@ Clio/
 │   │   ├── demo/             hand-shape kinematics, keyframes, verb choreographies, clip player,
 │   │   │                     demo library (recorded clip, else synthesized)
 │   │   ├── coach/            RealtimeAgent port, toolbox, narrator, prompt, session
+│   │   ├── widgets/          the coach's widgets: WidgetBoard (upserts, caps, lifecycle),
+│   │   │                     text rules, the on_screen line, what is recorded
 │   │   ├── plan/             the coach's view of the plan: recital, step briefings
 │   │   ├── recording/        recorder, uploader (ordered, retrying), sinks
 │   │   ├── overlay/          presentation model
 │   │   └── session/          LessonController (plan → run and record, objects located
 │   │                         meanwhile → revise), step watcher, curated-lesson templates,
 │   │                         Spotlight, closer look, live tracking (what the tracker follows)
-│   ├── src/adapters/         xr, render, audio, camera, gemini, scripted, net
+│   ├── src/adapters/         xr, render (widgets/: the dock beside the step card, object chips),
+│   │                         audio, camera, gemini, scripted, net
 │   ├── src/app/              config, boot page, ClioApp (composition root + frame pipeline),
-│   │                         LiveTracker (the /track stream, depth, live glow)
+│   │                         LiveTracker (the /track stream, depth, live glow), window.__widgets
 │   └── scripts/              synth-episode.ts: synthetic episodes from the real domain
 ├── apps/server/              @clio/server: relay, tokens, planner, vision, procedures, episodes, clips
 ├── pipeline/                 Python: validate, Rerun, LeRobot export (`clio …`)
@@ -135,9 +139,12 @@ core/       clock · emitter · math · log          @clio/protocol (schemas, ty
 ```
 
 Imports only point downward. Ports are declared next to the code that needs them: `RealtimeAgent`
-(coach), `EpisodeSink` (recording), `LessonPlanner` / `PlanImageSource` / `StepChecker` /
-`WatchFrameSource` / `TemplateSource` (session), `CameraFrameSource` / `VisionLocator` /
-`Grounder` / `DepthSource` (world), `ClipSource` (demo).
+and `WidgetsView` (coach; what the widgets show, never where), `EpisodeSink` (recording),
+`LessonPlanner` / `PlanImageSource` / `StepChecker` / `WatchFrameSource` / `TemplateSource`
+(session), `CameraFrameSource` / `VisionLocator` / `Grounder` / `DepthSource` (world),
+`ClipSource` (demo). `domain/widgets/` is on the coach's side of the perception boundary (§5.7):
+like `domain/coach/`, it imports nothing from the world model, the hands or the success checks
+(`test/architecture.test.ts`).
 
 ### 5.2 The frame pipeline (`app/clio-app.ts`)
 
@@ -150,11 +157,15 @@ Once per XR frame:
    detaches held objects. `LiveTracker` sends the tracker what to follow, reads depth, and places
    the tracker's answers since the last frame (§5.6). The registry's changes go out as
    `objects.updated`.
-4. **Decide.** `LessonController.update` runs the runner's checks and mistake rules, and
-   `CoachSession.tick` sends camera frames to the model when they're due.
+4. **Decide.** `LessonController.update` runs the runner's checks and mistake rules.
+   `WidgetBoard.tick` ends timers and closes widgets whose time is up, before `CoachSession.tick`,
+   so a timer's narration goes out the same frame; the session then sends held narrations and
+   camera frames to the model when they're due.
 5. **Record.** `EpisodeRecorder.recordFrame`.
-6. **Present.** Presenters read an `OverlaySnapshot` plus the active demonstration. The live glow
-   and the hands' depth occluders are in the world frame; the rest in the workspace frame.
+6. **Present.** Presenters read an `OverlaySnapshot` plus the active demonstration, and the widget
+   presenters the board's snapshot. The live glow, the hands' depth occluders and the widget dock
+   (updated right after the step card, whose pose it copies) are in the world frame; the rest,
+   including a timer's chip beside its object, in the workspace frame.
 
 ### 5.3 The "teach anything" flow (`domain/session/lesson-controller.ts`)
 
@@ -341,7 +352,7 @@ about 1 s after it arrives, so 3 to 4 s after the question.
 
 `CoachSession` wires a `RealtimeAgent` to:
 - the mic (16 kHz PCM) and the speaker (24 kHz PCM, barge-in flush);
-- the `CoachToolbox`, which validates and records the nine tools;
+- the `CoachToolbox`, which validates and records every tool call;
 - the `Narrator`, which turns lesson events into `[app]` narrations. For a Gemini coach they wait
   while either side is talking (up to 6 s), then go out merged into one message. A briefing for a
   step that lost focus meanwhile is dropped;
@@ -363,11 +374,23 @@ Tools:
 | `show_demo(step_id?)`                                              | plays the step's demonstration                           |
 | `flag_mistake(kind, message)`                                      | a coach-noticed mistake, shown and labeled               |
 | `look_closer(question)`                                            | asks the smart model; non-blocking, answers in 1 to 3 s  |
+| `show_<kind>(…)`, `clear_widget(widget_id)`                        | a widget beside the step card (below)                    |
 
 Arguments are flat, and every tool but `look_closer` answers at once. Planning and re-planning
 report back later as `[app]` messages. Plan tools return `plan`, the recital, and, when the focus
 moved, `now`, the new step's briefing, so the coach never hears a step twice. Details are in
 [coach-plan.md](coach-plan.md).
+
+**Widgets** (`domain/widgets`, `adapters/render/widgets`; [widgets.md](widgets.md)). The voice can
+keep a few things in view while the learner's hands are busy: a timer, a count toward a target, a
+checklist, the answers to its question, a value or a lasting hazard. `WidgetBoard` answers the
+seven widget tools, each an upsert, and owns the rest: one of each kind (two timers), three in all,
+when each closes (most when the step changes), and the learner's answers by touch or voice. The
+dock beside the step card always shows everything, so the coach is told what the widgets say
+(`on_screen` in every widget result, the reconnect recap and cancel notices), never whether or where
+one is drawn. A timer running out, an answer touched and a checklist ticked reach it as `[app]`
+narrations, and the stuck nudge waits while a timer runs. `?widgets=0` builds no board and declares
+no widget tools.
 
 **The step watcher** (`domain/session/step-watcher.ts`) is the coach's second pair of eyes.
 Gemini Live only takes a turn when someone speaks, so a step finished in silence would go
@@ -401,9 +424,9 @@ mistakes. The scripted coach can't see, so it still hears about missing objects 
   2 minutes without it). Resumption handles survive `goAway` and connection drops, and
   `connect()` races a timeout.
 - **Reconnects:** narrations sent while the connection is down are queued, and the coach gets
-  `[app] Reconnected.` with the plan when it's back.
-- **Barge-in:** when Gemini cancels a tool call that already changed the plan, the coach is told
-  the call was applied.
+  `[app] Reconnected.` with the plan, and what the widgets show, when it's back.
+- **Barge-in:** when Gemini cancels a tool call that already changed the plan or a widget, the
+  coach is told the call was applied.
 - **Non-blocking calls:** `look_closer` is declared `NON_BLOCKING` and its result is sent with
   `scheduling: WHEN_IDLE`, which waits for the voice to finish its filler and for the learner to
   stop talking. (`INTERRUPT` cut the filler off mid-word; `SILENT` never says it.) Learner speech
@@ -440,8 +463,9 @@ Three channels on one rebased clock:
 `EpisodeUploader` creates the episode eagerly, then delivers batches strictly in `seq` order with
 exponential-backoff retries, dropping only batches the server rejects as invalid. The episode's
 `meta.plan` holds the full plan snapshot. Generated plans exist nowhere else. Every later change
-to the plan is a `plan.updated` annotation with a full snapshot, and every step-watcher answer is
-a `step.watch` annotation. A narration is recorded as `coach.narration` when it reaches the model.
+to the plan is a `plan.updated` annotation with a full snapshot, every change to the learner's
+widgets a `widget.updated` annotation with the whole widget, and every step-watcher answer a
+`step.watch` annotation. A narration is recorded as `coach.narration` when it reaches the model.
 A stale briefing dropped at that point is a `coach.narration_dropped` annotation.
 
 ## 6. Server (`apps/server`)
@@ -491,7 +515,8 @@ Vite proxies `/api` and `/gemini`, so the headset talks to a single origin (and 
 | Another realtime model | Implement `RealtimeAgent`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | A new action verb      | Add it to `ACTION_VERBS` (protocol) and a choreography in `domain/demo/synthesizer.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | A new check type       | Add it to `@clio/protocol/checks.ts` and an evaluator in `domain/procedure/checks/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| A new coach tool       | Add it to `@clio/protocol/coach-tools.ts` and a handler in `LessonController.handlers()` (or, for a tool the coach answers itself such as `look_closer`, in `CoachOwnToolHandlers`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| A new coach tool       | Add it to `@clio/protocol/coach-tools.ts` and a handler in `LessonController.handlers()` (or, for a tool the coach answers itself such as `look_closer`, in `CoachOwnToolHandlers`; a widget tool in `WidgetBoard.handlers()`, listed in `WIDGET_TOOL_NAMES`)                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| A new widget kind      | Add it to `WIDGET_KINDS` with its `show_<kind>` tool (protocol), its rules in `WidgetBoard`, a view and a fixture under `adapters/render/widgets/`, its place in `DOCK_ORDER`, and its row in [widgets.md](widgets.md)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | A new recorded signal  | Add the event to `@clio/protocol/episode.ts`, emit it on the bus, then run `pnpm gen:schema`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 ## 9. Frames, units, time

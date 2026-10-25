@@ -15,7 +15,10 @@ looks) owns the step list through tools; `docs/coach-plan.md` is the design and
 refined in the background (`docs/handoff-stage1-speed.md` records the timing work and what is
 left; `pnpm bench` and `docs/planner-bench.md` measure planner changes). Each step's `show` items
 and the coach's `highlight` tell the tracker what to follow and glow; perception feeds only the
-learner's view and the recorded data, never a Gemini coach.
+learner's view and the recorded data, never a Gemini coach. The voice can also show a fixed set of
+widgets (timer, progress, checklist, choices, value, caution) beside the step card;
+`docs/widgets.md` is the reference and `apps/headset/src/adapters/render/widgets/theme.ts` holds
+their tokens.
 
 ## Visualizer handoff
 
