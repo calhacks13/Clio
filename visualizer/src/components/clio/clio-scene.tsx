@@ -177,9 +177,24 @@ export default function ClioScene({
 }: ClioSceneProps) {
   const theme = useTheme();
   // Frame the table from behind and above the learner, who stands at ROS x < 0 facing +x.
+  // With a posed G1 the learner's spot holds a solid robot, which would fill a view from behind it:
+  // frame the robot and the table together from a three-quarter view off the learner's right.
+  const posed = body !== null;
   const view = useMemo(() => {
     const { center, size } = workspaceBounds(capture);
     const reach = Math.max(size[0], size[1], 0.4);
+    if (posed) {
+      const span = Math.max(reach, 0.9);
+      const target = [center[0] - 0.3 * span, center[1], center[2] + 0.2];
+      return {
+        target: toRender(target),
+        position: toRender([
+          target[0] + 0.9 * span,
+          target[1] - 1.85 * span,
+          target[2] + 0.95 * span,
+        ]),
+      };
+    }
     return {
       target: toRender(center),
       position: toRender([
@@ -188,7 +203,7 @@ export default function ClioScene({
         center[2] + 1.15 * reach,
       ]),
     };
-  }, [capture]);
+  }, [capture, posed]);
   const camera = useMemo(
     () => ({ position: view.position, fov: 45, near: 0.01, far: 50 }),
     // The camera is placed once; CameraRig aims it below.
@@ -297,6 +312,12 @@ export function SceneLayers({
   models = NO_MODELS,
   ...layer
 }: SceneLayersProps) {
+  // The posed G1 stands where the learner stood; a made-up example arm there only gets in its way.
+  // Arms of a real robot profile still draw beside it.
+  const arms = useMemo(
+    () => (body ? retarget.filter((doc) => !doc.profile.example) : retarget),
+    [body, retarget],
+  );
   return (
     <group quaternion={ROS_TO_RENDER}>
       <SceneLights theme={layer.theme} />
@@ -319,8 +340,8 @@ export function SceneLayers({
         models={models}
       />
       <DetectionsLayer {...layer} />
-      {showRobot && retarget.length > 0 && (
-        <RobotLayer {...layer} retarget={retarget} />
+      {showRobot && arms.length > 0 && (
+        <RobotLayer {...layer} retarget={arms} />
       )}
       {showRobot && body && <BodyLayer {...layer} body={body} />}
     </group>

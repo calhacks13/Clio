@@ -11,21 +11,22 @@ import {
   LoadingManager,
   Matrix4,
   Mesh,
-  MeshBasicMaterial,
+  MeshStandardMaterial,
   type Object3D,
   Quaternion,
 } from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import URDFLoader, { type URDFRobot } from "urdf-loader";
 import { bodyAt } from "@/lib/clio/derived-display";
-import { SCENE_COLORS, themed } from "@/lib/clio/object-display";
+import { themed } from "@/lib/clio/object-display";
 import type { LayerProps } from "../clio-scene";
 
 // The whole Unitree G1 of body-g1.json at the grid frame in force at the viewed time: the real URDF
-// (the bucket the dataset viewer uses), its pelvis placed and its joints set from the document.
+// and its meshes (the bucket the dataset viewer uses), its pelvis placed and its joints set from the
+// document, so the robot does the task where the learner did it. It is drawn solid and lit in the
+// dataset viewer's G1 colors, because a wireframe of 87 meshes hides the motion it is there to show.
 // Only the head and hands were measured; the pelvis, legs, waist and fingers are posed by rule, so
-// the robot takes the inferred look (DESIGN.md): muted and drawn as a wireframe. A frame with no
-// pose hides it. The label says "Inferred" and names the robot.
+// the label says "Inferred" and names the robot (DESIGN.md). A frame with no pose hides it.
 
 const URDF_BASE_URL =
   process.env.NEXT_PUBLIC_URDF_BASE_URL ??
@@ -36,16 +37,42 @@ const ROS_FROM_W = new Quaternion().setFromRotationMatrix(
   new Matrix4().set(0, 0, -1, 0, -1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1),
 );
 
-const robots = new Map<string, Promise<URDFRobot>>();
+/** Dark carbon shells and light gray trim, the dataset viewer's G1 (urdf-viewer.tsx). */
+const G1_COLORS = {
+  shell: { light: "#1F2937", dark: "#4B5563" },
+  trim: { light: "#9CA3AF", dark: "#C4C9D1" },
+};
+
+/** The dataset viewer's rule for the G1's light parts: contours, roll links, rubber and supports. */
+function isTrim(meshUrl: string): boolean {
+  const lower = meshUrl.toLowerCase();
+  return [
+    "contour",
+    "roll_link",
+    "logo",
+    "rubber",
+    "constraint",
+    "support",
+  ].some((part) => lower.includes(part));
+}
+
+interface LoadedRobot {
+  robot: URDFRobot;
+  /** Shared by every mesh of the robot, recolored for the theme. */
+  materials: { shell: MeshStandardMaterial; trim: MeshStandardMaterial };
+}
+
+const robots = new Map<string, Promise<LoadedRobot>>();
 
 /** One download and parse per URDF per session; the one robot is shared by whoever draws it. */
-function loadRobot(
-  url: string,
-  material: MeshBasicMaterial,
-): Promise<URDFRobot> {
+function loadRobot(url: string): Promise<LoadedRobot> {
   let loading = robots.get(url);
   if (!loading) {
-    loading = new Promise<URDFRobot>((resolve, reject) => {
+    const materials = {
+      shell: new MeshStandardMaterial({ metalness: 0.15, roughness: 0.6 }),
+      trim: new MeshStandardMaterial({ metalness: 0.1, roughness: 0.5 }),
+    };
+    loading = new Promise<LoadedRobot>((resolve, reject) => {
       const manager = new LoadingManager();
       const loader = new URDFLoader(manager);
       loader.workingPath = LoaderUtils.extractUrlBase(url);
@@ -54,9 +81,16 @@ function loadRobot(
         stl.load(
           meshUrl,
           (geometry: BufferGeometry) => {
+            if (!geometry.getAttribute("normal"))
+              geometry.computeVertexNormals();
             // URDFLoader replaces the material of a bare Mesh; a Group keeps ours.
             const group = new Group();
-            group.add(new Mesh(geometry, material));
+            group.add(
+              new Mesh(
+                geometry,
+                isTrim(meshUrl) ? materials.trim : materials.shell,
+              ),
+            );
             onLoad(group);
           },
           undefined,
@@ -64,7 +98,7 @@ function loadRobot(
         );
       };
       let robot: URDFRobot | null = null;
-      manager.onLoad = () => robot && resolve(robot);
+      manager.onLoad = () => robot && resolve({ robot, materials });
       fetch(url)
         .then((res) => {
           if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
@@ -76,6 +110,7 @@ function loadRobot(
         .catch(reject);
     }).catch((err) => {
       robots.delete(url);
+      for (const material of Object.values(materials)) material.dispose();
       throw err;
     });
     robots.set(url, loading);
@@ -88,26 +123,29 @@ export function BodyLayer({
   theme,
   body,
 }: Pick<LayerProps, "clock" | "theme"> & { body: BodyDoc }) {
-  const [material] = useState(() => new MeshBasicMaterial({ wireframe: true }));
-  material.color.set(themed(SCENE_COLORS.muted, theme));
-  const [robot, setRobot] = useState<URDFRobot | null>(null);
+  const [loaded, setLoaded] = useState<LoadedRobot | null>(null);
+  const robot = loaded?.robot ?? null;
   const invalidate = useThree((s) => s.invalidate);
   const url = `${URDF_BASE_URL}/${body.profile.urdf}`;
 
   useEffect(() => {
     let live = true;
-    loadRobot(url, material)
-      .then((loaded) => {
+    loadRobot(url)
+      .then((next) => {
         if (!live) return;
-        setRobot(loaded);
+        setLoaded(next);
         invalidate();
       })
       .catch((err) => console.warn(`G1 not drawn: ${String(err)}`));
     return () => {
       live = false;
     };
-  }, [url, material, invalidate]);
-  useEffect(() => () => material.dispose(), [material]);
+  }, [url, invalidate]);
+  // The materials belong to the cached robot, so they outlive this layer and are never disposed here.
+  if (loaded) {
+    loaded.materials.shell.color.set(themed(G1_COLORS.shell, theme));
+    loaded.materials.trim.color.set(themed(G1_COLORS.trim, theme));
+  }
 
   const [label, setLabel] = useState<HTMLSpanElement | null>(null);
   const labelRef = useCallback(
