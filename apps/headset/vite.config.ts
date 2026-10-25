@@ -55,6 +55,7 @@ export default defineConfig({
         calibrate: fileURLToPath(new URL('./calibrate.html', import.meta.url)),
         glowPreview: fileURLToPath(new URL('./glow-preview.html', import.meta.url)),
         gallery: fileURLToPath(new URL('./gallery.html', import.meta.url)),
+        widgetsPreview: fileURLToPath(new URL('./widgets-preview.html', import.meta.url)),
       },
     },
   },

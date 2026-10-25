@@ -21,12 +21,15 @@ describe('readConfig', () => {
       trackerPort: null,
       frameWidth: null,
       liveHeld: true,
+      widgets: true,
+      widgetDemo: null,
+      foveation: null,
     });
   });
 
   it('reads options from the URL', () => {
     const c = readConfig(
-      '?coach=scripted&mode=record_demo&procedure=shirt-fold&goal=fold%20a%20shirt&debug=1&emulate=1&calibrate=1&camera=0&autoDemo=0&voice=Kore&transport=direct&showRefresh=5000&table=off&live=0&tracker=8791&frame=640&liveHeld=0',
+      '?coach=scripted&mode=record_demo&procedure=shirt-fold&goal=fold%20a%20shirt&debug=1&emulate=1&calibrate=1&camera=0&autoDemo=0&voice=Kore&transport=direct&showRefresh=5000&table=off&live=0&tracker=8791&frame=640&liveHeld=0&widgets=0&widgetDemo=timer,value&foveation=0.5',
     );
     expect(c).toEqual({
       coach: 'scripted',
@@ -46,6 +49,9 @@ describe('readConfig', () => {
       trackerPort: 8791,
       frameWidth: 640,
       liveHeld: false,
+      widgets: false,
+      widgetDemo: ['timer', 'value'],
+      foveation: 0.5,
     });
   });
 
@@ -62,5 +68,33 @@ describe('readConfig', () => {
     expect(readConfig('?showRefresh=0').showRefreshMs).toBe(0);
     const tracker = readConfig('?tracker=localhost&frame=-1&live=maybe');
     expect([tracker.trackerPort, tracker.frameWidth, tracker.live]).toEqual([null, null, true]);
+  });
+
+  it('reads the widget options: on by default, demo kinds in order, foveation from 0 to 1', () => {
+    expect(readConfig('?widgets=1').widgets).toBe(true);
+    expect(readConfig('?widgets=maybe').widgets).toBe(true);
+    expect(readConfig('?widgets=false').widgets).toBe(false);
+
+    expect(readConfig('?widgetDemo=all').widgetDemo).toEqual([
+      'timer',
+      'progress',
+      'checklist',
+      'choices',
+      'value',
+      'caution',
+    ]);
+    expect(readConfig('?widgetDemo=caution,%20timer,banner,timer').widgetDemo).toEqual([
+      'caution',
+      'timer',
+    ]);
+    expect(readConfig('?widgetDemo=banner').widgetDemo).toBeNull();
+    expect(readConfig('?widgetDemo=').widgetDemo).toBeNull();
+
+    expect(readConfig('?foveation=0').foveation).toBe(0);
+    expect(readConfig('?foveation=1').foveation).toBe(1);
+    expect(readConfig('?foveation=0.25').foveation).toBe(0.25);
+    for (const bad of ['-0.1', '1.5', 'full', '']) {
+      expect(readConfig(`?foveation=${bad}`).foveation).toBeNull();
+    }
   });
 });

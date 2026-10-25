@@ -1,4 +1,10 @@
-import { EPISODE_FEATURE, type HealthResponse, type Procedure } from '@clio/protocol';
+import {
+  COACH_TOOL_NAMES,
+  EPISODE_FEATURE,
+  type HealthResponse,
+  isWidgetTool,
+  type Procedure,
+} from '@clio/protocol';
 import { MicCapture } from '../adapters/audio/mic-capture';
 import type { SpeakerOutput } from '../adapters/audio/voice-output';
 import { passthroughCameraRecord } from '../adapters/camera/camera-meta';
@@ -26,6 +32,9 @@ import {
   WorkspacePresenter,
 } from '../adapters/render/presenters/workspace-view';
 import { SceneRuntime } from '../adapters/render/scene-runtime';
+import { WidgetChipsPresenter } from '../adapters/render/widgets/chips';
+import { WidgetDockPresenter } from '../adapters/render/widgets/dock';
+import { preloadWidgetFonts } from '../adapters/render/widgets/fonts';
 import { ScriptedAgent } from '../adapters/scripted/scripted-agent';
 import { WorkspaceAnchor } from '../adapters/xr/anchors';
 import { XrPlaneReader } from '../adapters/xr/environment';
@@ -37,8 +46,13 @@ import { Emitter } from '../core/emitter';
 import { createLogger } from '../core/log';
 import type { Pose } from '../core/math';
 import type { RealtimeAgent } from '../domain/coach/agent';
-import { CoachSession } from '../domain/coach/session';
-import { CoachToolbox } from '../domain/coach/toolbox';
+import { CoachSession, type CoachSessionDeps } from '../domain/coach/session';
+import {
+  type AvailableToolHandlers,
+  type CoachOwnToolHandlers,
+  CoachToolbox,
+  type ToolHandlers,
+} from '../domain/coach/toolbox';
 import { DemoLibrary } from '../domain/demo/demo-library';
 import type { AppEvents } from '../domain/events';
 import { PinchDetector, type PinchTransition } from '../domain/hands/pinch-detector';
@@ -47,6 +61,7 @@ import { OverlayModel } from '../domain/overlay/overlay-model';
 import { EpisodeRecorder } from '../domain/recording/recorder';
 import { CloserLook } from '../domain/session/closer-look';
 import { LessonController } from '../domain/session/lesson-controller';
+import { WidgetBoard } from '../domain/widgets/board';
 import { CalibrationFlow } from '../domain/world/calibration';
 import { EnvironmentRecorder } from '../domain/world/environment';
 import { ObjectGrounder } from '../domain/world/grounding';
@@ -57,11 +72,13 @@ import { chooseTablePlane, fitTable, type TablePlane } from '../domain/world/tab
 import { Workspace, workspaceInFrontOf } from '../domain/world/workspace';
 import type { AppConfig } from './config';
 import { LiveTracker } from './live-tracker';
+import { installWidgetDebug, type WidgetDebug } from './widget-debug';
 
 // The composition root: the only place that knows every adapter. It wires the domain to the
 // headset, then runs the per-frame pipeline from docs/ARCHITECTURE.md §5.2:
 // sample → localize → perceive → decide → record → present. With a camera, what each step shows
-// is followed live by the tracker when it answers (live-tracker.ts, ?live=0 turns it off).
+// is followed live by the tracker when it answers (live-tracker.ts, ?live=0 turns it off). The
+// coach's widgets (docs/widgets.md) sit beside the step card unless ?widgets=0.
 
 const log = createLogger('app');
 const PINCH_NEAREST_M = 0.15;
@@ -100,6 +117,10 @@ export class ClioApp {
   private readonly lesson: LessonController;
   /** The voice coach's line to the smart model (look_closer). */
   private readonly closerLook: CloserLook;
+  /** The coach's widgets (show_timer and the rest); null with ?widgets=0. */
+  private readonly widgets: WidgetBoard | null;
+  /** window.__widgets, with ?debug=1 or ?widgetDemo=; the demo itself runs at kickoff. */
+  private readonly widgetDebug: WidgetDebug | null;
   private readonly overlay: OverlayModel;
   private readonly sampler = new FrameSampler();
   private readonly surfaces = new XrPlaneSurfaces();
@@ -196,6 +217,15 @@ export class ClioApp {
       clock,
       placer: grounder,
     });
+    const widgets = o.config.widgets
+      ? new WidgetBoard({ bus, clock, view: this.lesson.view() })
+      : null;
+    widgets?.attach();
+    // The widgets' faces and glyphs, parsed once now, so the first card shows its text at once.
+    if (widgets) void preloadWidgetFonts();
+    this.widgets = widgets;
+    this.widgetDebug =
+      widgets && (o.config.debug || o.config.widgetDemo) ? installWidgetDebug(widgets) : null;
     this.overlay = new OverlayModel(bus, this.lesson.view());
     this.overlay.attach();
 
@@ -206,9 +236,21 @@ export class ClioApp {
       new GhostHandsPresenter(),
       new GlyphsPresenter(),
       new WorkspacePresenter(),
+      ...(widgets ? [new WidgetChipsPresenter({ source: () => widgets.snapshot() })] : []),
     ];
+    const card = new InstructionPanelPresenter(() => this.lesson.confirmByUser('Done button'));
     this.worldPresenters = [
-      new InstructionPanelPresenter(() => this.lesson.confirmByUser('Done button')),
+      card,
+      // Right after the card: the dock hangs off the card's pose and width, set this frame.
+      ...(widgets
+        ? [
+            new WidgetDockPresenter({
+              source: () => widgets.snapshot(),
+              onIntent: (intent) => widgets.touch(intent),
+              anchor: card,
+            }),
+          ]
+        : []),
       new HudPresenter(),
       new CalibrationMarkerPresenter(),
       ...(this.live ? [this.live.presenter] : []),
@@ -228,6 +270,11 @@ export class ClioApp {
   async enterXr(): Promise<void> {
     // Depth sensing measures what the tracker follows; it costs, so only with a tracker there.
     const depthSensing = (await this.live?.connect()) ?? false;
+    // Applied as the session starts. three's default is full fixed foveation, which may soften the
+    // widgets 11 to 34 degrees off centre; ?foveation= is for judging that (docs/widgets.md).
+    if (this.o.config.foveation !== null) {
+      this.scene.renderer.xr.setFoveation(this.o.config.foveation);
+    }
     try {
       this.runtime = await startArSession(this.scene.renderer, { depthSensing });
     } catch (err) {
@@ -294,6 +341,8 @@ export class ClioApp {
       objects: { position: (id) => this.registry.position(id) },
     });
     this.overlay.setProgress(this.lesson.runnerState?.progress ?? 0);
+    // Before the coach's tick, so a timer that ran out is told this frame.
+    this.widgets?.tick(t);
     this.coach?.tick(t);
     if (!this.kickedOff && !this.calibration && this.tableDeadline === null) {
       this.kickedOff = true;
@@ -424,6 +473,8 @@ export class ClioApp {
   // ---- lesson start ------------------------------------------------------------------------
 
   private async kickoff(): Promise<void> {
+    // The demo widgets go up first, with or without a coach (?coach=off).
+    if (this.o.config.widgetDemo) this.widgetDebug?.demo(this.o.config.widgetDemo);
     await this.startCoach();
     const { procedure, goal } = this.o;
     // Announced like a planned lesson, so the coach hears the whole plan with its step ids.
@@ -452,7 +503,7 @@ export class ClioApp {
       new CoachSession({
         agent,
         toolbox: new CoachToolbox(
-          { ...this.lesson.handlers(), ...this.closerLook.handlers() },
+          coachHandlers(this.lesson.handlers(), this.closerLook.handlers(), this.widgets),
           this.bus,
           this.clock,
         ),
@@ -464,6 +515,7 @@ export class ClioApp {
         ...(camera && agent.kind === 'gemini' ? { camera } : {}),
         ...(this.o.procedure?.coach.persona ? { persona: this.o.procedure.coach.persona } : {}),
         templates,
+        ...coachWidgets(this.widgets),
       });
     try {
       this.agent = make(!!useGemini);
@@ -512,6 +564,25 @@ export class ClioApp {
       ],
     };
   }
+}
+
+/** Every tool the coach can call: the lesson's, look_closer, and the widgets' unless ?widgets=0. */
+export function coachHandlers(
+  lesson: ToolHandlers,
+  own: CoachOwnToolHandlers,
+  widgets: WidgetBoard | null,
+): AvailableToolHandlers {
+  return { ...lesson, ...own, ...(widgets?.handlers() ?? {}) };
+}
+
+/**
+ * What the coach session knows of the widgets: the board (for on_screen and the stuck nudge), or
+ * with ?widgets=0 no widget tools at all, so the voice is not told about them either.
+ */
+export function coachWidgets(
+  widgets: WidgetBoard | null,
+): Pick<CoachSessionDeps, 'widgets' | 'tools'> {
+  return widgets ? { widgets } : { tools: COACH_TOOL_NAMES.filter((n) => !isWidgetTool(n)) };
 }
 
 /** Horizontal planes with their semantic labels (Quest's room setup), for the table snap. */

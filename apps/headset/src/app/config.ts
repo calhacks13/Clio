@@ -1,4 +1,4 @@
-import type { EpisodeMode } from '@clio/protocol';
+import { type EpisodeMode, WIDGET_KINDS, type WidgetKind } from '@clio/protocol';
 
 // Runtime options from the URL, e.g. /?coach=scripted&procedure=shirt-fold&debug=1.
 // Invalid values fall back to defaults: a typo must never stop the app from booting at the venue.
@@ -36,6 +36,12 @@ export interface AppConfig {
   frameWidth: number | null;
   /** Keep an object's live light on while it is in hand (0: hide it, as the other outlines do). */
   liveHeld: boolean;
+  /** The coach's widgets beside the step card (docs/widgets.md). 0: no board, no widget tools. */
+  widgets: boolean;
+  /** Widgets shown at the start, to tune them on the device without a conversation. */
+  widgetDemo: WidgetKind[] | null;
+  /** Fixed foveation, 0 (none) to 1; null keeps three's default (1). */
+  foveation: number | null;
 }
 
 const DEFAULTS: AppConfig = {
@@ -56,6 +62,9 @@ const DEFAULTS: AppConfig = {
   trackerPort: null,
   frameWidth: null,
   liveHeld: true,
+  widgets: true,
+  widgetDemo: null,
+  foveation: null,
 };
 
 function oneOf<T extends string>(value: string | null, allowed: readonly T[], fallback: T): T {
@@ -81,6 +90,25 @@ function millis(value: string | null, fallback: number): number {
   return Number.isFinite(ms) && ms >= 0 ? ms : fallback;
 }
 
+/** A number from 0 to 1, else null. */
+function unit(value: string | null): number | null {
+  const n = value === null || value.trim() === '' ? Number.NaN : Number(value);
+  return n >= 0 && n <= 1 ? n : null;
+}
+
+const isWidgetKind = (name: string): name is WidgetKind =>
+  (WIDGET_KINDS as readonly string[]).includes(name);
+
+/** `all`, or widget kinds separated by commas, in that order; unknown kinds are dropped. */
+function widgetKinds(value: string | null): WidgetKind[] | null {
+  const names = (value ?? '').split(',').map((name) => name.trim());
+  if (names.includes('all')) return [...WIDGET_KINDS];
+  const kinds = names.filter(
+    (name, i): name is WidgetKind => isWidgetKind(name) && names.indexOf(name) === i,
+  );
+  return kinds.length > 0 ? kinds : null;
+}
+
 export function readConfig(search: string): AppConfig {
   const q = new URLSearchParams(search);
   return {
@@ -101,5 +129,8 @@ export function readConfig(search: string): AppConfig {
     trackerPort: whole(q.get('tracker')),
     frameWidth: whole(q.get('frame')),
     liveHeld: flag(q.get('liveHeld'), DEFAULTS.liveHeld),
+    widgets: flag(q.get('widgets'), DEFAULTS.widgets),
+    widgetDemo: widgetKinds(q.get('widgetDemo')),
+    foveation: unit(q.get('foveation')),
   };
 }
