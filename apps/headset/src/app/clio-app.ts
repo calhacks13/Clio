@@ -32,12 +32,13 @@ import { ScriptedAgent } from '../adapters/scripted/scripted-agent';
 import { WorkspaceAnchor } from '../adapters/xr/anchors';
 import { XrPlaneReader } from '../adapters/xr/environment';
 import { FrameSampler, poseFromMatrix } from '../adapters/xr/frame-sampler';
+import { XrMeshReader } from '../adapters/xr/meshes';
 import { XrPlaneSurfaces } from '../adapters/xr/planes';
 import { startArSession, type XrRuntime } from '../adapters/xr/xr-session';
 import { type Clock, performanceClock } from '../core/clock';
 import { Emitter } from '../core/emitter';
 import { createLogger } from '../core/log';
-import type { Pose } from '../core/math';
+import type { Pose, Vec3 } from '../core/math';
 import type { RealtimeAgent } from '../domain/coach/agent';
 import { CoachSession } from '../domain/coach/session';
 import { CoachToolbox } from '../domain/coach/toolbox';
@@ -56,9 +57,11 @@ import { ObjectGrounder } from '../domain/world/grounding';
 import { GraspTracker } from '../domain/world/holding';
 import { ObjectRegistry } from '../domain/world/object-registry';
 import { PoseHistory } from '../domain/world/pose-history';
+import { RoomScanRecorder } from '../domain/world/room-scan';
 import { chooseTablePlane, fitTable, type TablePlane } from '../domain/world/table-snap';
 import { Workspace, workspaceInFrontOf } from '../domain/world/workspace';
 import type { AppConfig } from './config';
+import { KeyframeCapture } from './keyframe-capture';
 import { LiveTracker } from './live-tracker';
 
 // The composition root: the only place that knows every adapter. It wires the domain to the
@@ -66,7 +69,8 @@ import { LiveTracker } from './live-tracker';
 // sample → localize → perceive → decide → record → present. With a camera, what each step shows
 // is followed live by the tracker when it answers (live-tracker.ts, ?live=0 turns it off), and
 // with a Gemini key Robotics-ER 2's action focus boxes the step's objects for it every few seconds
-// and names the next thing to touch (?focus=0 turns it off).
+// and names the next thing to touch (?focus=0 turns it off). With ?scan=1 the recording keeps the
+// Quest room scan and a few camera keyframes of the work beside the lesson (docs/room-scene.md).
 
 const log = createLogger('app');
 const PINCH_NEAREST_M = 0.15;
@@ -75,6 +79,8 @@ const RELOCATE_DELAY_MS = 600;
 const PLAN_FRAME_MS = 450;
 /** How long after the session starts the workspace waits for a detected table. */
 const TABLE_WAIT_MS = 2000;
+/** The work area a keyframe looks at without a plan or known objects: [width, depth] (m). */
+const DEFAULT_WORK_SIZE: readonly [number, number] = [0.6, 0.4];
 
 export interface ClioAppOptions {
   config: AppConfig;
@@ -112,6 +118,12 @@ export class ClioApp {
     log.warn(`room planes unavailable (${String(err)})`),
   );
   private readonly environment: EnvironmentRecorder;
+  private readonly meshes = new XrMeshReader((err) =>
+    log.warn(`room scan unavailable (${String(err)})`),
+  );
+  private readonly roomScan: RoomScanRecorder;
+  /** Null without a camera, or without ?scan=1. */
+  private readonly keyframes: KeyframeCapture | null;
   /** Null without a camera, or with ?live=0. */
   private readonly live: LiveTracker | null;
   /** Null without the live tracker or a Gemini key, or with ?focus=0. */
@@ -144,8 +156,27 @@ export class ClioApp {
       onDrop: (why) => log.warn(`recording: dropped ${why}`),
     });
     this.environment = new EnvironmentRecorder({ bus });
+    const attach = (name: string, body: Blob) => this.recorder.attachMedia(name, body);
+    this.roomScan = new RoomScanRecorder({ bus, attach });
+    this.keyframes =
+      o.camera && o.config.scan
+        ? new KeyframeCapture({
+            bus,
+            clock,
+            camera: o.camera,
+            poses: this.poses,
+            workspace: () => this.currentWorkspace(),
+            focus: () => this.keyframeFocus(),
+            attach,
+          })
+        : null;
     bus.on('recorder.status', ({ recording }) => {
-      if (recording) this.environment.reset();
+      if (recording) {
+        this.environment.reset();
+        this.roomScan.reset();
+      }
+      // At the end too, so a still from this episode never lands in the next.
+      this.keyframes?.reset();
     });
     const grounder = o.camera
       ? new ObjectGrounder({
@@ -327,6 +358,11 @@ export class ClioApp {
     if (this.recorder.recording && this.planeDetection) {
       this.environment.update(t, detectedPlanes, workspace);
     }
+    // The room scan is read only when a snapshot could be taken: it can be large.
+    if (this.recorder.recording && this.scansRoom && this.roomScan.wants(t)) {
+      this.roomScan.update(t, this.meshes.read(frame, runtime.space), workspace);
+    }
+    if (this.recorder.recording) this.keyframes?.update(t);
 
     // 6. Present.
     this.live?.prepare(frame, runtime.space);
@@ -504,6 +540,25 @@ export class ClioApp {
     return this.runtime?.features.includes('plane-detection') ?? false;
   }
 
+  /** The room scan is recorded only with ?scan=1, when the session enabled mesh detection. */
+  private get scansRoom(): boolean {
+    return this.o.config.scan && (this.runtime?.features.includes('mesh-detection') ?? false);
+  }
+
+  /**
+   * What a keyframe should show, in W: the objects the lesson has placed and nobody holds (their
+   * models are made from these stills), else the middle of the work area.
+   */
+  private keyframeFocus(): Vec3[] {
+    const objects = this.registry
+      .all()
+      .filter((e) => e.lostAt === undefined && e.heldBy === null)
+      .map((e) => e.position);
+    if (objects.length > 0) return objects;
+    const [width, depth] = this.lesson.procedure?.workspace.size ?? DEFAULT_WORK_SIZE;
+    return [[width / 2, 0, -depth / 2]];
+  }
+
   private currentWorkspace(): Workspace {
     return this.workspace ?? new Workspace({ p: [0, 0.75, -0.5], q: [0, 0, 0, 1] }, 'none');
   }
@@ -529,6 +584,8 @@ export class ClioApp {
       ...(this.o.camera ? { camera: passthroughCameraRecord(this.o.camera) } : {}),
       features: [
         ...(this.planeDetection ? [EPISODE_FEATURE.environmentPlanes] : []),
+        ...(this.scansRoom ? [EPISODE_FEATURE.environmentMeshes] : []),
+        ...(this.keyframes ? [EPISODE_FEATURE.sceneKeyframes] : []),
         ...(this.live ? [EPISODE_FEATURE.objectObservations, EPISODE_FEATURE.objectSurface] : []),
       ],
     };

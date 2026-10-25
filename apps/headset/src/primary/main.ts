@@ -149,6 +149,8 @@ const hud = DEBUG.has('1') ? new PrimaryHud() : null;
 const debugBoxes = DEBUG.has('boxes') ? new DebugBoxes() : null;
 /** ?focus=part: one part of the main object is highlighted, not all of it. */
 const FOCUS_PART = params.get('focus') === 'part';
+/** ?scan=1: record the Quest room scan with the episode (docs/room-scene.md). */
+const SCAN = params.get('scan') === '1';
 // depthOverlay: window.__occlusion.setViz('depth') shows the depth map over the view.
 scene.add(hands.object, handOccluders.object, outline.object, depthOverlay.object);
 if (hud) scene.add(hud.object);
@@ -819,11 +821,18 @@ async function enterAr(): Promise<void> {
   const depth = depthSensingInit();
   const started = await navigator.xr.requestSession('immersive-ar', {
     requiredFeatures: ['local-floor'],
-    optionalFeatures: ['hand-tracking', 'plane-detection', 'hit-test', ...depth.optionalFeatures],
+    optionalFeatures: [
+      'hand-tracking',
+      'plane-detection',
+      ...(SCAN ? ['mesh-detection'] : []),
+      'hit-test',
+      ...depth.optionalFeatures,
+    ],
     depthSensing: depth.depthSensing,
   });
   // Runtimes that don't list enabled features get the benefit of the doubt.
   planesEnabled = started.enabledFeatures?.includes('plane-detection') ?? true;
+  const meshesEnabled = SCAN && (started.enabledFeatures?.includes('mesh-detection') ?? true);
   scene.background = null;
   button.hidden = true;
   started.addEventListener('end', endSession);
@@ -857,6 +866,7 @@ async function enterAr(): Promise<void> {
     xrFeatures: [...(started.enabledFeatures ?? [])],
     version: __CLIO_VERSION__,
     planes: planesEnabled,
+    meshes: meshesEnabled,
     camera: cameraInUse(),
   });
   tracker.open();

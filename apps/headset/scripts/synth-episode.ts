@@ -135,6 +135,10 @@ class DirectorySink implements EpisodeSink {
     bookkeeping.received.push(batch.seq);
     await writeFile(join(this.dir, 'batches.json'), JSON.stringify(bookkeeping));
   }
+  async putMedia(_id: string, name: string, body: Blob): Promise<void> {
+    await mkdir(join(this.dir, 'media'), { recursive: true });
+    await writeFile(join(this.dir, 'media', name), new Uint8Array(await body.arrayBuffer()));
+  }
   async finish(_id: string, finish: EpisodeFinish): Promise<void> {
     await writeFile(join(this.dir, 'finish.json'), `${JSON.stringify(finish, null, 2)}\n`);
   }

@@ -1,0 +1,345 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "clio.scene/1"
+    },
+    "episodeId": {
+      "type": "string"
+    },
+    "builtAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+    },
+    "builder": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "frame": {
+      "type": "string",
+      "const": "workspace"
+    },
+    "compiledAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+      "description": "The compile it was built from (manifest.json's compiledAt): a newer compile makes it stale"
+    },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Raw file name inside the episode directory"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "name",
+          "bytes",
+          "sha256"
+        ],
+        "additionalProperties": false
+      },
+      "description": "Raw and compiled files the build read (names relative to the episode or \"derived/\")"
+    },
+    "options": {
+      "type": "object",
+      "properties": {
+        "models": {
+          "type": "string",
+          "enum": [
+            "primitive",
+            "triposr",
+            "command"
+          ]
+        }
+      },
+      "required": [
+        "models"
+      ],
+      "additionalProperties": false
+    },
+    "stages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "failed",
+              "skipped"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "status"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "keyframes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "Keyframes the episode has with their image"
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "backend": {
+            "type": "string",
+            "enum": [
+              "primitive",
+              "triposr",
+              "command"
+            ]
+          },
+          "generator": {
+            "description": "What generated it, e.g. \"TripoSR (grid 128)\" or the command; null for primitive",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9._-]{0,95}\\.(json|glb|jpg)$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "GLB in meters, +y up, origin at the bottom center of its bounds; null when none could be made"
+          },
+          "crops": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9._-]{0,95}\\.(json|glb|jpg)$"
+                },
+                "keyframe": {
+                  "type": "string",
+                  "description": "The keyframe it was cut from, in the episode media/"
+                },
+                "box": {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 4,
+                  "maxItems": 4,
+                  "description": "Where in the keyframe, before the margin"
+                },
+                "from": {
+                  "type": "string",
+                  "enum": [
+                    "observation",
+                    "projection"
+                  ],
+                  "description": "observation: the tracker's box on that same camera frame; projection: the object's compiled position and size projected through the keyframe's pose"
+                }
+              },
+              "required": [
+                "file",
+                "keyframe",
+                "box",
+                "from"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "size": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "items": false,
+            "minItems": 3,
+            "maxItems": 3,
+            "description": "The model's bounds after fitting, m, along its own x, y (up), z"
+          },
+          "sizeSource": {
+            "type": "string",
+            "enum": [
+              "shape",
+              "extent",
+              "radius"
+            ],
+            "description": "Which measurement scaled it: the fused shape box, the estimated extent, or the plan's radius"
+          },
+          "placement": {
+            "type": "object",
+            "properties": {
+              "offset": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "items": false,
+                "minItems": 3,
+                "maxItems": 3,
+                "description": "From the object's tracked position (tracks.json) to the model origin, in W"
+              },
+              "rotation": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "items": false,
+                "minItems": 4,
+                "maxItems": 4,
+                "description": "Model rotation in W: a yaw about +y"
+              },
+              "rotationSource": {
+                "type": "string",
+                "enum": [
+                  "shape",
+                  "view",
+                  "none"
+                ],
+                "description": "shape: the fused shape box's yaw (measured); view: turned to face the camera that saw it (a guess); none: unrotated"
+              }
+            },
+            "required": [
+              "offset",
+              "rotation",
+              "rotationSource"
+            ],
+            "additionalProperties": false
+          },
+          "note": {
+            "description": "Why something was left out or approximated",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "backend",
+          "generator",
+          "model",
+          "crops",
+          "size",
+          "sizeSource",
+          "placement",
+          "note"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "episodeId",
+    "builtAt",
+    "builder",
+    "frame",
+    "compiledAt",
+    "inputs",
+    "options",
+    "stages",
+    "keyframes",
+    "objects"
+  ],
+  "additionalProperties": false,
+  "$id": "https://clio.dev/schema/scene.schema.json",
+  "title": "Clio rebuilt scene.json"
+}

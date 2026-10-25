@@ -1103,6 +1103,187 @@
               },
               "type": {
                 "type": "string",
+                "const": "environment.meshes"
+              },
+              "media": {
+                "type": "string",
+                "pattern": "^room-scan-[0-9]{1,4}\\.glb$",
+                "description": "The GLB with this snapshot's geometry, in media/ (e.g. \"room-scan-1.glb\")"
+              },
+              "meshes": {
+                "maxItems": 512,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "Stable within the episode; the headset numbers meshes as it first sees them"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "table",
+                        "floor",
+                        "wall",
+                        "ceiling",
+                        "couch",
+                        "other"
+                      ]
+                    },
+                    "label": {
+                      "description": "The WebXR semanticLabel as reported, if any",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "global": {
+                      "type": "boolean",
+                      "description": "The room's global mesh (semanticLabel \"global mesh\")"
+                    },
+                    "vertices": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "triangles": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "label",
+                    "global",
+                    "vertices",
+                    "triangles"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "Every mesh detected now: a full snapshot, not a list of changes"
+              }
+            },
+            "required": [
+              "t",
+              "type",
+              "media",
+              "meshes"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "t": {
+                "type": "number",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "const": "scene.keyframe"
+              },
+              "media": {
+                "type": "string",
+                "pattern": "^keyframe-[0-9]{4,5}\\.jpg$",
+                "description": "The JPEG still, in media/ (e.g. \"keyframe-0001.jpg\")"
+              },
+              "capturedT": {
+                "type": "number",
+                "description": "ms since episode start when the camera frame was captured (the same clock as an observation's observedT); negative if before the start"
+              },
+              "pose": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "items": false,
+                "minItems": 7,
+                "maxItems": 7,
+                "description": "Camera pose in W at capturedT: head pose then meta.camera.headFromCamera. Camera frame as WebXR: x right, y up, looking down -z"
+              },
+              "width": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Pixels of the stored image"
+              },
+              "height": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "intrinsics": {
+                "type": "object",
+                "properties": {
+                  "fx": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "fy": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "cx": {
+                    "type": "number"
+                  },
+                  "cy": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "fx",
+                  "fy",
+                  "cx",
+                  "cy"
+                ],
+                "additionalProperties": false,
+                "description": "meta.camera's intrinsics scaled to the stored image"
+              }
+            },
+            "required": [
+              "t",
+              "type",
+              "media",
+              "capturedT",
+              "pose",
+              "width",
+              "height",
+              "intrinsics"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "t": {
+                "type": "number",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
                 "const": "annotation"
               },
               "label": {

@@ -1,5 +1,5 @@
 /// <reference path="../../src/adapters/render/troika.d.ts" />
-import { parseProcedure } from '@clio/protocol';
+import { EPISODE_FEATURE, ObjectSpecSchema, parseProcedure } from '@clio/protocol';
 import type { WebGLRenderer } from 'three';
 import { Object3D } from 'three';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -16,6 +16,7 @@ import { ApiClient } from '../../src/adapters/net/api-client';
 import type { TrackerSocket } from '../../src/adapters/net/tracker-client';
 import type { XrRuntime } from '../../src/adapters/xr/xr-session';
 import { type ActionFocusWiring, ClioApp, createActionFocus } from '../../src/app/clio-app';
+import { readConfig } from '../../src/app/config';
 import { LiveTracker } from '../../src/app/live-tracker';
 import { ManualClock } from '../../src/core/clock';
 import { Emitter } from '../../src/core/emitter';
@@ -313,5 +314,67 @@ describe('ClioApp', () => {
     live.perceive({} as XRFrame, clock.now());
     await flush();
     expect(socket.frames).toBe(sent);
+  });
+});
+
+/** An app with only the parts the recording's meta and keyframe aim read. */
+function partialApp(parts: Record<string, unknown>): ClioApp {
+  return Object.assign(Object.create(ClioApp.prototype), parts) as ClioApp;
+}
+
+const contextOf = (app: ClioApp) =>
+  (app as unknown as { episodeContext(): { features: string[] } }).episodeContext();
+
+describe('ClioApp recording', () => {
+  beforeEach(() => {
+    vi.stubGlobal('navigator', { userAgent: 'test' });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const base = {
+    o: { config: readConfig(''), camera: null, emulated: true, version: 'test' },
+    agent: null,
+    live: null,
+    keyframes: null,
+  };
+
+  it('lists the room scan when the session detects meshes, and keyframes when it keeps them', () => {
+    const scan = { ...base.o, config: readConfig('?scan=1') };
+    const features = (xr: string[], parts: Record<string, unknown> = {}) =>
+      contextOf(partialApp({ ...base, o: scan, runtime: { features: xr }, ...parts })).features;
+    expect(features([])).toEqual([]);
+    expect(features(['plane-detection', 'mesh-detection'])).toEqual([
+      EPISODE_FEATURE.environmentPlanes,
+      EPISODE_FEATURE.environmentMeshes,
+    ]);
+    expect(features(['mesh-detection'], { keyframes: {} })).toEqual([
+      EPISODE_FEATURE.environmentMeshes,
+      EPISODE_FEATURE.sceneKeyframes,
+    ]);
+  });
+
+  it('keeps no room scan without ?scan=1, as before it was recorded', () => {
+    const features = (xr: string[]) =>
+      contextOf(partialApp({ ...base, runtime: { features: xr } })).features;
+    expect(features(['plane-detection', 'mesh-detection'])).toEqual([
+      EPISODE_FEATURE.environmentPlanes,
+    ]);
+  });
+
+  it('aims keyframes at the placed objects nobody holds, else at the middle of the work', () => {
+    const bus = new Emitter<AppEvents>();
+    const registry = new ObjectRegistry(bus);
+    const focus = (app: ClioApp) =>
+      (app as unknown as { keyframeFocus(): number[][] }).keyframeFocus();
+    const withPlan = (size: [number, number]) => ({ procedure: { workspace: { size } } });
+    expect(focus(partialApp({ registry, lesson: { procedure: null } }))).toEqual([[0.3, 0, -0.2]]);
+    expect(focus(partialApp({ registry, lesson: withPlan([1, 0.6]) }))).toEqual([[0.5, 0, -0.3]]);
+    const placed = (id: string, position: number[]) =>
+      ObjectSpecSchema.parse({ id, label: id, placement: { method: 'layout', position } });
+    registry.load([placed('cup', [0.2, 0, -0.1]), placed('jug', [0.4, 0, -0.3])], 0);
+    registry.attach('jug', 'right', { p: [0.4, 0.1, -0.3], q: [0, 0, 0, 1] }, 10);
+    expect(focus(partialApp({ registry, lesson: withPlan([1, 0.6]) }))).toEqual([[0.2, 0, -0.1]]);
   });
 });

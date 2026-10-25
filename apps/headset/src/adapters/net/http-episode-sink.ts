@@ -27,6 +27,10 @@ export class HttpEpisodeSink implements EpisodeSink {
     return delivering(() => this.api.appendBatch(episodeId, batch));
   }
 
+  putMedia(episodeId: string, name: string, body: Blob): Promise<void> {
+    return delivering(() => this.api.putMedia(episodeId, name, body));
+  }
+
   finish(episodeId: string, finish: EpisodeFinish): Promise<void> {
     return delivering(() => this.api.finishEpisode(episodeId, finish));
   }

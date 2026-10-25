@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  EnvironmentMeshSchema,
   EnvironmentPlaneSchema,
   EpisodeOutcomeSchema,
   GripKindSchema,
@@ -19,6 +20,7 @@ import { HandednessSchema } from './hand';
 //   tracks.json        TracksDoc: head, wrists and every object on one fixed-rate grid
 //   environment.json   EnvironmentDoc: table, floor and detected planes
 //   shapes.json        ShapesDoc: each object's depth samples fused relative to its tracked position
+//   room.glb           the Quest room scan in W (environment.json's `room` describes it)
 //   retarget-<profile>.json  RetargetDoc: robot joint trajectories solved by inverse kinematics
 //   body-g1.json             BodyDoc: a whole Unitree G1 posed from the head and hands (inferred)
 //
@@ -29,9 +31,16 @@ import { HandednessSchema } from './hand';
 export const DERIVED_SCHEMA_ID = 'clio.derived/1';
 
 /** File names the server serves from data/derived/<id>/ and the visualizer's proxy allows. */
-export const DERIVED_FILE_NAME = /^[a-z0-9][a-z0-9._-]{0,95}\.json$/;
+export const DERIVED_FILE_NAME = /^[a-z0-9][a-z0-9._-]{0,95}\.(json|glb)$/;
 
-export const DerivedKindSchema = z.enum(['tracks', 'environment', 'shapes', 'retarget', 'body']);
+export const DerivedKindSchema = z.enum([
+  'tracks',
+  'environment',
+  'shapes',
+  'retarget',
+  'body',
+  'room',
+]);
 
 const fraction = () => z.number().min(0).max(1);
 const ms = () => z.number();
@@ -284,6 +293,27 @@ export const ShapesDocSchema = z.object({
   objects: z.array(CompiledObjectShapeSchema),
 });
 
+/**
+ * The Quest room scan (Space Setup, read through WebXR mesh detection) as the compile kept it: the
+ * last `environment.meshes` snapshot whose GLB arrived, rewritten to room.glb in W. The headset
+ * measured it when the room was set up, not during the episode, so furniture may have moved since.
+ */
+export const RoomScanSchema = z.object({
+  file: z.string().regex(DERIVED_FILE_NAME).describe('The GLB beside environment.json, "room.glb"'),
+  source: z.literal('quest-scene').describe('WebXR mesh detection on the headset'),
+  media: z.string().describe('The raw snapshot it came from, in media/'),
+  snapshotT: ms().describe('When that snapshot was recorded'),
+  snapshots: z.number().int().positive().describe('Snapshots the episode recorded'),
+  meshes: z.array(
+    EnvironmentMeshSchema.extend({
+      bounds: z
+        .object({ min: Vec3Schema, max: Vec3Schema })
+        .nullable()
+        .describe('Axis-aligned bounds in W; null for a mesh without vertices'),
+    }),
+  ),
+});
+
 export const EnvironmentDocSchema = z.object({
   schema: z.literal(DERIVED_SCHEMA_ID),
   episodeId: z.string(),
@@ -315,6 +345,11 @@ export const EnvironmentDocSchema = z.object({
     .array(EnvironmentPlaneSchema.extend({ firstSeenT: ms(), lastSeenT: ms() }))
     .describe(
       'Each detected plane as last reported; lastSeenT is when a snapshot first left it out, or the end of the episode',
+    ),
+  room: RoomScanSchema.nullable()
+    .optional()
+    .describe(
+      'The Quest room scan the compile wrote to room.glb; null without one, absent from compilers before 0.8.0',
     ),
 });
 
@@ -421,6 +456,7 @@ export type CompiledHandTrack = z.infer<typeof CompiledHandTrackSchema>;
 export type TracksDoc = z.infer<typeof TracksDocSchema>;
 export type CompiledObjectShape = z.infer<typeof CompiledObjectShapeSchema>;
 export type ShapesDoc = z.infer<typeof ShapesDocSchema>;
+export type RoomScan = z.infer<typeof RoomScanSchema>;
 export type EnvironmentDoc = z.infer<typeof EnvironmentDocSchema>;
 export type RetargetArm = z.infer<typeof RetargetArmSchema>;
 export type RetargetDoc = z.infer<typeof RetargetDocSchema>;

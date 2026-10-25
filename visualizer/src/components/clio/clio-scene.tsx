@@ -1,7 +1,7 @@
 "use client";
 
 import { Grid, OrbitControls } from "@react-three/drei";
-import { Canvas, useThree } from "@react-three/fiber";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import type {
   EnvironmentDoc,
   BodyDoc,
@@ -9,19 +9,24 @@ import type {
   ShapesDoc,
   TracksDoc,
 } from "@clio/protocol";
+import type { Fetch } from "@clio-viewer/api";
 import type { Capture } from "@clio-viewer/capture/model";
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
-import { NoToneMapping } from "three";
+import { DirectionalLight, HemisphereLight, NoToneMapping } from "three";
 import { SCENE_COLORS, themed } from "@/lib/clio/object-display";
+import type { FileRef, ModelFile } from "@/lib/clio/scene-files";
 import { ROS_TO_RENDER } from "@/lib/scene";
 import { useTheme, type Theme } from "@/utils/theme";
 import { DetectionsLayer } from "./layers/detections";
 import { EnvironmentLayer, workspaceBounds } from "./layers/environment";
+import { BACKDROP_LAYER } from "./layers/gltf";
 import { HandsLayer } from "./layers/hands";
 import { HeadLayer } from "./layers/head";
 import { ObjectsLayer } from "./layers/objects";
 import { BodyLayer } from "./layers/body";
 import { RobotLayer } from "./layers/robot";
+import { RoomLayer } from "./layers/room";
+import { SceneFetchContext } from "./use-scene-file";
 
 // The Clio episode in 3D at one recording time. Every layer draws the Capture's ROS frame (z up,
 // meters) inside the single group below, which turns ROS into the renderer's y-up frame at scale 1;
@@ -32,6 +37,12 @@ import { RobotLayer } from "./layers/robot";
 // robot arms, and the objects follow their compiled series, extents and shapes instead of the raw
 // estimates; they are in W like the raw episode and reach ROS once, in derived-display.ts and
 // compiled-objects.ts.
+//
+// The Quest room scan (layers/room.tsx) and each object's generated model (layers/model.tsx) are
+// binary files read only while their toggle is on (scene-files.ts). The room is drawn first, on
+// its own layer, and everything else over it with a fresh depth buffer (BackdropPass), so the
+// room never hides the table, the hands or the objects; the grid then fades out nearer, around the
+// table, so it does not lie across the whole room.
 
 /** Where the scene reads the viewed time: integer microseconds of recording time. */
 export interface SceneClock {
@@ -79,9 +90,19 @@ export interface ClioSceneProps {
   showRobot?: boolean;
   /** The G1 posed from the head and hands. */
   body?: BodyDoc | null;
+  /** The room scan to draw (scene-files.ts, roomFile); null draws none. */
+  room?: FileRef | null;
+  /** Generated models by object id (scene-files.ts, modelFiles). */
+  models?: ReadonlyMap<string, ModelFile>;
+  /** Fetches the room scan and the models; the browser's fetch by default (the dev harness serves them). */
+  sceneFetch?: Fetch;
 }
 
 const NO_RETARGET: readonly RetargetDoc[] = [];
+const NO_MODELS: ReadonlyMap<string, ModelFile> = new Map();
+/** How far from the camera the grid fades out, without and with the room drawn around it. */
+const GRID_FADE = 4;
+const GRID_FADE_IN_ROOM = 2.2;
 
 /**
  * A SceneClock showing `tUs`. It is the same object for the component's life, so passing it does
@@ -150,6 +171,9 @@ export default function ClioScene({
   retarget = NO_RETARGET,
   showRobot = true,
   body = null,
+  room = null,
+  models = NO_MODELS,
+  sceneFetch,
 }: ClioSceneProps) {
   const theme = useTheme();
   // Frame the table from behind and above the learner, who stands at ROS x < 0 facing +x.
@@ -201,8 +225,11 @@ export default function ClioScene({
             retarget,
             showRobot,
             body,
+            room,
+            models,
           ]}
         />
+        {room && <BackdropPass />}
         <CameraRig position={view.position} target={view.target} />
         {/* The table plane: ROS z = 0 is the renderer's y = 0. */}
         <Grid
@@ -213,22 +240,26 @@ export default function ClioScene({
           sectionSize={0.25}
           sectionThickness={1}
           sectionColor={themed(SCENE_COLORS.gridSection, theme)}
-          fadeDistance={4}
+          fadeDistance={room ? GRID_FADE_IN_ROOM : GRID_FADE}
           infiniteGrid
         />
-        <SceneLayers
-          {...layer}
-          handsKeptFromUs={handsKeptFromUs}
-          framesLoadedToUs={framesLoadedToUs}
-          selectedId={selectedId}
-          onSelect={onSelect}
-          environment={environment}
-          tracks={tracks}
-          shapes={shapes}
-          retarget={retarget}
-          showRobot={showRobot}
-          body={body}
-        />
+        <SceneFetchContext.Provider value={sceneFetch ?? null}>
+          <SceneLayers
+            {...layer}
+            handsKeptFromUs={handsKeptFromUs}
+            framesLoadedToUs={framesLoadedToUs}
+            selectedId={selectedId}
+            onSelect={onSelect}
+            environment={environment}
+            tracks={tracks}
+            shapes={shapes}
+            retarget={retarget}
+            showRobot={showRobot}
+            body={body}
+            room={room}
+            models={models}
+          />
+        </SceneFetchContext.Provider>
         <OrbitControls makeDefault target={view.target} />
       </Canvas>
     </div>
@@ -246,6 +277,8 @@ export interface SceneLayersProps extends LayerProps {
   retarget?: readonly RetargetDoc[];
   showRobot?: boolean;
   body?: BodyDoc | null;
+  room?: FileRef | null;
+  models?: ReadonlyMap<string, ModelFile>;
 }
 
 /** Every layer of one capture, inside the group that turns ROS into the renderer's frame. */
@@ -260,10 +293,16 @@ export function SceneLayers({
   retarget = NO_RETARGET,
   showRobot = true,
   body = null,
+  room = null,
+  models = NO_MODELS,
   ...layer
 }: SceneLayersProps) {
   return (
     <group quaternion={ROS_TO_RENDER}>
+      <SceneLights theme={layer.theme} />
+      {room && (
+        <RoomLayer file={room} theme={layer.theme} debug={layer.debug} />
+      )}
       <EnvironmentLayer {...layer} environment={environment} />
       <HeadLayer {...layer} framesLoadedToUs={framesLoadedToUs} />
       <HandsLayer
@@ -277,6 +316,7 @@ export function SceneLayers({
         onSelect={onSelect}
         tracks={tracks}
         shapes={shapes}
+        models={models}
       />
       <DetectionsLayer {...layer} />
       {showRobot && retarget.length > 0 && (
@@ -285,6 +325,64 @@ export function SceneLayers({
       {showRobot && body && <BodyLayer {...layer} body={body} />}
     </group>
   );
+}
+
+/**
+ * The light the room scan and the generated models are shaded by; every other layer is unlit. A
+ * bright sky-to-ground fill and a soft key from behind the learner's left shoulder, on both layers,
+ * so surfaces read by their facing without going dark. In ROS: z up.
+ */
+function SceneLights({ theme }: { theme: Theme }) {
+  const lights = useMemo(() => {
+    const fill = new HemisphereLight();
+    fill.position.set(0, 0, 1);
+    const key = new DirectionalLight();
+    key.position.set(-1.2, 0.8, 2.4);
+    for (const light of [fill, key]) light.layers.enable(BACKDROP_LAYER);
+    return { fill, key };
+  }, []);
+  useEffect(
+    () => () => {
+      lights.fill.dispose();
+      lights.key.dispose();
+    },
+    [lights],
+  );
+  // Up-facing surfaces near their own color, walls a little below, the ground side not dark.
+  const dark = theme === "dark";
+  lights.fill.color.set("#ffffff");
+  lights.fill.groundColor.set(dark ? "#b4b9c2" : "#f0f2f5");
+  lights.fill.intensity = 2.9;
+  lights.key.intensity = 0.6;
+  return (
+    <>
+      <primitive object={lights.fill} />
+      <primitive object={lights.key} />
+    </>
+  );
+}
+
+/**
+ * Draws the backdrop layer (the room scan) first, then everything else over it with a cleared
+ * depth buffer, so context never hides measured data. Mounted only while a room is drawn; it takes
+ * over react-three-fiber's render for that time.
+ */
+function BackdropPass() {
+  useFrame(({ gl, scene, camera }) => {
+    const { background } = scene;
+    const autoClear = gl.autoClear;
+    camera.layers.set(BACKDROP_LAYER);
+    gl.render(scene, camera);
+    gl.autoClear = false;
+    gl.clearDepth();
+    // A color background would clear the room away again.
+    scene.background = null;
+    camera.layers.set(0);
+    gl.render(scene, camera);
+    scene.background = background;
+    gl.autoClear = autoClear;
+  }, 1);
+  return null;
 }
 
 /** Points the camera at the table. */

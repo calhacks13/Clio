@@ -33,13 +33,14 @@ Debug exposes a Compare action that opens 3D Replay and Data together. Compariso
 
 The `/clio` pages replay Clio recordings, live or finished. These rules add to the ones above and, where they are more specific, win over them on Clio pages. The G1 demo keeps its current look.
 
-### Measured, derived and inferred
+### Measured, derived, inferred and generated
 
-Every value on screen belongs to one of three levels. Each level keeps one look in the 3D scene, the lanes and the inspector, and a lower level never borrows a higher level's look.
+Every value on screen belongs to one of these levels. Each level keeps one look in the 3D scene, the lanes and the inspector, and a lower level never borrows a higher level's look.
 
 - **Measured**: what the headset wrote at capture time. Hand joints, head pose, object updates with their recorded source, detector answers with their recorded confidence and latency and, in episodes that declare them, location flags and grasp and release events. The source says how the headset got the value: a layout position is a recorded plan position, not a sensor reading. Measured marks are solid and full height.
 - **Derived**: exact arithmetic on measured values, with no assumptions. Time since the last update, a detector's observation time (answer time minus its latency), batch counts. Derived marks are thin 1px strokes in the muted color, never filled bars. A derived figure's label names its basis, such as "4.2 s since update".
 - **Inferred**: the viewer's own guess, which can be wrong. Held spans from pinch proximity or from frame-rate pinch runs, and any event whose origin is `inferred`. Inferred marks are the measured mark drawn dashed in the muted color, and their label says so ("Inferred from pinch"). In the event list an inferred event carries a muted "Inferred" after its name.
+- **Generated**: appearance a generator made, scaled and placed by measurements but never measured itself: each object's model from the rebuilt scene (`../docs/room-scene.md`). Generated marks are see-through and outlined, never solid: the model's own colors moved 35% toward their gray, lit, at half opacity with only its nearest surface drawn, and its visible creases as a thin 1px outline in the object's identity color (muted where the object is not tracked, like its dot). In the inspector, generated values are muted with a dotted underline, under a "Model (generated)" label. A generated model never replaces a measured mark: the dot, rings, trail, label, extent box and shape points stay with it.
 
 Show confidence only where it was measured (detector and marker answers). When it is null, leave the row out instead of showing 0, a dash or "n/a". Episodes without location flags never show tracking loss; the lane's tooltip says "Tracking loss not recorded" instead of drawing a gap.
 
@@ -70,6 +71,8 @@ Objects get identity colors in the order they first appear in the capture, cycli
 - **Detections**: a line loop in the detection color, with no fill and a small "Approximate" label, because the outline assumes a camera model. The reason ("Assumed camera model") goes in the inspector or a tooltip, not on the canvas.
 - **Context**: the workspace box and the floor plane from calibration stay as subdued as the grid. Their labels follow the axes rule and appear in Debug: "table corner" at the origin and "floor from calibration" on the floor. Compiled planes (floor, walls, a detected table) are context too: outlines in the grid color, labelled only in Debug ("detected wall", "table from calibration").
 - **Retargeted robot**: an inferred mark. Each arm is a dashed joint chain in the muted color with small joint markers and a dashed gripper, drawn at the compiled frame in force and hidden where it has no solution. One "Retargeted" label plus the robot's name sits at its base; the tooltip says it is solved from the hands, not measured. A solid Robot toggle in the header shows or hides it.
+- **Room scan**: context, measured by Space Setup before the episode, so it stays as quiet as the grid and never covers data: it is drawn first and everything measured over it, whatever is in front. The global mesh is a surface one step off the canvas (#E3E8EE / #1A1D24), lit softly from above so walls read by their facing without going dark, with its creases as faint edges in the grid color; seen from outside the room its nearest walls drop away. Furniture volumes are the table color at 30% opacity with edges in the stronger hairline (#BCC8D6 / #3B4350). Labels follow the context rule: only in Debug, "scanned couch", at the middle of the volume. The grid fades out nearer (2.2 m) while the room shows, so it frames the table instead of lying across the room. A Room toggle in the header shows or hides it.
+- **Generated models**: the generated look above, riding on the object's compiled position and hidden wherever that is null. A Models toggle in the header shows or hides them.
 
 ### Lanes
 
@@ -100,7 +103,7 @@ Source labels in the lanes, legend and inspector:
 ### Status and live
 
 - Status pills are 20px tall with 8px side padding, in Inter 12px/500 and sentence case. **Live** is a citrus fill with #0F1117 text in both themes. **Stopped** and **Reconnecting** use a `--fg-muted` fill with `--surface-0` text (#FFFFFF / #14171D). **Finished** uses a `--fill-strong` fill with `--fg-soft` text.
-- Once an episode is no longer live, a compile state that needs attention follows the status pill as plain text: Compiling, Not compiled, Compile stale, or Compile failed in the problem color with the error or the failed stages as tooltip. A healthy compile adds no text. An episode whose quality verdict is not usable adds "Not usable" in the problem color, with the first reason as tooltip.
+- Once an episode is no longer live, a compile state that needs attention follows the status pill as plain text: Compiling, Not compiled, Compile stale, or Compile failed in the problem color with the error or the failed stages as tooltip. A healthy compile adds no text. An episode whose quality verdict is not usable adds "Not usable" in the problem color, with the first reason as tooltip. The scene build follows the same way: Building scene, Scene stale, or Scene failed in the problem color. A healthy scene, and one never built, add no text.
 - Batch integrity appears only when something is missing: "3 batches missing" in the problem color beside the pill, in the list and the header. A complete episode adds no text; the Finished pill's tooltip says "All 12 batches received".
 - While following, the transport shows the Live pill. After a seek away from the edge, a filled slate "Go live" pill takes its place.
 - The live indicator never pulses or blinks; the advancing edge shows growth.
@@ -116,8 +119,8 @@ Source labels in the lanes, legend and inspector:
 
 ### Solid fills
 
-Status pills, legend swatches, lane bands and marks, missing ranges and the selected row are opaque fills. Shade time ranges with the missing color, never a translucent overlay. Trails and the live edge are solid, with no gradient or fade. 3D materials stay opaque: a lost object changes to the muted color, not to a lower opacity. Detection outlines and radius rings are lines with no fill. No pill, swatch or button here has an outlined variant.
+Status pills, legend swatches, lane bands and marks, missing ranges and the selected row are opaque fills. Shade time ranges with the missing color, never a translucent overlay. Trails and the live edge are solid, with no gradient or fade. 3D materials of measured, derived and inferred marks stay opaque: a lost object changes to the muted color, not to a lower opacity. The two exceptions are not marks of those levels: generated models are see-through by definition, and the room scan's furniture volumes are translucent context. Detection outlines and radius rings are lines with no fill. No pill, swatch or button here has an outlined variant.
 
 ### Checks for Clio pages
 
-Check light and dark; live, stopped, finished and reconnecting; an episode with and one without location flags; a null rotation; recorded and inferred held spans; "Not loaded" and "Hands not kept" ranges; a long object name; and narrow widths, where the lanes sit below the viewport and the label column shrinks to the swatch and a truncated name.
+Check light and dark; live, stopped, finished and reconnecting; an episode with and one without location flags; a null rotation; recorded and inferred held spans; "Not loaded" and "Hands not kept" ranges; a long object name; and narrow widths, where the lanes sit below the viewport and the label column shrinks to the swatch and a truncated name. With a room scan and models: the room on and off, the camera inside and outside the room, a model on a tracked and an untracked object, a model while its object is lost, and Debug's scanned labels beside the detected planes'.

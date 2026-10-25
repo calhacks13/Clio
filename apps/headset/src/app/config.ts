@@ -41,6 +41,11 @@ export interface AppConfig {
    * names the next thing to touch (needs the camera, the live tracker and a Gemini key).
    */
   focus: boolean;
+  /**
+   * Record the Quest room scan and camera keyframes for the object models (docs/room-scene.md).
+   * Off unless ?scan=1.
+   */
+  scan: boolean;
 }
 
 const DEFAULTS: AppConfig = {
@@ -62,6 +67,7 @@ const DEFAULTS: AppConfig = {
   frameWidth: null,
   liveHeld: true,
   focus: true,
+  scan: false,
 };
 
 function oneOf<T extends string>(value: string | null, allowed: readonly T[], fallback: T): T {
@@ -108,5 +114,6 @@ export function readConfig(search: string): AppConfig {
     frameWidth: whole(q.get('frame')),
     liveHeld: flag(q.get('liveHeld'), DEFAULTS.liveHeld),
     focus: flag(q.get('focus'), DEFAULTS.focus),
+    scan: flag(q.get('scan'), DEFAULTS.scan),
   };
 }

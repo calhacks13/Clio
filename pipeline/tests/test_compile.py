@@ -104,7 +104,7 @@ def test_the_manifest_records_inputs_artifacts_and_the_compiler(featured_episode
         "ep-20261024-031502-feat",
         15,
     )
-    assert manifest["compiler"] == {"name": "clio_pipeline", "version": "0.7.0"}
+    assert manifest["compiler"] == {"name": "clio_pipeline", "version": "0.8.0"}
     assert manifest["compiledAt"].endswith("Z") and len(manifest["compiledAt"]) == 24
     assert [i["name"] for i in manifest["inputs"]] == [
         "meta.json",
@@ -343,6 +343,7 @@ def test_a_profile_that_cannot_be_loaded_fails_only_its_stage(episode_dir, tmp_p
     assert [s["status"] for s in result.manifest["stages"] if s["name"] != "retarget"] == [
         "ok",
         "skipped",  # shapes: no depth samples
+        "skipped",  # room: no room scan
         "ok",
         "ok",  # body-g1
         "ok",
@@ -698,6 +699,7 @@ def test_a_malformed_observation_does_not_stop_the_compile(featured_episode_dir,
 
     assert [s["status"] for s in result.manifest["stages"]] == [
         "ok",
+        "skipped",
         "skipped",
         "ok",
         "skipped",

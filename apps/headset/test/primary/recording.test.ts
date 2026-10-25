@@ -408,6 +408,76 @@ describe('PrimaryRecording', () => {
     expect(off.reads).toBe(0);
   });
 
+  it('records the room scan with its GLB, when the session detects meshes', async () => {
+    const mesh = {
+      key: 'mesh-1',
+      label: 'global mesh',
+      pose: { p: [0, 0, 0] as Vec3, q: [0, 0, 0, 1] as [number, number, number, number] },
+      vertices: new Float32Array([0, 0, 0, 1, 0, 0, 0, 0, 1]),
+      indices: new Uint32Array([0, 2, 1]),
+      changedAt: 900,
+    };
+    const matrix = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1.5, 0, 1]);
+    const frame = {
+      getViewerPose: () => ({ transform: { matrix } }),
+      session: { inputSources: [] },
+    } as unknown as XRFrame;
+    const record = async (xrFeatures: string[]) => {
+      const sink = new MemoryEpisodeSink();
+      const clock = new ManualClock(1000);
+      let reads = 0;
+      const recording = new PrimaryRecording({
+        sink,
+        clock,
+        sleep: async () => {},
+        meshes: {
+          read: () => {
+            reads++;
+            return [mesh];
+          },
+        },
+      });
+      recording.begin({ ...info, xrFeatures });
+      for (let t = 1000; t < 1500; t += 14) {
+        clock.set(t);
+        recording.xrFrame(frame, {} as XRReferenceSpace, t);
+      }
+      await recording.end();
+      const episode = sink.only();
+      return { episode, events: episode.batches.flatMap((b) => b.events), reads };
+    };
+
+    const on = await record(['local-floor', 'mesh-detection']);
+    expect(on.episode.meta.features).toEqual(['object.flags', 'environment.meshes']);
+    // The first frame starts the episode and takes the snapshot; then nothing is read until a
+    // change could be recorded.
+    expect(on.reads).toBe(1);
+    const scans = on.events.filter((e) => e.type === 'environment.meshes');
+    expect(scans).toEqual([
+      {
+        t: 0,
+        type: 'environment.meshes',
+        media: 'room-scan-1.glb',
+        meshes: [
+          {
+            id: 'mesh-1',
+            kind: 'other',
+            label: 'global mesh',
+            global: true,
+            vertices: 3,
+            triangles: 1,
+          },
+        ],
+      },
+    ]);
+    expect(on.episode.media.get('room-scan-1.glb')?.type).toBe('model/gltf-binary');
+
+    const off = await record(['local-floor']);
+    expect(off.episode.meta.features).toEqual(['object.flags']);
+    expect(off.reads).toBe(0);
+    expect(off.episode.media.size).toBe(0);
+  });
+
   it('turns target names into object ids', () => {
     expect(objectIdFor('Red mug')).toBe('red-mug');
     expect(objectIdFor('  Syringe (10 ml) ')).toBe('syringe-10-ml');

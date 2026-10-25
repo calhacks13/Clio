@@ -1,11 +1,12 @@
 # Clio pipeline
 
 Offline Python tools for the episodes the server writes to `data/episodes/<episodeId>/`: validate
-them against the protocol's JSON Schemas, compile them into `data/derived/<episodeId>/`, replay
-them in [Rerun](https://rerun.io), and export them to a
-[LeRobot](https://github.com/huggingface/lerobot) dataset. The file formats are described in
-[docs/data-format.md](../docs/data-format.md), the compiled files in
-[docs/data-pipeline.md](../docs/data-pipeline.md).
+them against the protocol's JSON Schemas, compile them into `data/derived/<episodeId>/`, build a
+model of each object into `data/scenes/<episodeId>/`, replay them in [Rerun](https://rerun.io), and
+export them to a [LeRobot](https://github.com/huggingface/lerobot) dataset. The file formats are
+described in [docs/data-format.md](../docs/data-format.md), the compiled files in
+[docs/data-pipeline.md](../docs/data-pipeline.md), the room scan and the object models in
+[docs/room-scene.md](../docs/room-scene.md).
 
 ## Setup
 
@@ -16,8 +17,8 @@ uv run pytest -q
 ```
 
 Extras: `viz` (rerun-sdk, for `clio view`) and `lerobot` (lerobot[dataset], for `clio
-export-lerobot`; needs Python >= 3.12). `clio validate`, `clio info` and `clio compile` need
-neither.
+export-lerobot`; needs Python >= 3.12). `clio validate`, `clio info`, `clio compile` and `clio
+scene` need neither.
 
 ## Commands
 
@@ -27,6 +28,7 @@ Any argument can be an episode directory or a directory of episodes (such as `da
 uv run clio validate ../data/episodes            # exit code 1 if any file breaks the schemas
 uv run clio info ../data/episodes/ep-20261024-031502-k3f9
 uv run clio compile ../data/episodes --if-stale  # into ../data/derived/<id>/
+uv run clio scene ../data/episodes --if-stale    # object models, into ../data/scenes/<id>/
 uv run clio view ../data/episodes/ep-...         # opens the Rerun viewer
 uv run clio view ../data/episodes/ep-... --save out/ep.rrd   # or write a file: `rerun out/ep.rrd`
 uv run clio export-lerobot ../data/episodes --out out/shirt-fold --repo-id clio/shirt-fold --fps 30
@@ -58,7 +60,9 @@ refused). Each episode gets `<out>/<episodeId>/`:
 | ------------------------- | ------------------------------------------------------------------------------------------------- |
 | `manifest.json`           | compiler version, raw inputs (bytes, SHA-256), stage results, artifacts, quality verdict          |
 | `tracks.json`             | head, wrists (pose, pinch) and every object on one grid: masks, sources, held spans, observations |
-| `environment.json`        | table, floor and every detected plane                                                             |
+| `environment.json`        | table, floor, every detected plane, and `room`: the room scan's summary (null without one)        |
+| `room.glb`                | the Quest room scan in W, one node per mesh (only when the episode recorded one)                  |
+| `shapes.json`             | each object's depth samples fused around its tracked position (only with depth samples)           |
 | `retarget-<profile>.json` | one per `--retarget` profile: robot joint trajectories                                            |
 
 - Raw files are only read. Everything is written to a hidden directory first, then swapped in.
@@ -67,13 +71,14 @@ refused). Each episode gets `<out>/<episodeId>/`:
 - Compiles of one episode take turns (a lock on `<out>/.<episodeId>.lock`, which stays), and each
   first removes the hidden directories a killed compile left. SIGTERM (the server's timeout and
   shutdown) ends `clio compile` with exit code 143 after cleaning up.
-- Each stage (`tracks`, `environment`, `retarget-<profile>`, `quality`) runs on its own: a
-  failure is recorded in the manifest and the others still run. Without `--retarget` the
+- Each stage (`tracks`, `shapes`, `room`, `environment`, `retarget-<profile>`, `quality`) runs
+  on its own: a failure is recorded in the manifest and the others still run. Without `--retarget` the
   `retarget` stage is skipped. The exit code is 1 only when an episode could not be compiled at
   all: `meta.json`, `frames.ndjson`, `events.ndjson` and `objects.ndjson` must be readable (if not,
   the error names the file and line). `observations.ndjson` is not needed: bad lines are skipped.
 - `--if-stale` keeps a compile made from the same raw files, compiler version, fps and profile
-  versions. `--finished-only` skips episodes without `finish.json`. `--json` prints one line per
+  versions. The raw files are the ones above plus every `media/room-scan-<n>.glb` (listed as
+  inputs under that name); keyframes are not compile inputs. `--finished-only` skips episodes without `finish.json`. `--json` prints one line per
   episode: `{episodeId, skipped, outDir, usable, stages}`.
 - The quality verdict calls an episode usable only when it finished as `completed`, every batch
   arrived, no two frames are more than a second apart, a hand was tracked in at least half of the
@@ -96,6 +101,43 @@ refused). Each episode gets `<out>/<episodeId>/`:
   an `object.flags` episode, runs of `heldBy` for objects whose states record it; else inferred
   from pinches. A state without `heldBy` says nothing about holding (null means not held).
 
+- Room scan (`room.py`): the last `environment.meshes` snapshot whose GLB arrived and can be read
+  becomes `room.glb` in the same node layout (pose in W, local positions), with vertex normals and
+  `extras: {kind, label, global}`; `environment.json`'s `room` lists every mesh with its counts and
+  bounds in W. An unreadable later snapshot is passed over and a mesh no viewer could draw is left
+  out, both said in the stage's detail. No snapshot: skipped. None readable: failed, room null.
+
+## Scene
+
+The server runs `clio scene --if-stale` after each compile of an episode recorded with `?scan=1`;
+run it by hand to rebuild, or to build any other episode.
+
+```bash
+uv run clio scene ../data/episodes/ep-...                    # writes ../data/scenes/ep-.../
+uv run clio scene ../data/episodes/ep-... --derived ../data/derived --out ../data/scenes \
+    --models triposr --if-stale                              # what the server runs
+```
+
+Each episode needs its compile (`<derived>/<id>/manifest.json`; without one the exit code is 1
+and the last line on stderr says so). It gets `<out>/<episodeId>/`: `scene.json` (inputs with
+hashes, options, stages, one entry per object model), `model-<id>.glb` and `crop-<id>-<n>.jpg`
+([docs/room-scene.md](../docs/room-scene.md)).
+
+- `--models`: `triposr` (default: TripoSR on this machine, in its own environment in
+  `tools/triposr/`; run `tools/triposr/setup.sh` once, until then objects get primitives),
+  `primitive` (instant) or `command` (`$CLIO_MODEL_COMMAND`). The one stage, `models`, calls
+  `clio_pipeline.models.build_object_models`; a failure is recorded in scene.json, which is still
+  written (exit code 0). An object whose entry breaks the schema or names a file that was not
+  written is left out and said in the stage's detail.
+- Built aside and swapped in like a compile, under `<out>/.<id>.lock`; never into the episode,
+  its episodes directory or the derived root. SIGTERM ends it with exit code 143 and keeps the
+  scene it was replacing.
+- `--if-stale` keeps, untouched, a scene built from the same inputs (`meta.json`,
+  `events.ndjson`, `observations.ndjson`, the keyframe JPEGs, the compile's `manifest.json`,
+  `tracks.json`, `shapes.json`), `--models` and pipeline version, with every file it lists still
+  there. Every compile writes a new manifest.json, so it makes the scene stale. `--json` prints one
+  line per episode: `{episodeId, skipped, outDir, stages, objects}`.
+
 ## Library
 
 ```python
@@ -104,6 +146,8 @@ from clio_pipeline.segments import step_segments, frame_labels, mistakes
 from clio_pipeline.resample import resample_episode
 from clio_pipeline.objects import object_series
 from clio_pipeline.compile import compile_episode
+from clio_pipeline.keyframes import load_keyframes
+from clio_pipeline.scene import build_scene
 
 ep = load_episode("../data/episodes/ep-...", validate=True)
 ep.t            # (N,) ms since episode start
@@ -118,6 +162,8 @@ labels = frame_labels(ep, segments)            # per frame: step_index (-1 outsi
 r = resample_episode(ep, fps=30)               # max_gap_ms=MAX_FRAME_GAP_MS leaves long frame gaps out
 series = object_series(ep, r.t)                # {id: ObjectSeries}: position, valid, tracked, interpolated, held_by, ...
 result = compile_episode(ep.path, "../data/derived", if_stale=True)   # CompileResult(episode_id, out_dir, skipped, manifest)
+frames = load_keyframes(ep)                      # Keyframe(media, path, captured_t, pose, ...): project(), world_from_camera()
+scene = build_scene(ep.path, "../data/derived", "../data/scenes", models="primitive")  # SceneResult(episode_id, out_dir, skipped, scene)
 ```
 
 A step entered but never completed ends at the next `step.entered`, at `procedure.completed` or
@@ -165,6 +211,13 @@ Poses are converted to the z-up robot frame (base at the workspace origin, facin
 `tests/conftest.py` builds small synthetic episodes; `test_synthetic_builder.py` checks them against
 `packages/protocol/schema` with plain jsonschema so the builder can't drift from the contract.
 `test_fixture_episodes.py` runs every stage, compile included, over `fixtures/episodes/*` (the
-TypeScript generator's output); point `CLIO_FIXTURES_DIR` elsewhere to run it on other episodes.
+TypeScript generator's output, and the room scan fixture below); point `CLIO_FIXTURES_DIR`
+elsewhere to run it on other episodes.
 `test_compile.py` checks compiled files against the `derived-*` schemas with plain jsonschema.
 `CLIO_SCHEMA_DIR` overrides where the schemas are read from.
+
+`fixtures/episodes/synthetic-room-scan` is written by `scripts/synth_room_scan.py` (`uv run python
+scripts/synth_room_scan.py`, deterministic): a room scan, ray-cast keyframes of a cup and a box,
+and the tracker's boxes on the same camera frames. `test_room_scan_fixture.py` checks it is what
+the script writes and that its poses, boxes and images agree. `tests/assets/headset-room-scan.glb`
+is a room scan written by the headset's own GLB writer (`tests/assets/headset-room-scan.ts`).

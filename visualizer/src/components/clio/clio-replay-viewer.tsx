@@ -12,14 +12,26 @@ import React, {
   useState,
   useSyncExternalStore,
 } from "react";
-import { LuBot, LuBug, LuFolderOpen, LuPin } from "react-icons/lu";
+import {
+  LuBot,
+  LuBug,
+  LuFolderOpen,
+  LuHouse,
+  LuPin,
+  LuShapes,
+} from "react-icons/lu";
 import { ClioBrand } from "@/components/clio-brand";
 import { ThemeToggle } from "@/components/ui";
 import { TimeProvider } from "@/context/time-context";
 import { captureKey } from "@/lib/clio/capture-key";
-import { compileStatus, type DerivedState } from "@/lib/clio/derived";
+import {
+  compileStatus,
+  type DerivedState,
+  sceneStatus,
+} from "@/lib/clio/derived";
 import { buildLanes, recordsLocationFlags } from "@/lib/clio/lanes";
 import type { Clock } from "@/lib/clio/live-clock";
+import { modelFiles, roomFile, sceneFileUrl } from "@/lib/clio/scene-files";
 import { ClioSource } from "@/lib/clio/source";
 import type { EpisodeSourceState, FollowMode } from "@/lib/clio/types";
 import { useClioClock } from "./clio-clock";
@@ -42,8 +54,10 @@ import { useClioDerived } from "./use-clio-derived";
 // shown and moves to its /clio/<id> page. Laid out like the G1 replay: an
 // unframed canvas between two rounded toolbar surfaces, with docked panels.
 // The compiled documents (object series and shapes, planes, retargeted
-// robots, the compile state) come from their own loader beside the source
-// (use-clio-derived), so raw following never waits on them.
+// robots, the compile state) and the rebuilt scene's SceneDoc come from their
+// own loader beside the source (use-clio-derived), so raw following never
+// waits on them. The Room and Models toggles show the Quest room scan and the
+// generated object models; their files are read only while shown.
 
 /** The lanes' axis grows in these steps while live, so they rebuild at most ten times a second. */
 const AXIS_STEP_US = 100_000;
@@ -123,6 +137,11 @@ export default function ClioReplayViewer({
   );
   const derived = useClioDerived(snapshot.episodeId);
   const [showRobot, setShowRobot] = useState(true);
+  const [showRoom, setShowRoom] = useState(true);
+  const [showModels, setShowModels] = useState(true);
+  const hasRoom = Boolean(derived.environment?.room);
+  const hasModels =
+    derived.scene?.objects.some((model) => model.model !== null) ?? false;
 
   // A pinned episode the server does not have: back to the list.
   const gone =
@@ -202,6 +221,32 @@ export default function ClioReplayViewer({
                 <span className="tool-label">Pin</span>
               </button>
             )}
+            {hasRoom && (
+              <button
+                type="button"
+                aria-pressed={showRoom}
+                title="Show the Quest room scan, from Space Setup before the recording"
+                aria-label="Room"
+                onClick={() => setShowRoom((on) => !on)}
+                className={`btn ${showRoom ? "btn-active" : ""}`}
+              >
+                <LuHouse size={16} aria-hidden="true" />{" "}
+                <span className="tool-label">Room</span>
+              </button>
+            )}
+            {hasModels && (
+              <button
+                type="button"
+                aria-pressed={showModels}
+                title="Show the generated object models"
+                aria-label="Models"
+                onClick={() => setShowModels((on) => !on)}
+                className={`btn ${showModels ? "btn-active" : ""}`}
+              >
+                <LuShapes size={16} aria-hidden="true" />{" "}
+                <span className="tool-label">Models</span>
+              </button>
+            )}
             {(derived.retarget.length > 0 || derived.body !== null) && (
               <button
                 type="button"
@@ -254,6 +299,8 @@ export default function ClioReplayViewer({
           debug={debug}
           derived={derived}
           showRobot={showRobot}
+          showRoom={showRoom}
+          showModels={showModels}
           onRetry={() => {
             source.stop();
             source.start();
@@ -271,6 +318,8 @@ function ClioWorkspace({
   debug,
   derived,
   showRobot,
+  showRoom,
+  showModels,
   onRetry,
 }: {
   snapshot: EpisodeSourceState;
@@ -279,6 +328,8 @@ function ClioWorkspace({
   debug: boolean;
   derived: DerivedState;
   showRobot: boolean;
+  showRoom: boolean;
+  showModels: boolean;
   onRetry: () => void;
 }) {
   const { clock, seek, togglePlaying, goLive } = useClioClock(
@@ -362,6 +413,25 @@ function ClioWorkspace({
   // On the raw episode's own status, not the Reconnecting overlay: a live
   // episode that briefly fails to read is still not compiled.
   const compile = compileStatus(derived, snapshot.status);
+  const scene = sceneStatus(derived, snapshot.status);
+
+  // The files the scene reads, only while their toggle is on.
+  const { environment, compiledAt } = derived;
+  const room = useMemo(
+    () => roomFile({ episodeId, environment, compiledAt }, showRoom),
+    [episodeId, environment, compiledAt, showRoom],
+  );
+  const sceneDoc = derived.scene;
+  const models = useMemo(
+    () => modelFiles({ episodeId, scene: sceneDoc }, showModels),
+    [episodeId, sceneDoc, showModels],
+  );
+  const selectedModel =
+    sceneDoc?.objects.find((model) => model.id === selectedId) ?? null;
+  const cropUrl = useCallback(
+    (name: string) => sceneFileUrl(episodeId, name),
+    [episodeId],
+  );
 
   const newest = snapshot.newest;
   const lag: ClioLag | null =
@@ -408,6 +478,8 @@ function ClioWorkspace({
                     retarget={derived.retarget}
                     body={derived.body}
                     showRobot={showRobot}
+                    room={room}
+                    models={models}
                     className="absolute inset-0"
                   />
                   <StepBanner
@@ -444,6 +516,8 @@ function ClioWorkspace({
                 flagsRecorded={flagsRecorded}
                 tracks={derived.tracks}
                 shapes={derived.shapes}
+                model={selectedModel}
+                sceneFileUrl={cropUrl}
               />
               <div className="flex max-h-[320px] min-h-0 flex-col border-t border-line-subtle pt-4 lg:max-h-none lg:flex-1">
                 <EventList
@@ -486,6 +560,7 @@ function ClioWorkspace({
           batches={snapshot.batches}
           lag={lag}
           compile={compile}
+          scene={scene}
           disabled={!capture}
         />
       </div>

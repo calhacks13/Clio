@@ -6,6 +6,7 @@ import { ClipStore } from '../src/storage/clip-store';
 import { DerivedStore } from '../src/storage/derived-store';
 import { EpisodeStore } from '../src/storage/episode-store';
 import { ProcedureStore } from '../src/storage/procedure-store';
+import { SceneStore } from '../src/storage/scene-store';
 import { episodeCreate } from './fixtures';
 import { captureLogger, harness, tempDir } from './harness';
 
@@ -161,6 +162,7 @@ describe('CORS on /api', () => {
       liveModel: 'live-test',
       episodes: new EpisodeStore(join(dir, 'episodes')),
       derived: new DerivedStore(join(dir, 'derived')),
+      scenes: new SceneStore(join(dir, 'scenes')),
       procedures: new ProcedureStore({
         curatedDir: join(dir, 'procedures'),
         plansDir: join(dir, 'plans'),

@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CORS_ORIGINS, loadConfig, REPO_ROOT } from '../src/config';
+import { DEFAULT_CORS_ORIGINS, describeSceneBuilds, loadConfig, REPO_ROOT } from '../src/config';
 
 describe('loadConfig', () => {
   it('uses defaults rooted at the repo, not the working directory', () => {
@@ -28,6 +28,10 @@ describe('loadConfig', () => {
       compile: 'auto',
       pipelineDir: '/repo/pipeline',
       retargetProfiles: ['/repo/pipeline/src/clio_pipeline/retarget/profiles/clio-arm-6dof.json'],
+      // Each compile is followed by a scene build with offline primitive models.
+      scene: 'auto',
+      sceneModels: 'triposr',
+      sceneTimeoutMs: null,
     });
   });
 
@@ -168,9 +172,69 @@ describe('loadConfig', () => {
     );
   });
 
+  it('turns scene builds off only with CLIO_SCENE=off', () => {
+    expect(loadConfig({ CLIO_SCENE: 'off' }, '/repo').scene).toBe('off');
+    expect(loadConfig({ CLIO_SCENE: ' auto ' }, '/repo').scene).toBe('auto');
+    expect(loadConfig({ CLIO_SCENE: '' }, '/repo').scene).toBe('auto');
+    expect(() => loadConfig({ CLIO_SCENE: 'on' }, '/repo')).toThrow(/CLIO_SCENE/);
+  });
+
+  it('reads the object model backend, triposr unless set', () => {
+    for (const models of ['primitive', 'triposr', 'command'] as const) {
+      expect(loadConfig({ CLIO_SCENE_MODELS: ` ${models} ` }, '/repo').sceneModels).toBe(models);
+    }
+    expect(loadConfig({ CLIO_SCENE_MODELS: '' }, '/repo').sceneModels).toBe('triposr');
+    for (const value of ['gemini-cad', 'trellis', 'Primitive']) {
+      expect(() => loadConfig({ CLIO_SCENE_MODELS: value }, '/repo')).toThrow(/CLIO_SCENE_MODELS/);
+    }
+  });
+
+  it('reads a scene build timeout in whole milliseconds, up to a day', () => {
+    expect(loadConfig({ CLIO_SCENE_TIMEOUT_MS: ' 120000 ' }, '/repo').sceneTimeoutMs).toBe(120_000);
+    expect(loadConfig({ CLIO_SCENE_TIMEOUT_MS: '' }, '/repo').sceneTimeoutMs).toBeNull();
+    expect(loadConfig({ CLIO_SCENE_TIMEOUT_MS: '86400000' }, '/repo').sceneTimeoutMs).toBe(
+      86_400_000,
+    );
+    for (const value of ['0', '-5', '1.5', 'ten', '86400001']) {
+      expect(() => loadConfig({ CLIO_SCENE_TIMEOUT_MS: value }, '/repo'), value).toThrow(
+        /CLIO_SCENE_TIMEOUT_MS/,
+      );
+    }
+  });
+
   it('rejects an invalid port with a message naming the variable', () => {
     expect(() => loadConfig({ CLIO_SERVER_PORT: 'eighty' }, '/repo')).toThrow(/CLIO_SERVER_PORT/);
     expect(() => loadConfig({ CLIO_SERVER_PORT: '70000' }, '/repo')).toThrow(/CLIO_SERVER_PORT/);
+  });
+});
+
+describe('describeSceneBuilds', () => {
+  const on = { triposr: true, scene: true };
+
+  it('says which models scene builds make, and how to set TripoSR up when it is not', () => {
+    const models = (sceneModels: string) => loadConfig({ CLIO_SCENE_MODELS: sceneModels }, '/r');
+    expect(describeSceneBuilds(models('primitive'), on)).toBe(
+      'on (object models: primitive, offline)',
+    );
+    expect(describeSceneBuilds(models('triposr'), on)).toBe(
+      'on (object models: TripoSR, on this machine)',
+    );
+    expect(describeSceneBuilds(models(''), { ...on, triposr: false })).toBe(
+      'on (object models: triposr, but TripoSR is not set up, so primitives: run pipeline/tools/triposr/setup.sh)',
+    );
+    expect(describeSceneBuilds(models('command'), on)).toBe(
+      'on (object models: command, which runs CLIO_MODEL_COMMAND)',
+    );
+  });
+
+  it('says why scene builds are off', () => {
+    const off = { ...on, scene: false };
+    expect(describeSceneBuilds(loadConfig({ CLIO_SCENE: 'off' }, '/r'), off)).toBe(
+      'off (CLIO_SCENE=off)',
+    );
+    expect(describeSceneBuilds(loadConfig({ CLIO_COMPILE: 'off' }, '/r'), off)).toBe(
+      'off, since compiling is off',
+    );
   });
 });
 

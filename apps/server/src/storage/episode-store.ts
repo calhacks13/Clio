@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { createReadStream, type Dirent } from 'node:fs';
 import { appendFile, mkdir, open, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -18,7 +18,7 @@ import {
   type FrameRecord,
 } from '@clio/protocol';
 import { z } from 'zod';
-import { isSafeId, newEpisodeId } from '../ids';
+import { isSafeId, isSafeMediaName, newEpisodeId } from '../ids';
 import { describeError, type Logger } from '../log';
 import {
   countLines,
@@ -164,11 +164,11 @@ export class EpisodeStore {
   }
 
   /**
-   * Byte sizes of the named files of an episode, leaving out those that do not exist. Taken under
-   * the episode lock, so a size never counts half of an append.
+   * Byte sizes of the named files of an episode (`frames.ndjson`, or `media/<name>`), leaving out
+   * those that do not exist. Taken under the episode lock, so a size never counts half of an append.
    */
   fileSizes(id: string, names: readonly string[]): Promise<Map<string, number>> {
-    if (!isSafeId(id) || !names.every(isSafeId)) {
+    if (!isSafeId(id) || !names.every(isEpisodeFile)) {
       throw new Error(`Unsafe episode path: ${id}/{${names.join(',')}}`);
     }
     return this.#mutex.run(id, async () => {
@@ -182,6 +182,23 @@ export class EpisodeStore {
       }
       return sizes;
     });
+  }
+
+  /** The names of an episode's media files, sorted; none when it has no media/. */
+  async listMedia(id: string): Promise<string[]> {
+    if (!isSafeId(id)) return [];
+    let entries: Dirent[];
+    try {
+      entries = await readdir(this.#path(id, 'media'), { withFileTypes: true });
+    } catch (error) {
+      if (isMissing(error) || (error as NodeJS.ErrnoException).code === 'ENOTDIR') return [];
+      throw error;
+    }
+    // An upload in progress is a hidden temp file, which isSafeMediaName refuses.
+    return entries
+      .filter((e) => e.isFile() && isSafeMediaName(e.name))
+      .map((e) => e.name)
+      .sort();
   }
 
   /** Streams `body` to media/<name> through a temp file, so a failed upload leaves nothing. */
@@ -423,3 +440,8 @@ export class EpisodeStore {
 }
 
 const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/** One of an episode's own files (`meta.json`) or one of its media files (`media/<name>`). */
+function isEpisodeFile(name: string): boolean {
+  return name.startsWith('media/') ? isSafeMediaName(name.slice('media/'.length)) : isSafeId(name);
+}

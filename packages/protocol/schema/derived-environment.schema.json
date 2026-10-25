@@ -249,6 +249,160 @@
         "additionalProperties": false
       },
       "description": "Each detected plane as last reported; lastSeenT is when a snapshot first left it out, or the end of the episode"
+    },
+    "room": {
+      "description": "The Quest room scan the compile wrote to room.glb; null without one, absent from compilers before 0.8.0",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._-]{0,95}\\.(json|glb)$",
+              "description": "The GLB beside environment.json, \"room.glb\""
+            },
+            "source": {
+              "type": "string",
+              "const": "quest-scene",
+              "description": "WebXR mesh detection on the headset"
+            },
+            "media": {
+              "type": "string",
+              "description": "The raw snapshot it came from, in media/"
+            },
+            "snapshotT": {
+              "type": "number",
+              "description": "When that snapshot was recorded"
+            },
+            "snapshots": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "description": "Snapshots the episode recorded"
+            },
+            "meshes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "Stable within the episode; the headset numbers meshes as it first sees them"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "table",
+                      "floor",
+                      "wall",
+                      "ceiling",
+                      "couch",
+                      "other"
+                    ]
+                  },
+                  "label": {
+                    "description": "The WebXR semanticLabel as reported, if any",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "global": {
+                    "type": "boolean",
+                    "description": "The room's global mesh (semanticLabel \"global mesh\")"
+                  },
+                  "vertices": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "triangles": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "bounds": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "min": {
+                            "type": "array",
+                            "prefixItems": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "number"
+                              }
+                            ],
+                            "items": false,
+                            "minItems": 3,
+                            "maxItems": 3,
+                            "description": "[x, y, z] in meters"
+                          },
+                          "max": {
+                            "type": "array",
+                            "prefixItems": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "number"
+                              }
+                            ],
+                            "items": false,
+                            "minItems": 3,
+                            "maxItems": 3,
+                            "description": "[x, y, z] in meters"
+                          }
+                        },
+                        "required": [
+                          "min",
+                          "max"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Axis-aligned bounds in W; null for a mesh without vertices"
+                  }
+                },
+                "required": [
+                  "id",
+                  "kind",
+                  "label",
+                  "global",
+                  "vertices",
+                  "triangles",
+                  "bounds"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "file",
+            "source",
+            "media",
+            "snapshotT",
+            "snapshots",
+            "meshes"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [

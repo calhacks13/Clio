@@ -6,6 +6,7 @@ import type { RestMode } from './services/plan-service';
 import type { Planner } from './services/planner';
 import type { PrimaryObjectFinder } from './services/primary-object';
 import type { SceneAsker } from './services/scene';
+import type { SceneBuilder } from './services/scene-builder';
 import type { StepChecker } from './services/step-check';
 import type { TokenMinter } from './services/token-minter';
 import type { VisionLocator } from './services/vision';
@@ -15,6 +16,7 @@ import type { ClipStore } from './storage/clip-store';
 import type { DerivedStore } from './storage/derived-store';
 import type { EpisodeStore } from './storage/episode-store';
 import type { ProcedureStore } from './storage/procedure-store';
+import type { SceneStore } from './storage/scene-store';
 
 // Everything the HTTP app needs, injected so tests can build it on temp dirs with fakes for the
 // network-bound services.
@@ -56,6 +58,8 @@ export interface AppDeps {
   episodes: EpisodeStore;
   /** Compiled episodes (data/derived/): written by the pipeline, only read here. */
   derived: DerivedStore;
+  /** Rebuilt scenes (data/scenes/): object models from `clio scene`, only read here. */
+  scenes: SceneStore;
   procedures: ProcedureStore;
   clips: ClipStore;
   /** Gemini-backed services: null (or absent) when GEMINI_API_KEY is unset, so routes answer 503. */
@@ -76,6 +80,8 @@ export interface AppDeps {
   primary?: PrimaryObjectFinder | null;
   /** Compiles finished episodes in the background: null (or absent) when compiling is off. */
   compiler?: EpisodeCompiler | null;
+  /** Builds compiled episodes' scenes in the background: null (or absent) when that is off. */
+  sceneBuilder?: SceneBuilder | null;
   now?: () => Date;
   logger?: Logger;
   limits?: Partial<BodyLimits>;
@@ -91,7 +97,8 @@ type OptionalServices =
   | 'scene'
   | 'bench'
   | 'primary'
-  | 'compiler';
+  | 'compiler'
+  | 'sceneBuilder';
 
 export interface ServerDeps extends Required<Omit<AppDeps, 'limits' | OptionalServices>> {
   tokenMinter: TokenMinter | null;
@@ -104,6 +111,7 @@ export interface ServerDeps extends Required<Omit<AppDeps, 'limits' | OptionalSe
   bench: BenchDeps | null;
   primary: PrimaryObjectFinder | null;
   compiler: EpisodeCompiler | null;
+  sceneBuilder: SceneBuilder | null;
   limits: BodyLimits;
 }
 
@@ -120,6 +128,7 @@ export function resolveDeps(deps: AppDeps): ServerDeps {
     bench: deps.bench ?? null,
     primary: deps.primary ?? null,
     compiler: deps.compiler ?? null,
+    sceneBuilder: deps.sceneBuilder ?? null,
     now: deps.now ?? (() => new Date()),
     logger: deps.logger ?? consoleLogger,
     limits: { ...DEFAULT_LIMITS, ...deps.limits },

@@ -9,8 +9,10 @@ import {
   type EnvironmentDoc,
   EnvironmentDocSchema,
   EpisodeDerivedStatusSchema,
+  EpisodeSceneStatusSchema,
   type RetargetDoc,
   RetargetDocSchema,
+  type SceneDoc,
   type ShapesDoc,
   ShapesDocSchema,
   type TracksDoc,
@@ -32,8 +34,15 @@ import type { EpisodeStatus } from "./types";
 // manifest.compiledAt changes. A 404 or a file that does not parse means that
 // artifact is not compiled, never that the episode is gone: ClioSource alone
 // decides that.
+//
+// The same detail read carries the rebuilt scene (`clio scene`,
+// docs/room-scene.md): its build state and, once built, the SceneDoc that
+// says how each object's model was made. Its binary files (the room scan, the
+// models) are read lazily by the layers that draw them (scene-files.ts). A
+// scene status that does not parse, or a SceneDoc of another episode, reads as
+// no scene.
 
-/** How often the compile state is read while a compile is queued or running. */
+/** How often the compile state is read while a compile or a scene build is queued or running. */
 export const DERIVED_COMPILING_EVERY_MS = 2000;
 /** While nothing is compiled yet (the episode may still be recording). */
 export const DERIVED_WAITING_EVERY_MS = 5000;
@@ -84,9 +93,23 @@ export interface DerivedState {
   body: BodyDoc | null;
   /** Each artifact read for `compiledAt` (the DRAWN_KINDS), by file name. */
   artifacts: Readonly<Record<string, ArtifactStatus>>;
+  /**
+   * The scene build's state, the same states as a compile. Null before the first read, and when
+   * the server does not build scenes (its detail has no `scene`).
+   */
+  sceneState: CompileState | null;
+  /**
+   * The last scene build, while its state is ok or stale; a build queued or running keeps the one
+   * shown before. Null otherwise.
+   */
+  scene: SceneDoc | null;
+  /** Why the last scene build failed. */
+  sceneError: string | null;
   /** The last read failed (server unreachable or erroring) and will be retried. */
   error: { message: string; status: number | null; retryAtMs: number } | null;
 }
+
+type SceneFields = Pick<DerivedState, "sceneState" | "scene" | "sceneError">;
 
 export interface ClioDerivedSourceOptions {
   episodeId: string;
@@ -114,6 +137,9 @@ export function emptyDerivedState(episodeId: string | null): DerivedState {
     retarget: NO_RETARGET,
     body: null,
     artifacts: NO_ARTIFACTS,
+    sceneState: null,
+    scene: null,
+    sceneError: null,
     error: null,
   };
 }
@@ -279,14 +305,18 @@ export class ClioDerivedSource {
     const url = under(this.#apiBase, ApiPaths.episode(id));
     const res = await this.#fetch(url, { cache: "no-store", signal });
     if (!res.ok) throw new HttpError(url, res.status);
-    const body = (await res.json()) as { derived?: unknown } | null;
-    // Only `derived` is read: the raw fields are ClioSource's.
+    const body = (await res.json()) as {
+      derived?: unknown;
+      scene?: unknown;
+    } | null;
+    // Only `derived` and `scene` are read: the raw fields are ClioSource's.
     const derived = EpisodeDerivedStatusSchema.optional().parse(
       body?.derived ?? undefined,
     );
+    const scene = this.#scene(body?.scene);
     if (signal.aborted) return;
     if (!derived) {
-      this.#set(emptyDerivedState(id));
+      this.#set({ ...emptyDerivedState(id), ...scene });
       return;
     }
     const { state, manifest, error } = derived;
@@ -296,11 +326,12 @@ export class ClioDerivedSource {
         ...emptyDerivedState(id),
         compile: state,
         compileError: error,
+        ...scene,
       });
       return;
     }
     // A compile queued or running keeps the documents of the last one.
-    this.#set({ compile: state, manifest, compileError: error });
+    this.#set({ compile: state, manifest, compileError: error, ...scene });
     const readable = state === "ok" || state === "stale";
     if (!readable || manifest.compiledAt === this.#state.compiledAt) return;
     // One failed read abandons the others: the whole compile is read again.
@@ -369,7 +400,35 @@ export class ClioDerivedSource {
       : { name, status: "invalid" };
   }
 
+  /**
+   * The scene fields of a detail's `scene`. Like a compile's documents, the SceneDoc is taken from
+   * a build that is ok or stale, kept while another is queued or running, and dropped otherwise.
+   */
+  #scene(raw: unknown): SceneFields {
+    const parsed = EpisodeSceneStatusSchema.safeParse(raw);
+    if (raw === undefined || raw === null || !parsed.success) {
+      return { sceneState: null, scene: null, sceneError: null };
+    }
+    const { state, scene, error } = parsed.data;
+    const mine = scene?.episodeId === this.#episodeId ? scene : null;
+    const building = state === "queued" || state === "running";
+    return {
+      sceneState: state,
+      scene:
+        state === "ok" || state === "stale"
+          ? mine
+          : building
+            ? this.#state.scene
+            : null,
+      sceneError: error,
+    };
+  }
+
   #untilNext(): number {
+    const { sceneState } = this.#state;
+    if (sceneState === "queued" || sceneState === "running") {
+      return DERIVED_COMPILING_EVERY_MS;
+    }
     switch (this.#state.compile) {
       case "queued":
       case "running":
@@ -402,12 +461,18 @@ export class ClioDerivedSource {
       return JSON.stringify(a) === JSON.stringify(b);
     });
     if (same) return;
-    // Keep the manifest's identity while its content is unchanged.
+    // Keep the manifest's and the scene's identity while their content is unchanged.
     if (
       next.manifest !== this.#state.manifest &&
       JSON.stringify(next.manifest) === JSON.stringify(this.#state.manifest)
     ) {
       next.manifest = this.#state.manifest;
+    }
+    if (
+      next.scene !== this.#state.scene &&
+      JSON.stringify(next.scene) === JSON.stringify(this.#state.scene)
+    ) {
+      next.scene = this.#state.scene;
     }
     this.#state = next;
     for (const listener of this.#listeners) listener();
@@ -487,5 +552,76 @@ export function compileStatus(
           : "Compiled by an older pipeline"
         : null,
     notUsable,
+  };
+}
+
+/** What the transport shows for the scene build; null when there is nothing to show. */
+export interface SceneStatusView {
+  label: string;
+  /** A failed build or build stage: shown in the problem color. */
+  problem: boolean;
+  /** Tooltip detail, when there is any. */
+  detail: string | null;
+}
+
+/**
+ * The label of each scene state that needs attention. Unlike a compile, a scene that was never
+ * built says nothing: a server can be set not to build scenes (CLIO_SCENE=off).
+ */
+const SCENE_LABEL: Record<CompileState, string | null> = {
+  none: null,
+  queued: "Building scene",
+  running: "Building scene",
+  ok: null,
+  stale: "Scene stale",
+  failed: "Scene failed",
+};
+
+/**
+ * The scene build's state the transport shows beside the compile state, the same way
+ * (compileStatus): nothing while the episode is live or not loaded yet, a failed run or a failed
+ * stage of the last build as Scene failed, and a build queued or running as Building scene, which
+ * supersedes the last failure. A skipped stage (an object no model could be made for) is not a
+ * failure. A healthy or never-built scene adds no text.
+ */
+export function sceneStatus(
+  state: Pick<DerivedState, "sceneState" | "sceneError" | "scene">,
+  episodeStatus: EpisodeStatus | null,
+): SceneStatusView | null {
+  const { sceneState, sceneError, scene } = state;
+  if (
+    sceneState === null ||
+    episodeStatus === null ||
+    episodeStatus === "live"
+  ) {
+    return null;
+  }
+  const building = sceneState === "queued" || sceneState === "running";
+  const failures = building
+    ? []
+    : [
+        ...(sceneError ? [sceneError] : []),
+        ...(scene?.stages ?? [])
+          .filter((stage) => stage.status === "failed")
+          .map((stage) =>
+            stage.detail ? `${stage.name}: ${stage.detail}` : stage.name,
+          ),
+      ];
+  if (sceneState === "failed" || failures.length > 0) {
+    return {
+      label: "Scene failed",
+      problem: true,
+      detail: failures.length > 0 ? failures.join("\n") : null,
+    };
+  }
+  const label = SCENE_LABEL[sceneState];
+  if (label === null) return null;
+  return {
+    label,
+    problem: false,
+    detail:
+      sceneState === "stale"
+        ? "The compile or the keyframes changed after the last build"
+        : null,
   };
 }

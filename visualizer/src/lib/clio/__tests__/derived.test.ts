@@ -4,6 +4,7 @@ import {
   EnvironmentDocSchema,
   type EpisodeDerivedStatus,
   EpisodeDetailResponseSchema,
+  type EpisodeSceneStatus,
   type EpisodeMeta,
   RetargetDocSchema,
   ShapesDocSchema,
@@ -17,6 +18,7 @@ import {
   syntheticDerived,
 } from "../__fixtures__/synthetic-derived";
 import { syntheticEpisode, toNdjson } from "../__fixtures__/synthetic-episode";
+import { syntheticScene } from "../__fixtures__/synthetic-scene";
 import {
   ClioDerivedSource,
   compileStatus,
@@ -25,6 +27,7 @@ import {
   DERIVED_SETTLED_EVERY_MS,
   DERIVED_WAITING_EVERY_MS,
   emptyDerivedState,
+  sceneStatus,
 } from "../derived";
 import { ClioSource } from "../source";
 import type { Channel } from "../types";
@@ -33,7 +36,8 @@ import type { Channel } from "../types";
 // fetch. The fake serves an episode's detail (with its `derived` status), its
 // compiled files by name and, for the isolation tests, its raw NDJSON files
 // with `x-next-from` the way apps/server does. The loader reads only what the
-// scene draws: tracks, environment, shapes and retarget.
+// scene draws: tracks, environment, shapes and retarget, and the rebuilt
+// scene's state and SceneDoc from the same detail.
 
 const START_EPOCH_MS = Date.UTC(2026, 9, 24, 12);
 const EPISODE = syntheticEpisode({ startEpochMs: START_EPOCH_MS });
@@ -61,6 +65,8 @@ const hanging = (init?: RequestInit) =>
 class FakeServer {
   /** The detail's `derived`; undefined leaves it out (a server that cannot compile). */
   derived: EpisodeDerivedStatus | undefined;
+  /** The detail's `scene`; undefined leaves it out (a server that does not build scenes). */
+  scene: EpisodeSceneStatus | Record<string, unknown> | undefined;
   /** Compiled files by name: a body, or a bare status. */
   readonly files = new Map<string, string | number>();
   detailStatus = 200;
@@ -105,6 +111,7 @@ class FakeServer {
         },
         finish: null,
         ...(this.derived ? { derived: this.derived } : {}),
+        ...(this.scene !== undefined ? { scene: this.scene } : {}),
       });
     }
     if (part === "derived") {
@@ -738,6 +745,237 @@ describe("compile status", () => {
       reason: "Right hand tracked in 41% of frames",
     });
     expect(view({ compile: "ok", manifest }, "live")).toBeNull();
+  });
+});
+
+const SCENE = syntheticScene(EPISODE, COMPILED.manifest);
+
+describe("reading the rebuilt scene's state", () => {
+  test("an ok or stale scene gives its SceneDoc, read with the detail", async () => {
+    for (const state of ["ok", "stale"] as const) {
+      const server = new FakeServer();
+      server.compiled(COMPILED);
+      server.scene = { state, scene: SCENE.doc, error: null };
+      const loader = loaderOn(server);
+
+      expect(await loader.step()).toBe(DERIVED_SETTLED_EVERY_MS);
+      const shown = loader.getSnapshot();
+      expect(shown.sceneState).toBe(state);
+      expect(shown.scene).toEqual(SCENE.doc);
+      expect(shown.sceneError).toBeNull();
+      // No request of its own: the files are read by the layers, lazily.
+      expect(server.requests.filter((r) => r.includes("/scene"))).toEqual([]);
+    }
+  });
+
+  test("a build queued or running keeps the scene shown before", async () => {
+    const server = new FakeServer();
+    server.compiled(COMPILED);
+    server.scene = { state: "ok", scene: SCENE.doc, error: null };
+    const loader = loaderOn(server);
+    await loader.step();
+    const built = loader.getSnapshot().scene;
+
+    const rebuilt = syntheticScene(EPISODE, COMPILED.manifest, {
+      builtAt: "2026-10-24T12:08:00.000Z",
+    }).doc;
+    for (const state of ["queued", "running"] as const) {
+      server.scene = { state, scene: rebuilt, error: null };
+      // A build under way is polled like a compile under way.
+      expect(await loader.step()).toBe(DERIVED_COMPILING_EVERY_MS);
+      expect(loader.getSnapshot().sceneState).toBe(state);
+      expect(loader.getSnapshot().scene).toBe(built);
+    }
+    server.scene = { state: "ok", scene: rebuilt, error: null };
+    expect(await loader.step()).toBe(DERIVED_SETTLED_EVERY_MS);
+    expect(loader.getSnapshot().scene?.builtAt).toBe(rebuilt.builtAt);
+  });
+
+  test("a scene building before any was shown shows none", async () => {
+    const server = new FakeServer();
+    server.compiled(COMPILED);
+    server.scene = { state: "running", scene: SCENE.doc, error: null };
+    const loader = loaderOn(server);
+    await loader.step();
+    expect(loader.getSnapshot().sceneState).toBe("running");
+    expect(loader.getSnapshot().scene).toBeNull();
+  });
+
+  test("a failed or never-built scene has no SceneDoc", async () => {
+    const server = new FakeServer();
+    server.compiled(COMPILED);
+    server.scene = { state: "ok", scene: SCENE.doc, error: null };
+    const loader = loaderOn(server);
+    await loader.step();
+
+    server.scene = {
+      state: "failed",
+      scene: null,
+      error: "models: no keyframes",
+    };
+    await loader.step();
+    expect(loader.getSnapshot()).toMatchObject({
+      sceneState: "failed",
+      scene: null,
+      sceneError: "models: no keyframes",
+    });
+    server.scene = { state: "none", scene: null, error: null };
+    await loader.step();
+    expect(loader.getSnapshot()).toMatchObject({
+      sceneState: "none",
+      scene: null,
+    });
+  });
+
+  test("a scene status that does not parse, or another episode's scene, is no scene", async () => {
+    const server = new FakeServer();
+    server.compiled(COMPILED);
+    server.scene = {
+      state: "ok",
+      scene: { ...SCENE.doc, schema: "clio.scene/9" },
+      error: null,
+    };
+    const loader = loaderOn(server);
+    await loader.step();
+    expect(loader.getSnapshot()).toMatchObject({
+      sceneState: null,
+      scene: null,
+      sceneError: null,
+      // The compile is read as ever.
+      compile: "ok",
+      environment: COMPILED.environment,
+    });
+    expect(loader.getSnapshot().error).toBeNull();
+
+    server.scene = {
+      state: "ok",
+      scene: { ...SCENE.doc, episodeId: "ep-other" },
+      error: null,
+    };
+    await loader.step();
+    expect(loader.getSnapshot().sceneState).toBe("ok");
+    expect(loader.getSnapshot().scene).toBeNull();
+  });
+
+  test("a server that does not build scenes, or cannot compile, still shows a scene it reports", async () => {
+    const server = new FakeServer();
+    server.compiled(COMPILED);
+    const loader = loaderOn(server);
+    await loader.step();
+    expect(loader.getSnapshot()).toMatchObject({
+      sceneState: null,
+      scene: null,
+      sceneError: null,
+    });
+
+    const bare = new FakeServer();
+    bare.scene = { state: "ok", scene: SCENE.doc, error: null };
+    const scenesOnly = loaderOn(bare);
+    await scenesOnly.step();
+    expect(scenesOnly.getSnapshot()).toEqual({
+      ...emptyDerivedState(ID),
+      sceneState: "ok",
+      scene: SCENE.doc,
+    });
+  });
+
+  test("the SceneDoc keeps its identity while it is unchanged", async () => {
+    const server = new FakeServer();
+    server.compiled(COMPILED);
+    server.scene = { state: "ok", scene: SCENE.doc, error: null };
+    const loader = loaderOn(server);
+    await loader.step();
+    const first = loader.getSnapshot().scene;
+    server.scene = {
+      state: "ok",
+      scene: JSON.parse(JSON.stringify(SCENE.doc)),
+      error: null,
+    };
+    server.derived = {
+      state: "stale",
+      manifest: COMPILED.manifest,
+      error: null,
+    };
+    await loader.step();
+    expect(loader.getSnapshot().compile).toBe("stale");
+    expect(loader.getSnapshot().scene).toBe(first);
+  });
+});
+
+describe("scene status", () => {
+  const view = (
+    state: Partial<Parameters<typeof sceneStatus>[0]>,
+    episode: Parameters<typeof sceneStatus>[1] = "finished",
+  ) =>
+    sceneStatus(
+      { sceneState: null, sceneError: null, scene: null, ...state },
+      episode,
+    );
+
+  test("names each state that needs attention, quietly", () => {
+    const label = (sceneState: EpisodeSceneStatus["state"]) =>
+      view({ sceneState })?.label ?? null;
+    expect(label("queued")).toBe("Building scene");
+    expect(label("running")).toBe("Building scene");
+    expect(label("stale")).toBe("Scene stale");
+    expect(label("failed")).toBe("Scene failed");
+    expect(view({ sceneState: "stale" })).toEqual({
+      label: "Scene stale",
+      problem: false,
+      detail: "The compile or the keyframes changed after the last build",
+    });
+  });
+
+  test("a healthy scene, one never built and a server without scenes show nothing", () => {
+    expect(view({ sceneState: "ok", scene: SCENE.doc })).toBeNull();
+    expect(view({ sceneState: "none" })).toBeNull();
+    expect(view({ sceneState: null })).toBeNull();
+  });
+
+  test("nothing while live or unknown", () => {
+    expect(view({ sceneState: "failed" }, "live")).toBeNull();
+    expect(view({ sceneState: "failed" }, null)).toBeNull();
+    expect(view({ sceneState: "failed" }, "stopped")?.label).toBe(
+      "Scene failed",
+    );
+  });
+
+  test("a failed build, a failed run and a failed stage are problems", () => {
+    expect(view({ sceneState: "failed", sceneError: "Timed out" })).toEqual({
+      label: "Scene failed",
+      problem: true,
+      detail: "Timed out",
+    });
+    const failedStage = syntheticScene(EPISODE, COMPILED.manifest, {
+      modelsFailed: "triposr: TripoSR is not set up",
+    }).doc;
+    expect(view({ sceneState: "ok", scene: failedStage })).toEqual({
+      label: "Scene failed",
+      problem: true,
+      detail: "models: triposr: TripoSR is not set up",
+    });
+    expect(
+      view({ sceneState: "stale", sceneError: "Timed out", scene: failedStage })
+        ?.detail,
+    ).toBe("Timed out\nmodels: triposr: TripoSR is not set up");
+  });
+
+  test("a skipped stage is not a failure", () => {
+    const skipped = {
+      ...SCENE.doc,
+      stages: [
+        { name: "models", status: "skipped" as const, detail: "no objects" },
+      ],
+    };
+    expect(view({ sceneState: "ok", scene: skipped })).toBeNull();
+  });
+
+  test("a build under way supersedes the last failure", () => {
+    expect(view({ sceneState: "running", sceneError: "Timed out" })).toEqual({
+      label: "Building scene",
+      problem: false,
+      detail: null,
+    });
   });
 });
 

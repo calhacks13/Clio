@@ -60,6 +60,41 @@ describe('HttpEpisodeSink', () => {
     expect((await appendError(offline)).retriable).toBe(true);
   });
 
+  it('puts a media file with its own content type, and a refused one is not retried', async () => {
+    const calls: { url: string; method?: string; type?: string; body?: unknown }[] = [];
+    const f = (async (url: string, init?: RequestInit) => {
+      const headers = init?.headers as Record<string, string> | undefined;
+      calls.push({ url, method: init?.method, type: headers?.['content-type'], body: init?.body });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as typeof fetch;
+    const body = new Blob(['glb'], { type: 'model/gltf-binary' });
+    await new HttpEpisodeSink(new ApiClient('http://server', f)).putMedia(
+      'ep-1',
+      'room-scan-1.glb',
+      body,
+    );
+    expect(calls).toEqual([
+      {
+        url: 'http://server/api/episodes/ep-1/media/room-scan-1.glb',
+        method: 'PUT',
+        type: 'model/gltf-binary',
+        body,
+      },
+    ]);
+
+    const tooLarge = new HttpEpisodeSink(
+      new ApiClient(
+        'http://server',
+        fetchReturning(413, { error: { code: 'too_large', message: 'too large' } }),
+      ),
+    );
+    const err = await tooLarge
+      .putMedia('ep-1', 'keyframe-0001.jpg', new Blob(['x']))
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(SinkError);
+    expect((err as SinkError).retriable).toBe(false);
+  });
+
   it('marks a rejected (invalid) batch as not retriable', async () => {
     const err = await appendError(
       fetchReturning(400, { error: { code: 'invalid', message: 'bad batch' } }),

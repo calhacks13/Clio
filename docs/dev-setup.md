@@ -176,6 +176,7 @@ offset, adjust `DEFAULT_HEAD_FROM_CAMERA`, or better, implement marker self-cali
 | `focus=0`                     | on                  | no Robotics-ER 2 action focus (it needs the camera, the tracker and a Gemini key)       |
 | `voice=<name>`                |                     | Gemini prebuilt voice (e.g. `Kore`)                                                     |
 | `showRefresh=<ms>`            | `3000`              | how often to look again at what the step shows (0: only when the step starts)           |
+| `scan=1`                      | off                 | record the room scan and camera keyframes for the object models (room-scene.md)         |
 
 ## 5. Data
 

@@ -22,6 +22,7 @@ from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
 from .frames import HAND_JOINTS, JOINT_FIELDS
+from .glb import read_glb
 
 SCHEMA_DIR_ENV = "CLIO_SCHEMA_DIR"
 
@@ -44,6 +45,8 @@ DERIVED_SCHEMAS: dict[str, str] = {
     "retarget": "derived-retarget.schema.json",
     "body": "derived-body.schema.json",
 }
+# Rebuilt scene (clio.scene/1, packages/protocol/src/scene.ts), data/scenes/<id>/scene.json
+SCENE_SCHEMA = "scene.schema.json"
 
 
 @dataclass(frozen=True)
@@ -232,7 +235,8 @@ def derived_problems(
     doc: Any, kind: str, *, schemas: SchemaSet | None = None
 ) -> list[tuple[str, str]]:
     """(JSON path, message) for each way a compiled document breaks its schema. `kind` is
-    `manifest`, `tracks`, `environment`, `shapes`, `retarget` or `body`."""
+    `manifest`, `tracks`, `environment`, `shapes`, `retarget` or `body` (a `room` artifact is a
+    GLB, not a document: validate_derived checks it can be read)."""
     if kind not in DERIVED_SCHEMAS:
         raise KeyError(f"unknown compiled document kind {kind!r}")
     schemas = schemas if schemas is not None else default_schemas()
@@ -242,7 +246,9 @@ def derived_problems(
 def validate_derived(
     derived_dir: Path | str, *, schemas: SchemaSet | None = None
 ) -> list[ValidationIssue]:
-    """Check a compiled episode directory: manifest.json and every artifact it lists."""
+    """Check a compiled episode directory: manifest.json and every artifact it lists, each
+    document against its schema and each GLB (room.glb) for being one glTF 2.0 can read, and
+    that environment.json's room scan names a GLB the compile wrote."""
     derived_dir = Path(derived_dir)
     schemas = schemas if schemas is not None else default_schemas()
     try:
@@ -255,8 +261,12 @@ def validate_derived(
     issues = [ValidationIssue("manifest.json", None, p, m) for p, m in problems]
     if problems:
         return issues
+    written = {artifact["name"] for artifact in manifest["artifacts"]}
     for artifact in manifest["artifacts"]:
         name = artifact["name"]
+        if name.endswith(".glb"):
+            issues += _glb_issues(derived_dir / name)
+            continue
         try:
             doc = parse_json((derived_dir / name).read_text(encoding="utf-8"))
         except OSError:
@@ -267,7 +277,21 @@ def validate_derived(
             continue
         problems = derived_problems(doc, artifact["kind"], schemas=schemas)
         issues += [ValidationIssue(name, None, p, m) for p, m in problems]
+        room = doc.get("room") if artifact["kind"] == "environment" and not problems else None
+        if room is not None and room["file"] not in written:
+            message = f"{room['file']} is not among the compile's artifacts"
+            issues.append(ValidationIssue(name, None, "$.room.file", message))
     return issues
+
+
+def _glb_issues(path: Path) -> list[ValidationIssue]:
+    try:
+        read_glb(path)
+    except OSError:
+        return [ValidationIssue(path.name, None, None, "file is missing")]
+    except (ValueError, KeyError, IndexError, TypeError, UnicodeDecodeError) as e:
+        return [ValidationIssue(path.name, None, None, f"not a readable GLB ({e})")]
+    return []
 
 
 def hand_layout_problems(meta: dict) -> list[tuple[str, str]]:
