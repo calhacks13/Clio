@@ -212,6 +212,7 @@ class RefreshingTracker:
 
     def __init__(self, vision, params=None, segmenter=None, refresher=None):
         self.refresher, self.target, self.returned = refresher, None, []
+        self.drawn = {"follower": 3, "yoloe": 1}  # the stream's counters: found frames, by source
 
     def command(self, target) -> None:
         self.target = target
@@ -249,6 +250,7 @@ def test_run_with_fake_segmenter_reports_refreshes(monkeypatch):
                          make_tracker=make_tracker)  # fmt: skip
     r = measure(seq, played)
     assert r["refreshes"] >= 1
+    assert played.drawn == {"follower": 3, "yoloe": 1} and r["followed"] == 0.75
     assert isinstance(made[0]["refresher"], Refresher)
     assert made[0]["segmenter"].name == "fake-segmenter"
     assert made[0]["refresher"].segmenter is made[0]["segmenter"]
@@ -287,6 +289,7 @@ def test_without_a_segmenter_the_tracker_is_built_as_before(monkeypatch):
     played = jitter.play(seq, track, vision, vision, make_tracker=make_tracker)
     assert built[0].kwargs == {}  # no segmenter, no refresher
     assert played.refreshes == 0 and measure(seq, played)["refreshes"] == 0
+    assert played.drawn is None and np.isnan(measure(seq, played)["followed"])  # no follower
     sent = built[0].targets[0]  # the look is outlined by YOLOE's box, as before
     assert sent.box == pytest.approx(np.array(yoloe_box) / [OUT_W, OUT_H, OUT_W, OUT_H], abs=1e-6)
 
@@ -408,13 +411,17 @@ def test_moving_scenes_have_their_own_summary_row():
     ]  # fmt: skip
 
 
-def test_the_table_has_a_refreshes_column():
+def test_the_table_has_a_refreshes_and_a_followed_column():
     _, r = _truthful(CALIPER, refreshes=4)
-    assert r["refreshes"] == 4
-    head, row = jitter.table([("now", r)]).splitlines()
-    assert "refreshes" in head and "followed" not in head
-    end = head.index("refreshes") + len("refreshes")  # the columns are right-aligned
-    assert row[:end].split()[-1] == "4"
+    assert r["refreshes"] == 4 and np.isnan(r["followed"])
+    head, row = jitter.table([("now", {**r, "followed": 0.5})]).splitlines()
+    for name, value in (("refreshes", "4"), ("followed", "50.0%")):
+        end = head.index(name) + len(name)  # the columns are right-aligned
+        assert row[:end].split()[-1] == value
+    rows = jitter.summary_rows(
+        [_truthful(CALIPER)[0]] * 2, {"now": [{**r, "followed": 0.5}, {**r, "followed": 1.0}]}
+    )
+    assert rows[0][1]["followed"] == 0.75  # averaged over the sequences
 
 
 @pytest.mark.parametrize("name", ["none", "sam2.1-small"])

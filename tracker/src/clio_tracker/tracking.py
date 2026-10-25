@@ -130,6 +130,10 @@ class Sighting:
     # (predicted when coasting).
     measured: np.ndarray | None = None
     crop: MaskCrop | None = None  # its mask on this frame, when sighted
+    # What drew the outline, when found: "follower" (the segmenter's mask, carried), "yoloe"
+    # (YOLOE's mask, or its last shape at the predicted box while coasting) or "part-box" (a
+    # part's box, rounded, or its last shape there).
+    source: str | None = None
 
 
 @dataclass
@@ -337,6 +341,7 @@ class ObjectTracker:
             measured, crop = box, vision.mask(enc, int(anchor), box)
         else:
             measured, crop = followed.box, followed.crop
+        source = "yoloe" if followed is None else "follower"
         shown, shape = self._smooth.sighted(t, measured, crop, size)
         if shape is None:
             shape = vision.shape(enc, int(anchor), box)
@@ -351,7 +356,9 @@ class ObjectTracker:
             self.target_by,
         )
         self._tracked = box.copy()
-        return Sighting(True, shown, shape, confidence, "tracking", tid, measured.copy(), crop)
+        return Sighting(
+            True, shown, shape, confidence, "tracking", tid, measured.copy(), crop, source
+        )
 
     def _coast(self, tid: int, t: float) -> Sighting:
         fresh = self._fresh
@@ -371,9 +378,11 @@ class ObjectTracker:
         if followed is not None:  # YOLOE missed it, but its own pixels were followed
             measured, crop = followed.box, followed.crop
             shown, shape = self._smooth.sighted(t, measured, crop, fresh.size)
-            return Sighting(True, shown, shape, confidence, "tracking", tid, measured.copy(), crop)
+            return Sighting(
+                True, shown, shape, confidence, "tracking", tid, measured.copy(), crop, "follower"
+            )
         shown, shape = self._smooth.coasting(t, box, fresh.size)
-        return Sighting(True, shown, shape, confidence, "coasting", tid, box.copy())
+        return Sighting(True, shown, shape, confidence, "coasting", tid, box.copy(), source="yoloe")
 
     def _follows(self, tracked: np.ndarray) -> Followed | None:
         """The follower's answer on this frame when it may stand for the object: confident, and

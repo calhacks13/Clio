@@ -12,7 +12,9 @@ wait, one per frame; a newer keyframe for an object takes its box out of the job
 (a job left with no box is dropped) and waits in its place, and boxes for a frame that already
 has a job join that job. The oldest waiting job goes at the first `drain` with nothing in
 flight, and no refresh is taken while any waits. A segmenter error is logged once per outage and
-the job's remaining results dropped; the caller goes on with the outline it has.
+the job's remaining results dropped; the caller goes on with the outline it has. `tally` says
+how many boxes were cut since it was last asked, how long they took and how many held nothing,
+for the stream's log line.
 
 `submit`, `submit_keyframes`, `drain` and `tally` are for one thread, the frame thread. Only the
 executor's worker runs the segmenter.
@@ -67,9 +69,10 @@ class Refresher:
         self.min_interval_s = min_interval_s
         self._executor = executor
         self._clock = clock
-        self._lock = threading.Lock()  # the worker and the frame thread share these two
+        self._lock = threading.Lock()  # the worker and the frame thread share these
         self._in_flight = 0
         self._down = False
+        self._counts = [0, 0.0, 0]  # since the last tally: boxes cut, their seconds, empty ones
         self._pending: list[_Job] = []  # keyframe jobs waiting, oldest first, one per frame
         self._last_submit = -math.inf
         self._done: queue.SimpleQueue[Refreshed] = queue.SimpleQueue()
@@ -123,6 +126,13 @@ class Refresher:
             self._pending.insert(len(self._pending) if place is None else place, job)
         self._pending = [j for j in self._pending if j.boxes]
 
+    def tally(self) -> tuple[int, float, int]:
+        """Boxes cut since the last tally, their mean `took_s` (0 when none) and how many the
+        segmenter found nothing in; counting starts again."""
+        with self._lock:
+            (calls, seconds, empty), self._counts = self._counts, [0, 0.0, 0]
+        return calls, seconds / calls if calls else 0.0, empty
+
     def drain(self) -> list[Refreshed]:
         """What has finished since the last drain, oldest first. Then the oldest waiting
         keyframe goes, if nothing is in flight any more."""
@@ -158,6 +168,10 @@ class Refresher:
             for key, box in job.boxes.items():
                 crop = self.segmenter.mask_in_box(enc, box)
                 took = self._clock() - started
+                with self._lock:
+                    self._counts[0] += 1
+                    self._counts[1] += took
+                    self._counts[2] += crop is None
                 self._done.put(Refreshed(key, job.seq, crop, box, job.keyframe, took))
         except Exception as error:
             if self._set_down(True):

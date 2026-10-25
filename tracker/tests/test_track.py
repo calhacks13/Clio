@@ -513,6 +513,42 @@ def test_stream_submits_keyframe_on_target_and_applies_refresh(segmented):
     # The fake mask fills jev's box; FakeVision outlines the cup's own box, 10 pixels inside it.
     assert bounds(answer["outline"]) == pytest.approx(list(norm_box(JEV_CUP)), abs=2 / 960)
     assert answer["box"] == pytest.approx(list(norm_box(JEV_CUP)), abs=1e-3)
+    assert s.tracker.drawn == {"follower": 1}  # found answers, by what drew the outline
+
+
+def test_the_summary_line_says_how_often_the_follower_drew_and_what_the_segmenter_did(
+    monkeypatch, caplog, segmenter
+):
+    import clio_tracker.track as track
+
+    now = [0.0]
+    monkeypatch.setattr(track, "perf_counter", lambda: now[0])
+    clock = Clock()
+
+    class Slow(type(segmenter)):
+        def mask_in_box(self, enc, box):
+            clock.t += 0.14
+            return None if box[0] == 0 else super().mask_in_box(enc, box)
+
+    refresher = Refresher(Slow(), ManualExecutor(run_now=True), clock=clock)
+    refresher.submit_keyframes(1, textured(), {"a": np.array(CUP), "b": np.array([0, 0, 9, 9])})
+    refresher.drain()
+    with_segmenter, plain = track._Summary("Stream"), track._Summary("Stream")
+    with caplog.at_level(logging.INFO, logger="clio_tracker"):
+        for source in ("follower", "follower", "yoloe", None, "follower"):
+            with_segmenter.add(["tracking"], 20.0, [source], refresher)
+            plain.add(["tracking"], 20.0, [source])
+        now[0] = 3.5
+        with_segmenter.add(["tracking"], 20.0, [None], refresher)
+        plain.add(["tracking"], 20.0, [None])
+        now[0] = 7.0
+        with_segmenter.add(["lost"], 20.0, [None], refresher)
+    lines = [r.getMessage() for r in caplog.records]
+    assert lines[0].endswith(
+        "(tracking 6); follower 75%, segmenter: 2 calls, 210 ms, 1 empty"
+    )
+    assert lines[1].endswith("(tracking 6)")  # without a segmenter, as before
+    assert lines[2].endswith("(lost 1); follower 0%, segmenter: 0 calls, 0 ms, 0 empty")
 
 
 def test_stream_answers_while_refresh_pending(segmented, vision):

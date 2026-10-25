@@ -684,6 +684,24 @@ def test_coasting_with_confident_follower_keeps_mask(vision):
     assert gone[-1].state == "lost" and not run.tracker.wants_refresh  # nothing in sight to cut
 
 
+def test_each_sighting_says_what_drew_its_outline(vision):
+    plain = locked(vision)
+    assert plain.frame(Thing(at(100), A), Thing(at(500), B)).source == "yoloe"
+    follower = FakeFollower()
+    run = locked_following(vision, follower)
+    follower.answers.append(followed(at(101)))
+    assert run.frame(Thing(at(100), A), Thing(at(500), B)).source == "follower"
+    follower.answers.append(followed(at(101), confident=False))
+    assert run.frame(Thing(at(100), A), Thing(at(500), B)).source == "yoloe"
+    follower.answers.append(followed(at(104)))
+    s = run.frame(Thing(at(500), B))  # YOLOE misses it; the follower is sure
+    assert (s.state, s.source) == ("tracking", "follower")
+    s = run.frame(Thing(at(500), B))  # and now neither: it coasts
+    assert (s.state, s.source) == ("coasting", "yoloe")
+    gone = [run.frame(Thing(at(500), B)) for _ in range(10)]
+    assert not gone[-1].found and gone[-1].source is None
+
+
 def same(a, b) -> None:
     assert (a.found, a.state, a.track_id, a.confidence, a.shape) == (
         b.found,

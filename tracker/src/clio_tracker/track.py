@@ -33,7 +33,7 @@ import logging
 import math
 import re
 import struct
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from time import perf_counter
@@ -198,6 +198,8 @@ class StreamTracker:
         self.waiting: TargetBox | None = None  # a target whose frame hasn't arrived
         self.t = 0.0  # the newest frame's capture time (s, page clock)
         self.camera = CameraMotion()  # how the picture moved since the frame before
+        # Found answers by what drew the outline (Sighting.source), over the stream's life.
+        self.drawn: Counter[str | None] = Counter()
         self._summary = _Summary("Stream")
 
     def command(self, target: TargetBox | None) -> None:
@@ -371,9 +373,12 @@ class StreamTracker:
     ) -> dict:
         ms["total"] = _ms(started)
         state = sighting.state if sighting else "idle"
-        self._summary.add([state], ms["total"])
         if sighting is None or not sighting.found or sighting.box is None or size is None:
             sighting = None
+        source = sighting.source if sighting else None
+        if sighting is not None:
+            self.drawn[source] += 1
+        self._summary.add([state], ms["total"], [source], self.refresher)
         shape = sighting.shape if sighting else None
         return {
             "type": "mask",
@@ -434,13 +439,21 @@ class ObjectsTracker:
         sightings, size, _ = self.session.follow(image, self.objects)
         ms["track"] = _ms(tracking)
         detections = [_tracked(q.id, s, size) for q, s in zip(self.objects, sightings, strict=True)]
-        return self._answer(header, detections, ms, started)
+        found = [d["found"] for d in detections]
+        sources = [s.source if f else None for s, f in zip(sightings, found, strict=True)]
+        return self._answer(header, detections, ms, started, sources)
 
     def _answer(
-        self, header: FrameHeader, detections: list[dict], ms: dict, started: float
+        self,
+        header: FrameHeader,
+        detections: list[dict],
+        ms: dict,
+        started: float,
+        sources: list[str | None] | None = None,
     ) -> dict:
         ms["total"] = _ms(started)
-        self._summary.add([f"{d['id']} {d['state']}" for d in detections] or ["idle"], ms["total"])
+        states = [f"{d['id']} {d['state']}" for d in detections] or ["idle"]
+        self._summary.add(states, ms["total"], sources or [], self.session.refresher)
         return {
             "type": "detections",
             "seq": header.seq,
@@ -511,34 +524,51 @@ class Modes:
 class _Summary:
     """Every few seconds, a log line: frames answered, how often each state was answered and the
     mean time in the tracker, so a slow or lossy stream shows in the log, not only on the
-    headset."""
+    headset. With a segmenter it adds the share of found answers whose outline the follower drew
+    (`follower 82%`) and what the segmenter did since the last line (`segmenter: 12 calls, 140
+    ms, 1 empty`: boxes cut, their mean time, and how many held nothing), so a mask that is
+    rarely drawn shows too."""
 
     def __init__(self, what: str):
         self.what = what
         self._states: dict[str, int] = {}
         self._frames = 0
         self._ms = 0.0
+        self._found = 0  # found answers, and those the follower drew
+        self._followed = 0
         self._start = perf_counter()
 
-    def add(self, states: Iterable[str], total_ms: float) -> None:
+    def add(
+        self,
+        states: Iterable[str],
+        total_ms: float,
+        sources: Iterable[str | None] = (),
+        refresher: Refresher | None = None,
+    ) -> None:
+        """One frame: each answer's state, the frame's time, and what drew each found answer's
+        outline (None for an answer not found). `refresher` is the segmenter's, if any."""
         for state in states:
             self._states[state] = self._states.get(state, 0) + 1
+        for source in sources:
+            self._found += source is not None
+            self._followed += source == "follower"
         self._frames += 1
         self._ms += total_ms
         elapsed = perf_counter() - self._start
         if elapsed < 3:
             return
         counts = ", ".join(f"{k} {v}" for k, v in sorted(self._states.items()))
-        log.info(
-            "%s: %.1f frames/s, %.1f ms each (%s)",
-            self.what,
-            self._frames / elapsed,
-            self._ms / self._frames,
-            counts,
-        )
+        line = "%s: %.1f frames/s, %.1f ms each (%s)"
+        args: list = [self.what, self._frames / elapsed, self._ms / self._frames, counts]
+        if refresher is not None:
+            calls, mean_s, empty = refresher.tally()
+            line += "; follower %.0f%%, segmenter: %d calls, %.0f ms, %d empty"
+            args += [100 * self._followed / max(self._found, 1), calls, 1000 * mean_s, empty]
+        log.info(line, *args)
         self._states.clear()
         self._frames = 0
         self._ms = 0.0
+        self._found = self._followed = 0
         self._start = perf_counter()
 
 

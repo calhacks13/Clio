@@ -24,6 +24,9 @@ separate the tracker's own wobble from real movement:
   the true camera motion: 1.0 is perfectly steady. `swaps`: frames where the outline changed
   so much (IoU under 0.5) that it reads as a different mask.
 - `refreshes`: segmenter calls over the sequence (0 without a segmenter).
+- `followed`: with a segmenter, the share of found frames whose outline the follower drew (the
+  segmenter's mask, carried), read from the stream's counters (`StreamTracker.drawn`); without
+  one there is no follower, and no number.
 - `ms`: time in `step`, per frame (`p95` too), and the part of it after YOLOE's pass.
 
 Part scenes (`PART_SCENES`) follow one part of an object, as the primary demo's `?focus=part`
@@ -340,6 +343,7 @@ class Played:
     encode_ms: list[float] = field(default_factory=list)
     first: int | None = None  # the first frame after a target was sent
     refreshes: int = 0  # segmenter calls the tracker's refresher made
+    drawn: dict | None = None  # with a segmenter: found frames by what drew the outline
 
 
 class _TimedVision:
@@ -416,11 +420,13 @@ def play(
     """Stream the sequence through a fresh StreamTracker of `track_module` (track.py).
 
     With a `segmenter` the tracker gets it and a Refresher over a one-thread executor, as `/track`
-    does, and the look is outlined by it; `Played.refreshes` counts its calls. `make_tracker(vision,
-    params, **kwargs)` builds the tracker, `StreamTracker` by default; `kwargs` is `segmenter=` and
-    `refresher=` with a segmenter, else empty. With `pace` each frame takes at least 1 / FPS of
-    wall time (the headset's stream runs at 40 to 75 ms a frame, the harness alone at about 20,
-    and the refresher spaces its calls by wall clock): the wait is not counted in `step_ms`.
+    does, and the look is outlined by it; `Played.refreshes` counts its calls, and `Played.drawn`
+    is the tracker's `drawn` counters at the end (none without a segmenter: no follower drew).
+    `make_tracker(vision, params, **kwargs)` builds the tracker, `StreamTracker` by default;
+    `kwargs` is `segmenter=` and `refresher=` with a segmenter, else empty. With `pace` each
+    frame takes at least 1 / FPS of wall time (the headset's stream runs at 40 to 75 ms a frame,
+    the harness alone at about 20, and the refresher spaces its calls by wall clock): the wait is
+    not counted in `step_ms`.
     """
     timed = _TimedVision(vision)
     kwargs: dict = {}
@@ -456,6 +462,8 @@ def play(
             out.answers.append(answer)
             if pace and elapsed < 1 / FPS:
                 sleep(1 / FPS - elapsed)
+        if segmenter is not None:
+            out.drawn = dict(getattr(tracker, "drawn", {}))
     finally:
         if executor is not None:
             executor.shutdown(wait=True)  # the call in flight finishes, so it is counted
@@ -639,10 +647,17 @@ def measure(seq: Sequence, played: Played) -> dict:
         "mask_f2f": mean(mask_f2f),
         "swaps": swaps,
         "refreshes": played.refreshes,
+        "followed": _followed(played.drawn),
         "ms": mean(played.step_ms[start:]),
         "ms_p95": p95(played.step_ms[start:]),
         "tracker_ms": mean(tracker_ms),
     }
+
+
+def _followed(drawn: dict | None) -> float:
+    """The share of found frames the follower drew; nan without a follower or a found frame."""
+    found = sum(drawn.values()) if drawn else 0
+    return drawn.get("follower", 0) / found if drawn and found else float("nan")
 
 
 def summarize(results: list[dict]) -> dict:
@@ -702,6 +717,7 @@ COLUMNS = [
     ("mask_f2f", "mask f2f", "{:.3f}"),
     ("swaps", "swaps", "{:d}"),
     ("refreshes", "refreshes", "{:d}"),
+    ("followed", "followed", "{:.1%}"),
     ("ms", "ms", "{:.1f}"),
     ("ms_p95", "p95", "{:.1f}"),
     ("tracker_ms", "tracker", "{:.1f}"),

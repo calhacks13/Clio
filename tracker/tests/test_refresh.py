@@ -347,6 +347,23 @@ def test_pending_keyframe_counts_for_the_interval_once_it_goes():
     assert not refresher.submit("a", 3, frame(), BOX)  # 0.1 s after the keyframe went
 
 
+def test_tally_counts_boxes_cut_their_mean_time_and_empty_ones_then_starts_again():
+    class Slow(FakeSegmenter):
+        def mask_in_box(self, enc, box):
+            clock.t += 0.1
+            return None if box[0] == 0 else super().mask_in_box(enc, box)
+
+    clock, executor = Clock(), ManualExecutor(run_now=True)
+    refresher = Refresher(Slow(), executor, clock=clock)
+    assert refresher.tally() == (0, 0.0, 0)
+    refresher.submit_keyframes(1, frame(), {"x": BOX, "y": np.array([0, 0, 9, 9], np.float32)})
+    refresher.drain()
+    calls, mean_s, empty = refresher.tally()
+    assert (calls, empty) == (2, 1)
+    assert mean_s == pytest.approx(0.15)  # 0.1 and 0.2 s from the job's start to each mask
+    assert refresher.tally() == (0, 0.0, 0)
+
+
 def test_segmenter_error_is_dropped_and_logged(caplog):
     class Broken(FakeSegmenter):
         fail = True

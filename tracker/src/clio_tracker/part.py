@@ -332,27 +332,29 @@ class PartTracker:
             if held:
                 assert parent is not None
                 confidence, track_id = parent.confidence, parent.track_id
-            return Sighting(True, shown, shape, confidence, "tracking", track_id, box.copy(), crop)
+            return Sighting(True, shown, shape, confidence, "tracking", track_id, box.copy(), crop,
+                            "follower")  # fmt: skip
         if held:
             assert parent is not None
             crop = parent.crop
             if crop is not None and _fill(crop, box) >= p.part_fill:
                 shown, shape = self._smooth.sighted(t, box, crop, size)
                 return Sighting(True, shown, shape, parent.confidence, parent.state,
-                                parent.track_id, box.copy(), crop)  # fmt: skip
+                                parent.track_id, box.copy(), crop, "yoloe")  # fmt: skip
             if parent.state == "coasting":
                 shown, shape = self._smooth.coasting(t, box, size)
                 if shape is not None:
                     return Sighting(True, shown, shape, parent.confidence, "coasting",
-                                    parent.track_id, box.copy())  # fmt: skip
+                                    parent.track_id, box.copy(), source="part-box")  # fmt: skip
         crop = rounded_crop(box)
         shown, shape = self._smooth.sighted(t, box, crop, size)
         if held:
             assert parent is not None
             return Sighting(True, shown, shape, parent.confidence, parent.state,
-                            parent.track_id, box.copy(), crop)  # fmt: skip
+                            parent.track_id, box.copy(), crop, "part-box")  # fmt: skip
         confidence = round(0.5 * (1 - 0.5 * age / p.part_hold_s), 3)
-        return Sighting(True, shown, shape, confidence, "coasting", None, box.copy(), crop)
+        return Sighting(True, shown, shape, confidence, "coasting", None, box.copy(), crop,
+                        "part-box")  # fmt: skip
 
     def _remember(self, seq: int, t: float, box: np.ndarray) -> None:
         self._history.append((seq, t, box.copy()))

@@ -619,6 +619,19 @@ def test_jevs_keyframe_moves_the_part_box_to_its_mask_and_a_refresh_does_not(vis
     np.testing.assert_allclose(run.tracker.box, carried.box)  # once; then it rides as before
 
 
+def test_each_part_sighting_says_what_drew_its_outline(vision):
+    follower = FakeFollower()
+    run = locked_part(vision, follower)
+    follower.answers.append(followed(DOOR))
+    assert run.frame(*SCENE).source == "follower"
+    follower.answers.append(followed(DOOR, confident=False))
+    assert run.frame(*SCENE).source == "yoloe"  # the parent's mask inside the part box
+    gone = PartRun(vision, FakeFollower())
+    gone.frame(Thing(OTHER, B))
+    gone.jev(1, PART)  # nothing holds it: the camera carries the part box
+    assert gone.frame(Thing(OTHER, B)).source == "part-box"  # the box, rounded
+
+
 def test_part_reseeded_about_a_forgotten_frame_is_told_on_the_newest(vision):
     """An answer about a frame older than the part box's history: whether it is another part is
     told on the newest frame, with jev's box carried to it, as before."""
