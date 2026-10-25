@@ -13,7 +13,7 @@ import pytest
 
 from clio_pipeline.compile import compile_episode
 from clio_pipeline.glb import parse_glb, read_glb
-from clio_pipeline.room import RoomScan, room_doc, room_scan_media
+from clio_pipeline.room import RoomScan, _drawable, room_doc, room_scan_media
 from clio_pipeline.schema import validate_derived
 from conftest import (
     GLOBAL_MESH_POSE,
@@ -27,6 +27,7 @@ from conftest import (
 )
 
 SCHEMA_DIR = Path(__file__).resolve().parents[2] / "packages" / "protocol" / "schema"
+DATA = Path(__file__).resolve().parent / "data"
 GLOBAL_BOUNDS = {"min": [-1.6, -0.75, -1.5], "max": [2.4, 1.75, 2.5]}
 TABLE_BOUNDS = {"min": [0.0, -0.74, -0.6], "max": [0.8, 0.0, 0.0]}
 
@@ -114,6 +115,49 @@ def test_room_glb_keeps_the_node_layout_in_w_and_adds_normals(room_scan_episode_
         "media": "room-scan-1.glb",
         "snapshotT": 0.0,
     }
+
+
+def test_a_room_scan_written_by_the_headset_compiles(tmp_path):
+    # tests/data/headset-room-scan.glb comes from apps/headset's writeGlb (headset-room-scan.ts):
+    # translation and rotation always written, a null label, a mesh with vertices and no
+    # indices (mesh-3) and one without vertices (mesh-4).
+    b = build_room_scan(tmp_path)
+    b.events = [e for e in b.events if e["type"] != "environment.meshes"]
+    meshes = [
+        b.room_mesh("mesh-1", "other", label="global mesh", global_=True, vertices=4, triangles=2),
+        b.room_mesh("mesh-2", "table", vertices=8, triangles=12),
+        b.room_mesh("mesh-3", "other", vertices=2, triangles=0),
+        b.room_mesh("mesh-4", "couch", label="couch", vertices=0, triangles=0),
+    ]
+    b.room_scan(0.0, 1, (DATA / "headset-room-scan.glb").read_bytes(), meshes)
+    b.events.sort(key=lambda e: e["t"])
+
+    result = compile_episode(b.write(), tmp_path / "derived")
+
+    assert _stage(result) == {
+        "name": "room",
+        "status": "ok",
+        "detail": "left out mesh-3 (2 positions, no triangles)",
+    }
+    room = _environment(result)["room"]
+    assert room["meshes"] == [
+        {
+            **meshes[0],
+            "bounds": {"min": [-1.5, -0.74, -2.3], "max": [2.5, -0.74, 1.7]},
+        },
+        {**meshes[1], "bounds": {"min": [0.0, -0.74, -0.6], "max": [1.0, 0.0, 0.0]}},
+        {**meshes[2], "vertices": 0, "bounds": None},
+        {**meshes[3], "bounds": None},
+    ]
+    kept = read_glb(result.out_dir / "room.glb")
+    assert [(n.name, n.mesh is not None) for n in kept] == [
+        ("mesh-1", True),
+        ("mesh-2", True),
+        ("mesh-3", False),
+        ("mesh-4", False),
+    ]
+    assert kept[1].extras == {"kind": "table", "label": None, "global": False}
+    assert validate_derived(result.out_dir) == []
 
 
 def test_the_last_snapshot_that_arrived_is_kept(tmp_path):
@@ -240,6 +284,28 @@ def test_a_room_scan_that_arrives_late_makes_the_compile_stale(tmp_path):
     assert compile_episode(path, tmp_path / "derived", if_stale=True).skipped is True
 
 
+def test_a_room_scan_that_arrives_before_its_event_is_an_input_but_not_kept(tmp_path):
+    # The headset uploads media in its queue: a GLB can land up to a second before its event.
+    b = build_room_scan(tmp_path)
+    b.media["room-scan-2.glb"] = _table_glb()
+    path = b.write()
+    first = compile_episode(path, tmp_path / "derived")
+
+    assert [i["name"] for i in first.manifest["inputs"]][-2:] == [
+        "media/room-scan-1.glb",
+        "media/room-scan-2.glb",
+    ]
+    assert _environment(first)["room"]["media"] == "room-scan-1.glb"
+    event = {"t": 2900.0, "type": "environment.meshes", "media": "room-scan-2.glb"}
+    with (path / "events.ndjson").open("a") as f:
+        f.write(json.dumps({**event, "meshes": copy.deepcopy(ROOM_MESHES[1:])}) + "\n")
+
+    again = compile_episode(path, tmp_path / "derived", if_stale=True)
+
+    assert again.skipped is False
+    assert _environment(again)["room"]["media"] == "room-scan-2.glb"
+
+
 @pytest.mark.parametrize("change", ["same size", "removed", "keyframe arrived"])
 def test_changes_to_media_and_staleness(room_scan_episode_dir, tmp_path, change):
     compile_episode(room_scan_episode_dir, tmp_path / "derived")
@@ -272,22 +338,62 @@ def test_room_scan_media_lists_snapshots_in_number_order(tmp_path):
 # --- validation -----------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("problem", ["indices", "nan"])
-def test_a_room_scan_no_viewer_could_draw_is_unreadable(tmp_path, problem):
+def _broken(problem):
     corners, triangles = box_mesh([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
     if problem == "indices":
         triangles[3][1] = 8
     else:
         corners[2][1] = float("nan")
-    node = {**_node("mesh-2"), "positions": corners, "indices": triangles}
+    return {**_node("mesh-2"), "positions": corners, "indices": triangles}
+
+
+@pytest.mark.parametrize(
+    "problem, why",
+    [
+        ("indices", "triangles that point past its vertices"),
+        ("nan", "positions that are not finite"),
+    ],
+)
+def test_a_mesh_no_viewer_could_draw_is_left_out(tmp_path, problem, why):
     b = build_room_scan(tmp_path)
-    b.media["room-scan-1.glb"] = room_glb([node])
+    good = {**_node("mesh-1"), "extras": {"kind": "other", "label": None, "global": True}}
+    b.media["room-scan-1.glb"] = room_glb([good, _broken(problem)])
 
     result = compile_episode(b.write(), tmp_path / "derived")
 
-    assert _stage(result)["status"] == "failed"
-    assert "mesh-2: " in _stage(result)["detail"]
+    assert _stage(result) == {"name": "room", "status": "ok", "detail": f"left out mesh-2 ({why})"}
+    meshes = {m["id"]: m for m in _environment(result)["room"]["meshes"]}
+    assert meshes["mesh-1"]["bounds"] == {"min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, 1.0]}
+    assert (meshes["mesh-2"]["vertices"], meshes["mesh-2"]["bounds"]) == (0, None)
+    kept = read_glb(result.out_dir / "room.glb")
+    assert [(n.name, n.mesh is not None) for n in kept] == [("mesh-1", True), ("mesh-2", False)]
+    assert validate_derived(result.out_dir) == []
+
+
+def test_a_snapshot_with_nothing_to_draw_is_unreadable(tmp_path):
+    b = build_room_scan(tmp_path)
+    b.media["room-scan-1.glb"] = room_glb([_broken("indices")])
+
+    result = compile_episode(b.write(), tmp_path / "derived")
+
+    assert _stage(result) == {
+        "name": "room",
+        "status": "failed",
+        "detail": "ValueError: room-scan-1.glb has nothing to draw "
+        "(left out mesh-2 (triangles that point past its vertices))",
+    }
     assert _environment(result)["room"] is None
+
+
+def test_a_mesh_with_vertices_and_no_triangles_is_left_out():
+    # The headset writes a mesh with vertices and no indices without an indices accessor.
+    node = {**_node("mesh-3"), "positions": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], "indices": []}
+    data = bytearray(room_glb([_node("mesh-1"), node]))
+    scan = RoomScan("room-scan-1.glb", 0.0, 1, read_glb(bytes(data)), [])
+    nodes, left_out = _drawable(scan.nodes)
+
+    assert left_out == ["left out mesh-3 (no triangles)"]
+    assert [n.mesh is not None for n in nodes] == [True, False]
 
 
 def test_validate_derived_reads_room_glb(room_scan_episode_dir, tmp_path):

@@ -282,7 +282,7 @@ def _room_stage(
     """The `room` stage: room.glb from the last room scan snapshot whose GLB arrived and can be
     read (room.py), and its summary for environment.json (None when there is none). Skipped
     without a snapshot or when no GLB arrived; failed, with room.glb left out, when none that
-    arrived can be read. Passing over an unreadable later snapshot is said in the detail."""
+    arrived can be read. What was passed over or left out on the way is said in the detail."""
     snapshots = room_snapshots(episode)
     if not snapshots:
         stages.append({"name": "room", "status": "skipped", "detail": "no room scan"})
@@ -301,8 +301,8 @@ def _room_stage(
         stages.append({"name": "room", "status": "failed", "detail": describe(e)})
         return None
     artifacts.append({"name": ROOM_FILE, "kind": "room", "bytes": size})
-    detail = f"kept {scan.media}; " + "; ".join(scan.passed_over) if scan.passed_over else None
-    stages.append({"name": "room", "status": "ok", **({"detail": detail} if detail else {})})
+    note = scan.note
+    stages.append({"name": "room", "status": "ok", **({"detail": note} if note else {})})
     return doc
 
 

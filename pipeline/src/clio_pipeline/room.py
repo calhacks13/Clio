@@ -4,8 +4,11 @@ The headset records the room scan (Space Setup, read through WebXR mesh detectio
 `environment.meshes` events, each a full snapshot whose geometry is a GLB in media/
 (`room-scan-<n>.glb`): one root node per mesh, named by its id, its translation and rotation the
 mesh pose in W, POSITION in mesh-local meters. The compile keeps the last snapshot whose GLB
-arrived and can be read: an upload that was dropped leaves an event without its file, and a GLB
-that cannot be read is passed over for the one before it (the stage says so).
+arrived and can be read: an upload that was dropped leaves an event without its file (or the file
+is there before the batch with its event), and a GLB that cannot be read, or holds nothing a viewer
+can draw, is passed over for the one before it. Within the snapshot kept, a mesh no viewer could
+draw (positions that are not finite, triangles that point past its vertices, no triangles) is
+left out and its node kept without it. The stage's detail says what was passed over or left out.
 
 It is rewritten to room.glb in the same node layout: each mesh keeps its pose and local positions,
 gets vertex normals where the scan had none, and carries `extras: {kind, label, global}` as
@@ -21,7 +24,7 @@ moved since. Nothing here is an object measurement.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +52,13 @@ class RoomScan:
     nodes: list[Node]  # the GLB's root nodes: pose in W, local positions
     meshes: list[dict[str, Any]]  # the event's mesh list (EnvironmentMesh), as recorded
     passed_over: list[str] = field(default_factory=list)  # later snapshots that were unreadable
+    left_out: list[str] = field(default_factory=list)  # meshes of this one no viewer could draw
+
+    @property
+    def note(self) -> str | None:
+        """What was passed over or left out, for the stage's detail; None when nothing was."""
+        parts = [f"kept {self.media}", *self.passed_over] if self.passed_over else []
+        return "; ".join(parts + self.left_out) or None
 
 
 def room_scan_media(episode_dir: Path) -> list[str]:
@@ -83,10 +93,13 @@ def latest_room_scan(episode: Episode) -> RoomScan | None:
         if path is None:
             continue
         try:
-            nodes = read_glb(path)
-            _check_geometry(nodes)
+            nodes, left_out = _drawable(read_glb(path))
         except (OSError, ValueError, KeyError, IndexError, TypeError, UnicodeDecodeError) as e:
             passed_over.append(f"{event['media']} is unreadable ({type(e).__name__}: {e})")
+            continue
+        if not any(node.mesh is not None for node in nodes):
+            why = "; ".join(left_out) if left_out else "no meshes"
+            passed_over.append(f"{event['media']} has nothing to draw ({why})")
             continue
         meshes = event.get("meshes")
         return RoomScan(
@@ -96,29 +109,39 @@ def latest_room_scan(episode: Episode) -> RoomScan | None:
             nodes=nodes,
             meshes=[m for m in meshes if isinstance(m, dict)] if isinstance(meshes, list) else [],
             passed_over=passed_over,
+            left_out=left_out,
         )
     if passed_over:
         raise ValueError("; ".join(passed_over))
     return None
 
 
-def _check_geometry(nodes: list[Node]) -> None:
-    """Raise ValueError for a mesh no viewer could draw: positions that are not finite, or
-    triangles that point past its vertices."""
+def _drawable(nodes: list[Node]) -> tuple[list[Node], list[str]]:
+    """The nodes, each mesh a viewer could not draw taken off its node, and what was left out."""
+    out, left_out = [], []
     for node in nodes:
-        mesh = node.mesh
-        if mesh is None:
-            continue
-        if not np.isfinite(mesh.positions).all():
-            raise ValueError(f"{node.name}: positions that are not finite")
-        if mesh.indices is None and len(mesh.positions) % 3:
-            raise ValueError(f"{node.name}: {len(mesh.positions)} positions are not triangles")
-        if (
-            mesh.indices is not None
-            and len(mesh.indices)
-            and mesh.indices.max() >= len(mesh.positions)
-        ):
-            raise ValueError(f"{node.name}: triangles refer to vertices it does not have")
+        problem = _mesh_problem(node.mesh) if node.mesh is not None else None
+        if problem is not None:
+            left_out.append(f"left out {node.name} ({problem})")
+            node = replace(node, mesh=None)
+        out.append(node)
+    return out, left_out
+
+
+def _mesh_problem(mesh: MeshData) -> str | None:
+    positions, indices = mesh.positions, mesh.indices
+    if len(positions) == 0:
+        return None  # a node without geometry: written without a mesh
+    if not np.isfinite(positions).all():
+        return "positions that are not finite"
+    if indices is None:
+        # Without indices glTF reads every three positions as a triangle.
+        return None if len(positions) % 3 == 0 else f"{len(positions)} positions, no triangles"
+    if len(indices) == 0:
+        return "no triangles"
+    if indices.max() >= len(positions):
+        return "triangles that point past its vertices"
+    return None
 
 
 def room_doc(scan: RoomScan) -> dict[str, Any]:
