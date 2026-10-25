@@ -1,13 +1,14 @@
 import { Group } from 'three';
 import type { PresentContext, Presenter } from '../presenter';
+import { GloveHand } from './glove-hand';
 import { HandMesh } from './hand-mesh';
 
-/** Translucent demonstration hands (workspace frame), plus optional debug hands for tracking. */
+/** Solid demonstration gloves (workspace frame), plus optional debug skeletons for tracking. */
 export class GhostHandsPresenter implements Presenter {
   readonly object = new Group();
   private readonly ghost = {
-    left: new HandMesh(0x66e3ff, 0.5),
-    right: new HandMesh(0x66e3ff, 0.5),
+    left: new GloveHand(),
+    right: new GloveHand(),
   };
   private readonly tracked = {
     left: new HandMesh(0xffffff, 0.18),

@@ -115,7 +115,17 @@ def _identifier(settings: Settings, fake_box: str | None):
         client = JevClient(
             settings.jev_key, settings.jev_model, settings.jev_url, settings.jev_timeout_s
         )
-        return JevIdentifier(client)
+        dump = None
+        if settings.jev_dump:
+            from pathlib import Path
+
+            from .dump import JevDump
+
+            dump = JevDump(Path(settings.jev_dump).expanduser())
+            logging.getLogger("clio_tracker").info(
+                "jev dump: every call written to %s", dump.folder
+            )
+        return JevIdentifier(client, dump=dump)
     if settings.identifier_url:
         return HttpIdentifier(settings.identifier_url, settings.identifier_token)
     return None
@@ -157,8 +167,13 @@ def _serve(settings: Settings, args: argparse.Namespace) -> int:
         time.perf_counter() - loaded,
     )
     segmenter = _segmenter(settings)
+    # One call every interval at most, with every object that is due: one that moves on its own,
+    # coasts, is lost, new or in doubt on every call; one held steadily and still (or out of
+    # view) only every steady interval.
     session_settings = SessionSettings(
-        identify_interval_s=settings.identify_interval_ms / 1000,
+        identify_interval_s=settings.identify_steady_ms / 1000,
+        identify_moving_s=settings.identify_interval_ms / 1000,
+        identify_min_gap_s=settings.identify_interval_ms / 1000,
         identify_max_in_flight=settings.identify_max_in_flight,
     )
     executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="identify")
@@ -200,7 +215,8 @@ def _serve(settings: Settings, args: argparse.Namespace) -> int:
                 f"  Vision: {vision.model} on {vision.backend}",
                 f"  Outline: {outline}",
                 f"  Names the target: {identifier.name}; with a session or in objects mode, "
-                f"every {settings.identify_interval_ms} ms per object",
+                f"a call every {settings.identify_interval_ms} ms at most, an object held still "
+                f"every {settings.identify_steady_ms} ms",
             ]
         )
     )

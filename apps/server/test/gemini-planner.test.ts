@@ -314,7 +314,7 @@ describe('createGeminiPlanner', () => {
           'them as SHOW says for `phrase` and `description`. The look becomes its ' +
           'tracking.query.',
         '- `firstStep`: that first step as a card, with the same id as outline[0]. `show` ' +
-          'lists object ids. Each mistake names the object it is made with, never one the ' +
+          'lists the one object id it outlines. Each mistake names the object it is made with, never one the ' +
           'step itself uses: Clio speaks its message when a hand lingers at that object. Clio ' +
           'confirms the step by its `doneWhen`.',
         'Get the first step right: it starts from the scene as it is now, it names the right ' +
@@ -414,10 +414,19 @@ describe('PLANNER_SYSTEM_INSTRUCTION', () => {
     '"blue plastic cap", "white yogurt bottle"',
     "Name what stays true all lesson (a cup's own color, not its contents')",
     'Never a position, a verb, or a word as bare as "item", "object" or "container"',
-    '`description`: one standalone sentence of 15 to 35 words',
-    'size next to a hand',
-    'next to large things that stay put and to its neighbors',
-    'enough to tell it from every look-alike in view',
+    // jev checks the description against the one picture it sees: short, and always both where
+    // it is in the picture and where it is next to other things in view.
+    '`description`: one short standalone sentence of at most 30 words',
+    'can check against the one picture it sees',
+    'always, both where it is in the picture (left or right, top or bottom, closest to the',
+    'and where it is relative to other things in view',
+    '"the bottom one of the three chargers", "the leftmost cup"',
+    '("left of the laptop", "on top of the white extension block")',
+    'Never just a name.',
+    'Relate it to whole things in view, not to parts of them',
+    'Good: "White charger brick at the bottom right of the picture, the bottom one of the three chargers, left of the laptop."',
+    'Too hard to check: "The white charger brick plugged into the lower socket',
+    "The object finder's words (the show `description` and `tracking.query`) always say both",
     'No actions, no mention of steps',
     'Too vague: "The washer fluid cap."',
     'on its own',
@@ -464,15 +473,21 @@ describe('PLANNER_SYSTEM_INSTRUCTION', () => {
     'sharp tools (knives, blades, scissors, needles)',
     'hot things (kettles, stoves, pans, irons)',
     'what it looks like, where it is, and what to do',
-    // Parts: an attached component is its own object that names its whole, which is declared
-    // too, so the camera follows and records both; kind "region" is left to the mat.
+    // Whole things only, one at a time: the glow follows what the tracker can follow, and a part
+    // (the door) is named in the words; kind "region" is left to the mat.
     'Object `kind`: "tool" or "container" only when the whole tool or container is meant',
-    "caliper's vernier scale or locking screw, is an object of its own",
-    '`partOf` naming the whole object it sits on',
-    'Declare that whole object too',
-    'describe only that part',
+    'never a part that stays attached to it',
+    'the mini fridge, not its door, handle, shelf or freezer compartment',
+    'Name the part in the words instead',
+    'One object at a time',
   ])('covers %j', (phrase) => {
     expect(PLANNER_SYSTEM_INSTRUCTION).toContain(phrase);
+  });
+
+  it('no longer asks for parts as objects or for several outlines per step', () => {
+    expect(PLANNER_SYSTEM_INSTRUCTION).not.toContain('partOf');
+    expect(PLANNER_SYSTEM_INSTRUCTION).not.toContain('is an object of its own');
+    expect(PLANNER_SYSTEM_INSTRUCTION).not.toContain('At most 3');
   });
 
   it('never offers kind "region", which means a static zone on the mat', () => {

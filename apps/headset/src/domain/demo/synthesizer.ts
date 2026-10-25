@@ -127,6 +127,7 @@ const VERBS: Partial<Record<Action['verb'], Builder>> = {
     c.key(700, up(o, a.amount ?? 0.15), grip, Q_REACH)
       .mark('lift', 'Lift')
       .hold(500);
+    c.glyphs.push({ kind: 'arrow', from: o, to: up(o, a.amount ?? 0.15) });
     return true;
   },
   place(c, _a, o, t, grip) {
@@ -247,6 +248,7 @@ const VERBS: Partial<Record<Action['verb'], Builder>> = {
     c.key(700, up(o, a.amount ?? 0.2), grip, Q_REACH)
       .mark('lift', 'Lift')
       .hold(500);
+    c.glyphs.push({ kind: 'arrow', from: o, to: up(o, a.amount ?? 0.2) });
     return true;
   },
 };

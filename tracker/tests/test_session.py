@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 import pytest
 
-from clio_tracker.identify import FrameImage, Query
+from clio_tracker.identify import FrameImage, Identification, Query
 from clio_tracker.refresh import Refresher
 from clio_tracker.session import SessionSettings, TrackerSession
 from clio_tracker.track import FrameHeader, Modes, ObjectSet, StreamTracker
@@ -102,6 +102,54 @@ def test_an_object_jev_says_is_out_of_view_waits_the_interval_not_the_next_frame
     assert len(jev.calls) == 2
 
 
+class _Sees(FakeIdentifier):
+    """jev seeing the cup wherever it is when asked (the executor runs it on the same frame)."""
+
+    def __init__(self, where: list):
+        super().__init__()
+        self.where = where
+
+    def identify(self, image, queries):
+        self.calls.append(list(queries))
+        return [Identification(q.id, 0.9, norm_box(self.where[0])) for q in queries]
+
+
+def test_jev_looks_again_less_often_at_an_object_held_still_than_at_one_moving(vision):
+    clock, executor, where = Clock(), ManualExecutor(), [at(100)]
+    jev = _Sees(where)
+    paced = SessionSettings(identify_interval_s=1.0, identify_moving_s=0.2, identify_min_gap_s=0.2)
+    session = TrackerSession(vision, jev, executor, paced, clock)
+
+    def calls(seconds: float, dx: float = 0.0) -> int:
+        before = len(jev.calls)
+        for _ in range(round(seconds * 15)):
+            clock.t += 1 / 15
+            where[0] = at(where[0][0] + dx)
+            vision.scenes.append([Thing(where[0], A)])
+            session.locate(frame_image(), [CUP])
+            executor.run_all()
+        return len(jev.calls) - before
+
+    calls(1.0)  # found, then steady
+    assert calls(3.0) == 3  # held still: once a second
+    # 180 px/s, 1.3 sizes a second: every 0.2 s (every third or fourth frame at 15 a second)
+    assert calls(2.0, dx=12) >= 7
+    calls(1.0)
+    assert calls(2.0) == 2  # still again
+
+
+def test_an_object_out_of_view_waits_the_full_interval_when_paced(vision):
+    clock, jev, executor = Clock(), FakeIdentifier(), ManualExecutor()
+    paced = SessionSettings(identify_interval_s=1.0, identify_moving_s=0.2, identify_min_gap_s=0.2)
+    session = TrackerSession(vision, jev, executor, paced, clock)
+    for _ in range(15):  # no cup in view: the fake jev answers not present
+        clock.t += 1 / 15
+        vision.scenes.append([Thing(at(500), B)])
+        session.locate(frame_image(), [CUP])
+        executor.run_all()
+    assert len(jev.calls) == 1
+
+
 def test_new_words_for_an_object_out_of_view_are_asked_about_at_once(setup):
     _, jev, executor, _, frame = setup
     frame(Thing(at(500), B))
@@ -121,6 +169,25 @@ def test_an_object_jev_finds_again_is_asked_about_soon_once_lost(setup):
     executor.run_all()
     frame(Thing(at(100), A))  # jev's answer applies on the next frame: found
     assert len(jev.calls) == 2 and "cup" not in session._absent
+
+
+def test_a_minimum_gap_holds_back_the_call_for_a_lost_object(vision):
+    clock, jev, executor = Clock(), FakeIdentifier(), ManualExecutor()
+    every = SessionSettings(identify_interval_s=0.2, identify_min_gap_s=0.2)
+    session = TrackerSession(vision, jev, executor, every, clock)
+    jev.answers.extend([{"cup": (0.1, None)}] * 10)  # never in view, so jev is wanted now
+
+    def frame(dt: float) -> None:
+        clock.t += dt
+        vision.scenes.append([Thing(at(100), A)])
+        session.locate(frame_image(), [CUP])
+        executor.run_all()
+
+    frame(1 / 15)
+    frame(0.1)
+    assert len(jev.calls) == 1
+    frame(0.11)
+    assert len(jev.calls) == 2
 
 
 def test_no_more_than_max_in_flight(vision):

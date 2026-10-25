@@ -6,7 +6,7 @@ import {
   WIDGET_TOOL_NAMES,
 } from '@clio/protocol';
 import type { Clock } from '../../core/clock';
-import type { AppBus, CoachVoice } from '../events';
+import type { AppBus, CoachVoice, LessonPhase } from '../events';
 import { recitePlan } from '../plan/recital';
 import type { TemplateSummary } from '../session/templates';
 import type { AgentState, Narration, RealtimeAgent, ToolCall, ToolResult } from './agent';
@@ -21,14 +21,18 @@ import type { CoachToolbox } from './toolbox';
 //
 // It also keeps a Gemini coach in sync with the plan the app owns: a fresh system instruction once
 // the plan settles and on every reconnect (the next connection starts from it), a recap after a
-// reconnect, and a notice when the model cancels a call that had already changed the plan or the
-// learner's widgets; both also say what the widgets show. Every message to Gemini interrupts what
-// it is saying, so narrations wait while either side is talking or the connection is down, and go
-// out merged. Each narration is recorded when it reaches the model.
+// reconnect, and a notice when the model cancels a call that had already changed the plan. Every
+// message to Gemini interrupts what it is saying, so narrations wait while either side is talking
+// or the connection is down, and go out merged. What the app saw that the learner may be waiting
+// on (an urgent narration: a step done, something done wrong, a hazard) waits only for the coach,
+// not for the learner to stop. Each narration is recorded when it reaches the model.
 //
 // A non-blocking call (look_closer, which asks the smart model) answers a second or two later, as
 // the call's result; the model says it once nobody is talking. If its connection closed meanwhile,
 // the new connection never made that call, so the answer goes out as a narration instead.
+//
+// With no lesson running, whatever the learner says starts one. When a Gemini coach answers in
+// words instead and goes quiet without calling start_lesson, it is told to start one.
 //
 // It publishes conversation state (coach.voice) when it changes: speaking
 // from the model's first audio until the speaker has played the turn out (or a barge-in or a
@@ -63,6 +67,17 @@ const LEARNER_QUIET_MS = 1200;
 const MAX_HOLD_MS = 6000;
 /** Remember this many tool calls, for cancellations. */
 const REMEMBERED_CALLS = 50;
+/**
+ * A thinking voice says what it starts, ends its turn and calls start_lesson 1 to 4 s later, so
+ * it is told to start a lesson only once it has been quiet this long since the learner spoke.
+ */
+const START_NUDGE_MS = 6000;
+/** No lesson is running or being planned. */
+const NO_LESSON: ReadonlySet<LessonPhase> = new Set<LessonPhase>(['idle', 'done', 'failed']);
+const START_NUDGE =
+  'No lesson is running, so what they just said starts one: call start_lesson now with a goal ' +
+  'made from it, done with their hands, and say in one short sentence what you are starting. If ' +
+  'they only greeted or thanked you, ask in a few words what they want to do instead.';
 
 /** Tools that change the plan: cancelling one doesn't undo it. */
 const PLAN_TOOLS: ReadonlySet<string> = new Set<CoachToolName>([
@@ -116,6 +131,10 @@ export class CoachSession {
   private hears = false;
   private voice: CoachVoice = 'off';
   private lastLearnerT = Number.NEGATIVE_INFINITY;
+  /** When the model last spoke or called a tool. */
+  private lastCoachT = Number.NEGATIVE_INFINITY;
+  /** When the learner last spoke with no lesson running, until one starts or they are asked. */
+  private unstarted: number | null = null;
   private held: Narration[] = [];
   private heldSince = 0;
   private flushQueued = false;
@@ -141,6 +160,9 @@ export class CoachSession {
       events.on('toolCalls', ({ calls }) => {
         // The model's turn goes on after the calls: what they set off waits for it to end.
         this.speaking = true;
+        this.lastCoachT = clock.now();
+        if (calls.some((c) => c.name === 'start_lesson' || c.name === 'end_lesson'))
+          this.unstarted = null;
         for (const call of calls) {
           this.remember(call);
           void toolbox.handle(call).then((result) => this.onResult(result));
@@ -150,6 +172,7 @@ export class CoachSession {
       events.on('audio', ({ pcm, sampleRate }) => {
         this.speaking = true;
         this.speech = 'turn';
+        this.lastCoachT = clock.now();
         voice.play(pcm, sampleRate);
         this.updateVoice();
       }),
@@ -167,6 +190,7 @@ export class CoachSession {
       }),
       events.on('turnComplete', () => {
         this.speaking = false;
+        this.lastCoachT = clock.now();
         if (this.speech === 'turn') this.speech = 'tail';
         this.updateVoice();
       }),
@@ -175,6 +199,7 @@ export class CoachSession {
         // Partial transcripts stream while the learner talks; final ones come at the end of a turn.
         if (role === 'user' && !final) {
           this.lastLearnerT = t;
+          this.learnerSpoke(t);
           this.updateVoice(t);
         }
         bus.emit('coach.caption', { t, role, text, final });
@@ -182,6 +207,10 @@ export class CoachSession {
           bus.emit('transcript', { t, role, text: text.trim(), final: true });
       }),
       events.on('status', ({ state, detail }) => this.onStatus(state, detail)),
+      // A whole spoken turn, or one typed in the desk lab.
+      bus.on('transcript', ({ t, role }) => {
+        if (role === 'user') this.learnerSpoke(t);
+      }),
       bus.on('plan.changed', () => this.planChanged()),
       bus.on('plan.ready', () => this.planChanged()),
       // A lesson starting, failing or ending changes the plan without a plan event.
@@ -203,12 +232,23 @@ export class CoachSession {
     await mic?.start((pcm) => agent.pushAudio(pcm));
   }
 
+  /**
+   * Opens the conversation, since Live says nothing until it is spoken to: a greeting and the
+   * question, or, when the learner chose a goal before starting, a greeting while it is planned.
+   */
+  welcome(goal: string | null): void {
+    const body = goal
+      ? `They just put the headset on to: ${goal}. The app has already started that lesson, and its plan arrives as an [app] message. Greet them in one short sentence; give no steps yet and call no tool.`
+      : 'They just put the headset on and no lesson is running. Greet them in one short sentence and ask what they want to do.';
+    this.send({ kind: 'welcome', text: `[app] ${body}`, reply: true });
+  }
+
   /** Call once per frame: sends held narrations, a fresh instruction and camera frames when due. */
   tick(t: number): void {
     this.updateVoice(t);
-    this.narrator.tick(t);
+    this.nudgeToStart(t);
     const overdue = this.state === 'ready' && t - this.heldSince >= MAX_HOLD_MS;
-    if (this.held.length > 0 && (!this.gateClosed(t) || overdue)) this.flush();
+    if (this.held.length > 0 && (this.mayFlush(t) || overdue)) this.flush();
     if (this.planChangedT !== null && t - this.planChangedT >= INSTRUCTION_SETTLE_MS)
       this.refreshInstruction();
 
@@ -230,6 +270,7 @@ export class CoachSession {
     for (const off of this.offs) off();
     this.offs = [];
     this.held = [];
+    this.unstarted = null;
     this.deps.mic?.stop();
     this.deps.voice.stop();
     this.hears = false;
@@ -256,6 +297,29 @@ export class CoachSession {
 
   private planChanged(): void {
     this.planChangedT = this.deps.clock.now();
+  }
+
+  private noLesson(): boolean {
+    const phase = this.deps.view.phase?.();
+    return phase !== undefined && NO_LESSON.has(phase);
+  }
+
+  private learnerSpoke(t: number): void {
+    if (this.gemini && this.noLesson()) this.unstarted = t;
+  }
+
+  /** The learner spoke with no lesson running and the coach went quiet without starting one. */
+  private nudgeToStart(t: number): void {
+    const since = this.unstarted;
+    if (since === null) return;
+    if (!this.noLesson()) {
+      this.unstarted = null;
+      return;
+    }
+    if (this.gateClosed(t) || this.speech !== 'none') return;
+    if (t - Math.max(since, this.lastCoachT) < START_NUDGE_MS) return;
+    this.unstarted = null;
+    this.send({ kind: 'start_nudge', text: `[app] ${START_NUDGE}`, reply: true });
   }
 
   private refreshInstruction(): void {
@@ -406,8 +470,18 @@ export class CoachSession {
     return t - this.lastLearnerT < LEARNER_QUIET_MS ? 'hearing' : 'quiet';
   }
 
-  private gateClosed(t: number): boolean {
-    return this.state !== 'ready' || this.speaking || t - this.lastLearnerT < LEARNER_QUIET_MS;
+  /** Closed while there is no connection or either side is talking (`learner` false: the coach). */
+  private gateClosed(t: number, learner = true): boolean {
+    return (
+      this.state !== 'ready' ||
+      this.speaking ||
+      (learner && t - this.lastLearnerT < LEARNER_QUIET_MS)
+    );
+  }
+
+  /** What is held may go out: an urgent narration doesn't wait for the learner to stop. */
+  private mayFlush(t: number): boolean {
+    return !this.gateClosed(t, !this.held.some((n) => n.urgent));
   }
 
   private send(narration: Narration): void {
@@ -421,7 +495,7 @@ export class CoachSession {
     if (this.held.length === 0) this.heldSince = t;
     this.held.push(narration);
     // Whatever else the same events produce goes out with it.
-    if (!this.gateClosed(t)) this.flushSoon();
+    if (this.mayFlush(t)) this.flushSoon();
   }
 
   private flushSoon(): void {
@@ -429,7 +503,7 @@ export class CoachSession {
     this.flushQueued = true;
     queueMicrotask(() => {
       this.flushQueued = false;
-      if (!this.gateClosed(this.deps.clock.now())) this.flush();
+      if (this.mayFlush(this.deps.clock.now())) this.flush();
     });
   }
 

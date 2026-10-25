@@ -61,6 +61,20 @@ describe('synthesized demonstrations', () => {
     expect(distance(graspPoint(sampleAt(d, d.marks.grip ?? -1)), jug)).toBeLessThan(0.01);
     const end = graspPoint(sampleAt(d, d.clip.durationMs));
     expect(distance(end, [jug[0], jug[1] + 0.15, jug[2]])).toBeLessThan(0.01);
+    expect(d.glyphs).toContainEqual({
+      kind: 'arrow',
+      from: jug,
+      to: [jug[0], jug[1] + 0.15, jug[2]],
+    });
+  });
+
+  it('lift draws the requested height as well as moving the hand there', () => {
+    const d = demo({ verb: 'lift', object: 'jug', amount: 0.28 });
+    expect(d?.glyphs).toContainEqual({
+      kind: 'arrow',
+      from: jug,
+      to: [jug[0], jug[1] + 0.28, jug[2]],
+    });
   });
 
   it('place carries the object to the target and lets go', () => {

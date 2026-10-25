@@ -1,4 +1,5 @@
 import type { Procedure } from '@clio/protocol';
+import type { LessonPhase } from '../events';
 import type { PlanView } from '../plan/recital';
 
 /** Port: microphone, delivering PCM16 mono chunks at 16 kHz. */
@@ -31,6 +32,8 @@ export interface LessonView {
   label(objectId: string): string;
   /** The plan with each step's status, or null when no lesson is running. */
   plan(): PlanView | null;
+  /** Where the lesson is: idle before the first one and after one is ended, done once finished. */
+  phase?(): LessonPhase;
   /** Who completes steps from sensor checks right now (see docs/coach-plan.md). */
   authority?(): 'coach' | 'local';
 }

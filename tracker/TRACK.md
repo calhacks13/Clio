@@ -166,11 +166,14 @@ A lesson follows several objects at once and knows them by their words, not by a
 phrase and description the plan gives each of its objects (a step's show items first, then the
 rest of the plan, for the recording). In objects mode the tracker asks
 jev itself, as `POST /locate` with a session does ([README.md](README.md#how-it-works)): jev
-places the objects about once a second (`CLIO_TRACKER_IDENTIFY_INTERVAL_MS`), all that are due
-in one background call and sooner for an object that is new, lost or in doubt, never more
-than one call at a time. An object jev has just said is out of view waits for the interval, not
-the next frame, until its words change: one that really is out of sight (in a closed fridge)
-would otherwise keep jev busy several times a second. A failed call is not retried: jev is next asked after the interval,
+places the objects in one background call at most every 0.15 s
+(`CLIO_TRACKER_IDENTIFY_INTERVAL_MS`), with every object that is due, and never more than one
+call at a time. An object that moves on its own, coasts, is lost, new or in doubt is due on
+every call; one held steadily and still on screen (tracked on every frame for 0.5 s, slower than
+one box size a second across the picture, its own motion and the camera's together, so turning
+the head counts too) only once a second
+(`CLIO_TRACKER_IDENTIFY_STEADY_MS`). An object jev has just said is out of view waits the
+second too, not the next call, until its words change. A failed call is not retried: jev is next asked after the interval,
 then twice as long after each further failure, up to 16 s, and the first answer brings back the
 usual pace. YOLOE-26 and ByteTrack follow every object on every frame, with one YOLOE pass for
 all of them. Each connection in objects mode has a tracking session of its own.
@@ -246,8 +249,9 @@ page captured.
   newer frame. For 6 s after it, a jev answer about the object that disagrees is ignored: one
   that says the object is not in view, and one whose box is elsewhere. jev's box agrees when it
   is on the object's track on jev's frame (IoU 0.3, or one box inside the other), or, when the
-  track was not there yet, on where the object is now. A jev answer that agrees applies as usual.
-  After 6 s jev's answers apply as before.
+  track was not there yet, on where the object is now. A jev answer that agrees changes nothing
+  either: the anchor's box and its cut stay, since jev's box takes in neighbors (a row of three
+  chargers for one, on a Quest lesson). After 6 s jev's answers apply as before.
 - An anchor for an id outside the set, an anchor in target mode, and a malformed one are logged
   and skipped; the connection stays open.
 

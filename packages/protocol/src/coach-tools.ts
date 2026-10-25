@@ -44,10 +44,11 @@ const WIDGET_NAME_MAX = Math.max(...Object.values(WIDGET_TEXT_MAX));
 export const COACH_TOOLS = {
   start_lesson: {
     description:
-      'Start a hands-on lesson for what the user wants to do. Call it as soon as you can infer the ' +
-      'goal from what they say or show, without interviewing them; ask one short question first ' +
-      'only when there is no plausible goal. When they want something other than the running ' +
-      'lesson, call it with the new goal: it replaces that lesson at once. Pass ' +
+      'Start a hands-on lesson. While no lesson is running, call it in the same turn for whatever ' +
+      'the user says or shows, questions included: a question becomes a lesson on its answer, ' +
+      'done with their hands. Infer the goal without answering in words or interviewing them; ' +
+      'only a bare greeting gets a question back. When they want something other than the ' +
+      'running lesson, call it with the new goal: it replaces that lesson at once. Pass ' +
       'template_id when one of the curated lessons in your instructions fits. It answers at once; ' +
       'the step plan arrives as an [app] message.',
     args: z.object({
@@ -147,9 +148,11 @@ export const COACH_TOOLS = {
         .max(200)
         .optional()
         .describe(
-          'This one particular thing, so a camera finds it and nothing else: its color, ' +
-            'material, shape, size and markings, and where it is relative to its neighbors, ' +
-            'e.g. "small white plastic funnel on the fender, left of the blue cap"',
+          'This one particular thing, so a camera finds it and nothing else, in at most 30 ' +
+            'words: what it is and its color, then always both where it is in the camera picture ' +
+            '(bottom right, closest to the camera) and relative to other things in view (the ' +
+            'bottom one of the three, left of the laptop), e.g. "small white plastic funnel at ' +
+            'the bottom left, on the fender, left of the blue cap"',
         ),
     }),
   },
@@ -162,7 +165,9 @@ export const COACH_TOOLS = {
       'thing to touch until the step changes or you target another, "attention" is a soft white ' +
       'hint for a few seconds, "warning" is a brief red pulse for an object they should not ' +
       'touch. When object_id names nothing in the plan and look_for is given, that thing is ' +
-      'added to the lesson as a material and lit, and the result gives its material_id.',
+      'added to the lesson as a material and lit, and the result gives its material_id. It ' +
+      'works on anything, so never tell them you cannot highlight something: shown false means ' +
+      'it is not lit yet and lights up by itself once it is in view; say where it is meanwhile.',
     args: z.object({
       object_id: z
         .string()
@@ -184,8 +189,11 @@ export const COACH_TOOLS = {
         .optional()
         .describe(
           'Only for something the plan lacks: this one particular thing, so a camera finds it ' +
-            'and nothing else: its color, material, shape, size and markings, and where it is ' +
-            'relative to its neighbors, e.g. "small red button left of the steering wheel"',
+            'and nothing else, in at most 30 words: what it is and its color, then always both ' +
+            'where it is in the camera picture (bottom right, closest to the camera) and relative ' +
+            'to other things in view (the bottom one of the three, left of the laptop), e.g. ' +
+            '"small red button in the middle of the picture, the left one of the two below the ' +
+            'screen"',
         ),
     }),
   },

@@ -1,7 +1,8 @@
 # Clio tracker
 
 Clio's object finder and live tracker on `:8790`. **jev** decides which object the words mean,
-about once a second; the vision half of **YOLOE-26**, with ByteTrack, follows that object on
+about once a second for an object held still and every 0.15 s while it moves or is lost; the
+vision half of **YOLOE-26**, with ByteTrack, follows that object on
 every frame in between. It replaced the jev finder's EdgeTAM and SAM 2.1 models. On an M5 a frame
 takes about 31 ms with YOLOE-26L on the Neural Engine (15 ms with YOLOE-26s), plus about 3 ms
 per stream for decoding and the camera's motion and 2 ms per tracked object.
@@ -21,9 +22,9 @@ headset lesson ────────── ws /track, objects mode ───�
 | Endpoint                  | Who calls it                                                    | What it does                                                                                                                                                  |
 | ------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /locate`            | Clio's primary-object route (`CLIO_PRIMARY_FINDER_URL`)         | One jev call for the frame, then SAM 2.1 outlines each box jev found, YOLOE where SAM finds nothing or without a segmenter (`model`: `jev-1.14.0+yoloe-26l-seg+sam2.1-small`, without the `+sam2.1-small` when there is no segmenter). One request at a time; another gets 503. |
-| `POST /locate` + `session` | Clio's locate route (`CLIO_VISION_URL`), for lesson outlines   | Answers at once from tracking state, with `refreshMs: 50` so the headset sends the next frame soon; jev looks again about once a second.                    |
+| `POST /locate` + `session` | Clio's locate route (`CLIO_VISION_URL`), for lesson outlines   | Answers at once from tracking state, with `refreshMs: 50` so the headset sends the next frame soon; jev is paced by each object's motion (below).               |
 | `WS /track`               | `apps/headset/primary.html`                                     | Frames in, one mask per frame out; the page forwards each primary answer's box as the target. Protocol: [TRACK.md](TRACK.md).                              |
-| `WS /track`, objects mode | the headset's lesson                                            | Frames and the lesson's objects in words in, every object's outline per frame out; jev about once a second, as with a session. [TRACK.md](TRACK.md#objects-mode). |
+| `WS /track`, objects mode | the headset's lesson                                            | Frames and the lesson's objects in words in, every object's outline per frame out; jev paced by motion, as with a session. [TRACK.md](TRACK.md#objects-mode). |
 | `GET /health`             |                                                                 | `{ok, model, backend, segmenter, sessions}`                                                                                                                    |
 
 The contract for `/locate` is [docs/object-finder.md](../docs/object-finder.md). The service
@@ -100,9 +101,12 @@ first, then the coach's highlights, then the rest; only the first two kinds are 
 its id, a phrase that stays the same from step to step, and the step's description (else the
 object's tracking query) as the query; `"objects": []` once the lesson ends, which stops jev. It
 streams frames as `primary.html` does and gets every object's box,
-outline, point and contact on each one. The tracker asks jev itself, about once a second, in
-one call for all the objects that are due, and less often while jev fails (up to 16 s apart,
-as with a session). What comes back feeds the learner's AR view and the recording only, never a
+outline, point and contact on each one. The tracker asks jev itself, in one call for all the
+objects that are due: an object that moves on its own, coasts, is lost, new or in doubt every
+0.15 s, one held steadily and still on screen (tracked on every frame for 0.5 s, slower than one
+box size a second across the picture, its own motion and the camera's together, so turning the
+head counts too) or just said to be out of view once a second, and
+less often while jev fails (up to 16 s apart, as with a session). What comes back feeds the learner's AR view and the recording only, never a
 Gemini coach ([docs/coach-plan.md](../docs/coach-plan.md#the-perception-boundary)).
 
 While a step is focused, the headset also asks Gemini Robotics-ER 2 (Clio's
@@ -126,7 +130,8 @@ From the environment, then `tracker/.env`, then the repo's `.env`.
 | `CLIO_TRACKER_MODEL`, `--model`       | `l`                     | The size: `s`, `m` or `l` (also `n`, `x`, or a name such as `yoloe-26s-seg`). See below. |
 | `CLIO_TRACKER_BACKEND`, `--backend`   | `auto`                  | `coreml` (Apple Neural Engine) or `torch` (MPS, CUDA or CPU).                           |
 | `CLIO_TRACKER_SEGMENTER`, `--segmenter` | `auto` | `auto` is `sam2.1-small` (`transformers` is a dependency), or no segmenter when it fails to load; `sam2.1-large`; `none` turns SAM off: YOLOE's masks. `clio-tracker jitter` takes only `--segmenter` (default `none`). |
-| `CLIO_TRACKER_IDENTIFY_INTERVAL_MS`   | `1000`                  | With a session or in objects mode: how often jev looks again at each object.            |
+| `CLIO_TRACKER_IDENTIFY_INTERVAL_MS`   | `150`                   | With a session or in objects mode: one jev call every interval at most, with every object due; an object that moves, coasts, is lost, new or in doubt is due on every call. |
+| `CLIO_TRACKER_IDENTIFY_STEADY_MS`     | `1000`                  | ...and an object held steadily and still, or just said to be out of view, every this long. |
 | `CLIO_TRACKER_IDENTIFY_MAX_IN_FLIGHT` | `1`                     | jev calls in flight. jev's client never overlaps billed calls.                          |
 | `CLIO_TRACKER_JEV_TIMEOUT_S`          | `12`                    | The whole jev call. Clio gives up on the finder at 15 s.                                |
 | `JEV_MODEL`, `JEV_ENDPOINT`           | `jev-1.14.0`, TypeSafe  | Box needs jev 1.14 or later.                                                            |
@@ -227,7 +232,8 @@ covering it is not. The prompt is half jev's view and half the running one.
 
 **Losing and finding it again.** YOLOE's score for an object swings from frame to frame (blur,
 glare), while its box stays put: a target ByteTrack misses continues on a weaker candidate (down
-to 0.03) that overlaps its predicted box by IoU 0.5. Otherwise it coasts on its predicted box for
+to 0.03) that overlaps its predicted box by IoU 0.3. Each track's Kalman filter allows four times
+ByteTrack's velocity noise, since a hand starts and stops an object harder than a person walks. Otherwise it coasts on its predicted box for
 0.5 s (1 s when it was at an edge or filled the view), unless the prediction has left the view,
 then reads as lost; its track lives 3 s, carried by the camera, so after a glance away it is the
 same track again. In a close-up, the whole object and one part of it can swap scores and

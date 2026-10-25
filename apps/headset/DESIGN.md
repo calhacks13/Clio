@@ -56,7 +56,7 @@ which the HTML-only hierarchy detector does not resolve.
 
 ## Tracked object light
 
-The headset is an AR task surface. Preserve labels, placement, hand skeletons and HUD. The
+The headset is an AR task surface. Preserve labels, placement, tracked hand skeletons and HUD. The
 visual reference is Desktop `Jev fun/experiments/edgetam/preview/index.html`: saturated cyan
 emission, soft light falloff and readable real material. The user rejected flat segmentation
 fills and stacked contour bands, and then asked for the object itself to look like it is
@@ -168,28 +168,21 @@ from this table; the outlines presenter reads that accent; the level band is cut
 tracker's mask in the renderer. The tracker (`tracker/`) sends geometry only and knows nothing
 about color.
 
-## Coach widgets
+## Demonstration hands and movement
 
-The coach's widgets (a timer, a count, a checklist, the answers to its question, a value, a
-caution) are small cards beside the step card. [docs/widgets.md](../../docs/widgets.md) is their
-reference and `src/adapters/render/widgets/theme.ts` holds every value. What a headset designer
-needs from it:
-- They use the card's light theme: white `#FFFFFF` surfaces, ink `#0F1117`, secondary `#5B6472`
-  and inset `#F4F6FA`, soft shadows, Inter and Inter Tight, sentence case, no middle dot, no emoji.
-  Nothing beside the card outweighs its instruction.
-- Solid opaque fills only: no rings, outlines or translucent tints, and no state shown by opacity.
-  Elements are told apart by fill. Answers at rest and open checklist circles are `#E7EAEE`,
-  `#CAD0D9` under a fingertip and ink once pressed or chosen; answers not chosen turn `#F4F6FA`
-  with `#8A94A4` text. Dividers are `#E7EAEE`. Those greys are the navy hairline precomputed over
-  white. The caution sits on the launch page's warning surface `#FFF0E4`. The soft drop shadows
-  stay only as depth cues under cards, pills and answers, never as a tint.
-- Signal colours mean state, never decoration, and only on dots, the timer's ring, checks and small
-  state text: citrus `#FF7B3D` for what is live (a running timer, a lasting hazard), mint for done.
-  Guidance blue is absent: blue means AR guidance, and widgets are information.
-- They hang in a column beside the card, its top level with the card's top edge, and follow the
-  card: the column copies its pose every frame, so it glides with it beside the lit objects. They
-  draw on top like it (no depth test, after everything else), so a raised hand or the glow never
-  hides them; a hole punch keeps the real finger visible on a card it touches.
-- Never over an object when a side is clear: the column keeps the card's 6cm gap from every known
-  object, and when one is behind it, it fades out and back in on the card's other side, never
-  sweeping over the card.
+Demonstrations use solid off-white (`#f2f6fa`) gloves with a filled, softly rounded palm,
+continuous fingers and a cyan cuff. Articulation still follows the original 25-joint clip;
+the glove is illustrative geometry, never a new measurement. The tracking/debug skeleton stays
+separate. Use opaque, depth-tested surfaces so overlapping fingers read as one hand.
+
+Movement is a thick cyan (`#24d4ed`) three-dimensional tube (up to 12mm across) with a broad
+arrowhead, a start bead and a yellow (`#ffd23f`) destination ring. The whole route remains
+visible. Two small off-white chevrons travel along it every 1.7s to explain direction; they
+never move the destination or flash. Turning follows the specified axis and direction; presses
+point down to their contact point; wiping shows both directions. Size the cue down for short
+motions. Reduced motion fixes the chevrons in place while retaining the complete path.
+
+Reuse geometry during frames and release it when a demonstration changes. The gallery's
+Demonstrations section uses the real synthesizer and presenters, with orbit, pause and hand
+visibility controls for checking the movement from different angles without a headset.
+`gallery.html?demo=1` opens that preview alone.

@@ -62,6 +62,14 @@ const SIZES_KEPT = 32;
  */
 const ANCHOR_WAIT_MS = 2000;
 
+/**
+ * What jev is asked about an object: its phrase, then its description (the tracker's jev.py words
+ * both of its questions from these). Shown over each box with ?boxes=1.
+ */
+export function jevWords({ phrase, query }: { phrase: string; query: string }): string {
+  return query === phrase ? phrase : `${phrase}\n${query}`;
+}
+
 export interface LiveTrackerDeps {
   bus: AppBus;
   clock: Clock;
@@ -78,6 +86,8 @@ export interface LiveTrackerDeps {
   frameWidth: number | null;
   /** Hide an object's light while it is in hand. */
   hideHeld: boolean;
+  /** A test (?boxes=1): each object's box in corner brackets instead of its glow, under jev's words. */
+  boxes?: boolean;
   /** IWER: its depth maps encode window depth without a far plane. */
   emulated: boolean;
   /** The WebSocket (tests stand in for it). */
@@ -132,6 +142,7 @@ export class LiveTracker implements FocusAnchors {
       now: () => clock.now(),
       record: (sample) => recorder.record(sample),
       failed: (err) => log.warn(`placement failed: ${String(err)}`),
+      options: { boxes: deps.boxes ?? false },
     });
     this.client = new TrackerClient({
       url: deps.trackerPort ? `ws://localhost:${deps.trackerPort}/track` : trackerUrl(location),
@@ -273,7 +284,7 @@ export class LiveTracker implements FocusAnchors {
       return [
         {
           ...view,
-          label: spec.label,
+          label: this.deps.boxes ? jevWords(object) : spec.label,
           rank: object.rank,
           style: object.style,
           accent: object.accent,

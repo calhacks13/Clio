@@ -56,9 +56,11 @@ The planner writes `phrase` and the description (sent as `query`) for each step'
 For other lookups (a step's missing targets, or a coach highlight), `query` is the object's
 `tracking.query` or label, and `phrase` is its label.
 
-An attached component is a target in its own right: for example, "vernier scale on the sliding
-jaw" rather than "caliper". The lesson gives it its own object id with `kind: "item"`, and the
-step's `show` describes only that part. `"tool"` and `"container"` are for the whole object: their
+Planned lessons show whole objects and name a part in the words ([coach-plan.md](coach-plan.md)),
+so a part reaches the finder only from a curated lesson or the primary demo. There, an attached
+component is a target in its own right: for example, "vernier scale on the sliding jaw" rather
+than "caliper". The lesson gives it its own object id with `kind: "item"`, and the step's `show`
+describes only that part. `"tool"` and `"container"` are for the whole object: their
 glow spills around it, while an `item` keeps a soft surface light on its contour. So the finder
 should return the part's own contour. The mask of the object holding it lights up too much and is
 not a substitute. The tracker's part mode works this way (a target with `"part": true`, see
@@ -127,11 +129,12 @@ While the step runs, the show items are followed one of two ways:
   in rank order, then, for 5 s, whatever the coach highlights (a closer look's highlights
   included), then the plan's other objects in its order, as far as the 8 slots allow; hidden
   zones and points are left out. Only the show items and the highlights are lit; the rest is
-  followed for the data alone, including the whole object a shown part belongs to (`partOf` in
-  [procedures.md](procedures.md#objects)). Each object keeps one `phrase` for the whole lesson
+  followed for the data alone, including the whole object a curated lesson's shown part belongs
+  to (`partOf` in [procedures.md](procedures.md#objects)). Each object keeps one `phrase` for the whole lesson
   (its first show item's, else its label), because the tracker starts a track over when the
   phrase changes; the step's description goes in `query`, else the object's tracking query. The
-  tracker asks jev about the objects about once a second and follows them on every frame. The
+  tracker asks jev about the objects every 0.15 s while they move and once a second while they
+  are held still, and follows them on every frame. The
   headset places each outline at the object's measured distance (depth sensing, then hit-test),
   smooths it and draws it with a depth-correct glow. While this runs, the show items are not asked
   about again over HTTP. `?live=0` turns it off, `?tracker=<port>` picks another tracker (adb
@@ -157,7 +160,8 @@ replaced the jev finder's EdgeTAM and SAM 2.1). A request without `session` is a
 finder: one jev call, then YOLOE outlines each box jev found; the primary-object route sends
 those. A request with a `session` (the lesson's) is answered from tracking state instead:
 YOLOE-26 and ByteTrack follow each object on every frame (about 35 ms a round trip on an M5),
-jev is asked which object the words mean only about once a second, in the background, and the
+jev is asked which object the words mean in the background (every 0.15 s for an object that
+moves or is lost, once a second for one held still), and the
 answer carries `refreshMs: 50`, so outlines follow moving objects at 10 to 15 frames a second.
 SAM 2.1 is on by default (`CLIO_TRACKER_SEGMENTER=auto`, which is Small; `none` turns it off):
 for whole objects and parts alike, its mask is the tracker's outline while the follower that

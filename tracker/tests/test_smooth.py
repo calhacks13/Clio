@@ -57,6 +57,23 @@ def test_a_moving_box_is_followed_closely():
     assert iou(shown, box)[0, 0] > 0.88
 
 
+def test_speed_is_the_box_moving_on_its_own_in_box_sizes_a_second():
+    """jev's pace reads it (ObjectTracker.steady): near 0 for a still box with noise, and at
+    least the true speed for a moving box (measured against the filtered box, which trails)."""
+    rng = np.random.default_rng(2)
+    s = Stabilizer()
+    assert s.speed == 0.0
+    base = np.array([200, 120, 300, 220], dtype=np.float32)
+    for i in range(50):
+        box = base + rng.normal(0, 1, 4).astype(np.float32)
+        s.sighted(i * DT, box, None, SIZE)
+    assert s.speed < 0.3
+    for i in range(50, 100):
+        box = base + np.array([4, 0, 4, 0], np.float32) * (i - 50)  # 100 px/s, 1 size a second
+        s.sighted(i * DT, box, None, SIZE)
+    assert s.speed > 0.9
+
+
 def test_camera_motion_is_followed_without_lag():
     s = Stabilizer()
     box = np.array([100, 100, 200, 200], dtype=np.float32)

@@ -147,7 +147,13 @@ low left nothing to win.
 While a step is focused, the headset asks `POST /api/vision/focus` about one sharp frame every 5 s:
 Robotics-ER 2 at minimal thinking boxes the step's objects (up to 8, its show items first), writes
 a new description of each, which is all jev is told about it from then on, and names the one thing
-the learner should touch next. Measured on the first views of the four bench scenes (the fridge,
+the learner should touch next. The server counts the step's own object among its look-alikes and
+puts its place first in the description ("The rightmost of the three white charger blocks."):
+asked only in words, the model left the other chargers out on a Quest lesson with three in a row,
+and jev boxed the wrong one. The look boxes each object's look-alikes too (`look_alikes`), but as
+a field of that answer it saw one other charger of the three, so the step's own object is also
+counted by a second, plain request beside the look (`COUNT_INSTRUCTION`: box every thing a
+detector after this one could box), whose boxes come first. Measured on the first views of the four bench scenes (the fridge,
 the photo and the drawn pH tables, the TV remote) with `apps/server/scripts/focus-look.ts`, which
 asks about a step of each scene's saved plan, October 2026: 20 looks with 0 to 5 objects.
 - **Latency**: median 2.4 s, 1.7 to 3.1 s: 1.7 to 2.0 s with 2 objects or none, 2.4 to 2.5 s with

@@ -57,7 +57,10 @@ Grasped movable objects (`item`, `tool`, `container`) ride with the hand that ho
 a caliper's vernier scale is its own object (`kind: "item"`, its own `tracking.query`) with
 `partOf: "caliper"`, and the caliper is declared too. A step that shows the part lights only the
 part; the camera follows and records both, so the dataset has the whole object wherever the
-learner takes it. The whole must be declared, and an object is never a part of itself.
+learner takes it. The whole must be declared, and an object is never a part of itself. The
+planner no longer writes it: it declares and shows the whole object (the mini fridge) and names
+the part in the words ("Open the mini fridge door by its handle on the left."). It stays for
+curated lessons and older plans.
 
 **`hidden: true`** objects aren't drawn. Use them as zones for mistake rules.
 
@@ -115,22 +118,27 @@ learner's hand, because hand tracking already follows them.
   own color, not its contents'), because the tracker starts an object's track over when its
   phrase changes. Never a position, a verb, or a word as bare as "item", "object" or
   "container". jev and other detectors that take category prompts use it.
-- `description`: one standalone sentence of 15 to 35 words that finds the object in a single
-  frame with no other context. It names one particular thing, never a kind: say what it is, its
-  color, material, shape, size next to a hand and any text or symbols on it, which one it is
-  among similar things ("the second shelf from the top", "the leftmost of the three beakers",
-  left and right as the camera sees them), and where it is next to large things that stay put
-  and to its neighbors, enough to tell it from every look-alike in view. Describe its state at
-  that point in the task ("the cap is off", "the cup is now pink"), never an action or a step.
-  A place a step uses (a shelf, a drawer) is singled out the same way, in the instruction too.
+- `description`: one short standalone sentence of at most 30 words that jev can check against
+  the one frame it sees, with no other context. It names one particular thing, never a kind: say
+  what it is and its color (and any text or symbols, or its state at that point in the task,
+  when that tells it apart), then, always, both where it is in the picture (left or right, top
+  or bottom, closest to the camera) and where it is relative to other things in view: its place
+  among look-alikes ("the bottom one of the three chargers", "the leftmost cup") or next to a
+  nearby object ("left of the laptop"). Never just a name, and never a place in the picture alone
+  ("on the lower right": on a Quest lesson jev found the charger on none of 78 calls in those
+  words). Relate it to whole things, not
+  to their parts ("plugged into the lower socket of the extension block" is too hard to check).
+  Never an action or a step. The instruction still singles out a place a step uses (a shelf, a
+  drawer) as a person would: "the second shelf from the top".
   `tracking.query` follows the same rule, because the finder gets only that sentence;
   `placement.hint` never replaces it. While a step is focused, Robotics-ER 2's action focus
   rewrites what jev is told about each object from a sharp frame
   ([robotics-er.md](robotics-er.md)).
 - At most 4 items, most important first. Every `object` must be declared.
 
-The planner writes `show` for every step. A step without it outlines nothing and only looks for
-targets it hasn't found yet. Each answer is recorded as an `object.detected` event, so every
+The planner writes `show` for every step, with one item: the whole thing the step acts on, so
+one object glows at a time. A step without it outlines nothing and only looks for targets it
+hasn't found yet. Each answer is recorded as an `object.detected` event, so every
 outline is also a training label.
 
 ## Done when: how a step ends

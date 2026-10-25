@@ -42,12 +42,16 @@ export interface AppConfig {
    */
   focus: boolean;
   /**
-   * Record the Quest room scan and camera keyframes for the object models (docs/room-scene.md).
-   * Off unless ?scan=1.
+   * The action focus's boxes anchor the tracker (0: jev alone places the objects; ER still lights
+   * the next thing to touch and its words still reach jev).
    */
-  scan: boolean;
-  /** The coach's widgets beside the step card (docs/widgets.md). 0: no board, no widget tools. */
-  widgets: boolean;
+  anchors: boolean;
+  /**
+   * A closer look places and highlights what Robotics-ER points out (0: it answers in words only).
+   */
+  lookBoxes: boolean;
+  /** A test: frame each live object's box with corner brackets instead of glowing its outline. */
+  boxes: boolean;
 }
 
 const DEFAULTS: AppConfig = {
@@ -69,8 +73,9 @@ const DEFAULTS: AppConfig = {
   frameWidth: null,
   liveHeld: true,
   focus: true,
-  scan: false,
-  widgets: true,
+  anchors: true,
+  lookBoxes: true,
+  boxes: false,
 };
 
 function oneOf<T extends string>(value: string | null, allowed: readonly T[], fallback: T): T {
@@ -117,7 +122,8 @@ export function readConfig(search: string): AppConfig {
     frameWidth: whole(q.get('frame')),
     liveHeld: flag(q.get('liveHeld'), DEFAULTS.liveHeld),
     focus: flag(q.get('focus'), DEFAULTS.focus),
-    scan: flag(q.get('scan'), DEFAULTS.scan),
-    widgets: flag(q.get('widgets'), DEFAULTS.widgets),
+    anchors: flag(q.get('anchors'), DEFAULTS.anchors),
+    lookBoxes: flag(q.get('lookBoxes'), DEFAULTS.lookBoxes),
+    boxes: flag(q.get('boxes'), DEFAULTS.boxes),
   };
 }

@@ -14,7 +14,7 @@ vi.mock('../../src/adapters/render/text', () => ({
 
 import type { TrackerSocket } from '../../src/adapters/net/tracker-client';
 import type { XrRuntime } from '../../src/adapters/xr/xr-session';
-import { LiveTracker } from '../../src/app/live-tracker';
+import { jevWords, LiveTracker } from '../../src/app/live-tracker';
 import { ManualClock } from '../../src/core/clock';
 import { Emitter } from '../../src/core/emitter';
 import { quatFromAxisAngle } from '../../src/core/math';
@@ -463,5 +463,14 @@ describe('LiveTracker', () => {
     await flush();
     expect(covered.camera.frame).not.toHaveBeenCalled();
     covered.live.stop();
+  });
+});
+
+describe('jevWords', () => {
+  it("shows jev's phrase, then the description it is asked about, over each box", () => {
+    expect(jevWords({ phrase: 'blue washer cap', query: 'Round blue cap, front left' })).toBe(
+      'blue washer cap\nRound blue cap, front left',
+    );
+    expect(jevWords({ phrase: 'fluid jug', query: 'fluid jug' })).toBe('fluid jug');
   });
 });

@@ -325,8 +325,8 @@ export const FocusDetectionSchema = z.object({
     .max(300)
     .nullable()
     .describe(
-      'When found: a sharper standalone description of this one object as it looks in the view ' +
-        '(color, material, shape, size, markings, and where it is relative to its neighbors)',
+      'When found: a short standalone description of this one object as it looks in the view ' +
+        '(what it is and its color, where it is in the picture, and next to what)',
     ),
 });
 export const FocusActionSchema = z

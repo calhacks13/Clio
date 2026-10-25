@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import io
+import time
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -17,6 +18,7 @@ import numpy as np
 from PIL import Image
 
 from .bench import valid_box
+from .dump import JevDump
 from .images import BadImage, fit_frame, plain_pil
 from .jev import JevClient, JevError, Target
 
@@ -71,9 +73,10 @@ class JevIdentifier:
     one object the query describes, not any of the phrase's kind), one call at a time, never
     retried. Presence is the Noul probability; boxes only when present."""
 
-    def __init__(self, client: JevClient, name: str | None = None):
+    def __init__(self, client: JevClient, name: str | None = None, dump: JevDump | None = None):
         self.client = client
         self.name = name or client.model
+        self.dump = dump
 
     def identify(self, image: FrameImage, queries: list[Query]) -> list[Identification]:
         plain_pil()
@@ -84,10 +87,15 @@ class JevIdentifier:
         except (OSError, BadImage) as e:
             raise IdentifierError(f"The frame can't be sent to jev: {e}", 422) from e
         targets = [Target(id=q.id, query=q.query, phrase=q.phrase) for q in queries]
+        started = time.monotonic()
         try:
             reply = self.client.ask(frame.jpeg, targets)
         except JevError as e:
+            if self.dump is not None:
+                self.dump.write(frame.jpeg, targets, None, str(e), time.monotonic() - started)
             raise IdentifierError(str(e), e.status) from e
+        if self.dump is not None:
+            self.dump.write(frame.jpeg, targets, reply.answers, None, time.monotonic() - started)
         out = []
         for q, answer in zip(queries, reply.answers, strict=True):
             box = frame.from_jev(answer.box) if answer.present and answer.box else None

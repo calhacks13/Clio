@@ -149,6 +149,10 @@ function setup(o: SetupOptions = {}) {
 /** Gemini in charge: connected, in learn mode. */
 const gemini = { coach: { kind: 'gemini' as const, model: 'live' } };
 
+/** What highlight adds while its light is off: the call worked, and the light comes by itself. */
+const NOT_LIT =
+  'Highlighted, not lit yet: it lights up by itself once it is in view. Say where it is meanwhile.';
+
 describe('the coach edits the plan', () => {
   it('adds a step at the end and answers with the plan', async () => {
     const { lesson, tool, result, updates, begin } = setup();
@@ -789,21 +793,40 @@ describe('coach authority', () => {
     expect(await run('default_in_front')).toBe('todo');
   });
 
-  it('says only what the learner can see when a highlight cannot be shown', async () => {
+  it('says a highlight is not lit yet before the object is placed, never that it cannot be', async () => {
     const { lesson, tool, result, begin } = setup(gemini);
     await begin();
     const r = result(await tool('highlight', { object_id: 'cap', style: 'target' }));
-    expect(r).toEqual({
-      shown: false,
-      note: 'The headset cannot show it yet; describe where it is.',
-    });
-    expect(JSON.stringify(r)).not.toMatch(/locat|detect|found|camera/i);
+    expect(r).toEqual({ shown: false, note: NOT_LIT });
+    expect(JSON.stringify(r)).not.toMatch(/locat|detect|found|camera|cannot/i);
     expect(lesson.phase).toBe('lesson');
+  });
+
+  it('says a highlight is not lit while the object is lost from view, and lit once it is back', async () => {
+    const { registry, clock, tool, result, begin } = setup(gemini);
+    await begin();
+    const seen = () =>
+      registry.observe('cap', {
+        position: [0.1, 0, -0.2],
+        confidence: 0.9,
+        source: 'detector',
+        t: clock.now(),
+      });
+    const highlight = async () =>
+      result(await tool('highlight', { object_id: 'cap', style: 'target' }));
+    seen();
+    expect(await highlight()).toEqual({ shown: true });
+    clock.advance(500);
+    registry.lose('cap', clock.now());
+    expect(await highlight()).toEqual({ shown: false, note: NOT_LIT });
+    clock.advance(500);
+    seen();
+    expect(await highlight()).toEqual({ shown: true });
   });
 });
 
 describe('the step watcher', () => {
-  it('suggests a step that looks done twice in a row, while Gemini is in charge', async () => {
+  it('completes a step that looks done twice in a row, as the app, while Gemini is in charge', async () => {
     const checks: StepCheckRequest[] = [];
     const checker: StepChecker = {
       check: async (req) => {
@@ -812,10 +835,12 @@ describe('the step watcher', () => {
       },
     };
     const { bus, clock, lesson, annotations, begin } = setup({ ...gemini, checker });
-    const suggested: string[] = [];
+    const seen: string[] = [];
     bus.on('step.looks_done', ({ stepId, observation, image }) =>
-      suggested.push(`${stepId}:${observation}:${image}`),
+      seen.push(`${stepId}:${observation}:${image}`),
     );
+    const completed: string[] = [];
+    bus.on('step.completed', ({ stepId, by }) => completed.push(`${stepId}:${by}`));
     await begin();
     lesson.tick(clock.advance(10_000));
     await lesson.settled();
@@ -825,7 +850,8 @@ describe('the step watcher', () => {
     await lesson.settled();
     lesson.tick(clock.advance(1000));
     await lesson.settled();
-    expect(suggested).toEqual([]); // once is not enough
+    expect(seen).toEqual([]); // once is not enough
+    expect(lesson.currentStep()?.id).toBe('open');
     lesson.tick(clock.advance(1000));
     await lesson.settled();
     expect(checks).toHaveLength(2);
@@ -835,11 +861,30 @@ describe('the step watcher', () => {
       before: [{ mimeType: 'image/jpeg', data: 'AAAA' }],
       objects: [{ id: 'cap', label: 'blue cap', look: 'blue cap' }],
     });
-    expect(suggested).toEqual(['open:the cap is off:AAAA']);
+    expect(seen).toEqual(['open:the cap is off:AAAA']);
     expect(annotations.find((a) => a.label === 'step.watch')?.data).toMatchObject({
       stepId: 'open',
       verdict: 'done',
     });
+    expect(completed).toEqual(['open:check']);
+    expect(lesson.currentStep()?.id).toBe('pour');
+    expect(annotations.filter((a) => a.label === 'plan.updated').at(-1)?.data).toMatchObject({
+      op: 'complete',
+      by: 'app',
+      stepId: 'open',
+      reason: 'the cap is off',
+      evidence: 'seen',
+    });
+  });
+
+  it('leaves alone a step it saw done once that step has lost focus', async () => {
+    const { bus, clock, lesson, begin } = setup(gemini);
+    const completed: string[] = [];
+    bus.on('step.completed', ({ stepId }) => completed.push(stepId));
+    bus.emit('step.looks_done', { t: clock.now(), stepId: 'open', observation: 'o', image: null });
+    await begin();
+    bus.emit('step.looks_done', { t: clock.now(), stepId: 'pour', observation: 'o', image: null });
+    expect(completed).toEqual([]);
     expect(lesson.currentStep()?.id).toBe('open');
   });
 
@@ -955,8 +1000,9 @@ describe('review regressions', () => {
     expect(asked).toEqual([['cap']]);
     // The tools work meanwhile. A highlight joins the look already out instead of a second one,
     // and nothing is called missing before that look answers.
-    expect(result(await tool('highlight', { object_id: 'cap', style: 'target' }))).toMatchObject({
+    expect(result(await tool('highlight', { object_id: 'cap', style: 'target' }))).toEqual({
       shown: false,
+      note: NOT_LIT,
     });
     expect(
       result(await tool('add_step', { text: 'Wipe up.', done_when: 'dry fender' })),
@@ -1787,7 +1833,7 @@ describe('highlights the coach asks for', () => {
     await begin();
     expect(result(await tool('highlight', { object_id: 'red_button', style: 'target' }))).toEqual({
       error:
-        'Unknown object "red_button". Objects in this lesson: cap, jug, tank. For something the plan lacks, give look_for.',
+        'Unknown object "red_button". Objects in this lesson: cap, jug, tank. To light something the plan lacks, call highlight again with look_for.',
     });
     const look = 'small round, left of the steering wheel';
     expect(
@@ -1796,7 +1842,7 @@ describe('highlights the coach asks for', () => {
       shown: false,
       material_id: 'red_button',
       added: true,
-      note: 'The headset cannot show it yet; describe where it is.',
+      note: NOT_LIT,
     });
     expect(registry.spec('red_button')).toMatchObject({
       label: 'red button',

@@ -1,8 +1,13 @@
+import type { FocusObject, FocusRequest, NormalizedBox } from '@clio/protocol';
 import {
+  COUNT_INSTRUCTION,
+  countContents,
+  countJsonSchema,
   FOCUS_INSTRUCTION,
   type FocusFinder,
   focusContents,
   focusJsonSchema,
+  parseCount,
   parseFocusAnswer,
 } from './focus';
 import { type GenerateContentApi, thinkingConfig } from './gemini';
@@ -24,21 +29,57 @@ export function createGeminiFocusFinder(ai: GenerateContentApi, model: string): 
     model,
     async focus(request) {
       const objects = uniqueById(request.objects);
-      const text = await generateJson(
-        ai,
-        {
-          model,
-          contents: focusContents({ ...request, objects }),
-          config: {
-            systemInstruction: FOCUS_INSTRUCTION,
-            responseMimeType: 'application/json',
-            responseJsonSchema: focusJsonSchema(objects.map((o) => o.id)),
-            ...thinkingConfig(model, 'minimal'),
+      // The step's own object is counted among its look-alikes beside the look (focus.ts).
+      const own = objects[0];
+      const [text, counted] = await Promise.all([
+        generateJson(
+          ai,
+          {
+            model,
+            contents: focusContents({ ...request, objects }),
+            config: {
+              systemInstruction: FOCUS_INSTRUCTION,
+              responseMimeType: 'application/json',
+              responseJsonSchema: focusJsonSchema(objects.map((o) => o.id)),
+              ...thinkingConfig(model, 'minimal'),
+            },
           },
-        },
-        FOCUS_TIMEOUT_MS,
-      );
-      return parseFocusAnswer(text, objects);
+          FOCUS_TIMEOUT_MS,
+        ),
+        own ? count(ai, model, request.image, own) : Promise.resolve(null),
+      ]);
+      return parseFocusAnswer(text, objects, new Map(own && counted ? [[own.id, counted]] : []));
     },
   };
+}
+
+/** Every look-alike of `object` in the frame, the object included; null when the count fails. */
+async function count(
+  ai: GenerateContentApi,
+  model: string,
+  image: FocusRequest['image'],
+  object: FocusObject,
+): Promise<NormalizedBox[] | null> {
+  try {
+    const text = await generateJson(
+      ai,
+      {
+        model,
+        contents: countContents(image, object),
+        config: {
+          systemInstruction: COUNT_INSTRUCTION,
+          responseMimeType: 'application/json',
+          responseJsonSchema: countJsonSchema(),
+          // Counting takes a little thought: at minimal it found two of three chargers as often
+          // as three, look to look.
+          ...thinkingConfig(model, 'low'),
+        },
+      },
+      FOCUS_TIMEOUT_MS,
+    );
+    return parseCount(text);
+  } catch {
+    // The look still answers: its own look-alikes count the object instead.
+    return null;
+  }
 }

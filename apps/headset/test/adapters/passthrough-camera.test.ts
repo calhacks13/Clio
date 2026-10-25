@@ -104,10 +104,10 @@ describe('PassthroughCamera.snapshots', () => {
     expect(await none).toEqual([]);
   });
 
-  it('keeps the coach snapshot at 640 px', async () => {
+  it('sends the coach 1024 px snapshots, as sharp as the planner frames', async () => {
     const { encodes } = fakeDom();
     const camera = await openCamera();
     expect(await camera.snapshot()).toBe('JPEG1');
-    expect(encodes[0]?.width).toBe(640);
+    expect(encodes[0]?.width).toBe(1024);
   });
 });

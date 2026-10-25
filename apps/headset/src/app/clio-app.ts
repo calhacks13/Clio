@@ -37,6 +37,7 @@ import { XrPlaneReader } from '../adapters/xr/environment';
 import { FrameSampler, poseFromMatrix } from '../adapters/xr/frame-sampler';
 import { XrMeshReader } from '../adapters/xr/meshes';
 import { XrPlaneSurfaces } from '../adapters/xr/planes';
+import { RoomScan, roomCapture } from '../adapters/xr/room-scan';
 import { startArSession, type XrRuntime } from '../adapters/xr/xr-session';
 import { type Clock, performanceClock } from '../core/clock';
 import { Emitter } from '../core/emitter';
@@ -150,6 +151,8 @@ export class ClioApp {
   private pendingAnchor: Pose | null = null;
   /** Until this frame time, the workspace may still snap to a detected table. */
   private tableDeadline: number | null = null;
+  /** The room is known (or can't be) before the lesson starts. */
+  private room: RoomScan | null = null;
 
   constructor(private readonly o: ClioAppOptions) {
     const { bus, clock } = this;
@@ -210,6 +213,7 @@ export class ClioApp {
             trackerPort: o.config.trackerPort,
             frameWidth: o.config.frameWidth,
             hideHeld: !o.config.liveHeld,
+            boxes: o.config.boxes,
             emulated: o.emulated,
           })
         : null;
@@ -241,7 +245,8 @@ export class ClioApp {
       view: this.lesson.view(),
       bus,
       clock,
-      placer: grounder,
+      // ?lookBoxes=0: a closer look answers in words, and nothing ER points out is placed or lit.
+      placer: o.config.lookBoxes ? grounder : null,
     });
     const widgets = o.config.widgets
       ? new WidgetBoard({ bus, clock, view: this.lesson.view() })
@@ -260,6 +265,7 @@ export class ClioApp {
       live: this.live,
       lesson: this.lesson,
       wanted: o.config.focus,
+      anchors: o.config.anchors,
       gemini: o.health?.coach.configured ?? false,
     });
     this.detachFocus = this.focus?.attach() ?? null;
@@ -313,6 +319,7 @@ export class ClioApp {
       throw err;
     }
     this.live?.start(this.runtime, this.scene.renderer);
+    this.room = new RoomScan(this.planeDetection ? roomCapture(this.runtime.session) : null);
     log.info(`XR session: ${this.runtime.features.join(', ') || 'no optional features'}`);
     this.runtime.session.addEventListener('end', () => void this.shutdown('session ended'));
     if (!this.o.config.calibrate && (await this.anchor.restore(this.runtime.session))) {
@@ -376,7 +383,15 @@ export class ClioApp {
     this.widgets?.tick(t);
     this.coach?.tick(t);
     this.focus?.tick(t)?.catch((err: unknown) => log.warn(`action focus failed: ${String(err)}`));
-    if (!this.kickedOff && !this.calibration && this.tableDeadline === null) {
+    // Without a room scan the lesson waits for Quest's room setup; once it ends, the workspace
+    // looks for the table again.
+    const planes = this.planeDetection ? (frame.detectedPlanes?.size ?? 0) : 0;
+    const scanned = this.room?.update(t, planes) ?? false;
+    if (scanned && !this.calibration && !this.anchor.active && this.o.config.table === 'auto') {
+      this.tableDeadline = world.t + TABLE_WAIT_MS;
+    }
+    const roomKnown = this.room?.settled ?? true;
+    if (!this.kickedOff && !this.calibration && this.tableDeadline === null && roomKnown) {
       this.kickedOff = true;
       void this.kickoff();
     }
@@ -513,9 +528,14 @@ export class ClioApp {
     await this.startCoach();
     const { procedure, goal } = this.o;
     // Announced like a planned lesson, so the coach hears the whole plan with its step ids.
-    if (procedure) await this.lesson.run(procedure, null, { announce: [] });
-    else if (goal) await this.lesson.startLesson(goal);
-    // Otherwise the coach asks what they want to learn and calls start_lesson.
+    if (procedure) {
+      await this.lesson.run(procedure, null, { announce: [] });
+      return;
+    }
+    // The coach speaks first: it greets them while the goal is planned, or asks what they want to
+    // do and calls start_lesson.
+    this.coach?.welcome(goal);
+    if (goal) await this.lesson.startLesson(goal);
   }
 
   private async startCoach(): Promise<void> {
@@ -631,6 +651,8 @@ export interface ActionFocusWiring {
   lesson: Pick<LessonController, 'declareObject' | 'view'>;
   /** Not turned off (?focus=0). */
   wanted: boolean;
+  /** Its boxes anchor the tracker (?anchors=0 leaves placing objects to jev); on when left out. */
+  anchors?: boolean;
   /** The server has a Gemini key (without one it answers 503). */
   gemini: boolean;
 }
@@ -651,7 +673,7 @@ export function createActionFocus(w: ActionFocusWiring): ActionFocus | null {
     clock,
     finder: new RemoteFocusFinder(w.api),
     frames: new CameraFocusFrames(camera, () => clock.now()),
-    anchors: live,
+    anchors: w.anchors === false ? { anchor: () => {} } : live,
     tracking: live.tracking,
     view: w.lesson.view(),
     lesson: w.lesson,

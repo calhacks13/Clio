@@ -6,7 +6,7 @@ Clio is an AR tutor for Meta Quest 3, built with WebXR, that can teach you anyth
 want to learn ("refill the windshield washer fluid"). An LLM plans the lesson from your goal and
 what the headset camera sees, including a description of what to point out in each step. An
 object finder (Gemini, or jev) finds those things in the camera view and Clio outlines them, then
-shows each step with translucent ghost hands while a voice coach walks you through it and catches
+shows each step with solid demonstration hands and animated motion cues while a voice coach walks you through it and catches
 mistakes. Every
 session is recorded as intent-labeled hand, object and language data that robots can learn from,
 and it exports straight to LeRobot.

@@ -173,6 +173,9 @@ const WATCH_MS = 1000;
 const TRUSTED_SOURCES: ReadonlySet<PlacementMethod> = new Set(['marker', 'pinch', 'manual']);
 /** Coach-written lessons have no measured layout; the same default the planner uses. */
 const COACH_WORKSPACE: [number, number] = [0.8, 0.6];
+/** What highlight adds while its light is off: the call worked, and the light comes by itself. */
+const NOT_LIT_NOTE =
+  'Highlighted, not lit yet: it lights up by itself once it is in view. Say where it is meanwhile.';
 /** Planning frames are kept this long after the learner last spoke (when planFrameMs is on). */
 const PLAN_FRAMES_WARM_MS = 8000;
 
@@ -343,6 +346,7 @@ export class LessonController {
       else this.finish('completed', t);
     });
     bus.on('procedure.aborted', ({ t }) => this.finish('aborted', t));
+    bus.on('step.looks_done', ({ stepId, observation }) => this.seenDone(stepId, observation));
     bus.on('coach.status', ({ state }) => {
       this.coachState = state;
     });
@@ -383,6 +387,7 @@ export class LessonController {
       procedure: () => this.procedure,
       label: (id) => this.deps.registry.spec(id)?.label ?? id,
       plan: () => this.planView(),
+      phase: () => this.currentPhase,
       authority: () => this.authority(),
     };
   }
@@ -1119,6 +1124,25 @@ export class LessonController {
     );
   }
 
+  /**
+   * The step watcher saw the focused step done, twice in a row: the app completes it, so the lesson
+   * moves on at once and the coach hears it with the next step's briefing, instead of judging a
+   * suggestion from its own few frames.
+   */
+  private seenDone(stepId: string, observation: string): void {
+    if (this.planning && !this.planning.revision) return;
+    const runner = this.activeRunner();
+    if (!runner || this.focusId() !== stepId) return;
+    this.op(() => {
+      const r = runner.complete(stepId, 'check', this.deps.clock.now());
+      if (!r.ok) return r;
+      if (!r.already) {
+        this.changed('complete', 'app', { stepId, reason: observation, evidence: 'seen' });
+      }
+      return { ok: true, result: null };
+    });
+  }
+
   private addMaterial(label: string, lookFor: string | undefined, callId: string): ToolOutcome {
     if (this.planning && !this.planning.revision) return this.planningError();
     const runner = this.activeRunner();
@@ -1368,16 +1392,13 @@ export class LessonController {
     // `added` tells the coach session the call changed the plan (a cancelled one is reported).
     const material =
       added || id !== objectId ? { material_id: id, ...(added ? { added: true } : {}) } : {};
-    if (!registry.get(id)) {
-      this.track(this.locate([id]));
-      return {
-        ok: true,
-        result: {
-          shown: false,
-          ...material,
-          note: 'The headset cannot show it yet; describe where it is.',
-        },
-      };
+    const estimate = registry.get(id);
+    if (!estimate) this.track(this.locate([id]));
+    // What the learner sees: no light shows on an object with no place yet, or one a live source
+    // has lost from view, until it is seen. An answer that it could not be shown had the coach
+    // tell the learner it could not highlight it, so the answer says the call worked.
+    if (!estimate || estimate.lostAt !== undefined) {
+      return { ok: true, result: { shown: false, ...material, note: NOT_LIT_NOTE } };
     }
     return { ok: true, result: { shown: true, ...material } };
   }
@@ -1407,7 +1428,9 @@ export class LessonController {
       return { ok: true, id: spec.id, added: true };
     }
     const known = existing.map((s) => s.id).join(', ') || 'none';
-    const how = runner ? ' For something the plan lacks, give look_for.' : '';
+    const how = runner
+      ? ' To light something the plan lacks, call highlight again with look_for.'
+      : '';
     return {
       ok: false,
       error: `Unknown object "${objectId}". Objects in this lesson: ${known}.${how}`,

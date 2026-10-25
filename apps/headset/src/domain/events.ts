@@ -63,8 +63,8 @@ export interface InternalEvents {
   /** The plan or a step's status changed. Read the new plan from LessonView.plan(). */
   'plan.changed': Timed<{ rev: number; op: PlanOp; stepId: string | null }>;
   /**
-   * The step watcher thinks a step looks done (base64 JPEG it judged by), with the step's criteria
-   * as the last look judged them (all met). The coach decides.
+   * The step watcher saw a step done, twice in a row (base64 JPEG it judged by), with the step's
+   * criteria as the last look judged them (all met). The lesson completes it if it still has focus.
    */
   'step.looks_done': Timed<{
     stepId: string;

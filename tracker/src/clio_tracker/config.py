@@ -36,8 +36,10 @@ class Settings:
     identifier_url: str | None
     identifier_token: str | None
     identify_interval_ms: int
+    identify_steady_ms: int
     identify_max_in_flight: int
     refresh_ms: int
+    jev_dump: str | None
 
 
 class ConfigError(Exception):
@@ -98,9 +100,11 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         jev_timeout_s=number("CLIO_TRACKER_JEV_TIMEOUT_S", DEFAULT_TIMEOUT_S, 1, 60),
         identifier_url=identifier_url,
         identifier_token=text("CLIO_TRACKER_IDENTIFIER_TOKEN"),
-        identify_interval_ms=whole("CLIO_TRACKER_IDENTIFY_INTERVAL_MS", 1000, 100, 600_000),
+        identify_interval_ms=whole("CLIO_TRACKER_IDENTIFY_INTERVAL_MS", 150, 100, 600_000),
+        identify_steady_ms=whole("CLIO_TRACKER_IDENTIFY_STEADY_MS", 1000, 100, 600_000),
         identify_max_in_flight=whole("CLIO_TRACKER_IDENTIFY_MAX_IN_FLIGHT", 1, 1, 8),
         refresh_ms=whole("CLIO_TRACKER_REFRESH_MS", 50, 0, 10_000),
+        jev_dump=text("CLIO_TRACKER_JEV_DUMP"),
     )
 
 

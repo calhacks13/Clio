@@ -1,6 +1,69 @@
 /* A quiet slate gallery for the actual launch and AR surfaces. */
 @import "../ui-fonts.css";
 
+.demo-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.demo-controls label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.demo-controls select,
+.demo-controls button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0.65rem 1rem;
+  font: inherit;
+  background: var(--raised);
+  color: var(--text);
+}
+
+.demo-controls button {
+  background: var(--text);
+  color: var(--raised);
+  cursor: pointer;
+}
+
+.demo-controls :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.demo-controls input {
+  accent-color: var(--accent);
+  width: 20px;
+  height: 20px;
+}
+
+.demo-viewport {
+  height: clamp(360px, 48vw, 560px);
+  overflow: hidden;
+  border-radius: 16px;
+  touch-action: none;
+}
+
+.demo-viewport canvas {
+  display: block;
+}
+
+.demo-alone {
+  padding-top: 2rem;
+}
+
+.demo-alone h1 {
+  margin: 0 0 1.5rem;
+  font-size: 2rem;
+  letter-spacing: -0.025em;
+}
+
 :root {
   color-scheme: light;
   --ground: #edf2f6;
@@ -369,8 +432,15 @@ figcaption {
   }
 
   .bar nav {
+    min-width: 0;
+    overflow-x: auto;
+    white-space: nowrap;
     gap: 0;
     font-size: 0.8rem;
+  }
+
+  .wordmark {
+    flex-shrink: 0;
   }
 
   .pages > div {

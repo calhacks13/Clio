@@ -295,6 +295,24 @@ def test_a_weak_candidate_away_from_the_prediction_is_not_taken(vision):
     assert s.state == "coasting"
 
 
+def test_steady_means_still_across_the_picture_not_only_still_in_the_room(vision):
+    """jev's pace (session.py) reads `steady`: an object and a view that hold still are steady;
+    a still object while the head turns is not; one the head follows, still on screen, is."""
+    run = locked_moving(vision)
+    for _ in range(10):  # held still, the view too
+        run.frame(Thing(at(100), A), Thing(at(500), B), camera=pan(0))
+    assert run.tracker.steady(run.t)
+    x = 100
+    for k in range(10):  # the head turns: 20 px a frame, 2.2 box sizes a second across the view
+        x += 20
+        s = run.frame(Thing(at(x), A), Thing(at(x + 400), B), camera=pan(20))
+        assert s.state == "tracking"
+        assert k == 0 or not run.tracker.steady(run.t)  # filtered: from the second frame
+    for _ in range(15):  # the head follows the object: the view pans, the object stays put on it
+        run.frame(Thing(at(x), A), camera=pan(20))
+    assert run.tracker.steady(run.t)
+
+
 def test_the_camera_motion_keeps_the_track_through_a_fast_glance(vision):
     """The whole picture jumps 160 px in one frame: with the camera's motion the track's
     prediction jumps too, so it is the same track; without it, the target is missed."""

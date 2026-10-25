@@ -185,7 +185,7 @@ compile of an episode recorded with `?scan=1`; an up-to-date scene is left untou
 
 The live tracker (YOLOE-26 + ByteTrack over `/track`, [object-finder.md](object-finder.md)) follows
 every object a lesson declares, for the whole lesson (8 at a time, the focused step's show items
-first), including the whole object a shown part belongs to (`partOf`). Only the show items and the
+first), including the whole object a curated lesson's shown part belongs to (`partOf`). Only the show items and the
 coach's highlights are lit; the rest is followed for the recording. It feeds only the learner's AR
 view and the recording: nothing it says reaches a Gemini coach, completes a step or fires a rule
 under one ([coach-plan.md](coach-plan.md)).

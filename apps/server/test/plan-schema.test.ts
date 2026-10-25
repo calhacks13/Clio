@@ -160,7 +160,7 @@ describe.each(['plan', 'revision'] as const)('buildPlanJsonSchema(%s) in full', 
   it('asks each step what to outline: an object, a short phrase and a standalone description', () => {
     const step = defs(schema).step as JsonSchema;
     const show = props(step).show as JsonSchema;
-    expect(show).toMatchObject({ type: 'array', maxItems: 3 });
+    expect(show).toMatchObject({ type: 'array', maxItems: 1 });
     const item = show.items as JsonSchema;
     expect(Object.keys(props(item))).toEqual(['object', 'phrase', 'description']);
     expect(item.required).toEqual(['object', 'phrase', 'description']);
@@ -168,8 +168,10 @@ describe.each(['plan', 'revision'] as const)('buildPlanJsonSchema(%s) in full', 
     const card = (buildPlanJsonSchema('first').properties as Record<string, JsonSchema>)
       .objects as JsonSchema;
     expect(props(item).phrase).toEqual(props(card.items as JsonSchema).phrase);
+    // And the same finder's words as the card's look, always placed next to other things.
+    expect(props(item).description).toEqual(props(card.items as JsonSchema).look);
     expect((props(item).description as JsonSchema).description).toContain(
-      'tells this one thing from every look-alike in view',
+      'always, both where it is in the camera picture',
     );
     // Gemini writes properties in schema order: it decides what to show right after the action.
     const order = Object.keys(props(step));
@@ -245,14 +247,14 @@ describe('plan, first stage and revision', () => {
     const card = objects.items as JsonSchema;
     expect(Object.keys(props(card))).toEqual(['id', 'label', 'phrase', 'look', 'moves']);
     expect(card.required).toEqual(['id', 'label', 'phrase', 'look', 'moves']);
-    // The card's words are all jev gets: a concrete subject, and a look that tells it apart.
+    // The card's words are all jev gets: a concrete subject, and a look placed among its neighbors.
     const phrase = (props(card).phrase as JsonSchema).description;
     expect(phrase).toContain('2 to 5 words: color or material, then a concrete noun');
     expect(phrase).toContain('never a position, a verb or a bare "item"');
     const look = (props(card).look as JsonSchema).description;
-    expect(look).toContain('tells this one object from every look-alike in view');
-    expect(look).toContain('next to large things that stay put and its neighbors');
-    expect(look).toContain('No actions, no steps');
+    expect(look).toContain('One short standalone sentence of at most 30 words');
+    expect(look).toContain('"at the bottom right", "closest to the camera"');
+    expect(look).toContain('"the bottom one of the three chargers"');
     expect(props(card).moves).toMatchObject({ type: 'boolean' });
 
     const step = props(schema).firstStep as JsonSchema;
@@ -269,7 +271,7 @@ describe('plan, first stage and revision', () => {
     expect(props(step).action).toEqual({ $ref: '#/$defs/action' });
     expect(props(step).show).toMatchObject({
       type: 'array',
-      maxItems: 3,
+      maxItems: 1,
       items: { type: 'string', description: 'An object id declared in objects' },
     });
     const mistakes = props(step).mistakes as JsonSchema;
