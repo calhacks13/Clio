@@ -67,8 +67,9 @@ class IdentifierError(Exception):
 
 
 class JevIdentifier:
-    """jev through the jev finder's client (jev.py): its benchmarked Noul and Box questions, one
-    call at a time, never retried. Presence is the Noul probability; boxes only when present."""
+    """jev through the jev finder's client (jev.py): its Noul and Box questions (Noul about the
+    one object the query describes, not any of the phrase's kind), one call at a time, never
+    retried. Presence is the Noul probability; boxes only when present."""
 
     def __init__(self, client: JevClient, name: str | None = None):
         self.client = client
