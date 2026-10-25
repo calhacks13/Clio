@@ -5,6 +5,7 @@ import type {
   ObjectObservation,
   ObjectState,
   Pose7,
+  Vec3,
 } from '@clio/protocol';
 import type { Pose } from '../../core/math';
 import type { TrackedFrame } from '../hands/types';
@@ -18,6 +19,7 @@ const round = (v: number, scale: number) => {
 };
 export const q4 = (v: number) => round(v, 1e4);
 export const qTime = (v: number) => round(v, 1e2);
+const vec3 = (p: Vec3): Vec3 => [q4(p[0]), q4(p[1]), q4(p[2])];
 
 const pose7 = (p: Pose): Pose7 => [
   q4(p.p[0]),
@@ -58,7 +60,7 @@ export function quantizeDeep<T>(value: T): T {
 export function quantizeObject(o: ObjectState, startT: number, t: number): ObjectState {
   return {
     id: o.id,
-    position: [q4(o.position[0]), q4(o.position[1]), q4(o.position[2])],
+    position: vec3(o.position),
     orientation: o.orientation && [
       q4(o.orientation[0]),
       q4(o.orientation[1]),
@@ -79,7 +81,8 @@ const point = (p: NormalizedPoint | null): NormalizedPoint | null => p && [q4(p[
 
 /**
  * One observation for observations.ndjson. Its `t` and `observedT` arrive in performance.now ms and
- * are rebased onto `startT`; normalized image coordinates and the score keep 1e-4.
+ * are rebased onto `startT`; normalized image coordinates, the score and the surface samples keep
+ * 1e-4.
  */
 export function quantizeObservation(o: ObjectObservation, startT: number): ObjectObservation {
   return {
@@ -96,5 +99,6 @@ export function quantizeObservation(o: ObjectObservation, startT: number): Objec
     score: o.score === null ? null : q4(o.score),
     frame: o.frame && { seq: o.frame.seq, width: o.frame.width, height: o.frame.height },
     trackId: o.trackId,
+    ...(o.surface === undefined ? {} : { surface: o.surface.map(vec3) }),
   };
 }

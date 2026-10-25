@@ -71,6 +71,12 @@ export interface TrackedObjectSample {
   positionMeasured?: boolean;
   /** World frame, only when measured (a marker, a 6DoF tracker); never guessed. */
   orientation: Quat | null;
+  /**
+   * World frame: depth samples measured on this frame, where camera rays inside the outline met
+   * the depth map on the object, for a shape fused after the episode. Null or absent when none
+   * were taken: a coasting or held object, a reused or guessed distance, or no depth source.
+   */
+  surface?: Vec3[] | null;
 }
 
 /** Port: anything that reports objects frame by frame. Returns a function that stops it. */

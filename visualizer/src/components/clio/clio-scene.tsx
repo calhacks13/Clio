@@ -2,7 +2,12 @@
 
 import { Grid, OrbitControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
-import type { EnvironmentDoc, RetargetDoc } from "@clio/protocol";
+import type {
+  EnvironmentDoc,
+  RetargetDoc,
+  ShapesDoc,
+  TracksDoc,
+} from "@clio/protocol";
 import type { Capture } from "@clio-viewer/capture/model";
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { NoToneMapping } from "three";
@@ -22,7 +27,9 @@ import { RobotLayer } from "./layers/robot";
 // records (a revision), a theme or selection change, or the camera moving. A scene draws one
 // capture for its whole life: the viewer mounts a new one for a new capture (capture-key.ts).
 // Compiled documents (derived.ts), when there are any, add the detected planes and retargeted
-// robot arms; they are in W like the raw episode and reach ROS once, in derived-display.ts.
+// robot arms, and the objects follow their compiled series, extents and shapes instead of the raw
+// estimates; they are in W like the raw episode and reach ROS once, in derived-display.ts and
+// compiled-objects.ts.
 
 /** Where the scene reads the viewed time: integer microseconds of recording time. */
 export interface SceneClock {
@@ -60,6 +67,10 @@ export interface ClioSceneProps {
   className?: string;
   /** The compiled environment: planes, table and floor. Without it, the calibrated context. */
   environment?: EnvironmentDoc | null;
+  /** The compiled object series: objects follow it, with their extents, instead of the raw estimates. */
+  tracks?: TracksDoc | null;
+  /** Each object's measured shape, riding with its compiled position. */
+  shapes?: ShapesDoc | null;
   /** Retargeted robots, one document per profile. */
   retarget?: readonly RetargetDoc[];
   /** Draws the retargeted robots (default true). */
@@ -130,6 +141,8 @@ export default function ClioScene({
   onSelect,
   className,
   environment = null,
+  tracks = null,
+  shapes = null,
   retarget = NO_RETARGET,
   showRobot = true,
 }: ClioSceneProps) {
@@ -178,6 +191,8 @@ export default function ClioScene({
             handsKeptFromUs,
             framesLoadedToUs,
             environment,
+            tracks,
+            shapes,
             retarget,
             showRobot,
           ]}
@@ -202,6 +217,8 @@ export default function ClioScene({
           selectedId={selectedId}
           onSelect={onSelect}
           environment={environment}
+          tracks={tracks}
+          shapes={shapes}
           retarget={retarget}
           showRobot={showRobot}
         />
@@ -217,6 +234,8 @@ export interface SceneLayersProps extends LayerProps {
   selectedId: string | null;
   onSelect?: (entityId: string) => void;
   environment?: EnvironmentDoc | null;
+  tracks?: TracksDoc | null;
+  shapes?: ShapesDoc | null;
   retarget?: readonly RetargetDoc[];
   showRobot?: boolean;
 }
@@ -228,6 +247,8 @@ export function SceneLayers({
   selectedId,
   onSelect,
   environment = null,
+  tracks = null,
+  shapes = null,
   retarget = NO_RETARGET,
   showRobot = true,
   ...layer
@@ -241,7 +262,13 @@ export function SceneLayers({
         handsKeptFromUs={handsKeptFromUs}
         framesLoadedToUs={framesLoadedToUs}
       />
-      <ObjectsLayer {...layer} selectedId={selectedId} onSelect={onSelect} />
+      <ObjectsLayer
+        {...layer}
+        selectedId={selectedId}
+        onSelect={onSelect}
+        tracks={tracks}
+        shapes={shapes}
+      />
       <DetectionsLayer {...layer} />
       {showRobot && retarget.length > 0 && (
         <RobotLayer {...layer} retarget={retarget} />

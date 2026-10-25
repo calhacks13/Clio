@@ -51,6 +51,7 @@ describe('synthetic tracked-objects episode', () => {
       'object.flags',
       'object.grasp',
       'object.observations',
+      'object.surface',
       'environment.planes',
     ]);
     expect(meta.camera).toMatchObject({

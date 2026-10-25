@@ -43,6 +43,11 @@ export const EPISODE_FEATURE = {
   objectGrasp: 'object.grasp',
   /** Batches carry `observations`: 2D object observations, stored as observations.ndjson. */
   objectObservations: 'object.observations',
+  /**
+   * Observations carry `surface`: depth samples measured inside the outline, in W, so a shape can
+   * be fused after the episode.
+   */
+  objectSurface: 'object.surface',
   /** `environment.planes` events record the planes the headset detected (table, floor, walls). */
   environmentPlanes: 'environment.planes',
 } as const;
@@ -287,6 +292,13 @@ export const ObjectObservationSchema = z
       .string()
       .nullable()
       .describe("The tracker's own id: provenance only, it can change while following one object"),
+    surface: z
+      .array(Vec3Schema)
+      .max(64)
+      .optional()
+      .describe(
+        'Depth samples measured on this frame: where camera rays inside the outline met the depth map on the object, workspace frame W (meters). Absent when none were taken ("object.surface" feature)',
+      ),
   })
   .describe(
     'One 2D object observation (observations.ndjson line), in normalized image coordinates',

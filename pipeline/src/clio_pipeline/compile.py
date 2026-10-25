@@ -1,7 +1,10 @@
 """`clio compile`: turn an episode into data/derived/<id>/ (docs/data-pipeline.md).
 
     manifest.json            inputs (bytes, SHA-256), stages, artifacts, quality verdict
-    tracks.json              head, wrists and every object on one grid (default 30 fps)
+    tracks.json              head, wrists and every object on one grid (default 30 fps), each
+                             object with its estimated metric extent
+    shapes.json              every object's depth samples fused relative to its tracked position
+                             (only when the headset recorded any)
     environment.json         table, floor and detected planes
     retarget-<profile>.json  one per robot profile
 
@@ -46,6 +49,7 @@ from . import __version__
 from .derived_io import DERIVED_SCHEMA_ID, rounded, time_or_none, times, write_json
 from .environment import environment_doc
 from .episode import Episode, load_episode
+from .extents import object_extents
 from .frames import HANDS, WRIST
 from .objects import (
     DEFAULT_MAX_INTERPOLATE_GAP_MS,
@@ -57,6 +61,13 @@ from .observations import observation_summaries
 from .quality import quality
 from .resample import MAX_FRAME_GAP_MS, Resampled, resample_episode
 from .schema import ValidationIssue, parse_json, validate_episode
+from .shapes import (
+    DEFAULT_MIN_HITS,
+    DEFAULT_VOXEL_M,
+    has_depth_samples,
+    object_shapes,
+    shapes_doc,
+)
 
 COMPILER_NAME = "clio_pipeline"
 # Raw files a compile reads, in the episode directory. Any change makes the compile stale.
@@ -196,13 +207,28 @@ def _run_stages(
     def write(name: str, kind: str, doc: dict[str, Any]) -> None:
         artifacts.append({"name": name, "kind": kind, "bytes": write_json(work / name, doc)})
 
-    def tracks() -> dict[str, ObjectSeries]:
+    def tracks() -> tuple[np.ndarray, dict[str, ObjectSeries]]:
         resampled = resample_episode(episode, fps, max_gap_ms=MAX_FRAME_GAP_MS)
         series = object_series(episode, resampled.t)
-        write("tracks.json", "tracks", tracks_doc(episode, resampled, series, fps=fps))
-        return series
+        extents = object_extents(episode, series)
+        write("tracks.json", "tracks", tracks_doc(episode, resampled, series, extents, fps=fps))
+        return resampled.t, series
 
-    series = stage("tracks", tracks)
+    def shapes() -> None:
+        fused = object_shapes(episode, series, voxel_m=DEFAULT_VOXEL_M, min_hits=DEFAULT_MIN_HITS)
+        doc = shapes_doc(
+            episode, grid, fused, fps=fps, voxel_m=DEFAULT_VOXEL_M, min_hits=DEFAULT_MIN_HITS
+        )
+        write("shapes.json", "shapes", doc)
+
+    compiled = stage("tracks", tracks)
+    grid, series = compiled if compiled is not None else (None, None)
+    if series is None:
+        stages.append({"name": "shapes", "status": "skipped", "detail": "no tracks"})
+    elif not has_depth_samples(episode):
+        stages.append({"name": "shapes", "status": "skipped", "detail": "no depth samples"})
+    else:
+        stage("shapes", shapes)
     stage("environment", lambda: write("environment.json", "environment", environment_doc(episode)))
 
     if not profiles:
@@ -242,6 +268,7 @@ def tracks_doc(
     episode: Episode,
     resampled: Resampled,
     series: dict[str, ObjectSeries],
+    extents: dict[str, dict[str, Any] | None] | None = None,
     *,
     fps: int,
     max_interpolate_gap_ms: float = DEFAULT_MAX_INTERPOLATE_GAP_MS,
@@ -249,12 +276,14 @@ def tracks_doc(
 ) -> dict[str, Any]:
     """TracksDoc (packages/protocol/src/derived.ts) from the resampled frames and the object
     series on the same grid, each object with a summary of its 2D observations when there are
-    any (observations.py). The frames must be resampled with a `max_gap_ms` (see
+    any (observations.py) and its estimated metric extent (`extents`, keyed like `series`, from
+    extents.py; null when not estimated). The frames must be resampled with a `max_gap_ms` (see
     MAX_FRAME_GAP_MS): head and wrists are null across longer frame gaps, never filled in."""
     if resampled.max_gap_ms is None:
         raise ValueError("tracks need frames resampled with max_gap_ms: gaps must not be filled")
     wrist = resampled.hands[:, :, WRIST, :7]
     observed = observation_summaries(episode)
+    extents = extents or {}
     return {
         "schema": DERIVED_SCHEMA_ID,
         "episodeId": episode.episode_id,
@@ -276,11 +305,13 @@ def tracks_doc(
             }
             for h, side in enumerate(HANDS)
         ],
-        "objects": [_object_doc(s, observed.get(s.id)) for s in series.values()],
+        "objects": [_object_doc(s, observed.get(s.id), extents.get(s.id)) for s in series.values()],
     }
 
 
-def _object_doc(s: ObjectSeries, observations: dict[str, Any] | None) -> dict[str, Any]:
+def _object_doc(
+    s: ObjectSeries, observations: dict[str, Any] | None, extent: dict[str, Any] | None
+) -> dict[str, Any]:
     return {
         "id": s.id,
         "label": s.label,
@@ -288,6 +319,7 @@ def _object_doc(s: ObjectSeries, observations: dict[str, Any] | None) -> dict[st
         "radius": s.radius,
         "hidden": s.hidden,
         "partOf": s.part_of,
+        "extent": extent,
         "position": rounded(s.position.reshape(-1, 3), valid=s.valid),
         "orientation": rounded(s.orientation.reshape(-1, 4)),
         "tracked": s.tracked.tolist(),

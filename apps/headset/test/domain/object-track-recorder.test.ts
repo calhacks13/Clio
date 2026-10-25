@@ -92,6 +92,23 @@ describe('ObjectTrackRecorder', () => {
     ]);
   });
 
+  it('writes depth samples in the workspace frame, only with a workspace and only when there are some', () => {
+    const { recorder, observed } = setup();
+    recorder.record(sample({ surface: [WORLD, [1, 0.7, -1]] }));
+    recorder.record(sample({ observedT: 1240, surface: [] }));
+    recorder.record(sample({ observedT: 1290, surface: null }));
+    recorder.record(sample({ observedT: 1340 }));
+    expect(observed.map((o) => 'surface' in o)).toEqual([true, false, false, false]);
+    expect(observed[0]?.surface).toHaveLength(2);
+    expect(near(observed[0]?.surface?.[0], IN_W)).toBe(true);
+    expect(near(observed[0]?.surface?.[1], [0, 0, 0])).toBe(true);
+
+    const without = setup('record', false);
+    without.recorder.record(sample({ surface: [WORLD] }));
+    expect(without.observed).toHaveLength(1);
+    expect(without.observed[0]).not.toHaveProperty('surface');
+  });
+
   it('records an answer recorded after it arrived as arriving then; its 3D state is written now', () => {
     const { recorder, observed, updated } = setup();
     recorder.record(sample({ arrivedT: 1210 }));

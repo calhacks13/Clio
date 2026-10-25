@@ -123,6 +123,42 @@ export function maskRays(
   };
 }
 
+/** Even-odd test: whether an image point is inside the polygon (crossings to its left). */
+function insidePolygon([x, y]: Uv, polygon: readonly Uv[]): boolean {
+  let inside = false;
+  let [xj, yj] = polygon[polygon.length - 1] ?? [Number.NaN, Number.NaN];
+  for (const [xi, yi] of polygon) {
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    xj = xi;
+    yj = yi;
+  }
+  return inside;
+}
+
+/**
+ * Camera rays to measure the object's surface along: through a grid of image points inside the
+ * outline (the box when there is none), about sqrt(max) cells per side over the outline's bounds,
+ * the first `max` of them inside. None when the mask has no outline or box.
+ */
+export function surfaceRays(mask: ObjectMask, model: CameraModel, head: Pose, max = 24): Ray[] {
+  const outline = mask.outline && mask.outline.length >= 3 ? mask.outline : null;
+  const polygon = outline ?? (mask.box && boxPolygon([...mask.box]));
+  if (!polygon || max < 1) return [];
+  const us = polygon.map(([u]) => u);
+  const vs = polygon.map(([, v]) => v);
+  const [u0, u1, v0, v1] = [Math.min(...us), Math.max(...us), Math.min(...vs), Math.max(...vs)];
+  const cells = Math.ceil(Math.sqrt(max));
+  const rays: Ray[] = [];
+  for (let row = 0; row < cells && rays.length < max; row++) {
+    const v = v0 + ((row + 0.5) * (v1 - v0)) / cells;
+    for (let col = 0; col < cells && rays.length < max; col++) {
+      const u = u0 + ((col + 0.5) * (u1 - u0)) / cells;
+      if (insidePolygon([u, v], polygon)) rays.push(pixelRay(model, [u, v], head));
+    }
+  }
+  return rays;
+}
+
 /** The point on `ray` straight above (or below) `base`: an object standing at its base. */
 function standingAt(ray: Ray, base: Readonly<Vec3>): Vec3 {
   const dh: Vec3 = [ray.direction[0], 0, ray.direction[2]];

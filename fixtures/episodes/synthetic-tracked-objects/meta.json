@@ -114,6 +114,7 @@
     "object.flags",
     "object.grasp",
     "object.observations",
+    "object.surface",
     "environment.planes"
   ],
   "camera": {

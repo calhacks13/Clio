@@ -13,13 +13,19 @@ import {
 } from "@/lib/clio/__fixtures__/synthetic-episode";
 import { type CompileStatusView, compileStatus } from "@/lib/clio/derived";
 import { recordsLocationFlags } from "@/lib/clio/lanes";
-import type { EnvironmentDoc, RetargetDoc } from "@clio/protocol";
+import type {
+  EnvironmentDoc,
+  RetargetDoc,
+  ShapesDoc,
+  TracksDoc,
+} from "@clio/protocol";
 import { buildCaptureFromClio } from "@clio-viewer/capture/from-clio";
 
 // Dev harness for the Clio 3D scene: the synthetic episode, built in memory
 // without the server, drawn by ClioScene at a time kept in state (useSceneClock),
 // as the replay viewer does. Toggles cover the states DESIGN.md asks to check,
-// and the compiled documents (synthetic-derived.ts): detected planes, the
+// and the compiled documents (synthetic-derived.ts): the compiled object
+// series with the syringe's extent box and fused shape, detected planes, the
 // table on the detected table plane, the retargeted arm and the compile state
 // (a failed retarget stage, a verdict that is not usable). Not served in
 // production builds.
@@ -115,6 +121,8 @@ function SceneHarness() {
         framesLoadedToUs={on.framesCut ? FRAMES_LOADED_TO_US : null}
         debug={on.debug}
         environment={on.compiled ? derived.environment : null}
+        tracks={on.compiled ? derived.tracks : null}
+        shapes={on.compiled ? derived.shapes : null}
         retarget={on.compiled ? derived.retarget : NO_RETARGET}
         showRobot={on.robot}
         compile={compileStatus(
@@ -137,6 +145,8 @@ function SceneStage({
   framesLoadedToUs,
   debug,
   environment,
+  tracks,
+  shapes,
   retarget,
   showRobot,
   compile,
@@ -147,6 +157,8 @@ function SceneStage({
   framesLoadedToUs: number | null;
   debug: boolean;
   environment: EnvironmentDoc | null;
+  tracks: TracksDoc | null;
+  shapes: ShapesDoc | null;
   retarget: readonly RetargetDoc[];
   showRobot: boolean;
   compile: CompileStatusView | null;
@@ -192,6 +204,8 @@ function SceneStage({
             selectedId={selectedId}
             onSelect={setSelectedId}
             environment={environment}
+            tracks={tracks}
+            shapes={shapes}
             retarget={retarget}
             showRobot={showRobot}
             className="absolute inset-0"
@@ -203,6 +217,8 @@ function SceneStage({
             entityId={selectedId}
             tUs={tUs}
             flagsRecorded={flagsRecorded}
+            tracks={tracks}
+            shapes={shapes}
           />
         </aside>
       </div>

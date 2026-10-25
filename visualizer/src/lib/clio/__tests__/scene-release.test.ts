@@ -3,8 +3,14 @@ import { act, createElement } from "react";
 import * as THREE from "three";
 import { buildCaptureFromClio } from "@clio-viewer/capture/from-clio";
 import type { Capture } from "@clio-viewer/capture/model";
-import { syntheticEpisode } from "../__fixtures__/synthetic-episode";
+import type { SceneLayersProps } from "@/components/clio/clio-scene";
+import { syntheticDerived } from "../__fixtures__/synthetic-derived";
+import {
+  SYNTHETIC_TIMES,
+  syntheticEpisode,
+} from "../__fixtures__/synthetic-episode";
 import { captureKey } from "../capture-key";
+import { compiledObjectAt } from "../compiled-objects";
 
 // What the Clio viewer's 3D scene holds when it moves to another capture (a
 // newer episode on /clio/live, or a rebuild of the same one), without a
@@ -14,7 +20,9 @@ import { captureKey } from "../capture-key";
 // under captureKey, so the same key re-renders the canvas and a new key
 // unmounts it and mounts another. Drawing a new capture into the same canvas
 // kept the old one reachable (about 100 MB for 10 minutes at 90 Hz). drei's
-// Html, Grid and OrbitControls need a DOM and are left out.
+// Html, Grid and OrbitControls need a DOM and are left out. The compiled case
+// checks that objects follow tracks.json, vanish where it has no position and
+// that their extent boxes and shape points are disposed with the rest.
 
 mock.module("@react-three/drei", () => ({
   Html: () => null,
@@ -74,7 +82,11 @@ class SceneSlot {
   store: Store | null = null;
   mounted = 0;
 
-  async show(capture: Capture, revision: number): Promise<void> {
+  async show(
+    capture: Capture,
+    revision: number,
+    extra: Partial<SceneLayersProps> = {},
+  ): Promise<void> {
     const key = captureKey(capture);
     if (key !== this.key) {
       await this.clear();
@@ -100,6 +112,7 @@ class SceneSlot {
           handsKeptFromUs: null,
           framesLoadedToUs: null,
           selectedId: null,
+          ...extra,
         }),
       );
     });
@@ -193,5 +206,68 @@ describe("the scene on a switch of capture", () => {
     await new Promise((resolve) => setTimeout(resolve, ROOT_RELEASE_MS));
     expect(await released(old)).toBe(true);
     await slot.clear();
+  });
+});
+
+describe("the scene with a compiled episode", () => {
+  const episode = syntheticEpisode({
+    episodeId: "ep-20261024-120000-cccc",
+    startEpochMs: START_EPOCH_MS,
+    recordedGrasps: true,
+  });
+  const capture = buildCaptureFromClio(episode);
+  const compiled = syntheticDerived(episode);
+  const docs = { tracks: compiled.tracks, shapes: compiled.shapes };
+  const at = (tUs: number) => ({
+    getTimeUs: () => tUs,
+    subscribe: () => () => {},
+  });
+
+  test("objects follow the compiled series and vanish where it has no position", async () => {
+    const slot = new SceneSlot();
+    const syringe = () => {
+      const scene = slot.store?.getState().scene;
+      if (!scene) throw new Error("no scene mounted");
+      return scene.getObjectByName("syringe") as THREE.Object3D;
+    };
+    // Mid-carry, inside the grid: at the compiled position.
+    const carriedUs = 4_000_000;
+    await slot.show(capture, 0, { ...docs, clock: at(carriedUs) });
+    const expected = compiledObjectAt(compiled.tracks, "syringe", carriedUs);
+    if (!expected) throw new Error("the syringe is compiled mid-carry");
+    expect(syringe().visible).toBe(true);
+    expect(syringe().position.toArray()).toEqual(expected.position);
+    // While the headset had lost it, the compiled position is null: nothing is
+    // drawn, not the raw pose the compile rejected.
+    const { start, end } = SYNTHETIC_TIMES.dropout;
+    const lostUs = Math.round(((start + end) / 2) * 1000);
+    await slot.show(capture, 1, { ...docs, clock: at(lostUs) });
+    expect(compiledObjectAt(compiled.tracks, "syringe", lostUs)).toBeNull();
+    expect(syringe().visible).toBe(false);
+    // Past the grid's end the compiled object shows nothing, where the raw
+    // path keeps the last pose.
+    const afterUs = capture.endUs + 2_000_000;
+    await slot.show(capture, 2, { ...docs, clock: at(afterUs) });
+    expect(syringe().visible).toBe(false);
+    await slot.show(capture, 3, { clock: at(afterUs) });
+    expect(syringe().visible).toBe(true);
+    await slot.clear();
+  });
+
+  test("the extent boxes and shape points are disposed with the rest", async () => {
+    const slot = new SceneSlot();
+    await slot.show(capture, 0, { ...docs, clock: at(4_000_000) });
+    const resources = drawnResources(slot);
+    expect(resources.some((r) => r instanceof THREE.PointsMaterial)).toBe(true);
+    // The syringe's extent box and its shape's box.
+    expect(
+      resources.filter((r) => r instanceof THREE.EdgesGeometry).length,
+    ).toBeGreaterThanOrEqual(2);
+    const disposed = new Set<object>();
+    for (const r of resources) {
+      r.addEventListener("dispose", () => disposed.add(r));
+    }
+    await slot.clear();
+    expect(resources.filter((r) => !disposed.has(r))).toEqual([]);
   });
 });

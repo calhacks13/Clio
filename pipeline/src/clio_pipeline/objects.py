@@ -66,6 +66,10 @@ class ObjectSeries:
     def __len__(self) -> int:
         return len(self.t)
 
+    def nearest_frame(self, t: float) -> int | None:
+        """The index of the grid time nearest `t` (the earlier on a tie); None for an empty grid."""
+        return int(np.argmin(np.abs(self.t - t))) if len(self.t) else None
+
     @property
     def orientation_valid(self) -> np.ndarray:
         return ~np.isnan(self.orientation).any(axis=1)

@@ -195,7 +195,13 @@ def test_compile_prints_one_json_line_per_episode(make_default_episode, tmp_path
     first = lines[0]
     assert set(first) == {"episodeId", "skipped", "outDir", "usable", "stages"}
     assert (first["episodeId"], first["skipped"], first["usable"]) == ("ep-a", False, False)
-    assert [s["name"] for s in first["stages"]] == ["tracks", "environment", "retarget", "quality"]
+    assert [s["name"] for s in first["stages"]] == [
+        "tracks",
+        "shapes",
+        "environment",
+        "retarget",
+        "quality",
+    ]
     assert Path(first["outDir"]) == tmp_path / "derived" / "ep-a"
 
 

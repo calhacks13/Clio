@@ -6,6 +6,7 @@ import {
   EpisodeDetailResponseSchema,
   type EpisodeMeta,
   RetargetDocSchema,
+  ShapesDocSchema,
   TracksDocSchema,
 } from "@clio/protocol";
 import type { Fetch } from "@clio-viewer/api";
@@ -32,7 +33,7 @@ import type { Channel } from "../types";
 // fetch. The fake serves an episode's detail (with its `derived` status), its
 // compiled files by name and, for the isolation tests, its raw NDJSON files
 // with `x-next-from` the way apps/server does. The loader reads only what the
-// scene draws (environment and retarget), never tracks.json.
+// scene draws: tracks, environment, shapes and retarget.
 
 const START_EPOCH_MS = Date.UTC(2026, 9, 24, 12);
 const EPISODE = syntheticEpisode({ startEpochMs: START_EPOCH_MS });
@@ -41,6 +42,7 @@ const COMPILED = syntheticDerived(EPISODE);
 const ENVIRONMENT = "environment.json";
 const RETARGET = "retarget-clio-arm-6dof.json";
 const TRACKS = "tracks.json";
+const SHAPES = "shapes.json";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -155,6 +157,7 @@ describe("the synthetic compile", () => {
   test("is valid clio.derived/1", () => {
     expect(() => CompileManifestSchema.parse(COMPILED.manifest)).not.toThrow();
     expect(() => TracksDocSchema.parse(COMPILED.tracks)).not.toThrow();
+    expect(() => ShapesDocSchema.parse(COMPILED.shapes)).not.toThrow();
     expect(() =>
       EnvironmentDocSchema.parse(COMPILED.environment),
     ).not.toThrow();
@@ -164,6 +167,7 @@ describe("the synthetic compile", () => {
     expect(COMPILED.manifest.artifacts.map((a) => a.name).sort()).toEqual([
       ENVIRONMENT,
       RETARGET,
+      SHAPES,
       TRACKS,
     ]);
   });
@@ -259,6 +263,7 @@ describe("the synthetic compile", () => {
     expect(failed.manifest.artifacts.map((a) => a.kind)).toEqual([
       "tracks",
       "environment",
+      "shapes",
     ]);
     expect(failed.manifest.stages).toContainEqual({
       name: "retarget-clio-arm-6dof",
@@ -266,7 +271,7 @@ describe("the synthetic compile", () => {
       detail: "URDF not found",
     });
     expect(Object.keys(failed.files).sort()).toEqual(
-      ["environment.json", "manifest.json", "tracks.json"].sort(),
+      [ENVIRONMENT, "manifest.json", SHAPES, TRACKS].sort(),
     );
   });
 });
@@ -283,19 +288,23 @@ describe("reading a compiled episode", () => {
     expect(state.compiledAt).toBe(COMPILED.manifest.compiledAt);
     expect(state.environment).toEqual(COMPILED.environment);
     expect(state.retarget).toEqual(COMPILED.retarget);
+    expect(state.tracks).toEqual(COMPILED.tracks);
+    expect(state.shapes).toEqual(COMPILED.shapes);
     expect(state.artifacts).toEqual({
       [ENVIRONMENT]: "ok",
       [RETARGET]: "ok",
+      [SHAPES]: "ok",
+      [TRACKS]: "ok",
     });
     expect(state.error).toBeNull();
-    // The manifest comes with the detail; only the artifacts a layer draws
-    // are read. The manifest lists tracks.json, which nothing draws yet.
-    expect(COMPILED.manifest.artifacts.map((a) => a.name)).toContain(TRACKS);
+    // The manifest comes with the detail; every artifact a layer draws is read.
     expect(server.requests.sort()).toEqual(
       [
         `/episodes/${ID}`,
         `/episodes/${ID}/derived/${ENVIRONMENT}`,
         `/episodes/${ID}/derived/${RETARGET}`,
+        `/episodes/${ID}/derived/${SHAPES}`,
+        `/episodes/${ID}/derived/${TRACKS}`,
       ].sort(),
     );
   });
@@ -311,6 +320,7 @@ describe("reading a compiled episode", () => {
     expect(state.artifacts[ENVIRONMENT]).toBe("missing");
     expect(state.environment).toBeNull();
     expect(state.retarget.length).toBe(1);
+    expect(state.tracks).toEqual(COMPILED.tracks);
     expect(state.compile).toBe("ok");
     expect(state.episodeId).toBe(ID);
     expect(state.error).toBeNull();
@@ -321,6 +331,7 @@ describe("reading a compiled episode", () => {
     server.compiled(COMPILED);
     server.files.set(ENVIRONMENT, '{"schema": "clio.derived/1",');
     server.files.set(RETARGET, JSON.stringify(COMPILED.tracks));
+    server.files.set(SHAPES, JSON.stringify(COMPILED.environment));
     const loader = loaderOn(server);
 
     await loader.step();
@@ -328,9 +339,13 @@ describe("reading a compiled episode", () => {
     expect(state.artifacts).toEqual({
       [ENVIRONMENT]: "invalid",
       [RETARGET]: "invalid",
+      [SHAPES]: "invalid",
+      [TRACKS]: "ok",
     });
     expect(state.environment).toBeNull();
     expect(state.retarget).toEqual([]);
+    expect(state.shapes).toBeNull();
+    expect(state.tracks).toEqual(COMPILED.tracks);
     expect(state.error).toBeNull();
   });
 
@@ -357,7 +372,7 @@ describe("reading a compiled episode", () => {
 
     await loader.step();
     await loader.step();
-    expect(server.derivedRequests().length).toBe(2);
+    expect(server.derivedRequests().length).toBe(4);
     expect(loader.getSnapshot()).toBe(first);
 
     const recompiled = syntheticDerived(EPISODE, {
@@ -366,7 +381,7 @@ describe("reading a compiled episode", () => {
     server.compiled(recompiled);
     await loader.step();
     const second = loader.getSnapshot();
-    expect(server.derivedRequests().length).toBe(4);
+    expect(server.derivedRequests().length).toBe(8);
     expect(second.compiledAt).toBe("2026-10-24T12:05:00.000Z");
     expect(second.environment).not.toBe(first.environment);
     expect(second.environment).toEqual(recompiled.environment);
@@ -392,12 +407,12 @@ describe("reading a compiled episode", () => {
       expect(shown.environment).toBe(stale.environment);
       expect(shown.compiledAt).toBe(COMPILED.manifest.compiledAt);
     }
-    expect(server.derivedRequests().length).toBe(2);
+    expect(server.derivedRequests().length).toBe(4);
 
     server.compiled(next, "ok");
     await loader.step();
     expect(loader.getSnapshot().compiledAt).toBe(next.manifest.compiledAt);
-    expect(server.derivedRequests().length).toBe(4);
+    expect(server.derivedRequests().length).toBe(8);
   });
 
   test("a failed recompile keeps the last documents and shows its error", async () => {
@@ -491,6 +506,8 @@ describe("reading a compiled episode", () => {
     const state = loader.getSnapshot();
     expect(state.environment).toBeNull();
     expect(state.retarget).toEqual([]);
+    expect(state.tracks).toBeNull();
+    expect(state.shapes).toBeNull();
     expect(state.compiledAt).toBeNull();
   });
 
@@ -830,6 +847,8 @@ describe("live raw following", () => {
     expect(loader.getSnapshot().artifacts).toEqual({
       [ENVIRONMENT]: "missing",
       [RETARGET]: "missing",
+      [SHAPES]: "missing",
+      [TRACKS]: "missing",
     });
     expect(source.getSnapshot().error).toBeNull();
     expect(source.getSnapshot().capture).not.toBeNull();

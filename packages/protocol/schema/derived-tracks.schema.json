@@ -211,6 +211,41 @@
               "null"
             ]
           },
+          "extent": {
+            "description": "Estimated size: the median of each measured observation's box at the object's depth, through the camera intrinsics. Null without a camera model, boxes or depth; absent from compilers before 0.6.0",
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "width": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "description": "Across the camera, m"
+                  },
+                  "height": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "description": "Up the camera, m"
+                  },
+                  "samples": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "Measured boxes the medians came from"
+                  }
+                },
+                "required": [
+                  "width",
+                  "height",
+                  "samples"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "position": {
             "type": "array",
             "items": {

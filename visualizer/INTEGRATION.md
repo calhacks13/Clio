@@ -103,7 +103,7 @@ The headset's `../apps/headset/viewer.html` (`src/viewer/{main,scene,panel}.ts`)
 - The environment layer draws compiled planes (floor, walls, a detected table) as context geometry, and the compiled table and floor when they exist; otherwise the calibrated floor and workspace box as before. Plane labels show only in Debug.
 - `layers/robot.tsx` draws each retargeted arm as a dashed joint chain in the inferred look, at the grid frame at or before the clock time, hidden where its joints are null, labelled "Retargeted" with the profile's robot name. The Robot toggle in the header shows or hides it. It is never drawn as measured.
 - Once the episode is no longer live, the playback bar shows a compile state that needs attention (Compiling, Not compiled, Compile stale, Compile failed, including a failed stage or a failed recompile) and "Not usable" with the quality verdict's first reason as a tooltip. A healthy compile adds no text.
-- `tracks.json` is not fetched yet: no layer draws it, and the scene's objects come from the raw estimates.
+- `tracks.json` and `shapes.json` are read too (`src/lib/clio/compiled-objects.ts`). Once an episode is compiled, the objects layer takes each object's position, rotation, held state and tracked color from the compiled grid (the frame at or before the clock time; hidden where the compile has no position), draws the estimated `extent` as a wireframe box around the position and the measured shape as the fused depth points with their yaw box riding on the position. The inspector shows "Size (estimated)" and "Shape (measured)" when they exist. Live and uncompiled episodes still draw from the raw estimates.
 
 ### Where things live
 

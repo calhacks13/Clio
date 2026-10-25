@@ -36,6 +36,7 @@ OBSERVATIONS = ("observations.ndjson", "object-observation.schema.json", True)
         ("episode_dir", FILES),
         ("planned_episode_dir", FILES),
         ("featured_episode_dir", [*FILES, OBSERVATIONS]),
+        ("measured_episode_dir", [*FILES, OBSERVATIONS]),
         ("frame_gap_episode_dir", [f for f in FILES if f[0] != "objects.ndjson"]),
     ],
 )

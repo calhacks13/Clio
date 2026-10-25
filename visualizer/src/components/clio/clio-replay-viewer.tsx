@@ -41,9 +41,9 @@ import { useClioDerived } from "./use-clio-derived";
 // follows the newest episode and keeps the address; Pin stays on the episode
 // shown and moves to its /clio/<id> page. Laid out like the G1 replay: an
 // unframed canvas between two rounded toolbar surfaces, with docked panels.
-// The compiled documents (planes, retargeted robots, the compile state) come
-// from their own loader beside the source (use-clio-derived), so raw
-// following never waits on them.
+// The compiled documents (object series and shapes, planes, retargeted
+// robots, the compile state) come from their own loader beside the source
+// (use-clio-derived), so raw following never waits on them.
 
 /** The lanes' axis grows in these steps while live, so they rebuild at most ten times a second. */
 const AXIS_STEP_US = 100_000;
@@ -403,6 +403,8 @@ function ClioWorkspace({
                     selectedId={selectedId}
                     onSelect={select}
                     environment={derived.environment}
+                    tracks={derived.tracks}
+                    shapes={derived.shapes}
                     retarget={derived.retarget}
                     showRobot={showRobot}
                     className="absolute inset-0"
@@ -439,6 +441,8 @@ function ClioWorkspace({
                 entityId={selectedId}
                 tUs={clock.tUs}
                 flagsRecorded={flagsRecorded}
+                tracks={derived.tracks}
+                shapes={derived.shapes}
               />
               <div className="flex max-h-[320px] min-h-0 flex-col border-t border-line-subtle pt-4 lg:max-h-none lg:flex-1">
                 <EventList

@@ -115,6 +115,28 @@ describe('EpisodeRecorder observations', () => {
     ]);
   });
 
+  it('writes depth samples to 1e-4, and none for an observation without them', async () => {
+    const { bus, recorder, sink } = setup();
+    recorder.start(meta, 1000);
+    observe(
+      bus,
+      observation({
+        surface: [
+          [0.123456, 0.05, -0.2000001],
+          [0.1, 0.02, -0.19],
+        ],
+      }),
+    );
+    observe(bus, observation({ objectId: 'cup' }));
+    await recorder.stop('completed', { stepsCompleted: 0, stepsTotal: 0 }, 3000);
+    const [first, second] = sink.only().batches.flatMap((b) => b.observations);
+    expect(first?.surface).toEqual([
+      [0.1235, 0.05, -0.2],
+      [0.1, 0.02, -0.19],
+    ]);
+    expect(second).not.toHaveProperty('surface');
+  });
+
   it('keeps a camera frame from before the episode as a negative observation time', async () => {
     const { bus, recorder, sink } = setup();
     recorder.start(meta, 1000);

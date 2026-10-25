@@ -18,6 +18,7 @@ import { HandednessSchema } from './hand';
 //   manifest.json      CompileManifest: inputs (with hashes), stages, artifacts, quality verdict
 //   tracks.json        TracksDoc: head, wrists and every object on one fixed-rate grid
 //   environment.json   EnvironmentDoc: table, floor and detected planes
+//   shapes.json        ShapesDoc: each object's depth samples fused relative to its tracked position
 //   retarget-<profile>.json  RetargetDoc: robot joint trajectories solved by inverse kinematics
 //
 // Arrays hold one value per grid frame. null marks "no valid value": compiled files never fill a
@@ -29,7 +30,7 @@ export const DERIVED_SCHEMA_ID = 'clio.derived/1';
 /** File names the server serves from data/derived/<id>/ and the visualizer's proxy allows. */
 export const DERIVED_FILE_NAME = /^[a-z0-9][a-z0-9._-]{0,95}\.json$/;
 
-export const DerivedKindSchema = z.enum(['tracks', 'environment', 'retarget']);
+export const DerivedKindSchema = z.enum(['tracks', 'environment', 'shapes', 'retarget']);
 
 const fraction = () => z.number().min(0).max(1);
 const ms = () => z.number();
@@ -172,6 +173,17 @@ export const CompiledObjectTrackSchema = z.object({
     .describe(
       'The declared object this one is a component of (plan partOf); null when none, absent from compilers before 0.5.0',
     ),
+  extent: z
+    .object({
+      width: z.number().positive().describe('Across the camera, m'),
+      height: z.number().positive().describe('Up the camera, m'),
+      samples: z.number().int().positive().describe('Measured boxes the medians came from'),
+    })
+    .nullable()
+    .optional()
+    .describe(
+      "Estimated size: the median of each measured observation's box at the object's depth, through the camera intrinsics. Null without a camera model, boxes or depth; absent from compilers before 0.6.0",
+    ),
   position: z.array(Vec3Schema.nullable()).describe('Null where no valid estimate'),
   orientation: z.array(QuatSchema.nullable()).describe('Null where the orientation is unknown'),
   tracked: z
@@ -224,6 +236,51 @@ export const TracksDocSchema = z.object({
   head: z.array(Pose7Schema.nullable()),
   hands: z.array(CompiledHandTrackSchema),
   objects: z.array(CompiledObjectTrackSchema),
+});
+
+/**
+ * One object's measured shape: the depth samples recorded inside its outlines (observations.ndjson
+ * `surface`), each frame's taken relative to the object's tracked position at that frame, so the
+ * shape rides with the object. Only frames where the object stood still (not held, position
+ * valid) count. A yaw-aligned box sums the points up; the points show the side the camera saw.
+ */
+export const CompiledObjectShapeSchema = z.object({
+  id: z.string(),
+  points: z
+    .array(Vec3Schema)
+    .describe(
+      "Fused samples as offsets from the object's tracked position, W axes, m; voxel means, at most policy.maxPoints",
+    ),
+  box: z
+    .object({
+      center: Vec3Schema.describe('Offset from the tracked position, W axes'),
+      rotation: QuatSchema.describe('A yaw about +y (up); the box stands on the table'),
+      size: Vec3Schema.describe("Along the box's own x, y (up) and z, m"),
+    })
+    .nullable()
+    .describe('Null with too few points'),
+  samples: z.number().int().nonnegative().describe('Raw depth samples before fusing'),
+  frames: z.number().int().nonnegative().describe('Observations that contributed'),
+  firstT: ms().nullable().describe('Capture time of the first contributing frame'),
+  lastT: ms().nullable(),
+});
+
+export const ShapesDocSchema = z.object({
+  ...docBase,
+  kind: z.literal('shapes'),
+  policy: z.object({
+    voxelM: z.number().positive().describe('Offsets are fused on this grid'),
+    minHits: z
+      .number()
+      .int()
+      .positive()
+      .describe('A voxel needs this many samples once there are more than 50 voxels'),
+    reachM: z
+      .number()
+      .positive()
+      .describe('The headset kept samples within this of the measured center'),
+  }),
+  objects: z.array(CompiledObjectShapeSchema),
 });
 
 export const EnvironmentDocSchema = z.object({
@@ -326,6 +383,8 @@ export type ObservationSummary = z.infer<typeof ObservationSummarySchema>;
 export type CompiledObjectTrack = z.infer<typeof CompiledObjectTrackSchema>;
 export type CompiledHandTrack = z.infer<typeof CompiledHandTrackSchema>;
 export type TracksDoc = z.infer<typeof TracksDocSchema>;
+export type CompiledObjectShape = z.infer<typeof CompiledObjectShapeSchema>;
+export type ShapesDoc = z.infer<typeof ShapesDocSchema>;
 export type EnvironmentDoc = z.infer<typeof EnvironmentDocSchema>;
 export type RetargetArm = z.infer<typeof RetargetArmSchema>;
 export type RetargetDoc = z.infer<typeof RetargetDocSchema>;

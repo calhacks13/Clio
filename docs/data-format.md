@@ -203,6 +203,11 @@ camera image, separately from the 3D estimates in `objects.ndjson`:
 
 - `t` is when the answer arrived; `observedT` is when its camera frame was captured (can be
   negative). Image coordinates are normalized 0..1, x right, y down.
+- `surface` (optional, `"object.surface"` feature): up to 64 depth samples measured on that frame,
+  in `W` (meters): where camera rays through a grid inside the outline met the depth map, kept only
+  within 0.3 m of the object's measured center, at most every 0.5 s per object, never while the
+  object is in hand or only coasting. `clio compile` fuses them into `shapes.json`
+  ([data-pipeline.md](data-pipeline.md#compiled-files-clioderived1)).
 - `status`: `measured` (seen in that frame), `predicted` (carried forward by the tracker without
   being seen), `lost`, `absent` (the identifier says it is not in view) or `unknown`. A
   `predicted` observation never produces a measured 3D estimate: its `objects.ndjson` state has

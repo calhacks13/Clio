@@ -8,6 +8,7 @@ import {
   type HandSample,
   type Pose7,
   type RetargetDoc,
+  type ShapesDoc,
   type TracksDoc,
   type Vec3,
 } from "@clio/protocol";
@@ -18,8 +19,8 @@ import {
 } from "./synthetic-episode";
 
 // What `clio compile` would write for a synthetic episode
-// (synthetic-episode.ts): the manifest, tracks, environment and one retarget
-// document, all valid clio.derived/1. Pure and deterministic, for tests and
+// (synthetic-episode.ts): the manifest, tracks, environment, shapes and one
+// retarget document, all valid clio.derived/1. Pure and deterministic, for tests and
 // the dev harness pages, so the compiled planes and a retargeted arm show
 // without a server or the Python pipeline.
 //
@@ -32,7 +33,13 @@ import {
 // stands right of the tray and follows the right hand's pinch point with a
 // two-link elbow; it has no target (null q) while the right hand is untracked.
 // Head, wrists and arm targets are null wherever the recorded frames around a
-// grid time are more than policy.maxFrameGapMs apart.
+// grid time are more than policy.maxFrameGapMs apart. An object's position is
+// null where the governing estimate's location flags say it was not valid (the
+// syringe while the headset lost the hand carrying it, with recorded grasps).
+// The syringe, the one object a finder followed, has an estimated extent and
+// a fused shape: depth samples on its top face, taken after it was put down.
+// Cup A has a shape entry with no points, as an object whose every sampled
+// frame was dropped leaves.
 
 export interface SyntheticDerivedOptions {
   /** Grid rate, default 30 fps. */
@@ -54,6 +61,7 @@ export interface SyntheticDerived {
   manifest: CompileManifest;
   tracks: TracksDoc;
   environment: EnvironmentDoc;
+  shapes: ShapesDoc;
   retarget: RetargetDoc[];
   /** Every compiled file by name, manifest.json included, as the server serves them. */
   files: Record<string, unknown>;
@@ -98,6 +106,20 @@ const INDEX_TIP = 9;
 const STRIDE = 8;
 
 const IDENTITY: [number, number, number, number] = [0, 0, 0, 1];
+
+/** The syringe's estimated size across the camera: a thin tool seen on its side. */
+const SYRINGE_EXTENT = { width: 0.118, height: 0.021, samples: 23 };
+/** The fused shape's grid, hit count and the headset's sampling reach (shapes.json policy). */
+const SHAPES_POLICY = { voxelM: 0.01, minHits: 2, reachM: 0.3 };
+/** The syringe lies turned this far from W's x axis once put down. */
+const SYRINGE_YAW = (20 * Math.PI) / 180;
+const SYRINGE_LENGTH = 0.11;
+const SYRINGE_WIDTH = 0.02;
+/** Depth samples came every 500 ms once the detector found the syringe put down. */
+const SURFACE_EVERY_MS = 500;
+const SURFACE_POINTS_PER_FRAME = 12;
+/** Location flag bit: position valid (OpenXR). */
+const POSITION_VALID = 2;
 
 const round = (v: number, digits = 4) => {
   const k = 10 ** digits;
@@ -414,10 +436,16 @@ function tracksDoc(
     );
     const at = (i: number): { t: number; state: SyntheticObjectState } | null =>
       mine[i];
+    // The flags, when recorded, say whether the position was valid at all.
+    const valid = (i: number) => {
+      const flags = at(i)?.state.locationFlags;
+      return flags === undefined || (flags & POSITION_VALID) !== 0;
+    };
     const measured = (i: number) => {
       const s = at(i);
       return (
         s !== null &&
+        valid(i) &&
         s.state.source !== "layout" &&
         s.state.source !== "manual" &&
         t[i] - s.t <= staleMs
@@ -432,7 +460,11 @@ function tracksDoc(
       kind: spec?.kind ?? null,
       radius: placed.radius,
       hidden: spec?.hidden ?? false,
-      position: t.map((_, i) => at(i)?.state.position ?? placed.position),
+      partOf: null,
+      extent: carried ? { ...SYRINGE_EXTENT } : null,
+      position: t.map((_, i) =>
+        valid(i) ? (at(i)?.state.position ?? placed.position) : null,
+      ),
       orientation: t.map(() => null),
       tracked: t.map((_, i) => measured(i)),
       interpolated: t.map(() => false),
@@ -484,6 +516,82 @@ function tracksDoc(
   };
 }
 
+/**
+ * The syringe's fused shape as offsets from its tracked position, W axes: a
+ * dozen voxel means on its top face, along its length and turned by its yaw,
+ * with the box the pipeline fits around them.
+ */
+function syringeShape(episode: SyntheticEpisode): ShapesDoc["objects"][number] {
+  const c = Math.cos(SYRINGE_YAW);
+  const s = Math.sin(SYRINGE_YAW);
+  const points: Vec3[] = [];
+  for (let i = 0; i < SURFACE_POINTS_PER_FRAME; i++) {
+    const along =
+      -SYRINGE_LENGTH / 2 +
+      (i / (SURFACE_POINTS_PER_FRAME - 1)) * SYRINGE_LENGTH;
+    const across = (i % 2 === 0 ? -1 : 1) * (SYRINGE_WIDTH / 2 - 0.004);
+    const up = SYRINGE_WIDTH / 2 + 0.002 * (i % 3);
+    // The box frame turned by the yaw about W's up (+y).
+    points.push(
+      roundVec([along * c + across * s, up, -along * s + across * c]),
+    );
+  }
+  // Sampled once the detector found it put down, until the episode ended.
+  const firstT = SYNTHETIC_TIMES.relocated;
+  const lastT = episode.finish.durationMs;
+  const frames = Math.max(
+    1,
+    Math.floor((lastT - firstT) / SURFACE_EVERY_MS) + 1,
+  );
+  return {
+    id: "syringe",
+    points,
+    box: {
+      center: [0, round(SYRINGE_WIDTH / 2), 0],
+      rotation: roundVec([
+        0,
+        Math.sin(SYRINGE_YAW / 2),
+        0,
+        Math.cos(SYRINGE_YAW / 2),
+      ]),
+      size: [SYRINGE_LENGTH, SYRINGE_WIDTH, SYRINGE_WIDTH],
+    },
+    samples: frames * SURFACE_POINTS_PER_FRAME,
+    frames,
+    firstT,
+    lastT: firstT + (frames - 1) * SURFACE_EVERY_MS,
+  };
+}
+
+function shapesDoc(
+  episode: SyntheticEpisode,
+  t: number[],
+  fps: number,
+): ShapesDoc {
+  return {
+    schema: DERIVED_SCHEMA_ID,
+    episodeId: episode.meta.episodeId,
+    frame: "workspace",
+    fps,
+    t,
+    kind: "shapes",
+    policy: { ...SHAPES_POLICY },
+    objects: [
+      syringeShape(episode),
+      // Sampled while held: every frame dropped, nothing fused.
+      {
+        id: "cup_a",
+        points: [],
+        box: null,
+        samples: 0,
+        frames: 0,
+        firstT: null,
+        lastT: null,
+      },
+    ],
+  };
+}
+
 /** The compiled files `clio compile` would write for `episode`. */
 export function syntheticDerived(
   episode: SyntheticEpisode,
@@ -496,6 +604,7 @@ export function syntheticDerived(
   const frames = framesOnGrid(episode.frames, t, SYNTHETIC_MAX_FRAME_GAP_MS);
   const tracks = tracksDoc(episode, t, frames, fps, staleMs);
   const environment = environmentDoc(episode, options.table ?? "planes");
+  const shapes = shapesDoc(episode, t, fps);
   const retargetStage = `retarget-${SYNTHETIC_PROFILE.id}`;
   const retarget =
     options.retargetFailed === undefined
@@ -505,6 +614,7 @@ export function syntheticDerived(
   const names = {
     tracks: "tracks.json",
     environment: "environment.json",
+    shapes: "shapes.json",
     retarget: `retarget-${SYNTHETIC_PROFILE.id}.json`,
   };
   const bytes = (doc: unknown) => JSON.stringify(doc).length;
@@ -574,6 +684,7 @@ export function syntheticDerived(
     stages: [
       { name: "tracks", status: "ok" },
       { name: "environment", status: "ok" },
+      { name: "shapes", status: "ok" },
       options.retargetFailed === undefined
         ? {
             name: retargetStage,
@@ -594,6 +705,7 @@ export function syntheticDerived(
         kind: "environment",
         bytes: bytes(environment),
       },
+      { name: names.shapes, kind: "shapes", bytes: bytes(shapes) },
       ...retarget.map((doc) => ({
         name: names.retarget,
         kind: "retarget" as const,
@@ -606,11 +718,13 @@ export function syntheticDerived(
     manifest,
     tracks,
     environment,
+    shapes,
     retarget,
     files: {
       "manifest.json": manifest,
       [names.tracks]: tracks,
       [names.environment]: environment,
+      [names.shapes]: shapes,
       ...(retarget[0] && { [names.retarget]: retarget[0] }),
     },
   };

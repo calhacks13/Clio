@@ -13,7 +13,8 @@ import type { Workspace } from '../world/workspace';
 
 // Records what object sources report (TrackedObjectSample) on the bus, for EpisodeRecorder to
 // write. The 2D part goes out as an `objects.observed` observation, unchanged (normalized image
-// coordinates). The 3D part, when asked for, goes out as an `objects.updated` state in the
+// coordinates), with the frame's depth samples (surface) in the workspace frame when there is a
+// workspace to put them in. The 3D part, when asked for, goes out as an `objects.updated` state in the
 // workspace frame with honest location flags: a position measured on its frame is tracked; a
 // predicted one (a coasting tracker), or one not measured on that frame (a reused depth, a surface
 // guess), is valid but never tracked; and a lost object keeps its last position with no flags, once
@@ -67,7 +68,7 @@ export class ObjectTrackRecorder {
     const t = this.deps.clock.now();
     if (sample.image || sample.status === 'lost' || sample.status === 'absent') {
       // The observation says when its answer arrived; a 3D state is written now.
-      const observation = observationOf(sample, sample.arrivedT ?? t);
+      const observation = observationOf(sample, sample.arrivedT ?? t, this.deps.workspace());
       this.deps.bus.emit('objects.observed', { t, observation });
     }
     if (this.deps.states !== 'record') return;
@@ -150,9 +151,20 @@ export class ObjectTrackRecorder {
   }
 }
 
-/** The observation a sample makes, with absolute times; the episode recorder rebases them. */
-function observationOf(sample: TrackedObjectSample, t: number): ObjectObservation {
+/**
+ * The observation a sample makes, with absolute times; the episode recorder rebases them. Its
+ * surface samples go into the workspace frame; without a workspace they are left out.
+ */
+function observationOf(
+  sample: TrackedObjectSample,
+  t: number,
+  workspace: Workspace | null,
+): ObjectObservation {
   const image = sample.image;
+  const surface =
+    workspace && sample.surface?.length
+      ? sample.surface.map((p) => workspace.toWorkspacePoint(p))
+      : null;
   return {
     t,
     observedT: sample.observedT,
@@ -167,6 +179,7 @@ function observationOf(sample: TrackedObjectSample, t: number): ObjectObservatio
     score: sample.score,
     frame: image?.frame ?? null,
     trackId: sample.trackId,
+    ...(surface ? { surface } : {}),
   };
 }
 

@@ -138,6 +138,7 @@
             "enum": [
               "tracks",
               "environment",
+              "shapes",
               "retarget"
             ]
           },

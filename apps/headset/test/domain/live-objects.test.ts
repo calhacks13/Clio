@@ -1,7 +1,7 @@
 import { parseProcedure } from '@clio/protocol';
 import { describe, expect, it, vi } from 'vitest';
 import { Emitter } from '../../src/core/emitter';
-import { type Pose, quatFromAxisAngle, sub } from '../../src/core/math';
+import { distance, madd, type Pose, quatFromAxisAngle, sub } from '../../src/core/math';
 import type { AppEvents } from '../../src/domain/events';
 import { type CameraModel, intersectPlaneY, type Ray } from '../../src/domain/world/camera-model';
 import type { DepthHit, DepthSource } from '../../src/domain/world/depth-source';
@@ -10,6 +10,8 @@ import {
   type LiveFrame,
   LiveObjects,
   liveStatus,
+  SURFACE_MAX_POINTS,
+  SURFACE_REACH_M,
 } from '../../src/domain/world/live-objects';
 import { DEFAULT_MOTION_OPTIONS } from '../../src/domain/world/motion-smoothing';
 import { ObjectRegistry } from '../../src/domain/world/object-registry';
@@ -29,19 +31,29 @@ const LOOKING_DOWN: Pose = { p: [0, 1.25, 0], q: quatFromAxisAngle([1, 0, 0], -2
 const LOOKING_UP: Pose = { p: [0, 1.25, 0], q: quatFromAxisAngle([1, 0, 0], 20 * DEG) };
 const TABLE_Y = 0.72;
 
-/** Depth along each ray: the table, facing up; `pending` holds the answers until released. */
+/**
+ * Depth along each ray: the table, facing up; `pause` holds the answers until released. After
+ * `behind()`, every other ray of a batch of more than two (the surface samples) hits 1 m farther
+ * along, as the floor or a wall behind a small object would.
+ */
 function tableDepth() {
   const asked: Ray[][] = [];
   let hold: Promise<void> | null = null;
   let release = () => {};
+  let behind = false;
   const source: DepthSource = {
     async measure(rays) {
       asked.push([...rays]);
       if (hold) await hold;
-      return rays.map((ray): DepthHit | null => {
+      return rays.map((ray, i): DepthHit | null => {
         const point = intersectPlaneY(ray, TABLE_Y);
         if (!point) return null;
-        return { point, normal: [0, 1, 0], distance: Math.hypot(...sub(point, ray.origin)) };
+        const along = Math.hypot(...sub(point, ray.origin));
+        if (behind && rays.length > 2 && i % 2 === 1) {
+          const far = madd(ray.origin, ray.direction, along + 1);
+          return { point: far, normal: [0, 1, 0], distance: along + 1 };
+        }
+        return { point, normal: [0, 1, 0], distance: along };
       });
     },
   };
@@ -53,7 +65,10 @@ function tableDepth() {
       };
     });
   };
-  return { source, asked, pause, release: () => release() };
+  const behindNow = () => {
+    behind = true;
+  };
+  return { source, asked, pause, release: () => release(), behind: behindNow };
 }
 
 const objects = parseProcedure({
@@ -201,15 +216,16 @@ describe('LiveObjects', () => {
     expect(samples).toHaveLength(2);
     expect(samples[1]).toMatchObject({ observedT: 950, positionMeasured: false });
     expect(samples[1]?.position).not.toBeNull();
-    // Less than 200 ms after the last one: the registry is not told again.
+    // Less than 200 ms after the last one: the registry is not told again, nor is depth.
+    const placements = () => table.asked.filter((rays) => rays.length <= 2).length;
     expect(observe).toHaveBeenCalledTimes(1);
-    expect(table.asked).toHaveLength(1);
+    expect(placements()).toBe(1);
 
     // Due again (5 Hz): told at once as not measured, then measured once depth answers.
     clock.now = 1250;
     live.handle(frame(3, 1150, [detection('cap')]));
     await flush();
-    expect(table.asked).toHaveLength(2);
+    expect(placements()).toBe(2);
     expect(observe.mock.calls.map(([, o]) => [o.t, o.measured])).toEqual([
       [900, true],
       [1150, false],
@@ -417,6 +433,110 @@ describe('LiveObjects', () => {
     live.reset();
     expect(lose.mock.calls).toEqual([['cap', 1500]]);
     expect(live.views(1500 + DEFAULT_MOTION_OPTIONS.holdMs + 1)).toHaveLength(0);
+  });
+
+  it('records depth samples inside the outline of a measured frame, within reach of its center', async () => {
+    const { live, samples, table } = setup();
+    live.handle(frame(1, 900, [detection('cap')]));
+    await flush();
+    // The two placement rays first, then one batch through the outline.
+    expect(table.asked).toHaveLength(2);
+    const rays = table.asked[1]?.length ?? 0;
+    expect(rays).toBeGreaterThan(1);
+    expect(rays).toBeLessThanOrEqual(SURFACE_MAX_POINTS);
+    const [sample] = samples;
+    const surface = sample?.surface ?? [];
+    expect(surface).toHaveLength(rays);
+    for (const p of surface) {
+      expect(p[1]).toBeCloseTo(TABLE_Y, 6);
+      expect(distance(p, sample?.position ?? [0, 0, 0])).toBeLessThanOrEqual(SURFACE_REACH_M);
+    }
+  });
+
+  it('drops surface hits farther than 0.3 m from the measured center: the background behind', async () => {
+    const { live, samples, table } = setup();
+    table.behind();
+    live.handle(frame(1, 900, [detection('cap')]));
+    await flush();
+    const rays = table.asked[1]?.length ?? 0;
+    expect(rays).toBeGreaterThan(1);
+    const surface = samples[0]?.surface ?? [];
+    expect(surface).toHaveLength(Math.ceil(rays / 2));
+    for (const p of surface) expect(p[1]).toBeCloseTo(TABLE_Y, 6);
+  });
+
+  it('samples the surface at most every 500 ms per object, and never from a coasting box', async () => {
+    const { live, samples, clock, table } = setup();
+    live.handle(frame(1, 900, [detection('cap')]));
+    await flush();
+    // Measured again in the background 250 ms later: too soon for more samples.
+    clock.now = 1250;
+    live.handle(frame(2, 1150, [detection('cap')]));
+    await flush();
+    clock.now = 1550;
+    live.handle(frame(3, 1450, [detection('cap')]));
+    await flush();
+    clock.now = 2100;
+    live.handle(frame(4, 2000, [detection('cap', { state: 'coasting' })]));
+    await flush();
+    expect(samples.map((s) => [s.observedT, s.positionMeasured, 'surface' in s])).toEqual([
+      [900, true, true],
+      [1150, true, false],
+      [1450, true, true],
+      [2000, false, false],
+    ]);
+    expect(table.asked.filter((rays) => rays.length > 2)).toHaveLength(2);
+  });
+
+  it('takes no surface samples for an object in hand, or without a depth source', async () => {
+    const held = setup();
+    held.registry.observe('cap', { position: [0, 0, 0], confidence: 1, source: 'pinch', t: 0 });
+    held.registry.attach('cap', 'right', { p: [0, 1, 0], q: [0, 0, 0, 1] }, 10);
+    held.live.handle(frame(1, 900, [detection('cap')]));
+    await flush();
+    expect(held.samples[0]).toMatchObject({ status: 'measured', positionMeasured: true });
+    expect(held.samples[0]).not.toHaveProperty('surface');
+    expect(held.table.asked.map((rays) => rays.length)).toEqual([2]);
+
+    const blind = setup({ depth: false });
+    blind.live.handle(frame(1, 900, [detection('cap')]));
+    await flush();
+    expect(blind.samples[0]).toMatchObject({ status: 'measured', positionMeasured: false });
+    expect(blind.samples[0]).not.toHaveProperty('surface');
+  });
+
+  it('records a frame measured again in the background once measured, or where it was drawn if dropped', async () => {
+    const { live, samples, clock, table } = setup();
+    live.handle(frame(1, 900, [detection('cap')]));
+    await flush();
+    clock.now = 1250;
+    live.handle(frame(2, 1150, [detection('cap')]));
+    // Drawn at once at the remembered distance; recorded once its own distance is measured.
+    expect(samples).toHaveLength(1);
+    expect(live.views(1250)).toHaveLength(1);
+    await flush();
+    expect(samples[1]).toMatchObject({ observedT: 1150, arrivedT: 1250, positionMeasured: true });
+    // One replaced while waiting is recorded at the distance it was drawn at.
+    table.pause();
+    clock.now = 1450;
+    live.handle(frame(3, 1350, [detection('cap')]));
+    clock.now = 1560;
+    live.handle(frame(4, 1460, [detection('cap')]));
+    clock.now = 1700;
+    live.handle(frame(5, 1600, [detection('cap')]));
+    expect(samples.map((s) => [s.observedT, s.arrivedT, s.positionMeasured])).toEqual([
+      [900, 1000, true],
+      [1150, 1250, true],
+      [1460, 1560, false],
+    ]);
+    expect(samples[2]?.position).not.toBeNull();
+    table.release();
+    await flush();
+    await flush();
+    expect(samples.slice(3).map((s) => [s.observedT, s.arrivedT, s.positionMeasured])).toEqual([
+      [1350, 1450, true],
+      [1600, 1700, true],
+    ]);
   });
 
   it('records a detection it cannot place (no head pose yet) without 3D', async () => {

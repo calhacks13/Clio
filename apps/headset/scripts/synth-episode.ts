@@ -758,6 +758,29 @@ interface Answer {
   sample: TrackedObjectSample;
 }
 
+/**
+ * Depth samples on a prop (W): rays through its outline meet its cylinder on the side facing the
+ * collector, 16 points at four heights and four bearings within 60 degrees of the head, with about
+ * 2 mm of repeatable error.
+ */
+function propSurface(prop: Prop, center: Vec3, t: number, k: number, seed: number): Vec3[] {
+  const headW = trackedHead(t).p;
+  const facing = Math.atan2(headW[0] - center[0], headW[2] - center[2]);
+  const points: Vec3[] = [];
+  [-1.05, -0.35, 0.35, 1.05].forEach((turn, i) => {
+    [-0.375, -0.125, 0.125, 0.375].forEach((level, j) => {
+      const n = i * 4 + j;
+      const a = facing + turn;
+      points.push([
+        center[0] + prop.radius * Math.sin(a) + 0.002 * Math.sin(k * 0.37 + n * 1.3 + seed),
+        center[1] + prop.height * level + 0.002 * Math.sin(k * 0.53 + n * 0.7 + 2 * seed),
+        center[2] + prop.radius * Math.cos(a) + 0.002 * Math.sin(k * 0.41 + n * 1.1 + 3 * seed),
+      ]);
+    });
+  });
+  return points;
+}
+
 /** What the tracker answers for one camera frame: the mug, the bottle and the tape. */
 function trackerAnswers(k: number, workspace: Workspace): Answer[] {
   const observedT = 20 + k * TRACK_PERIOD_MS;
@@ -766,6 +789,11 @@ function trackerAnswers(k: number, workspace: Workspace): Answer[] {
   const frame = { seq: k, width: CAMERA.intrinsics.width, height: CAMERA.intrinsics.height };
   const yoloe = { observedT, role: 'tracker', source: 'yoloe-26l-seg', orientation: null } as const;
   const world = (p: Vec3, seed: number) => workspace.toWorldPoint(add(p, wobble(k, seed)));
+  // The headset samples a resting object's surface about twice a second: every 10th frame here,
+  // never while the mug is in hand or an object only coasts.
+  const sampled = k % 10 === 0;
+  const surfaceOf = (prop: Prop, center: Vec3, seed: number) =>
+    propSurface(prop, center, observedT, k, seed).map((p) => world(p, seed));
 
   const mugCoasting = within(observedT, MUG_COAST);
   const mugCenter = mugAt(mugCoasting ? MUG_COAST.from : observedT);
@@ -780,6 +808,9 @@ function trackerAnswers(k: number, workspace: Workspace): Answer[] {
     image: propImage(head, workspace, MUG, mugCenter, frame),
     // Coasting, the predicted box is lifted like a measured one.
     position: world(mugCenter, 1),
+    ...(sampled && !mugCoasting && !within(observedT, MUG_GRASP)
+      ? { surface: surfaceOf(MUG, mugCenter, 1) }
+      : {}),
   };
 
   const lost = within(observedT, BOTTLE_LOST);
@@ -804,6 +835,7 @@ function trackerAnswers(k: number, workspace: Workspace): Answer[] {
       : propImage(head, workspace, BOTTLE, BOTTLE_AT, frame),
     // Coasting behind the hand, there is a predicted box but nothing to lift it with.
     position: lost || coasting ? null : world(BOTTLE_AT, 2),
+    ...(sampled && !lost && !coasting ? { surface: surfaceOf(BOTTLE, BOTTLE_AT, 2) } : {}),
   };
 
   const tape: TrackedObjectSample = {
@@ -820,6 +852,7 @@ function trackerAnswers(k: number, workspace: Workspace): Answer[] {
       p: TAPE_AT,
       q: quatMultiply(TAPE_YAW, quatFromAxisAngle([0, 1, 0], 0.01 * Math.sin(k / 2))),
     }).q,
+    ...(sampled ? { surface: surfaceOf(TAPE, TAPE_AT, 3) } : {}),
   };
   return [mug, bottle, tape].map((sample) => ({ at, sample }));
 }
@@ -1011,6 +1044,7 @@ async function trackedObjects(): Promise<void> {
         EPISODE_FEATURE.objectFlags,
         EPISODE_FEATURE.objectGrasp,
         EPISODE_FEATURE.objectObservations,
+        EPISODE_FEATURE.objectSurface,
         EPISODE_FEATURE.environmentPlanes,
       ],
       camera: {

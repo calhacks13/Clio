@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   composePose,
   dot,
+  madd,
   type Pose,
   quatFromAxisAngle,
   rotateVec,
@@ -10,7 +11,12 @@ import {
 } from '../../src/core/math';
 import { type CameraModel, intersectPlaneY } from '../../src/domain/world/camera-model';
 import { billboard, outlinePoint } from '../../src/domain/world/outline';
-import { placeDetection, surfaceOrTable } from '../../src/domain/world/placement';
+import {
+  type ObjectMask,
+  placeDetection,
+  surfaceOrTable,
+  surfaceRays,
+} from '../../src/domain/world/placement';
 
 // A level camera at the head, 1.2 m above the floor: 1280 x 960, f = 800 px. The default table
 // plane is 45 cm below the head (y = 0.75). A ray through image row y meets it where
@@ -141,5 +147,65 @@ describe('placeDetection', () => {
       surfaceOrTable(null, head),
     );
     expect(sky).toBeNull();
+  });
+});
+
+describe('surfaceRays', () => {
+  const triangle: [number, number][] = [
+    [0.4, 0.8],
+    [0.6, 0.8],
+    [0.5, 0.5],
+  ];
+  const mask = (over: Partial<ObjectMask>): ObjectMask => ({
+    point: null,
+    box: [0.4, 0.5, 0.6, 0.8],
+    outline: triangle,
+    ...over,
+  });
+  /** The image point a ray passes through. */
+  const imagePoint = (ray: { origin: Vec3; direction: Vec3 }) =>
+    project(madd(ray.origin, ray.direction, 1), head);
+  /** Strictly inside the triangle: on the inner side of each edge. */
+  function insideTriangle([x, y]: readonly [number, number]): boolean {
+    const side = (a: [number, number], b: [number, number]) =>
+      (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]);
+    const [a, b, c] = triangle as [[number, number], [number, number], [number, number]];
+    const sides = [side(a, b), side(b, c), side(c, a)];
+    return sides.every((s) => s > 1e-9) || sides.every((s) => s < -1e-9);
+  }
+
+  it('casts at most 24 rays from the camera, each through a point inside the outline', () => {
+    const rays = surfaceRays(mask({}), model, head);
+    // A grid over the outline's bounds keeps only the cells inside the triangle.
+    expect(rays.length).toBeGreaterThanOrEqual(8);
+    expect(rays.length).toBeLessThanOrEqual(24);
+    for (const ray of rays) {
+      near(ray.origin, head.p);
+      expect(insideTriangle(imagePoint(ray))).toBe(true);
+    }
+    // Not all through one point: spread across the outline.
+    const us = rays.map((ray) => imagePoint(ray)[0]);
+    expect(Math.max(...us) - Math.min(...us)).toBeGreaterThan(0.1);
+  });
+
+  it('fills the box when there is no outline, up to the limit', () => {
+    const rays = surfaceRays(mask({ outline: null }), model, head);
+    expect(rays).toHaveLength(24);
+    for (const ray of rays) {
+      const [u, v] = imagePoint(ray);
+      expect(u).toBeGreaterThan(0.4);
+      expect(u).toBeLessThan(0.6);
+      expect(v).toBeGreaterThan(0.5);
+      expect(v).toBeLessThan(0.8);
+    }
+    expect(surfaceRays(mask({ outline: null }), model, head, 4)).toHaveLength(4);
+    // An outline too short to be a polygon counts as none.
+    expect(surfaceRays(mask({ outline: [[0.5, 0.6]] }), model, head)).toHaveLength(24);
+  });
+
+  it('casts none without an outline or a box', () => {
+    expect(surfaceRays(mask({ outline: null, box: null, point: [0.5, 0.6] }), model, head)).toEqual(
+      [],
+    );
   });
 });

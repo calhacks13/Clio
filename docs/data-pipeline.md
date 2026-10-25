@@ -80,6 +80,7 @@ primary-object page (`primary.html`) records detected planes and `meta.camera` t
 | Feature               | What it adds                                                                                                                                          |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `object.observations` | Batches carry `observations`, stored as `observations.ndjson`: one `ObjectObservation` per line, what an object finder saw in one camera frame (2D)   |
+| `object.surface`      | Observations carry `surface`: depth samples measured inside the outline on that frame, in W, so a shape can be fused after the episode                |
 | `environment.planes`  | `environment.planes` events: a full snapshot of every detected plane (kind, raw label, pose in W, polygon), at the start and whenever a plane changes |
 | (none)                | `meta.camera`: the passthrough camera model (intrinsics, `headFromCamera`, where it came from) that observations were lifted with                     |
 
@@ -106,16 +107,35 @@ a silently filled gap. Where the recorded frames around a grid time are more tha
 (`policy.maxFrameGapMs`: a lost batch, or the XR loop paused while the headset was off), the head
 and wrists are `null` and the robot arms get no target.
 
-| File                      | Contents                                                                                                                                                                                                                                                 |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `manifest.json`           | Compiler version, the raw inputs with byte counts and SHA-256, each stage's status, the artifacts written and the quality verdict                                                                                                                        |
-| `tracks.json`             | The head, both wrists (pose and pinch) and every object on one grid (default 30 fps): position, orientation, tracked, interpolated, held by, confidence, source, held spans, the plan's kind and `partOf`, and a summary of the object's 2D observations |
-| `environment.json`        | The table (from calibration, the plan, or placed on a detected table plane), the floor of the WebXR space with the table height when it is known, and every detected plane                                                                               |
-| `retarget-<profile>.json` | Per robot arm: joint values, gripper, tool target and achieved pose, residuals, reachability, and joint positions for drawing                                                                                                                            |
+| File                      | Contents                                                                                                                                                                                                                                                                                |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `manifest.json`           | Compiler version, the raw inputs with byte counts and SHA-256, each stage's status, the artifacts written and the quality verdict                                                                                                                                                       |
+| `tracks.json`             | The head, both wrists (pose and pinch) and every object on one grid (default 30 fps): position, orientation, tracked, interpolated, held by, confidence, source, held spans, the plan's kind and `partOf`, an estimated `extent` (below), and a summary of the object's 2D observations |
+| `environment.json`        | The table (from calibration, the plan, or placed on a detected table plane), the floor of the WebXR space with the table height when it is known, and every detected plane                                                                                                              |
+| `shapes.json`             | Each object's depth samples fused into a point set and a yaw-aligned box, as offsets from its tracked position (below); skipped when no observation carries `surface`                                                                                                                   |
+| `retarget-<profile>.json` | Per robot arm: joint values, gripper, tool target and achieved pose, residuals, reachability, and joint positions for drawing                                                                                                                                                           |
 
 The quality verdict marks an episode **usable** only when it finished as `completed`, every batch
 arrived, no frames are missing for more than a second, the hands were tracked for most of it, and
 every line passed validation. `reasons` says why not otherwise.
+
+### Measured 3D for objects
+
+A camera-tracked object is recorded as one point per frame (where its inner ray met the depth
+map) and a 2D outline; nothing says how big it is or what shape it has. Two compiled values add
+that without inventing anything, and the visualizer labels them as what they are:
+- **`extent`** (in `tracks.json`, estimated): each measured observation's box, at the object's
+  compiled depth from the camera, through `meta.camera`'s intrinsics, gives a width and a height in
+  meters; the medians over at least three observations are kept, with the sample count. Null without
+  a camera model, boxes or depth. The depth across the camera is unknown, so the viewer draws a
+  box of width by width by height.
+- **`shapes.json`** (measured): the `surface` samples of every measured observation, each frame's
+  taken relative to the object's compiled position at that frame so the shape rides with the
+  object, skipping frames where the object is held or has no valid position. Offsets are fused on
+  a 1 cm voxel grid (a voxel needs two samples once there are more than 50), capped at 2000
+  points, and summed up as a yaw-aligned box: the principal horizontal axis from the points, the
+  2nd to 98th percentile along each axis, standing on the table. The points show the side the
+  camera saw; the box is the honest envelope of that.
 
 ## Where the object tracker plugs in
 
@@ -154,10 +174,11 @@ Four seams carry its answers into the data:
    (the inspector says what the camera last saw) and types a valid but untracked camera estimate as
    predicted. Compiled files arrive through `/api/clio/episodes/<id>/derived/<name>`. The viewer
    draws the compiled planes, table and floor, the retargeted arms (inferred look) and the compile
-   state. `tracks.json` is not drawn yet: the scene still shows objects from the raw estimates,
-   which carry the same flags.
+   state. Once an episode is compiled, its objects play back from `tracks.json` (position, held,
+   tracked), with the estimated `extent` as a box and the fused `shapes.json` as points and a yaw
+   box riding on the position; live and uncompiled episodes show the raw estimates.
 
-Pipeline 0.4.0 added the observations summary, 0.5.0 each object's `partOf`. A version change makes every compile stale, so the
+Pipeline 0.4.0 added the observations summary, 0.5.0 each object's `partOf`, 0.6.0 the estimated `extent` and `shapes.json`. A version change makes every compile stale, so the
 server's startup sweep recompiles the library once, one episode at a time.
 
 ## Robot retargeting

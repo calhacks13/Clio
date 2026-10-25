@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "clio.derived/1"
+    },
+    "episodeId": {
+      "type": "string"
+    },
+    "frame": {
+      "type": "string",
+      "const": "workspace"
+    },
+    "fps": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "t": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "description": "Grid times, ms since episode start, one per frame"
+    },
+    "kind": {
+      "type": "string",
+      "const": "shapes"
+    },
+    "policy": {
+      "type": "object",
+      "properties": {
+        "voxelM": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Offsets are fused on this grid"
+        },
+        "minHits": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "description": "A voxel needs this many samples once there are more than 50 voxels"
+        },
+        "reachM": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "The headset kept samples within this of the measured center"
+        }
+      },
+      "required": [
+        "voxelM",
+        "minHits",
+        "reachM"
+      ],
+      "additionalProperties": false
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "items": false,
+              "minItems": 3,
+              "maxItems": 3,
+              "description": "[x, y, z] in meters"
+            },
+            "description": "Fused samples as offsets from the object's tracked position, W axes, m; voxel means, at most policy.maxPoints"
+          },
+          "box": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "center": {
+                    "type": "array",
+                    "prefixItems": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ],
+                    "items": false,
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "description": "Offset from the tracked position, W axes"
+                  },
+                  "rotation": {
+                    "type": "array",
+                    "prefixItems": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ],
+                    "items": false,
+                    "minItems": 4,
+                    "maxItems": 4,
+                    "description": "A yaw about +y (up); the box stands on the table"
+                  },
+                  "size": {
+                    "type": "array",
+                    "prefixItems": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ],
+                    "items": false,
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "description": "Along the box's own x, y (up) and z, m"
+                  }
+                },
+                "required": [
+                  "center",
+                  "rotation",
+                  "size"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null with too few points"
+          },
+          "samples": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Raw depth samples before fusing"
+          },
+          "frames": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Observations that contributed"
+          },
+          "firstT": {
+            "description": "Capture time of the first contributing frame",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "lastT": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "box",
+          "samples",
+          "frames",
+          "firstT",
+          "lastT"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "episodeId",
+    "frame",
+    "fps",
+    "t",
+    "kind",
+    "policy",
+    "objects"
+  ],
+  "additionalProperties": false,
+  "$id": "https://clio.dev/schema/derived-shapes.schema.json",
+  "title": "Clio compiled shapes.json"
+}

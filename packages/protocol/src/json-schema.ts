@@ -4,6 +4,7 @@ import {
   CompileManifestSchema,
   EnvironmentDocSchema,
   RetargetDocSchema,
+  ShapesDocSchema,
   TracksDocSchema,
 } from './derived';
 import {
@@ -81,6 +82,12 @@ export function buildJsonSchemas(): Record<string, object> {
       'derived-environment.schema.json',
       'Clio compiled environment.json',
       EnvironmentDocSchema,
+      'output',
+    ),
+    exportSchema(
+      'derived-shapes.schema.json',
+      'Clio compiled shapes.json',
+      ShapesDocSchema,
       'output',
     ),
     exportSchema(

@@ -17,12 +17,14 @@ import pytest
 from clio_pipeline import compile as compile_module
 from clio_pipeline.compile import compile_episode
 from clio_pipeline.schema import validate_derived
+from conftest import SYRINGE_SURFACE_OFFSETS
 
 SCHEMA_DIR = Path(__file__).resolve().parents[2] / "packages" / "protocol" / "schema"
 SCHEMA_OF = {
     "manifest.json": "derived-manifest.schema.json",
     "tracks": "derived-tracks.schema.json",
     "environment": "derived-environment.schema.json",
+    "shapes": "derived-shapes.schema.json",
     "retarget": "derived-retarget.schema.json",
 }
 
@@ -96,7 +98,7 @@ def test_the_manifest_records_inputs_artifacts_and_the_compiler(featured_episode
         "ep-20261024-031502-feat",
         15,
     )
-    assert manifest["compiler"] == {"name": "clio_pipeline", "version": "0.5.0"}
+    assert manifest["compiler"] == {"name": "clio_pipeline", "version": "0.6.0"}
     assert manifest["compiledAt"].endswith("Z") and len(manifest["compiledAt"]) == 24
     assert [i["name"] for i in manifest["inputs"]] == [
         "meta.json",
@@ -162,6 +164,73 @@ def test_objects_carry_masks_sources_and_held_spans(featured_episode_dir, tmp_pa
     held = [t for t, hand in zip(tracks["t"], syringe["heldBy"], strict=True) if hand == "right"]
     assert held[0] == 1600.0 and held[-1] < 2000.0
     assert all(c is None or 0 <= c <= 1 for c in syringe["confidence"])
+
+
+# --- measured 3D: extents and shapes -------------------------------------------------------------
+
+
+def test_every_object_reports_an_extent(featured_episode_dir, measured_episode_dir, tmp_path):
+    without_camera = compile_episode(featured_episode_dir, tmp_path / "derived")
+    with_camera = compile_episode(measured_episode_dir, tmp_path / "derived")
+
+    unmeasured = _read(without_camera.out_dir / "tracks.json")["objects"]
+    assert unmeasured and all(o["extent"] is None for o in unmeasured)
+    measured = {o["id"]: o["extent"] for o in _read(with_camera.out_dir / "tracks.json")["objects"]}
+    # The syringe's 0.1 x 0.15 box on a 480 x 360 frame with f = 400, 0.55 m ahead of the camera,
+    # in three measured frames; the dots were never seen by a finder.
+    assert measured["syringe"] == {"width": 0.066, "height": 0.074, "samples": 3}
+    assert measured["shoulder"] is None
+    assert validate_derived(with_camera.out_dir) == []
+
+
+def test_depth_samples_compile_into_shapes(measured_episode_dir, tmp_path):
+    result = compile_episode(measured_episode_dir, tmp_path / "derived")
+
+    assert _stages(result)["shapes"] == {"name": "shapes", "status": "ok"}
+    kinds = {a["name"]: a["kind"] for a in result.manifest["artifacts"]}
+    assert kinds["shapes.json"] == "shapes"
+    shapes = _read(result.out_dir / "shapes.json")
+    assert _schema_errors(shapes, SCHEMA_OF["shapes"]) == []
+    assert shapes["kind"] == "shapes" and shapes["t"] == _read(result.out_dir / "tracks.json")["t"]
+    assert shapes["policy"] == {"voxelM": 0.01, "minHits": 2, "reachM": 0.3}
+    (syringe,) = shapes["objects"]
+    assert (syringe["id"], syringe["frames"], syringe["samples"]) == ("syringe", 3, 72)
+    assert (syringe["firstT"], syringe["lastT"]) == (400.0, 800.0)
+    np.testing.assert_allclose(
+        sorted(map(tuple, syringe["points"])),
+        sorted(map(tuple, SYRINGE_SURFACE_OFFSETS)),
+        atol=1e-3,
+    )
+    assert syringe["box"]["size"][0] > syringe["box"]["size"][2] > 0
+    assert validate_derived(result.out_dir) == []
+
+
+def test_shapes_stage_is_skipped_without_samples(featured_episode_dir, tmp_path):
+    result = compile_episode(featured_episode_dir, tmp_path / "derived")
+
+    assert _stages(result)["shapes"] == {
+        "name": "shapes",
+        "status": "skipped",
+        "detail": "no depth samples",
+    }
+    assert not (result.out_dir / "shapes.json").exists()
+    assert not any(a["kind"] == "shapes" for a in result.manifest["artifacts"])
+
+
+def test_shapes_are_skipped_when_the_tracks_stage_failed(
+    measured_episode_dir, tmp_path, monkeypatch
+):
+    def broken(*args, **kwargs):
+        raise RuntimeError("no grid")
+
+    monkeypatch.setattr(compile_module, "object_series", broken)
+
+    result = compile_episode(measured_episode_dir, tmp_path / "derived")
+
+    stages = _stages(result)
+    assert stages["tracks"]["status"] == "failed"
+    assert stages["shapes"] == {"name": "shapes", "status": "skipped", "detail": "no tracks"}
+    assert not (result.out_dir / "shapes.json").exists()
 
 
 def test_an_up_to_date_compile_is_kept(featured_episode_dir, tmp_path):
@@ -267,6 +336,7 @@ def test_a_profile_that_cannot_be_loaded_fails_only_its_stage(episode_dir, tmp_p
     assert [s["name"] for s in failed] == ["retarget"]
     assert [s["status"] for s in result.manifest["stages"] if s["name"] != "retarget"] == [
         "ok",
+        "skipped",  # shapes: no depth samples
         "ok",
         "ok",
     ]
@@ -619,5 +689,11 @@ def test_a_malformed_observation_does_not_stop_the_compile(featured_episode_dir,
 
     result = compile_episode(featured_episode_dir, tmp_path / "derived")
 
-    assert [s["status"] for s in result.manifest["stages"]] == ["ok", "ok", "skipped", "ok"]
+    assert [s["status"] for s in result.manifest["stages"]] == [
+        "ok",
+        "skipped",
+        "ok",
+        "skipped",
+        "ok",
+    ]
     assert result.manifest["quality"]["validationIssues"] == 3

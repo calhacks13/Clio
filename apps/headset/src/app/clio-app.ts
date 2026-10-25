@@ -504,7 +504,7 @@ export class ClioApp {
       ...(this.o.camera ? { camera: passthroughCameraRecord(this.o.camera) } : {}),
       features: [
         ...(this.planeDetection ? [EPISODE_FEATURE.environmentPlanes] : []),
-        ...(this.live ? [EPISODE_FEATURE.objectObservations] : []),
+        ...(this.live ? [EPISODE_FEATURE.objectObservations, EPISODE_FEATURE.objectSurface] : []),
       ],
     };
   }

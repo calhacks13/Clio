@@ -1,16 +1,24 @@
 "use client";
 
 import React from "react";
-import { inspectObject } from "@/lib/clio/lanes";
+import {
+  formatCount,
+  formatExtent,
+  formatShape,
+} from "@/lib/clio/compiled-objects";
+import { inspectObject, type InspectorRow } from "@/lib/clio/lanes";
 import { drawnObjects, identityColor, themed } from "@/lib/clio/object-display";
 import type { Basis } from "@/lib/clio/types";
+import type { ShapesDoc, TracksDoc } from "@clio/protocol";
 import type { Capture } from "@clio-viewer/capture/model";
 import { useTheme } from "@/utils/theme";
 
 // One object at the viewed time: its newest update's source and estimate type,
 // how long ago it was (derived), measured confidence only when there is one,
 // held state and the newest detector answer. Inferred values are muted with a
-// dashed underline, as inferred marks are dashed in the lanes.
+// dashed underline, as inferred marks are dashed in the lanes. A compiled
+// episode adds the object's estimated size and measured shape, each only when
+// the compile has it.
 
 const VALUE_CLASS: Record<Basis, string> = {
   measured: "text-fg-soft",
@@ -26,7 +34,44 @@ export interface ObjectInspectorProps {
   tUs: number;
   /** The episode records location flags, so a lost position can show. */
   flagsRecorded: boolean;
+  /** The compiled object series, for the estimated size. */
+  tracks?: TracksDoc | null;
+  /** The compiled shapes, for the measured shape. */
+  shapes?: ShapesDoc | null;
   className?: string;
+}
+
+/**
+ * What the compile measured of the object: its extent (the median of the
+ * finder's boxes at the tracked depth: arithmetic on measured values, so
+ * derived) and its fused depth samples (measured). Nothing for an object the
+ * compile has no size or shape for.
+ */
+function compiledRows(
+  entityId: string,
+  tracks: TracksDoc | null,
+  shapes: ShapesDoc | null,
+): InspectorRow[] {
+  const rows: InspectorRow[] = [];
+  const extent = tracks?.objects.find((o) => o.id === entityId)?.extent;
+  if (extent) {
+    rows.push({
+      label: "Size (estimated)",
+      value: formatExtent(extent),
+      basis: "derived",
+      title: `Width and height across the camera, the median of ${formatCount(extent.samples)} measured boxes at the tracked depth`,
+    });
+  }
+  const shape = shapes?.objects.find((o) => o.id === entityId);
+  if (shape && shape.frames > 0) {
+    rows.push({
+      label: "Shape (measured)",
+      value: formatShape(shape),
+      basis: "measured",
+      title: `${formatCount(shape.samples)} depth samples, fused relative to the tracked position`,
+    });
+  }
+  return rows;
 }
 
 export default function ObjectInspector({
@@ -34,6 +79,8 @@ export default function ObjectInspector({
   entityId,
   tUs,
   flagsRecorded,
+  tracks = null,
+  shapes = null,
   className = "",
 }: ObjectInspectorProps) {
   const theme = useTheme();
@@ -51,6 +98,10 @@ export default function ObjectInspector({
     );
   }
   const index = drawnObjects(capture).findIndex((e) => e.id === entityId);
+  const rows = [
+    ...inspection.rows,
+    ...compiledRows(inspection.entityId, tracks, shapes),
+  ];
   return (
     <section
       className={`flex min-w-0 flex-col gap-3 ${className}`}
@@ -69,7 +120,7 @@ export default function ObjectInspector({
         </span>
       </h3>
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-[13px]">
-        {inspection.rows.map((row) =>
+        {rows.map((row) =>
           row.label === null ? (
             <dd
               key={row.value}

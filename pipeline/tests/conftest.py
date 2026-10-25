@@ -291,6 +291,37 @@ def plane(
     }
 
 
+IDENTITY_POSE = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+
+
+def camera_model(
+    *,
+    width: int = 1280,
+    height: int = 960,
+    fx: float = 800.0,
+    fy: float | None = None,
+    cx: float | None = None,
+    cy: float | None = None,
+    head_from_camera=IDENTITY_POSE,
+    source: str = "default",
+) -> dict:
+    """A CameraModel for meta.camera: a pinhole whose principal point is the image center unless
+    given, mounted at `head_from_camera` (the camera pose in the head frame; at the head, looking
+    the way the head looks, by default)."""
+    return {
+        "intrinsics": {
+            "width": width,
+            "height": height,
+            "fx": fx,
+            "fy": fx if fy is None else fy,
+            "cx": width / 2 if cx is None else cx,
+            "cy": height / 2 if cy is None else cy,
+        },
+        "headFromCamera": list(head_from_camera),
+        "source": source,
+    }
+
+
 class EpisodeBuilder:
     """Accumulates an episode in memory and writes it in the server's on-disk layout."""
 
@@ -382,28 +413,38 @@ class EpisodeBuilder:
         box=(0.4, 0.3, 0.5, 0.45),
         score: float | None = 0.8,
         seq: int | None = None,
+        frame_size: tuple[int, int] = (480, 360),
+        surface=None,
     ) -> EpisodeBuilder:
-        """One ObjectObservation line (observations.ndjson)."""
+        """One ObjectObservation line (observations.ndjson). `seq` adds the camera `frame`
+        (`frame_size` pixels); `surface` adds depth samples ([x, y, z] in W, "object.surface")."""
         if self.observation_lines is None:
             self.observation_lines = []
         box = list(box) if box is not None else None
-        self.observation_lines.append(
-            {
-                "t": t,
-                "observedT": t if observed_t is None else observed_t,
-                "objectId": object_id,
-                "status": status,
-                "role": role,
-                "source": source,
-                "box": box,
-                "outline": None,
-                "point": [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2] if box else None,
-                "contact": [(box[0] + box[2]) / 2, box[3]] if box else None,
-                "score": score,
-                "frame": {"seq": seq, "width": 480, "height": 360} if seq is not None else None,
-                "trackId": "7" if role == "tracker" else None,
-            }
-        )
+        width, height = frame_size
+        line = {
+            "t": t,
+            "observedT": t if observed_t is None else observed_t,
+            "objectId": object_id,
+            "status": status,
+            "role": role,
+            "source": source,
+            "box": box,
+            "outline": None,
+            "point": [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2] if box else None,
+            "contact": [(box[0] + box[2]) / 2, box[3]] if box else None,
+            "score": score,
+            "frame": {"seq": seq, "width": width, "height": height} if seq is not None else None,
+            "trackId": "7" if role == "tracker" else None,
+        }
+        if surface is not None:
+            line["surface"] = [list(point) for point in surface]
+        self.observation_lines.append(line)
+        return self
+
+    def camera(self, **model) -> EpisodeBuilder:
+        """Record the passthrough camera model in meta.camera (see `camera_model`)."""
+        self.meta["camera"] = camera_model(**model)
         return self
 
     def planes(self, t: float, *planes: dict) -> EpisodeBuilder:
@@ -601,6 +642,37 @@ def build_featured(root: Path, episode_id: str = "ep-20261024-031502-feat") -> E
     return b
 
 
+# --- an episode from a headset with a depth source ------------------------------------------------
+#
+# The featured episode, plus what the measured 3D path records ("object.surface"): meta.camera (a
+# 480 x 360 pinhole at the head, matching the observations' frame size) and depth samples on the
+# syringe's measured observations. The syringe is seen three more times while it rests at
+# SYRINGE_AT (t = 400 .. 1600): at 400, 600 and 800, each frame sampling the same 24 surface
+# points (SYRINGE_SURFACE_OFFSETS, each at the center of its own 1 cm voxel) 1.5 cm above it.
+
+SYRINGE_AT = [0.31, 0.02, -0.2]
+SYRINGE_SURFACE_OFFSETS = [
+    [round(0.005 + 0.02 * i, 4), 0.015, round(0.005 + 0.01 * j, 4)]
+    for i in range(-3, 3)
+    for j in range(-2, 2)
+]
+
+
+def build_measured(root: Path, episode_id: str = "ep-20261024-031502-meas") -> EpisodeBuilder:
+    b = build_featured(root, episode_id)
+    b.features(*b.meta["features"], "object.surface")
+    b.camera(width=480, height=360, fx=400.0)
+    surface = [
+        [round(p + o, 4) for p, o in zip(SYRINGE_AT, offset, strict=True)]
+        for offset in SYRINGE_SURFACE_OFFSETS
+    ]
+    b.observation_lines = [line for line in b.observation_lines if line["t"] != 400.0]
+    for t, seq in ((400.0, 12), (600.0, 18), (800.0, 24)):
+        b.observation(t, "syringe", seq=seq, score=0.9, surface=surface)
+    b.observation_lines.sort(key=lambda line: line["t"])
+    return b
+
+
 # --- an episode with a hole in its frames ---------------------------------------------------------
 #
 # Both hands and the head at 60 Hz from 0 to 1000 ms and again from 3000 to 4000 ms, with nothing
@@ -639,6 +711,12 @@ def build_frame_gap(root: Path, episode_id: str = "ep-20261024-031502-gap") -> E
 def featured_episode_dir(tmp_path) -> Path:
     """The default episode recorded with every optional feature (see `build_featured`)."""
     return build_featured(tmp_path).write()
+
+
+@pytest.fixture
+def measured_episode_dir(tmp_path) -> Path:
+    """The featured episode with a camera model and depth samples (see `build_measured`)."""
+    return build_measured(tmp_path).write()
 
 
 @pytest.fixture
