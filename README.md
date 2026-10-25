@@ -18,6 +18,8 @@ pnpm dev                 # server :8787 + headset app :5173
 ```
 
 - Desktop, no headset: http://localhost:5173/?emulate=1&debug=1
+- A whole lesson on the laptop's camera and mic: http://localhost:5173/desk.html, with
+  `pnpm tracker` ([desk lab](docs/dev-setup.md#desk-lab))
 - Quest 3: `pnpm quest:reverse`, then open http://localhost:5173 in Quest Browser
   ([setup](docs/dev-setup.md), including the camera-permission workaround)
 

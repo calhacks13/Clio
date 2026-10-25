@@ -11,8 +11,10 @@ export const STEP_STATUS_CHANGES = ['current', 'skipped', 'todo'] as const;
 export const COACH_TOOLS = {
   start_lesson: {
     description:
-      'Start a hands-on lesson for what the user wants to do. Call it as soon as you know the ' +
-      'goal; ask one short clarifying question first only if the goal is ambiguous. Pass ' +
+      'Start a hands-on lesson for what the user wants to do. Call it as soon as you can infer the ' +
+      'goal from what they say or show, without interviewing them; ask one short question first ' +
+      'only when there is no plausible goal. When they want something other than the running ' +
+      'lesson, call it with the new goal: it replaces that lesson at once. Pass ' +
       'template_id when one of the curated lessons in your instructions fits. It answers at once; ' +
       'the step plan arrives as an [app] message.',
     args: z.object({
@@ -26,6 +28,17 @@ export const COACH_TOOLS = {
         .string()
         .optional()
         .describe('A curated lesson id from your instructions, e.g. "ph-indicator"'),
+    }),
+  },
+  end_lesson: {
+    description:
+      'End the lesson now without starting another: when the learner wants to stop, or says the ' +
+      'lesson is not what they want without saying what they do want. It also cancels a lesson ' +
+      'still being planned. Its steps and highlights go at once. Then ask in a few words what ' +
+      'they would like to do. When they name something else, call start_lesson instead: it ' +
+      'replaces the lesson.',
+    args: z.object({
+      reason: z.string().min(1).max(200).describe('Why, in a few words, e.g. "not what they want"'),
     }),
   },
   revise_plan: {
@@ -101,26 +114,45 @@ export const COACH_TOOLS = {
         .max(200)
         .optional()
         .describe(
-          'What it looks like and exactly where, so a camera finds this one and nothing else, ' +
+          'This one particular thing, so a camera finds it and nothing else: its color, ' +
+            'material, shape, size and markings, and where it is relative to its neighbors, ' +
             'e.g. "small white plastic funnel on the fender, left of the blue cap"',
         ),
     }),
   },
   highlight: {
     description:
-      'Visually emphasize one object for the user. Call it right before you mention an object. ' +
-      'Each step already glows its objects by meaning: cyan for what to act on, yellow for where ' +
-      'it goes, green for a fill or stop level. Your highlight adds to that for a moment: ' +
-      '"attention" is a soft white hint on the object, "warning" is a brief red pulse for an ' +
-      'object they should not touch, "target" flares its own color.',
+      'Light one object for the user. Every time you ask them to touch, move or operate ' +
+      'something, call it on that thing in the same turn, before you say it; also right before ' +
+      'you mention an object. Each step already glows its objects by meaning: cyan for what to ' +
+      'act on, yellow for where it goes, green for a fill or stop level. "target" lights the next ' +
+      'thing to touch until the step changes or you target another, "attention" is a soft white ' +
+      'hint for a few seconds, "warning" is a brief red pulse for an object they should not ' +
+      'touch. When object_id names nothing in the plan and look_for is given, that thing is ' +
+      'added to the lesson as a material and lit, and the result gives its material_id.',
     args: z.object({
-      object_id: z.string().min(1).describe('An object id from the procedure, e.g. "cup_a"'),
+      object_id: z
+        .string()
+        .min(1)
+        .describe(
+          'An object id from the plan, e.g. "cup_a"; for something the plan lacks, a short new ' +
+            'id such as "red_button", with look_for',
+        ),
       style: z
         .enum(['target', 'attention', 'warning'])
         .default('target')
         .describe(
-          'target: next thing to touch (its own color). attention: white hint to draw the eye. ' +
+          'target: next thing to touch, lit for the step. attention: white hint to draw the eye. ' +
             'warning: red pulse, wrong object.',
+        ),
+      look_for: z
+        .string()
+        .max(200)
+        .optional()
+        .describe(
+          'Only for something the plan lacks: this one particular thing, so a camera finds it ' +
+            'and nothing else: its color, material, shape, size and markings, and where it is ' +
+            'relative to its neighbors, e.g. "small red button left of the steering wheel"',
         ),
     }),
   },

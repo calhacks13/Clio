@@ -3,7 +3,7 @@ import { type GenerateContentApi, thinkingConfig } from './gemini';
 import { generateJson } from './gemini-planner';
 import { isRecord, parseModelJson } from './model-json';
 import type { JsonSchema } from './plan-schema';
-import { fromGeminiDetection, type VisionLocator } from './vision';
+import { fromGeminiDetection, uniqueById, type VisionLocator } from './vision';
 
 // Object grounding with Gemini: one image plus a list of { id, query, phrase? }, answered through
 // structured output in Gemini's native spatial convention (0..1000, y first), then converted.
@@ -15,11 +15,6 @@ import { fromGeminiDetection, type VisionLocator } from './vision';
 export const LOCATE_TIMEOUT_MS = 10_000;
 
 type LocateObject = LocateRequest['objects'][number];
-
-function uniqueById(objects: readonly LocateObject[]): LocateObject[] {
-  const seen = new Set<string>();
-  return objects.filter((o) => !seen.has(o.id) && seen.add(o.id));
-}
 
 export function locatePrompt(objects: readonly LocateObject[]): string {
   return [

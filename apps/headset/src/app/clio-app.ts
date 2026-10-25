@@ -2,12 +2,14 @@ import { EPISODE_FEATURE, type HealthResponse, type Procedure } from '@clio/prot
 import { MicCapture } from '../adapters/audio/mic-capture';
 import type { SpeakerOutput } from '../adapters/audio/voice-output';
 import { passthroughCameraRecord } from '../adapters/camera/camera-meta';
+import { CameraFocusFrames } from '../adapters/camera/focus-frames';
 import type { PassthroughCamera } from '../adapters/camera/passthrough-camera';
 import { GeminiLiveAgent } from '../adapters/gemini/gemini-live-agent';
 import type { ApiClient } from '../adapters/net/api-client';
 import { HttpEpisodeSink } from '../adapters/net/http-episode-sink';
 import {
   RemoteClipSource,
+  RemoteFocusFinder,
   RemoteLocator,
   RemotePlanner,
   RemoteSceneAsker,
@@ -32,7 +34,7 @@ import { XrPlaneReader } from '../adapters/xr/environment';
 import { FrameSampler, poseFromMatrix } from '../adapters/xr/frame-sampler';
 import { XrPlaneSurfaces } from '../adapters/xr/planes';
 import { startArSession, type XrRuntime } from '../adapters/xr/xr-session';
-import { performanceClock } from '../core/clock';
+import { type Clock, performanceClock } from '../core/clock';
 import { Emitter } from '../core/emitter';
 import { createLogger } from '../core/log';
 import type { Pose } from '../core/math';
@@ -40,11 +42,12 @@ import type { RealtimeAgent } from '../domain/coach/agent';
 import { CoachSession } from '../domain/coach/session';
 import { CoachToolbox } from '../domain/coach/toolbox';
 import { DemoLibrary } from '../domain/demo/demo-library';
-import type { AppEvents } from '../domain/events';
+import type { AppBus, AppEvents } from '../domain/events';
 import { PinchDetector, type PinchTransition } from '../domain/hands/pinch-detector';
 import { HANDS, type TrackedFrame } from '../domain/hands/types';
 import { OverlayModel } from '../domain/overlay/overlay-model';
 import { EpisodeRecorder } from '../domain/recording/recorder';
+import { ActionFocus } from '../domain/session/action-focus';
 import { CloserLook } from '../domain/session/closer-look';
 import { LessonController } from '../domain/session/lesson-controller';
 import { CalibrationFlow } from '../domain/world/calibration';
@@ -61,7 +64,9 @@ import { LiveTracker } from './live-tracker';
 // The composition root: the only place that knows every adapter. It wires the domain to the
 // headset, then runs the per-frame pipeline from docs/ARCHITECTURE.md §5.2:
 // sample → localize → perceive → decide → record → present. With a camera, what each step shows
-// is followed live by the tracker when it answers (live-tracker.ts, ?live=0 turns it off).
+// is followed live by the tracker when it answers (live-tracker.ts, ?live=0 turns it off), and
+// with a Gemini key Robotics-ER 2's action focus boxes the step's objects for it every few seconds
+// and names the next thing to touch (?focus=0 turns it off).
 
 const log = createLogger('app');
 const PINCH_NEAREST_M = 0.15;
@@ -109,6 +114,9 @@ export class ClioApp {
   private readonly environment: EnvironmentRecorder;
   /** Null without a camera, or with ?live=0. */
   private readonly live: LiveTracker | null;
+  /** Null without the live tracker or a Gemini key, or with ?focus=0. */
+  private readonly focus: ActionFocus | null;
+  private readonly detachFocus: (() => void) | null;
   private readonly anchor = new WorkspaceAnchor();
   private readonly workspacePresenters: Presenter[];
   private readonly worldPresenters: Presenter[];
@@ -198,6 +206,17 @@ export class ClioApp {
     });
     this.overlay = new OverlayModel(bus, this.lesson.view());
     this.overlay.attach();
+    this.focus = createActionFocus({
+      bus,
+      clock,
+      api: o.api,
+      camera: o.camera,
+      live: this.live,
+      lesson: this.lesson,
+      wanted: o.config.focus,
+      gemini: o.health?.coach.configured ?? false,
+    });
+    this.detachFocus = this.focus?.attach() ?? null;
 
     const lit = (id: string) => this.live?.lit(id) ?? false;
     this.workspacePresenters = [
@@ -249,7 +268,8 @@ export class ClioApp {
   async shutdown(reason: string): Promise<void> {
     // The camera stream and the tracker's jev calls end with the session. Each answer sends the
     // next frame, so waiting for the lesson to settle (an upload retries while the server is
-    // down) would keep them going without a frame of XR.
+    // down) would keep them going without a frame of XR. No more looks for ER either.
+    this.detachFocus?.();
     this.live?.stop();
     await this.lesson.stop(reason);
     await this.coach?.stop();
@@ -295,6 +315,7 @@ export class ClioApp {
     });
     this.overlay.setProgress(this.lesson.runnerState?.progress ?? 0);
     this.coach?.tick(t);
+    this.focus?.tick(t)?.catch((err: unknown) => log.warn(`action focus failed: ${String(err)}`));
     if (!this.kickedOff && !this.calibration && this.tableDeadline === null) {
       this.kickedOff = true;
       void this.kickoff();
@@ -512,6 +533,42 @@ export class ClioApp {
       ],
     };
   }
+}
+
+export interface ActionFocusWiring {
+  bus: AppBus;
+  clock: Clock;
+  api: ApiClient;
+  camera: Pick<PassthroughCamera, 'capture'> | null;
+  live: LiveTracker | null;
+  lesson: Pick<LessonController, 'declareObject' | 'view'>;
+  /** Not turned off (?focus=0). */
+  wanted: boolean;
+  /** The server has a Gemini key (without one it answers 503). */
+  gemini: boolean;
+}
+
+/**
+ * Robotics-ER 2's action focus, when it can run: a camera for its frames, the live tracker for
+ * what it is asked about and where its boxes go, and a Gemini key on the server. Null otherwise.
+ */
+export function createActionFocus(w: ActionFocusWiring): ActionFocus | null {
+  const { camera, live, clock } = w;
+  if (!w.wanted || !camera || !live) return null;
+  if (!w.gemini) {
+    log.info('no Gemini key on the server: no action focus');
+    return null;
+  }
+  return new ActionFocus({
+    bus: w.bus,
+    clock,
+    finder: new RemoteFocusFinder(w.api),
+    frames: new CameraFocusFrames(camera, () => clock.now()),
+    anchors: live,
+    tracking: live.tracking,
+    view: w.lesson.view(),
+    lesson: w.lesson,
+  });
 }
 
 /** Horizontal planes with their semantic labels (Quest's room setup), for the table snap. */

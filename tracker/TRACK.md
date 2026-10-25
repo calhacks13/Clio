@@ -8,6 +8,7 @@ which matches it against the object it is already following.
 
 A lesson uses [objects mode](#objects-mode) instead: it names its objects in words (the focused
 step's first), and the tracker asks jev about them itself and follows all of them on every frame.
+Gemini Robotics-ER 2's boxes for them, sent as anchors ([below](#objects-mode)), outrank jev's.
 
 Endpoint: WebSocket `ws://127.0.0.1:8790/track`. The headset reaches it through Vite's proxy at
 `ws://localhost:5173/track` (USB `adb reverse tcp:5173`). A connection whose `Origin` (or `Host`)
@@ -48,8 +49,8 @@ JPEG bytes.
 **Backpressure:** the page sends the next frame only after the result for the previous one arrives
 (or 500 ms pass), so the stream runs exactly as fast as the Mac answers. If frames arrive faster
 than that, a frame waiting to be tracked is replaced by the newer one and gets no answer: only
-the newest frame is ever tracked. Targets, objects and `clear` apply in order before the next
-frame.
+the newest frame is ever tracked. Targets, objects, anchors and `clear` apply in order before
+the next frame.
 
 A message that doesn't follow this (bad header, not JSON, unknown type) is logged and skipped
 without an answer; the connection stays open.
@@ -167,7 +168,9 @@ rest of the plan, for the recording). In objects mode the tracker asks
 jev itself, as `POST /locate` with a session does ([README.md](README.md#how-it-works)): jev
 places the objects about once a second (`CLIO_TRACKER_IDENTIFY_INTERVAL_MS`), all that are due
 in one background call and sooner for an object that is new, lost or in doubt, never more
-than one call at a time. A failed call is not retried: jev is next asked after the interval,
+than one call at a time. An object jev has just said is out of view waits for the interval, not
+the next frame, until its words change: one that really is out of sight (in a closed fridge)
+would otherwise keep jev busy several times a second. A failed call is not retried: jev is next asked after the interval,
 then twice as long after each further failure, up to 16 s, and the first answer brings back the
 usual pace. YOLOE-26 and ByteTrack follow every object on every frame, with one YOLOE pass for
 all of them. Each connection in objects mode has a tracking session of its own.
@@ -195,7 +198,9 @@ boundary](../docs/coach-plan.md#the-perception-boundary)).
 
 - `id`: the lesson's object id. `phrase`: a short noun phrase for its kind (2 to 5 words), jev's
   subject; without one, jev is given the `query` alone. `query`: the words that tell this one
-  apart (where it is, what is next to it), given to jev as context.
+  apart (where it is, what is next to it). jev is asked whether the one the query describes is
+  in view ("Is the clear plastic cup described below visible…"), not whether any of its kind is,
+  and is given the query to box it among look-alikes.
 - Send the whole set whenever it changes. An object left out is dropped at once, along with any
   jev answer about it still on the way. A new `phrase` for an id starts its track over, as
   another object; a new `query` only changes what jev is told next, and the track goes on. So
@@ -209,6 +214,42 @@ boundary](../docs/coach-plan.md#the-perception-boundary)).
 ```json
 { "type": "objects", "objects": [] }
 ```
+
+**Anchor** (text, JSON): where Gemini Robotics-ER 2 boxed one object of the set, on a frame the
+page captured.
+
+```json
+{
+  "type": "anchor",
+  "id": "cup_a",
+  "t": 123456.7,
+  "box": [0.31, 0.42, 0.58, 0.77],
+  "source": "er",
+  "query": "clear plastic cup on the left, half full of pink liquid"
+}
+```
+
+- `id`: an object of the current set. `box`: `[left, top, right, bottom]`, normalized 0..1, on
+  the frame captured at `t` (the page's `performance.now()` clock, like a frame's `t`). That frame
+  need not be one the page streamed. `source`: who boxed it; `"er"` is the only one for now, and
+  the default. `query` (optional): what jev is told about the object from now on, as a new
+  `query` in `objects` would be. The phrase stays, so the track goes on.
+- The tracker places the object from the box as it places it from a jev answer, on the next
+  frame. The box is on the streamed frame whose `t` is nearest, if within 120 ms: it is matched to
+  the track there, or carried to now by the camera's motion when no track was there. Otherwise it
+  is carried from the nearest streamed frame to the next one by the camera's motion since. With
+  no frame streamed before, or the next frame the nearest, it is applied to the next frame as if
+  measured on it. The tracker keeps the last 300 streamed frames (20 s at 15 frames a second) for
+  this. An object jev hasn't placed yet (`unknown`) is placed on the next frame.
+- With a segmenter, the box is cut out of the frame it was placed on, as jev's boxes are.
+- **An anchor outranks jev.** It is never stale: it applies even when jev has answered about a
+  newer frame. For 6 s after it, a jev answer about the object that disagrees is ignored: one
+  that says the object is not in view, and one whose box is elsewhere. jev's box agrees when it
+  is on the object's track on jev's frame (IoU 0.3, or one box inside the other), or, when the
+  track was not there yet, on where the object is now. A jev answer that agrees applies as usual.
+  After 6 s jev's answers apply as before.
+- An anchor for an id outside the set, an anchor in target mode, and a malformed one are logged
+  and skipped; the connection stays open.
 
 **Detections** (one per frame, text, JSON):
 
@@ -229,7 +270,8 @@ boundary](../docs/coach-plan.md#the-perception-boundary)).
       "point": [0.45, 0.6],
       "contact": [0.44, 0.76],
       "score": 0.91,
-      "track": 3
+      "track": 3,
+      "source": "er"
     }
   ]
 }
@@ -242,8 +284,11 @@ boundary](../docs/coach-plan.md#the-perception-boundary)).
 - `state`: `tracking`; `coasting` (not seen on this frame, drawn where it is predicted to be);
   `lost` (not in view, also when jev says so); `unknown` (jev hasn't placed it yet).
 - `found: false` with null `box`, `outline`, `point`, `contact`, `score` and `track`.
-- `ms`: `decode` is the JPEG, `track` the YOLOE pass, every object's tracking step and jev's
-  answers applied. With an empty set there is only `total`:
+- `source`: the finder that last placed the object: `"jev"`, `"er"` (an anchor), or
+  null before any. It stays while the object is lost. Pages that ignore it keep working.
+- `ms`: `decode` is the JPEG, `track` the YOLOE pass, every object's tracking step, and jev's
+  answers and anchors applied (an anchor on an earlier frame costs a YOLOE pass on that frame).
+  With an empty set there is only `total`:
 
 ```json
 { "type": "detections", "seq": 42, "t": 123523.4, "model": "yoloe-26l-seg", "ms": { "total": 0.1 }, "detections": [] }

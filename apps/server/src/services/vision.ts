@@ -77,19 +77,33 @@ export function notFound(id: string): Detection {
   return { id, found: false, point: null, box: null, outline: null, confidence: 0 };
 }
 
-/** One Gemini entry `{ id, found, point, box_2d, confidence }` → Detection (null without an id). */
-export function fromGeminiDetection(raw: unknown): Detection | null {
-  if (!isRecord(raw) || typeof raw.id !== 'string') return null;
+type Location = Pick<Detection, 'found' | 'point' | 'box' | 'confidence'>;
+
+/**
+ * Where a Gemini entry `{ found, point, box_2d, confidence }` says something is. Found needs a
+ * point, or a box to take the center of; anything else reads as not found.
+ */
+export function fromGeminiLocation(raw: Record<string, unknown>): Location {
   const point = fromGeminiPoint(raw.point) ?? geminiBoxCenter(raw.box_2d);
-  if (raw.found !== true || !point) return notFound(raw.id);
+  if (raw.found !== true || !point) return { found: false, point: null, box: null, confidence: 0 };
   return {
-    id: raw.id,
     found: true,
     point,
     box: fromGeminiBox(raw.box_2d),
-    outline: null,
     confidence: isFiniteNumber(raw.confidence) ? clamp01(raw.confidence) : 0.5,
   };
+}
+
+/** One Gemini entry `{ id, found, point, box_2d, confidence }` → Detection (null without an id). */
+export function fromGeminiDetection(raw: unknown): Detection | null {
+  if (!isRecord(raw) || typeof raw.id !== 'string') return null;
+  return { id: raw.id, ...fromGeminiLocation(raw), outline: null };
+}
+
+/** The first of each id, in order: a request that names an object twice asks about it once. */
+export function uniqueById<T extends { id: string }>(items: readonly T[]): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => !seen.has(item.id) && seen.add(item.id));
 }
 
 /**

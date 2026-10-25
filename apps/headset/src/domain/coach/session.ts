@@ -57,6 +57,7 @@ const REMEMBERED_CALLS = 50;
 /** Tools that change the plan: cancelling one doesn't undo it. */
 const PLAN_TOOLS: ReadonlySet<string> = new Set<CoachToolName>([
   'start_lesson',
+  'end_lesson',
   'revise_plan',
   'add_step',
   'update_step',
@@ -64,10 +65,20 @@ const PLAN_TOOLS: ReadonlySet<string> = new Set<CoachToolName>([
   'add_material',
 ]);
 
+/** Tools that change the plan only when their result says so: a highlight that added a material. */
+const SOMETIMES_PLAN_TOOLS: ReadonlySet<string> = new Set<CoachToolName>(['highlight']);
+
+/** Whether a call changed the plan, from its name and, for some tools, its result. */
+const changedPlan = (name: string, result: unknown): boolean =>
+  PLAN_TOOLS.has(name) ||
+  (SOMETIMES_PLAN_TOOLS.has(name) && (result as { added?: unknown } | null)?.added === true);
+
 interface CallRecord {
   name: string;
   /** Unset while the call runs. */
   ok?: boolean;
+  /** Set with `ok`: the call changed the plan. */
+  changed?: boolean;
   /** Cancelled while it ran: report it once it has succeeded. */
   cancelled?: boolean;
   /** A non-blocking call whose connection closed while it ran. */
@@ -281,9 +292,12 @@ export class CoachSession {
     this.deps.agent.respond([result]);
     if (!call) return;
     call.ok = ok;
+    call.changed = changedPlan(call.name, result.result);
     if (!call.cancelled) return;
     this.calls.delete(id);
-    if (ok) this.applied([call.name]);
+    // A plan tool's cancellation was recorded when it came; a highlight's only now, if it added.
+    if (!PLAN_TOOLS.has(call.name) && call.changed) this.cancelledLabel(id, call.name);
+    if (ok && call.changed) this.applied([call.name]);
   }
 
   /** A non-blocking answer for a call the model no longer has: told as a narration. */
@@ -298,7 +312,6 @@ export class CoachSession {
 
   /** The model dropped calls it had made (the learner barged in), but plan changes stick. */
   private onCancelled(ids: readonly string[]): void {
-    const { bus, clock } = this.deps;
     const names: string[] = [];
     for (const callId of ids) {
       const call = this.calls.get(callId);
@@ -307,20 +320,29 @@ export class CoachSession {
         call.cancelled = true;
         continue;
       }
-      if (!call || !PLAN_TOOLS.has(call.name)) continue;
-      bus.emit('annotation', {
-        t: clock.now(),
-        label: 'coach.tool_cancelled',
-        data: { callId, name: call.name },
-      });
+      if (!call || !(PLAN_TOOLS.has(call.name) || SOMETIMES_PLAN_TOOLS.has(call.name))) continue;
+      // Still running: whether it changed the plan is known when it answers.
       if (call.ok === undefined) {
+        if (PLAN_TOOLS.has(call.name)) this.cancelledLabel(callId, call.name);
         call.cancelled = true;
         continue;
       }
       this.calls.delete(callId);
+      // A plan tool counts even when it failed (recorded, not reported); a highlight if it added.
+      if (!call.changed) continue;
+      this.cancelledLabel(callId, call.name);
       if (call.ok) names.push(call.name);
     }
     this.applied(names);
+  }
+
+  private cancelledLabel(callId: string, name: string): void {
+    const { bus, clock } = this.deps;
+    bus.emit('annotation', {
+      t: clock.now(),
+      label: 'coach.tool_cancelled',
+      data: { callId, name },
+    });
   }
 
   private applied(names: readonly string[]): void {

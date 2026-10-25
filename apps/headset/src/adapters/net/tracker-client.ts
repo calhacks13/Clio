@@ -13,8 +13,11 @@ import { createLogger } from '../../core/log';
 //   objects  (the lesson) a set of objects in words; the tracker asks jev about them itself,
 //            together, about once a second, YOLOE-26 and ByteTrack follow each one on every frame,
 //            and each frame is answered with one detection per object, in the set's order.
-// A connection is in target mode until it sends an `objects` message. The socket goes through the
-// page's own origin (Vite proxies /track to the tracker), and reconnects with backoff while open.
+// A connection is in target mode until it sends an `objects` message. In objects mode an `anchor`
+// hands the tracker another finder's box for one object (Robotics-ER 2's, from the lesson's action
+// focus), which places it at once and outranks jev's answers about it for a while; each detection
+// says which finder placed its object last. The socket goes through the page's own origin (Vite
+// proxies /track to the tracker), and reconnects with backoff while open.
 
 const log = createLogger('tracker');
 
@@ -54,6 +57,11 @@ const UnitOutline = z
   .array(UnitPoint)
   .transform((points) => (points.length >= 3 ? points : null))
   .nullable();
+/**
+ * Which finder placed an object last: null before any did, from a tracker that omits it, and for
+ * a finder this page doesn't know (one odd field must not drop the frame).
+ */
+const SourceSchema = z.enum(['jev', 'er']).nullable().catch(null);
 
 /** One object of the set in one frame (objects mode). */
 const DetectionSchema = z.object({
@@ -68,6 +76,8 @@ const DetectionSchema = z.object({
   contact: UnitPoint.nullable().default(null),
   score: z.number().nullable().default(null),
   track: z.number().int().nullable().default(null),
+  /** The finder that last placed the object: jev, or Robotics-ER 2 through an anchor. */
+  source: SourceSchema,
 });
 
 const DetectionsSchema = z.object({
@@ -88,6 +98,7 @@ const TrackerMessageSchema = z.discriminatedUnion('type', [
 ]);
 
 export type TrackerMask = z.output<typeof MaskSchema>;
+export type TrackerSource = NonNullable<z.output<typeof SourceSchema>>;
 export type TrackerDetection = z.output<typeof DetectionSchema>;
 export type TrackerDetections = z.output<typeof DetectionsSchema>;
 export type TrackerMessage = z.output<typeof TrackerMessageSchema>;
@@ -127,6 +138,23 @@ export interface TrackedQuery {
  * tracking and every jev call.
  */
 export type ObjectsMessage = { type: 'objects'; objects: readonly TrackedQuery[] };
+
+/**
+ * Another finder's box for one object of the set (objects mode): the tracker places the object
+ * from it, and for a while ignores jev answers that disagree with it.
+ */
+export type AnchorMessage = {
+  type: 'anchor';
+  /** An object of the current set; the tracker skips any other. */
+  id: string;
+  /** Capture time of the frame the box was measured on (performance.now() clock, like a frame's). */
+  t: number;
+  box: readonly [number, number, number, number];
+  /** Who boxed it. */
+  source: 'er';
+  /** What jev is told about the object from now on; its phrase stays, so its track goes on. */
+  query?: string;
+};
 
 /** A message from the tracker, or null for anything this page doesn't understand. */
 export function parseTrackerMessage(data: unknown): TrackerMessage | null {
@@ -263,8 +291,8 @@ export class TrackerClient {
     });
   }
 
-  /** Send a target, a clear or an object set; false when not connected. */
-  send(message: TargetMessage | ClearMessage | ObjectsMessage): boolean {
+  /** Send a target, a clear, an object set or an anchor; false when not connected. */
+  send(message: TargetMessage | ClearMessage | ObjectsMessage | AnchorMessage): boolean {
     if (!this.connected || !this.ws) return false;
     this.ws.send(JSON.stringify(message));
     return true;

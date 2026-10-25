@@ -1,8 +1,9 @@
 import { COACH_TOOL_NAMES } from '@clio/protocol';
-import { Behavior, FunctionResponseScheduling } from '@google/genai';
+import { Behavior, FunctionResponseScheduling, ThinkingLevel } from '@google/genai';
 import { describe, expect, it, vi } from 'vitest';
 import { toGeminiTools } from '../../src/adapters/gemini/declarations';
 import { GeminiLiveAgent } from '../../src/adapters/gemini/gemini-live-agent';
+import { liveModelTraits } from '../../src/adapters/gemini/live-model';
 import { interpretServerMessage, TranscriptAggregator } from '../../src/adapters/gemini/messages';
 
 // A fake Live API: every connect() opens a recording session the test can close from the server
@@ -88,13 +89,39 @@ describe('Gemini tool declarations', () => {
       );
     }
   });
+
+  it('leaves behavior out for a model that refuses it', () => {
+    const all = toGeminiTools(COACH_TOOL_NAMES, { behavior: false })[0]?.functionDeclarations;
+    expect(all?.map((d) => d.name)).toEqual(COACH_TOOL_NAMES);
+    for (const d of all ?? []) expect(d, d.name).not.toHaveProperty('behavior');
+  });
+});
+
+describe('liveModelTraits', () => {
+  it('names a thinking level and drops behavior and scheduling for a thinking voice', () => {
+    expect(liveModelTraits('gemini-3.8-live-extended-thinking')).toEqual({
+      toolBehavior: false,
+      responseScheduling: false,
+      thinkingLevel: ThinkingLevel.LOW,
+    });
+  });
+
+  it('keeps everything for the plain voice', () => {
+    for (const model of ['gemini-3.8-live', 'gemini-3.1-flash-live-preview']) {
+      expect(liveModelTraits(model), model).toEqual({
+        toolBehavior: true,
+        responseScheduling: true,
+        thinkingLevel: null,
+      });
+    }
+  });
 });
 
 describe('GeminiLiveAgent', () => {
-  async function connected() {
+  async function connected(model = 'gemini-live-test') {
     live.connections.length = 0;
     const agent = new GeminiLiveAgent({
-      model: 'gemini-live-test',
+      model,
       transport: 'relay',
       origin: 'http://laptop.test',
       connectTimeoutMs: 1000,
@@ -163,6 +190,28 @@ describe('GeminiLiveAgent', () => {
             response: { output: { answer: 'Cup C.' } },
             scheduling: FunctionResponseScheduling.WHEN_IDLE,
           },
+        ],
+      },
+    ]);
+    await agent.close();
+  });
+
+  it('asks a thinking voice for its thinking level, with no behavior or scheduling', async () => {
+    const { agent } = await connected('gemini-3.8-live-extended-thinking');
+    const config = connection(0).config as {
+      thinkingConfig?: unknown;
+      tools?: { functionDeclarations?: object[] }[];
+    };
+    expect(config.thinkingConfig).toEqual({ thinkingLevel: ThinkingLevel.LOW });
+    for (const d of config.tools?.[0]?.functionDeclarations ?? []) {
+      expect(d).not.toHaveProperty('behavior');
+    }
+    connection(0).send(calls(['c1', 'look_closer']));
+    agent.respond([{ id: 'c1', name: 'look_closer', ok: true, result: { answer: 'Cup C.' } }]);
+    expect(connection(0).session.toolResponses).toEqual([
+      {
+        functionResponses: [
+          { id: 'c1', name: 'look_closer', response: { output: { answer: 'Cup C.' } } },
         ],
       },
     ]);

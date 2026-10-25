@@ -19,9 +19,11 @@ import type {
 } from '../../domain/coach/agent';
 import { base64ToInt16, int16ToBase64 } from '../audio/pcm';
 import { toGeminiTools } from './declarations';
+import { type LiveModelTraits, liveModelTraits } from './live-model';
 import { interpretServerMessage, TranscriptAggregator } from './messages';
 
-// RealtimeAgent over the Gemini Live API (@google/genai 2.31, model gemini-3.8-live).
+// RealtimeAgent over the Gemini Live API (@google/genai 2.31, model gemini-3.8-live-extended-thinking
+// by default). What each Live model accepts (thinking, tool behavior, scheduling) is in live-model.ts.
 //
 // Transports: "relay" (default) points the SDK at the laptop server, which proxies the WebSocket
 // and injects the API key, so the headset holds no key and needs no internet of its own. "direct"
@@ -40,7 +42,7 @@ import { interpretServerMessage, TranscriptAggregator } from './messages';
 // matches an answer with an id it never issued to a call still pending, and speaks it twice. A
 // non-blocking call's answer (look_closer) is scheduled WHEN_IDLE, so the voice says it once
 // neither it nor the learner is talking; INTERRUPT would cut its own filler off mid-word, and
-// SILENT would never say it.
+// SILENT would never say it. A thinking voice takes no scheduling: it waits for every answer.
 
 const log = createLogger('gemini');
 
@@ -74,7 +76,11 @@ export class GeminiLiveAgent implements RealtimeAgent {
   /** While 'ready' is announced, narrations join the queue so they go out in one turn. */
   private replaying = false;
 
-  constructor(private readonly options: GeminiLiveOptions) {}
+  private readonly traits: LiveModelTraits;
+
+  constructor(private readonly options: GeminiLiveOptions) {
+    this.traits = liveModelTraits(options.model);
+  }
 
   get model(): string {
     return this.options.model;
@@ -115,7 +121,9 @@ export class GeminiLiveAgent implements RealtimeAgent {
         id: r.id,
         name: r.name,
         response: r.ok ? { output: r.result } : { error: r.result },
-        ...(isNonBlockingTool(r.name) ? { scheduling: FunctionResponseScheduling.WHEN_IDLE } : {}),
+        ...(this.traits.responseScheduling && isNonBlockingTool(r.name)
+          ? { scheduling: FunctionResponseScheduling.WHEN_IDLE }
+          : {}),
       })),
     });
   }
@@ -170,7 +178,10 @@ export class GeminiLiveAgent implements RealtimeAgent {
     return {
       responseModalities: [Modality.AUDIO],
       systemInstruction: setup.systemInstruction,
-      tools: toGeminiTools(setup.tools),
+      tools: toGeminiTools(setup.tools, { behavior: this.traits.toolBehavior }),
+      ...(this.traits.thinkingLevel
+        ? { thinkingConfig: { thinkingLevel: this.traits.thinkingLevel } }
+        : {}),
       inputAudioTranscription: {},
       outputAudioTranscription: {},
       contextWindowCompression: {

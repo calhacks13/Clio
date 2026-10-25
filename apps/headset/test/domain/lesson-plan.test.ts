@@ -19,6 +19,7 @@ import type { AppEvents } from '../../src/domain/events';
 import { OverlayModel } from '../../src/domain/overlay/overlay-model';
 import { EpisodeRecorder } from '../../src/domain/recording/recorder';
 import { MemoryEpisodeSink } from '../../src/domain/recording/sink';
+import { ActionFocus } from '../../src/domain/session/action-focus';
 import {
   type EpisodeContext,
   LessonController,
@@ -26,6 +27,7 @@ import {
   type LessonPlanner,
   type PlanImageSource,
 } from '../../src/domain/session/lesson-controller';
+import { isShown, LiveTracking } from '../../src/domain/session/live-tracking';
 import type { StepChecker } from '../../src/domain/session/step-watcher';
 import type { TemplateSource } from '../../src/domain/session/templates';
 import type { Grounder, GroundingResult } from '../../src/domain/world/grounding';
@@ -213,6 +215,25 @@ describe('the coach edits the plan', () => {
     ).toBe('put-the-funnel-in');
   });
 
+  it('declares an object the action focus named, as the app, once, and only in a lesson', async () => {
+    const { lesson, registry, updates, begin } = setup();
+    const button = { label: 'red reset button', look: 'Small round red button, left of the cap' };
+    expect(lesson.declareObject(button)).toBeNull();
+    await begin();
+    expect(lesson.declareObject({ label: 'Blue cap.', look: 'a cap' })).toBe('cap');
+    expect(lesson.declareObject(button)).toBe('red-reset-button');
+    expect(lesson.declareObject({ ...button, label: 'Red reset button' })).toBe('red-reset-button');
+    expect(registry.spec('red-reset-button')).toMatchObject({
+      label: 'red reset button',
+      placement: { method: 'detect' },
+      tracking: { query: 'Small round red button, left of the cap', moves: true },
+    });
+    expect(updates().map((u) => [u.op, u.by])).toEqual([
+      ['start', 'planner'],
+      ['material', 'app'],
+    ]);
+  });
+
   it('completes any step, briefing the next one only when the focus moves', async () => {
     const { lesson, tool, result, begin } = setup();
     await begin();
@@ -319,8 +340,11 @@ describe('where the first draft comes from', () => {
     const slow: number[] = [];
     bus.on('plan.slow', ({ elapsedMs }) => slow.push(elapsedMs));
     await tool('start_lesson', { goal: 'add wiper fluid' });
-    expect(result(await tool('start_lesson', { goal: 'again' }))).toMatchObject({
-      error: expect.stringMatching(/Already planning/),
+    // The same call again (a replay after a reconnect) is the lesson already on its way.
+    expect(result(await tool('start_lesson', { goal: 'Add wiper fluid.' }))).toEqual({
+      status: 'planning',
+      goal: 'Add wiper fluid.',
+      already: true,
     });
     lesson.tick(clock.advance(11_999));
     expect(slow).toEqual([]);
@@ -646,7 +670,7 @@ describe('two-stage plans', () => {
     const spec = registry.get('jug')?.spec;
     expect(spec && glowModeFor(spec)).toBe('object');
     // Only the card's objects are filled in: the coach's rag keeps its words.
-    expect(registry.spec('rag')?.tracking?.query).toBe('grey cloth');
+    expect(registry.spec('rag')?.tracking?.query).toBe('rag, grey cloth');
   });
 
   it('drops the rest when the coach changed the steps meanwhile, and says why', async () => {
@@ -1516,5 +1540,280 @@ describe('starting quickly', () => {
     expect(overlay.snapshot(clock.advance(4000)).missing).toEqual([]);
     expect(lab.unseen()).toEqual([]);
     expect(lab.locates()).toEqual([]);
+  });
+});
+
+describe('the learner wants something else', () => {
+  const tea = parseProcedure({
+    ...plan,
+    id: 'tea',
+    title: 'Make tea',
+    origin: { ...plan.origin, goal: 'make tea' },
+  });
+
+  /** A planner that answers each request when the test says so. */
+  function heldPlanner() {
+    const asked: { goal: string; answer: (procedure: Procedure) => void }[] = [];
+    const planner: LessonPlanner = {
+      plan: (req) =>
+        new Promise<PlanResponse>((resolve) =>
+          asked.push({
+            goal: req.goal,
+            answer: (procedure) => resolve({ planId: procedure.id, procedure, warnings: [] }),
+          }),
+        ),
+    };
+    return { asked, planner };
+  }
+
+  it('replaces a lesson still being planned, and drops its late plan', async () => {
+    const held = heldPlanner();
+    const { lesson, tool, result, sink } = setup({ planner: held.planner });
+    await tool('start_lesson', { goal: 'add wiper fluid' });
+    expect(result(await tool('start_lesson', { goal: 'make tea' }))).toEqual({
+      status: 'planning',
+      goal: 'make tea',
+      replaced: 'add wiper fluid',
+    });
+    await vi.waitFor(() =>
+      expect(held.asked.map((a) => a.goal)).toEqual(['add wiper fluid', 'make tea']),
+    );
+    held.asked[0]?.answer(plan);
+    held.asked[1]?.answer(tea);
+    await lesson.settled();
+    expect(lesson.procedure?.title).toBe('Make tea');
+    expect([...sink.episodes.values()].map((e) => e.meta.procedure?.title)).toEqual(['Make tea']);
+  });
+
+  it('replaces a lesson the coach was writing itself', async () => {
+    let first = true;
+    const { lesson, tool, result } = setup({
+      ...gemini,
+      planner: {
+        plan: async () => {
+          if (first) {
+            first = false;
+            throw new Error('planner down');
+          }
+          return { planId: 'tea', procedure: tea, warnings: [] };
+        },
+      },
+    });
+    await tool('start_lesson', { goal: 'add wiper fluid' });
+    await lesson.settled();
+    expect(result(await tool('start_lesson', { goal: 'make tea' }))).toMatchObject({
+      replaced: 'add wiper fluid',
+    });
+    await lesson.settled();
+    expect(lesson.procedure?.title).toBe('Make tea');
+  });
+
+  it('ends the running lesson at once: its steps, its lights and its recording', async () => {
+    const held = heldPlanner();
+    const { bus, clock, lesson, registry, tool, result, sink } = setup({ planner: held.planner });
+    const tracking = new LiveTracking({ bus, registry, procedure: () => lesson.procedure });
+    tracking.attach();
+    const overlay = new OverlayModel(bus, lesson.view());
+    overlay.attach();
+    await tool('start_lesson', { goal: 'add wiper fluid' });
+    await vi.waitFor(() => expect(held.asked).toHaveLength(1));
+    held.asked[0]?.answer(plan);
+    await vi.waitFor(() => expect(lesson.phase).toBe('lesson'));
+    expect(tracking.objects.filter(isShown).map((o) => o.id)).toEqual(['cap']);
+    const aborted: string[] = [];
+    bus.on('procedure.aborted', ({ reason }) => aborted.push(reason));
+    // Before the new plan exists, the old lesson is gone.
+    expect(result(await tool('start_lesson', { goal: 'make tea' }))).toEqual({
+      status: 'planning',
+      goal: 'make tea',
+      replaced: 'add wiper fluid',
+    });
+    expect(aborted).toEqual(['a new lesson was requested']);
+    expect(lesson.procedure).toBeNull();
+    expect(lesson.view().plan()).toBeNull();
+    expect(lesson.phase).toBe('planning');
+    expect(tracking.objects).toEqual([]);
+    expect(overlay.snapshot(clock.now())).toMatchObject({ instruction: null, highlights: [] });
+    await vi.waitFor(() => expect(held.asked).toHaveLength(2));
+    held.asked[1]?.answer(tea);
+    await lesson.settled();
+    // A new lesson is a new episode.
+    const [first, next] = [...sink.episodes.values()];
+    expect(first?.meta.procedure?.title).toBe('Refill washer fluid');
+    expect(first?.finish?.outcome).toBe('aborted');
+    expect(next?.meta.procedure?.title).toBe('Make tea');
+    expect(next?.finish).toBeNull();
+  });
+});
+
+describe('ending a lesson without another', () => {
+  it('ends the running lesson at once: its episode, its steps and every light', async () => {
+    const { bus, clock, lesson, registry, tool, result, sink, begin } = setup();
+    const tracking = new LiveTracking({ bus, registry, procedure: () => lesson.procedure });
+    tracking.attach();
+    const overlay = new OverlayModel(bus, lesson.view());
+    overlay.attach();
+    const looks: string[] = [];
+    const focus = new ActionFocus({
+      bus,
+      clock,
+      finder: {
+        focus: async (r) => {
+          looks.push(r.step.instruction);
+          return { detections: [], action: null, model: 'er', latencyMs: 1 };
+        },
+      },
+      frames: { grab: async () => ({ image: { mimeType: 'image/jpeg', data: 'AAAA' }, t: 0 }) },
+      anchors: { anchor: () => {} },
+      tracking,
+      view: lesson.view(),
+      lesson,
+    });
+    focus.attach();
+    await begin();
+    expect(tracking.objects.filter(isShown).map((o) => o.id)).toEqual(['cap']);
+    const aborted: string[] = [];
+    bus.on('procedure.aborted', ({ reason }) => aborted.push(reason));
+    expect(result(await tool('end_lesson', { reason: 'not what they want' }))).toEqual({
+      ended: 'add wiper fluid',
+    });
+    expect(aborted).toEqual(['not what they want']);
+    expect(lesson.procedure).toBeNull();
+    expect(lesson.view().plan()).toBeNull();
+    expect(result(await tool('show_demo', {}))).toEqual({ error: 'No lesson is running.' });
+    // The HUD asks what they want to do, not "Lesson complete!".
+    expect(lesson.phase).toBe('idle');
+    expect(tracking.objects).toEqual([]);
+    expect(overlay.snapshot(clock.now())).toMatchObject({
+      phase: 'idle',
+      title: null,
+      instruction: null,
+      highlights: [],
+    });
+    expect(focus.tick(clock.advance(10_000))).toBeNull();
+    expect(looks).toEqual([]);
+    await lesson.settled();
+    expect(sink.only().finish?.outcome).toBe('aborted');
+    // Another lesson starts as usual.
+    await begin();
+    expect(lesson.phase).toBe('lesson');
+  });
+
+  it('cancels a lesson being planned or written, and says so when there is none', async () => {
+    let answer: (r: PlanResponse) => void = () => {};
+    const held = setup({ planner: { plan: () => new Promise((r) => (answer = r)) } });
+    expect(held.result(await held.tool('end_lesson', { reason: 'stop' }))).toEqual({
+      ended: null,
+      note: 'No lesson was running.',
+    });
+    await held.tool('start_lesson', { goal: 'add wiper fluid' });
+    expect(held.result(await held.tool('end_lesson', { reason: 'stop' }))).toEqual({
+      ended: 'add wiper fluid',
+    });
+    expect(held.lesson.phase).toBe('idle');
+    answer({ planId: 'refill-fluid', procedure: plan, warnings: [] });
+    await held.lesson.settled();
+    expect(held.lesson.procedure).toBeNull();
+    expect(held.sink.episodes.size).toBe(0);
+
+    const writing = setup({
+      ...gemini,
+      planner: { plan: async () => Promise.reject(new Error('planner down')) },
+    });
+    await writing.tool('start_lesson', { goal: 'add wiper fluid' });
+    await writing.lesson.settled();
+    expect(writing.result(await writing.tool('end_lesson', { reason: 'stop' }))).toEqual({
+      ended: 'add wiper fluid',
+    });
+    expect(
+      writing.result(await writing.tool('add_step', { text: 'Open it.', done_when: 'it is open' })),
+    ).toEqual({ error: 'No lesson is running. Call start_lesson first.' });
+  });
+});
+
+describe('highlights the coach asks for', () => {
+  it('adds something the plan lacks as a material when the coach says what it looks like', async () => {
+    const { bus, lesson, registry, tool, result, updates, begin } = setup();
+    const lit: string[] = [];
+    bus.on('overlay.highlight', ({ objectId, style }) => lit.push(`${objectId}:${style}`));
+    await begin();
+    expect(result(await tool('highlight', { object_id: 'red_button', style: 'target' }))).toEqual({
+      error:
+        'Unknown object "red_button". Objects in this lesson: cap, jug, tank. For something the plan lacks, give look_for.',
+    });
+    const look = 'small round, left of the steering wheel';
+    expect(
+      result(await tool('highlight', { object_id: 'red_button', style: 'target', look_for: look })),
+    ).toEqual({
+      shown: false,
+      material_id: 'red_button',
+      added: true,
+      note: 'The headset cannot show it yet; describe where it is.',
+    });
+    expect(registry.spec('red_button')).toMatchObject({
+      label: 'red button',
+      placement: { method: 'detect' },
+      tracking: { query: 'red button, small round, left of the steering wheel', moves: true },
+    });
+    expect(
+      lesson
+        .view()
+        .plan()
+        ?.materials.map((m) => m.id),
+    ).toContain('red_button');
+    // Known now: lit as it is. An id that is not one becomes one; a name it has is that material.
+    await tool('highlight', { object_id: 'red_button', style: 'attention', look_for: 'other' });
+    expect(
+      result(
+        await tool('highlight', { object_id: 'Wiper Arm', style: 'target', look_for: 'black arm' }),
+      ),
+    ).toMatchObject({ material_id: 'wiper-arm' });
+    expect(
+      result(
+        await tool('highlight', { object_id: 'blue-cap', style: 'target', look_for: 'blue cap' }),
+      ),
+    ).toMatchObject({ material_id: 'cap' });
+    expect(lit).toEqual([
+      'red_button:target',
+      'red_button:attention',
+      'wiper-arm:target',
+      'cap:target',
+    ]);
+    expect(updates().map((u) => [u.op, u.by])).toEqual([
+      ['start', 'planner'],
+      ['material', 'coach'],
+      ['material', 'coach'],
+    ]);
+  });
+
+  it('adds nothing outside a lesson', async () => {
+    const { tool, result } = setup();
+    expect(
+      result(await tool('highlight', { object_id: 'cup', style: 'target', look_for: 'a cup' })),
+    ).toEqual({ error: 'Unknown object "cup". Objects in this lesson: none.' });
+  });
+
+  it("names the thing in the words a coach's material is found by", async () => {
+    const { registry, tool, result, begin, lesson } = setup();
+    await begin();
+    await tool('add_material', { label: 'funnel', look_for: 'White plastic, on the fender.' });
+    await tool('add_material', { label: 'rag' });
+    expect(registry.spec('funnel')?.tracking?.query).toBe('funnel, White plastic, on the fender');
+    expect(registry.spec('rag')?.tracking?.query).toBe('rag');
+    const added = result(
+      await tool('add_step', {
+        text: 'Put the funnel in the neck.',
+        done_when: 'the funnel sits in the neck',
+        objects: ['funnel', 'tank'],
+      }),
+    );
+    expect(lesson.procedure?.steps.find((s) => s.id === added.step_id)?.show).toEqual([
+      {
+        object: 'funnel',
+        phrase: 'funnel',
+        description: 'funnel, White plastic, on the fender',
+      },
+      { object: 'tank', phrase: 'reservoir', description: 'reservoir' },
+    ]);
   });
 });

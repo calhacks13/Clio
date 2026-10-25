@@ -12,6 +12,7 @@ import { Behavior, type FunctionDeclaration, type Schema, type Tool, Type } from
 // (planning) reports back later as an [app] message. The exception is NON_BLOCKING: look_closer
 // asks the smart model, and the voice keeps talking until the answer arrives (measured on
 // gemini-3.8-live: it says its filler, calls, and speaks a WHEN_IDLE answer once it is idle).
+// A thinking voice refuses both kinds (live-model.ts), so its declarations leave `behavior` out.
 
 interface JsonSchemaNode {
   type?: string;
@@ -45,11 +46,16 @@ function toSchema(node: JsonSchemaNode): Schema {
   return schema;
 }
 
-export function toGeminiTools(names: readonly CoachToolName[]): Tool[] {
+export function toGeminiTools(
+  names: readonly CoachToolName[],
+  { behavior = true }: { behavior?: boolean } = {},
+): Tool[] {
   const functionDeclarations: FunctionDeclaration[] = names.map((name) => ({
     name,
     description: COACH_TOOLS[name].description,
-    behavior: isNonBlockingTool(name) ? Behavior.NON_BLOCKING : Behavior.BLOCKING,
+    ...(behavior
+      ? { behavior: isNonBlockingTool(name) ? Behavior.NON_BLOCKING : Behavior.BLOCKING }
+      : {}),
     parameters: toSchema(toolParametersJsonSchema(name) as JsonSchemaNode),
   }));
   return [{ functionDeclarations }];

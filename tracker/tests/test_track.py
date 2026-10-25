@@ -26,6 +26,7 @@ from clio_tracker.server import create_app
 from clio_tracker.session import Sessions, SessionSettings, TrackerSession
 from clio_tracker.track import (
     MAX_OBJECTS,
+    Anchor,
     BadMessage,
     FrameHeader,
     Modes,
@@ -158,6 +159,50 @@ def test_objects_parse_in_order_first_words_win_and_at_most_eight():
 def test_bad_objects_are_refused(text):
     with pytest.raises(BadMessage):
         parse_command(text)
+
+
+def anchor(seq: int, box=CUP, oid: str = "cup", **extra) -> str:
+    """An anchor on the frame `frame(seq)` streams (its capture time), `box` in frame pixels."""
+    x0, y0, x1, y1 = box
+    return json.dumps(
+        {
+            "type": "anchor",
+            "id": oid,
+            "t": 1000.0 + 66 * seq,
+            "box": [x0 / 960, y0 / 720, x1 / 960, y1 / 720],
+            "source": "er",
+            **extra,
+        }
+    )
+
+
+def test_anchors_parse_with_er_as_the_source_and_words_trimmed():
+    a = parse_command(anchor(3, query="  The blue cup on the left, half full  "))
+    assert a == Anchor("cup", 1198.0, norm_box(CUP), "er", "The blue cup on the left, half full")
+    bare = json.loads(anchor(3))
+    del bare["source"]
+    assert parse_command(json.dumps(bare)) == Anchor("cup", 1198.0, norm_box(CUP), "er", None)
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"id": ""},
+        {"id": 7},
+        {"t": None},
+        {"t": "now"},
+        {"box": [0.5, 0.2, 0.4, 0.6]},
+        {"box": [0.1, 0.2, 0.3]},
+        {"box": [0.1, 0.2, 1.3, 0.6]},
+        {"source": "jev"},
+        {"query": " ... "},
+        {"query": 3},
+        {"query": "x" * 1001},
+    ],
+)
+def test_bad_anchors_are_refused(fields):
+    with pytest.raises(BadMessage):
+        parse_command(json.dumps({**json.loads(anchor(3)), **fields}))
 
 
 # --- tracking ----------------------------------------------------------------------------------
@@ -307,6 +352,7 @@ def test_not_found_entries_have_no_geometry_and_absent_reads_as_lost():
         "contact": None,
         "score": None,
         "track": None,
+        "source": None,
     }
     assert _tracked("cup", Sighting(False, state="lost", track_id=4))["track"] is None
 
@@ -433,6 +479,153 @@ def test_switching_modes_either_way_drops_what_the_other_followed(lesson):
     (jug,) = play(lesson, 20)["detections"]
     assert jug["id"] == "jug" and jug["state"] == "unknown"
     assert len(lesson.made) == 1 and len(lesson.jev.calls) == 2  # the connection's one session
+
+
+# --- anchors -----------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def lookalikes(lesson, vision):
+    """The lesson's room with two cups that look alike (scene 10 + i, i up to 9): cup A stays
+    at CUP, cup B starts at OTHER and slides 40 px left a frame, so ByteTrack follows both."""
+    for i in range(10):
+        vision.world[10 + i] = [Thing(CUP, A), Thing(b_on(i), B)]
+    return lesson
+
+
+def b_on(seq: int) -> tuple[float, float, float, float]:
+    """Cup B on frame `seq` of the lookalikes (it stops at the last scene)."""
+    return moved(OTHER, -40 * min(seq, 9))
+
+
+def slide(lesson, seq: int, dt: float = 1 / 15) -> dict:
+    """The cup's entry on frame `seq` of the lookalikes."""
+    (cup,) = play(lesson, seq, scene=10 + min(seq, 9), dt=dt)["detections"]
+    return cup
+
+
+def on_a_then_er_says_b(lesson, *jev: dict) -> dict:
+    """jev places the cup on A; on frame 4, ER's anchor (boxed on frame 1) says it is B. jev's
+    later answers are `jev`, in order. The cup's entry on frame 4."""
+    lesson.jev.answers.extend([{"cup": (0.9, norm_box(CUP))}, *jev])
+    lesson.modes.command(parse_command(objects(CUP_WORDS)))
+    for seq in range(4):
+        cup = slide(lesson, seq)
+    assert cup["source"] == "jev" and cup["box"] == pytest.approx(list(norm_box(CUP)), abs=1e-3)
+    lesson.modes.command(parse_command(anchor(1, b_on(1))))
+    return slide(lesson, 4)
+
+
+def test_an_anchor_places_the_object_on_the_frame_it_was_boxed_on(lookalikes):
+    encoded = len(lookalikes.encodes)
+    cup = on_a_then_er_says_b(lookalikes)
+    # Frame 1 was encoded again: the anchor's box is matched to the track that was there then,
+    # cup B's, which has slid its own width since (on this frame the box would miss it).
+    assert len(lookalikes.encodes) == encoded + 4 + 2
+    assert cup["found"] and cup["state"] == "tracking" and cup["source"] == "er"
+    assert cup["box"] == pytest.approx(list(norm_box(b_on(4))), abs=1e-3)
+
+
+def test_a_disagreeing_jev_answer_is_ignored_while_the_anchor_holds_and_applies_after(
+    lookalikes, caplog
+):
+    a = {"cup": (0.9, norm_box(CUP))}
+    with caplog.at_level(logging.INFO, logger="clio_tracker"):
+        on_a_then_er_says_b(lookalikes, a, a)
+        slide(lookalikes, 5, dt=1.0)  # jev looks again: cup A
+        held = slide(lookalikes, 6)
+    assert len(lookalikes.jev.calls) == 2
+    # Still on B (the box trails it a little after the 1 s gap: it is smoothed).
+    assert held["source"] == "er" and held["box"][0] == pytest.approx(b_on(6)[0] / 960, abs=0.02)
+    assert any("ignored, anchored 1.1 s ago" in r.message for r in caplog.records)
+    slide(lookalikes, 7, dt=5.0)  # 6 s after the anchor: jev's cup A again
+    after = slide(lookalikes, 8)
+    assert len(lookalikes.jev.calls) == 3
+    assert after["source"] == "jev" and after["box"][0] == pytest.approx(CUP[0] / 960, abs=0.02)
+
+
+def test_an_agreeing_jev_answer_applies_while_the_anchor_holds(lookalikes):
+    b = {"cup": (0.9, norm_box(b_on(5)))}  # jev's box on frame 5: cup B
+    anchored = on_a_then_er_says_b(lookalikes, b)
+    slide(lookalikes, 5, dt=1.0)
+    agreed = slide(lookalikes, 6)
+    assert len(lookalikes.jev.calls) == 2
+    assert agreed["source"] == "jev" and agreed["track"] == anchored["track"]
+    assert agreed["box"][0] == pytest.approx(b_on(6)[0] / 960, abs=0.02)
+
+
+def test_jev_saying_absent_does_not_lose_an_anchored_object_while_it_holds(lookalikes, caplog):
+    absent = {"cup": (0.1, None)}
+    anchored = on_a_then_er_says_b(lookalikes, absent, absent)
+    cup = lookalikes.made[0]._objects["cup"]
+    with caplog.at_level(logging.INFO, logger="clio_tracker"):
+        slide(lookalikes, 5, dt=1.0)
+        held = slide(lookalikes, 6)
+        assert not cup.absent and cup.target_id == anchored["track"]
+        assert held["found"] and held["state"] == "tracking" and held["source"] == "er"
+        slide(lookalikes, 7, dt=5.0)
+        later = slide(lookalikes, 8)
+    told = [r.getMessage() for r in caplog.records if "not in view" in r.getMessage()]
+    assert told[0].endswith("ignored, anchored 1.1 s ago") and told[1].endswith(": absent")
+    # After the hold jev's word is taken (B, still in plain view, is found again by appearance).
+    assert cup.absent and later["source"] == "er"  # who last placed it
+
+
+def test_an_anchors_words_are_what_jev_is_told_next_and_the_track_goes_on(lesson):
+    lesson.jev.answers.extend([{"cup": (0.9, norm_box(CUP))}] * 3)
+    lesson.modes.command(parse_command(objects(CUP_WORDS)))
+    play(lesson, 0)
+    (before,) = play(lesson, 1)["detections"]
+    words = "The blue ceramic cup at the front left, half full of water"
+    lesson.modes.command(parse_command(anchor(1, query=words)))
+    (after,) = play(lesson, 2)["detections"]
+    assert after["source"] == "er" and after["track"] == before["track"]
+    play(lesson, 3, dt=1.1)
+    assert lesson.jev.calls[-1] == [Query("cup", words, "blue cup")]  # the phrase stays
+    (later,) = play(lesson, 4)["detections"]
+    assert later["source"] == "jev" and later["track"] == before["track"]
+
+
+def test_an_object_jev_has_not_placed_is_placed_from_its_anchor_at_once(lesson):
+    lesson.executor.run_now = False  # jev has not answered
+    lesson.modes.command(parse_command(objects(CUP_WORDS, JUG_WORDS)))
+    for seq in range(3):
+        cup, jug = play(lesson, seq)["detections"]
+    assert cup["state"] == "unknown" and cup["source"] is None
+    lesson.modes.command(parse_command(anchor(1)))
+    cup, jug = play(lesson, 3)["detections"]
+    assert cup["found"] and cup["state"] == "tracking" and cup["source"] == "er"
+    assert cup["box"] == pytest.approx(list(norm_box(CUP)), abs=1e-3)
+    assert jug["state"] == "unknown" and jug["source"] is None
+
+
+def test_an_anchor_on_a_frame_not_streamed_yet_is_placed_on_the_next_frame(lookalikes):
+    lookalikes.executor.run_now = False
+    lookalikes.modes.command(parse_command(objects(CUP_WORDS)))
+    for seq in range(3):
+        slide(lookalikes, seq)
+    lookalikes.modes.command(parse_command(anchor(3, b_on(3))))  # frame 3 comes next
+    encoded = len(lookalikes.encodes)
+    cup = slide(lookalikes, 3)
+    assert len(lookalikes.encodes) == encoded + 1  # this frame is the anchor's
+    assert cup["found"] and cup["source"] == "er"
+    assert cup["box"] == pytest.approx(list(norm_box(b_on(3))), abs=1e-3)
+
+
+def test_an_anchor_for_an_unknown_object_or_in_target_mode_is_logged_and_skipped(lesson, caplog):
+    with caplog.at_level(logging.WARNING, logger="clio_tracker"):
+        play(lesson, 0, scene=1)
+        lesson.modes.command(parse_command(anchor(0)))  # target mode
+        assert play(lesson, 1, scene=1)["type"] == "mask" and lesson.made == []
+        lesson.modes.command(parse_command(objects(CUP_WORDS)))
+        play(lesson, 2)
+        lesson.modes.command(parse_command(anchor(2, JUG, oid="jug")))
+        (cup,) = play(lesson, 3)["detections"]
+    assert cup["id"] == "cup" and cup["source"] is None  # jev says absent; nothing placed it
+    assert lesson.made[0]._anchored == {}
+    told = [r.getMessage() for r in caplog.records]
+    assert "Track: an anchor for cup in target mode; skipped" in told
+    assert "Track: an anchor for jug, which is not followed; skipped" in told
 
 
 # --- the segmenter -----------------------------------------------------------------------------
@@ -840,6 +1033,25 @@ def test_ready_then_one_mask_per_frame(app):
         ws.send_text(target(3))
         ws.send_bytes(frame(4))
         assert ws.receive_json()["type"] == "mask"
+
+
+def test_anchors_over_the_socket_and_a_bad_one_skipped(app):
+    with TestClient(app) as client, client.websocket_connect("/track") as ws:
+        assert ws.receive_json()["type"] == "ready"
+        ws.send_text(anchor(0))  # target mode: logged and skipped
+        ws.send_bytes(frame(0))
+        assert ws.receive_json()["type"] == "mask"
+        ws.send_text(objects(CUP_WORDS))
+        ws.send_bytes(frame(1))
+        (cup,) = ws.receive_json()["detections"]
+        assert cup["state"] == "unknown" and cup["source"] is None  # jev hasn't answered
+        ws.send_text(anchor(1, source="gemini"))  # malformed: logged and skipped
+        ws.send_text(anchor(1, oid="spoon"))  # not followed: logged and skipped
+        ws.send_text(anchor(1))
+        ws.send_bytes(frame(2))
+        (cup,) = ws.receive_json()["detections"]
+        assert cup["found"] and cup["source"] == "er"
+        assert cup["box"] == pytest.approx(list(norm_box(CUP)), abs=1e-3)
 
 
 def test_a_foreign_origin_is_refused(app):

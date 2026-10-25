@@ -1,0 +1,443 @@
+/* The desk lab: a laptop page, dark like the planner bench. The picture fills the left; the panel
+   on the right scrolls. */
+
+:root {
+  color-scheme: dark;
+  --bg: #070b14;
+  --panel: #0f1728;
+  --panel-2: #152038;
+  --line: #22304d;
+  --text: #e8eefc;
+  --muted: #8ea0c2;
+  --accent: #24d4ed;
+  --ok: #7dffa4;
+  --warn: #ffd27d;
+  --bad: #ff8a95;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 13px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+}
+
+#desk {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+h1,
+h3 {
+  margin: 0;
+  font-weight: 650;
+}
+
+h1 {
+  font-size: 1.05rem;
+  margin-right: 0.4rem;
+}
+
+h3 {
+  font-size: 0.95rem;
+  margin: 0.4rem 0;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+input,
+select {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  padding: 0.4rem 0.5rem;
+}
+
+input:focus,
+select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+button {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+button:hover {
+  border-color: var(--muted);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #04121a;
+  font-weight: 650;
+}
+
+button.on {
+  background: #3a1d24;
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.86em;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: 0.88em;
+}
+
+.ok {
+  color: var(--ok);
+}
+
+.warn {
+  color: var(--warn);
+}
+
+.bad {
+  color: var(--bad);
+}
+
+.desk-top {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding: 0.55rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.desk-top label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--muted);
+}
+
+.desk-top select {
+  max-width: 14rem;
+  color: var(--text);
+}
+
+.status {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.desk {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(22rem, 30rem);
+  flex: 1;
+  min-height: 0;
+}
+
+.stage {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.7rem;
+  min-height: 0;
+}
+
+.viewer {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: #000;
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+/* Not mirrored: the picture is the frame the models see, so the boxes line up. */
+.viewer video,
+.viewer canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.viewer video {
+  object-fit: contain;
+}
+
+.viewer canvas {
+  pointer-events: none;
+}
+
+.camera-error {
+  position: absolute;
+  left: 1rem;
+  right: 1rem;
+  top: 1rem;
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  border-radius: 0.4rem;
+  background: #3a1d24;
+  color: var(--bad);
+}
+
+.row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.side {
+  border-left: 1px solid var(--line);
+  overflow-y: auto;
+  background: var(--panel);
+}
+
+.side details {
+  border-bottom: 1px solid var(--line);
+}
+
+.side summary {
+  padding: 0.5rem 0.8rem;
+  font-weight: 650;
+  cursor: pointer;
+  user-select: none;
+}
+
+.section {
+  padding: 0 0.8rem 0.6rem;
+}
+
+.section.log {
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.section p {
+  margin: 0.25rem 0;
+}
+
+.phase {
+  display: inline-block;
+  padding: 0.05rem 0.45rem;
+  border-radius: 1rem;
+  background: var(--panel-2);
+  color: var(--muted);
+}
+
+.phase-lesson {
+  color: var(--ok);
+}
+
+.phase-planning,
+.phase-locating {
+  color: var(--warn);
+}
+
+.phase-failed {
+  color: var(--bad);
+}
+
+.steps {
+  list-style: none;
+  margin: 0.3rem 0;
+  padding: 0;
+}
+
+.step {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.25rem 0.35rem;
+  border-radius: 0.35rem;
+}
+
+.step .mark {
+  width: 1rem;
+  flex: none;
+  text-align: center;
+  color: var(--muted);
+}
+
+.step.focus {
+  background: var(--panel-2);
+}
+
+.step.focus .mark {
+  color: var(--accent);
+}
+
+.step.done .mark {
+  color: var(--ok);
+}
+
+.step.done,
+.step.skipped {
+  color: var(--muted);
+}
+
+.step-id {
+  color: var(--muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.85em;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 0.1rem 0.3rem 0.1rem 0;
+  padding: 0.05rem 0.45rem;
+  border-radius: 1rem;
+  background: var(--panel-2);
+}
+
+.chip i {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+}
+
+.chip.hot {
+  color: var(--accent);
+}
+
+.chip.warn {
+  color: var(--warn);
+}
+
+.line {
+  line-height: 1.35;
+}
+
+.line .who {
+  font-weight: 650;
+}
+
+.line.user .who {
+  color: var(--warn);
+}
+
+.line.coach .who {
+  color: var(--accent);
+}
+
+.line.app {
+  color: var(--muted);
+  font-size: 0.9em;
+  white-space: pre-wrap;
+}
+
+.line.partial {
+  opacity: 0.65;
+}
+
+.when {
+  color: var(--muted);
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+}
+
+.calls {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.call {
+  padding: 0.3rem 0.4rem;
+  margin-bottom: 0.25rem;
+  border-left: 2px solid var(--line);
+}
+
+.call code {
+  display: block;
+  word-break: break-word;
+  color: var(--muted);
+}
+
+.call code.result {
+  color: var(--text);
+}
+
+.call.ok {
+  border-left-color: var(--ok);
+}
+
+.call.failed {
+  border-left-color: var(--bad);
+}
+
+.call.pending {
+  border-left-color: var(--warn);
+}
+
+.call.hot {
+  background: rgba(36, 212, 237, 0.08);
+}
+
+.er {
+  padding: 0.3rem 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+.er ul {
+  margin: 0.2rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.2rem 0.7rem;
+  margin: 0;
+}
+
+.stats dt {
+  color: var(--muted);
+}
+
+.stats dd {
+  margin: 0;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 1.2rem;
+  transform: translateX(-50%);
+  padding: 0.6rem 1rem;
+  border-radius: 0.5rem;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}

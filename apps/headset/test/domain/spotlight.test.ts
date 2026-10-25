@@ -250,6 +250,50 @@ describe('Spotlight', () => {
     ]);
   });
 
+  it("takes an unroled item's role from what the step's hands do before its kind", async () => {
+    const show = (object: string, extra = {}) => ({
+      object,
+      phrase: object,
+      description: object,
+      ...extra,
+    });
+    const [GRAB, FILL, MARK] = parseProcedure({
+      ...procedure,
+      steps: [
+        {
+          id: 'grab',
+          instruction: 'Pick up the jug by its handle.',
+          action: { verb: 'pick_up', object: 'jug' },
+          show: [show('jug')],
+          success: { type: 'confirm' },
+        },
+        {
+          id: 'fill',
+          instruction: 'Pour the mug into the jug.',
+          action: { verb: 'pour', object: 'mug', target: 'jug' },
+          show: [show('jug'), show('mug')],
+          success: { type: 'confirm' },
+        },
+        {
+          id: 'mark',
+          instruction: 'Hold the jug up to the light.',
+          action: { verb: 'pick_up', object: 'jug' },
+          show: [show('jug', { role: 'level' })],
+          success: { type: 'confirm' },
+        },
+      ],
+    }).steps as [Step, Step, Step];
+    const { spotlight, of } = setup();
+    // The jug is a container, but the hands pick it up; the mug, listed second, is poured.
+    for (const step of [GRAB, FILL, MARK]) await spotlight.enterStep(step);
+    expect(of('overlay.outline').map((e) => [e.objectId, e.role])).toEqual([
+      ['jug', 'act'],
+      ['jug', 'destination'],
+      ['mug', 'act'],
+      ['jug', 'level'],
+    ]);
+  });
+
   it('outlines a layout object where the camera saw it, keeping its measured position', async () => {
     const { spotlight, registry, of } = setup();
     await spotlight.enterStep(RINSE);

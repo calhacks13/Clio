@@ -105,6 +105,15 @@ one call for all the objects that are due, and less often while jev fails (up to
 as with a session). What comes back feeds the learner's AR view and the recording only, never a
 Gemini coach ([docs/coach-plan.md](../docs/coach-plan.md#the-perception-boundary)).
 
+While a step is focused, the headset also asks Gemini Robotics-ER 2 (Clio's
+`POST /api/vision/focus`) to box the step's objects on a sharp frame every few seconds, and sends
+each box it finds as an `anchor` ([TRACK.md](TRACK.md#objects-mode)): the frame's capture time,
+the box, and ER's words for the object, which jev is told from then on. The tracker places the
+object from the box on the streamed frame captured nearest that time (it keeps the last 300),
+as it places a jev answer, and for 6 s ignores jev's answers that put the object elsewhere or
+say it is gone. Each detection's `source` says which finder last placed the object, `jev` or
+`er`.
+
 ## Settings
 
 From the environment, then `tracker/.env`, then the repo's `.env`.
@@ -192,6 +201,17 @@ there on that frame (IoU 0.3, or a part inside its whole): a late answer still l
 object, or moves the target if it had drifted to a look-alike. When no track was there, jev's box
 is carried to now (below) and the candidate filling it becomes the target on the next frame, as
 a new track if need be.
+
+**jev is asked about one object, not its kind.** Each object is two questions in the one
+request for the frame: Noul, whether it is in view (the 0.5 gate), and Box, where. The phrase
+names the object's kind and the query singles it out, so with a query Noul asks "Is the paper
+cup described below visible in `photo`? Description: …" rather than "Is there a paper cup…",
+which is yes whenever any cup is in view, after which Box boxes a look-alike and the tracker
+takes the object as having moved to it. Asked both ways on two real frames, an object that
+was not there among look-alikes that were (cup D among cups A to C, an ORANGE JUICE bottle
+among other bottles, an ETHANOL bottle among squeeze bottles) scored 0.95 to 0.98 by kind and
+0.01 to 0.02 described; present objects scored 0.93 to 0.99 and an absent kind (a pear) 0.04
+and 0.05. A phrase alone gets the benchmarked question; Box gets the query as context.
 
 **Everything moves with the camera.** The headset's camera turns with the head, so most motion
 in the picture is the wearer's. `motion.py` measures it between frames (sparse optical flow with
@@ -294,9 +314,16 @@ another person.
 mode it follows two people at once, the man and the person at the left edge, both on every
 frame after jev's one answer and never on anyone else; a frame of the two took 12 to 14 ms with
 s and 21 to 23 ms with l on the Neural Engine, decoding included. Nothing here has run on a
-Quest yet. jev itself has not been called from this machine; its client is the jev finder's,
-which was measured against real jev (five calls, 7 of 7 present objects found, 3 of 3 absent
-ones rejected, boxes at IoU 0.82 to 0.98), and is tested here against a fake transport.
+Quest yet. jev's client is the jev finder's, which was measured against real jev (five calls, 7
+of 7 present objects found, 3 of 3 absent ones rejected, boxes at IoU 0.82 to 0.98), and is
+tested here against a fake transport. On 2026-10-24 it was called from here: four requests
+asking questions side by side on two bench photos at 1024 x 768 (the words above; Box worded
+three ways, each asked three times, found the described cup or bottle every time, IoU 0.67 to
+0.79 with it and at most 0.12 with a look-alike), each answered in 0.19 to 0.25 s; and a
+45-frame objects-mode stream of the cups photo over `/track` with an anchor, whose ten jev
+answers applied 0.2 to 0.7 s after their frames. The stream's first answer put cup B on cup A,
+and the other nine were right; the log did not yet give jev's box, so whether jev or the
+tracker's placement erred is not known (each answer's line now ends with jev's box).
 
 **Steadiness of `/track`** (`clio-tracker jitter --baseline DIR`, `jitter.py`): seven 12 s
 sequences at 25 frames a second, 480x360 JPEGs like the headset's, of a camera panning, zooming

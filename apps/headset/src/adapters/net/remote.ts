@@ -1,11 +1,14 @@
 import type {
   DemoClip,
+  FocusRequest,
+  FocusResponse,
   PlanRequest,
   PlanResponse,
   SceneAskRequest,
   SceneAskResponse,
 } from '@clio/protocol';
 import type { ClipSource } from '../../domain/demo/demo-library';
+import type { FocusFinder } from '../../domain/session/action-focus';
 import type { SceneAsker } from '../../domain/session/closer-look';
 import type { LessonPlanner } from '../../domain/session/lesson-controller';
 import type {
@@ -49,6 +52,14 @@ export class RemoteSceneAsker implements SceneAsker {
   constructor(private readonly api: ApiClient) {}
   ask(request: SceneAskRequest): Promise<SceneAskResponse> {
     return this.api.askScene(request);
+  }
+}
+
+/** Robotics-ER 2's action focus on one sharp frame (POST /api/vision/focus). */
+export class RemoteFocusFinder implements FocusFinder {
+  constructor(private readonly api: ApiClient) {}
+  focus(request: FocusRequest): Promise<FocusResponse> {
+    return this.api.focus(request);
   }
 }
 

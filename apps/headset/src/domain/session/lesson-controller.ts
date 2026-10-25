@@ -12,6 +12,7 @@ import {
   type PlanResponse,
   PROCEDURE_SCHEMA_ID,
   type Procedure,
+  SlugSchema,
   type Step,
   safeParseProcedure,
 } from '@clio/protocol';
@@ -139,6 +140,14 @@ interface FirstStepTiming {
   planMs: number;
 }
 
+/** An object a model named that the plan lacks, in its words (LessonController.declareObject). */
+export interface DeclaredObject {
+  /** Its spoken name, e.g. "red reset button". */
+  label: string;
+  /** A standalone description of this one object, which the camera finds it by. */
+  look: string;
+}
+
 /** A lesson the coach writes itself, before its first step exists. */
 interface CoachDraft {
   goal: string;
@@ -183,6 +192,41 @@ function uniqueId(base: string, taken: ReadonlySet<string>): string {
   let id = base;
   for (let n = 2; taken.has(id); n++) id = `${base}-${n}`;
   return id;
+}
+
+/** An object declared during the lesson: something to find with the camera, which may move. */
+function newObject(
+  label: string,
+  look: string | undefined,
+  existing: readonly ObjectSpec[],
+  /** The id the coach already calls it by, when it is a free, valid one. */
+  preferredId?: string,
+): ObjectSpec {
+  const taken = new Set(existing.map((o) => o.id));
+  const preferred =
+    preferredId && SlugSchema.safeParse(preferredId).success && !taken.has(preferredId)
+      ? preferredId
+      : undefined;
+  return {
+    id: preferred ?? uniqueId(slugFrom(label, 'material'), taken),
+    label,
+    kind: 'item',
+    radius: 0.03,
+    hidden: false,
+    placement: { method: 'detect' },
+    tracking: { query: look?.trim() || label, moves: true },
+  };
+}
+
+/**
+ * What the camera finds an object the coach names by: its look_for, standalone, so it names the
+ * thing too ("white plastic, on the fender, left of the blue cap" for the funnel becomes "funnel,
+ * white plastic, on the fender, left of the blue cap"); without one, its name.
+ */
+function coachLook(label: string, lookFor: string | undefined): string {
+  const look = lookFor?.trim().replace(/[.\s]+$/, '');
+  if (!look) return label;
+  return look.toLowerCase().includes(label.toLowerCase()) ? look : `${label}, ${look}`;
 }
 
 const sameText = (a: string, b: string) =>
@@ -347,6 +391,7 @@ export class LessonController {
     return {
       start_lesson: ({ goal, context, template_id }) =>
         this.startLesson(goal, context, template_id),
+      end_lesson: ({ reason }) => this.endLesson(reason),
       revise_plan: ({ reason }, { callId }) => this.revisePlan(reason, callId),
       add_step: (args, { callId }) =>
         this.op(() =>
@@ -357,19 +402,27 @@ export class LessonController {
         this.op(() => this.completeStep(step_id, reason, evidence, callId)),
       add_material: ({ label, look_for }, { callId }) =>
         this.op(() => this.addMaterial(label, look_for, callId)),
-      highlight: ({ object_id, style }) => this.highlight(object_id, style),
+      highlight: ({ object_id, style, look_for }, { callId }) =>
+        this.highlight(object_id, style, look_for, callId),
       show_demo: ({ step_id }) => this.showDemo(step_id),
       flag_mistake: ({ kind, message }) => this.flagMistake(kind, message),
     };
   }
 
-  /** Start a lesson for a goal. Answers at once; the plan arrives as plan.ready (or plan.failed). */
+  /**
+   * Start a lesson for a goal. Answers at once; the plan arrives as plan.ready (or plan.failed).
+   * A new goal replaces whatever came before, at once (the learner wants something else): a lesson
+   * running, whose recording ends and whose lights go out; one being planned or written; a re-plan.
+   */
   startLesson(rawGoal: string, context?: string, templateId?: string): ToolOutcome {
-    // A re-plan of the current lesson gives way to a new lesson.
-    if (this.planning && !this.planning.revision) {
-      return { ok: false, error: 'Already planning a lesson; it will arrive as an [app] message.' };
-    }
     const goal = rawGoal.trim().slice(0, GOAL_MAX);
+    const status = templateId ? 'loading' : 'planning';
+    // The same call again (a replay after a reconnect) is the lesson already on its way.
+    if (this.planning && !this.planning.revision && sameText(this.planning.goal, goal)) {
+      return { ok: true, result: { status, goal, already: true } };
+    }
+    // What it replaces, so the coach can say so.
+    const replaced = this.lessonGoal();
     for (const abandon of this.abandons) abandon();
     const attempt = ++this.attempt;
     this.planning = {
@@ -382,7 +435,7 @@ export class LessonController {
     };
     this.draft = null;
     this.track(this.prepare(goal, context, templateId, attempt));
-    return { ok: true, result: { status: templateId ? 'loading' : 'planning', goal } };
+    return { ok: true, result: { status, goal, ...(replaced ? { replaced } : {}) } };
   }
 
   /** Run a procedure (curated from the menu, or freshly planned). */
@@ -529,18 +582,47 @@ export class LessonController {
       : { ok: false, error: r.error };
   }
 
+  /**
+   * The learner wants to stop, or the lesson is not what they want and they haven't said what is:
+   * it ends at once, without another. A lesson being planned or written is dropped, and one
+   * running is aborted, so its episode ends aborted and its steps and lights go; the HUD asks
+   * what they want to do. Answers what it ended, if anything.
+   */
+  endLesson(reason: string): ToolOutcome {
+    const ended = this.lessonGoal();
+    if (ended === null)
+      return { ok: true, result: { ended: null, note: 'No lesson was running.' } };
+    const runner = this.activeRunner();
+    this.abandonPlanning();
+    runner?.abort(reason.trim() || 'ended by the coach', this.deps.clock.now());
+    // Its plan must not stand in for a lesson any more (a demonstration, the view).
+    this.runner = null;
+    this.setPhase('idle');
+    return { ok: true, result: { ended } };
+  }
+
   async stop(reason: string): Promise<void> {
     // Give up on a plan in flight rather than waiting for it and starting a lesson nobody sees,
     // and on the rest of a plan still being written.
-    if (this.planning || this.draft || this.abandons.size > 0) {
-      this.planning = null;
-      this.draft = null;
-      this.attempt++;
-      for (const abandon of this.abandons) abandon();
-    }
+    this.abandonPlanning();
     if (this.runner?.state.status === 'running') this.runner.abort(reason, this.deps.clock.now());
     this.watcher?.stop();
     await this.settled();
+  }
+
+  /** The lesson on its way or under way, by its goal: being planned, being written, or running. */
+  private lessonGoal(): string | null {
+    if (this.planning && !this.planning.revision) return this.planning.goal;
+    return this.draft?.goal ?? (this.activeRunner() ? this.goal : null);
+  }
+
+  /** Gives up on planning in flight: a lesson being planned or written, a re-plan, the rest. */
+  private abandonPlanning(): void {
+    if (!this.planning && !this.draft && this.abandons.size === 0) return;
+    this.planning = null;
+    this.draft = null;
+    this.attempt++;
+    for (const abandon of this.abandons) abandon();
   }
 
   /** Resolves when background work (planning, grounding, recording uploads) has finished. */
@@ -1039,34 +1121,53 @@ export class LessonController {
 
   private addMaterial(label: string, lookFor: string | undefined, callId: string): ToolOutcome {
     if (this.planning && !this.planning.revision) return this.planningError();
-    const { registry, clock } = this.deps;
     const runner = this.activeRunner();
     const draft = runner ? null : this.draft;
     if (!runner && !draft) {
       return { ok: false, error: 'No lesson is running. Call start_lesson first.' };
     }
-    const existing = runner ? registry.allSpecs() : (draft?.objects ?? []);
+    const existing = runner ? this.deps.registry.allSpecs() : (draft?.objects ?? []);
     const same = existing.find((o) => sameText(o.label, label));
     if (same) return this.planResult({ material_id: same.id, already: true }, this.focusId());
-    const spec: ObjectSpec = {
-      id: uniqueId(slugFrom(label, 'material'), new Set(existing.map((o) => o.id))),
-      label,
-      kind: 'item',
-      radius: 0.03,
-      hidden: false,
-      placement: { method: 'detect' },
-      tracking: { query: lookFor?.trim() || label, moves: true },
-    };
+    const spec = newObject(label, coachLook(label, lookFor), existing);
     if (!runner) {
       draft?.objects.push(spec);
       return { ok: true, result: { material_id: spec.id } };
     }
-    const r = runner.addObject(spec);
+    const r = this.addObject(runner, spec);
     if (!r.ok) return r;
-    registry.add(spec, clock.now());
-    this.track(this.locate([spec.id]));
     this.changed('material', 'coach', { callId, materialId: spec.id });
     return this.planResult({ material_id: spec.id }, this.focusId());
+  }
+
+  /**
+   * An object a model named that the plan lacks: the action focus's next thing to touch
+   * (Robotics-ER 2). The lesson declares it in that model's words and follows it from now on, as
+   * it would an object the planner declared. Answers its id (the lesson's own when it already has
+   * an object by that name), or null when no lesson is running or one is being planned. Recorded
+   * as a plan change by the app; the coach hears of it only as one of the plan's materials.
+   */
+  declareObject({ label, look }: DeclaredObject): string | null {
+    if (this.planning && !this.planning.revision) return null;
+    const runner = this.activeRunner();
+    const name = label.trim();
+    if (!runner || !name) return null;
+    const existing = this.deps.registry.allSpecs();
+    const same = existing.find((o) => sameText(o.label, name));
+    if (same) return same.id;
+    const spec = newObject(name, look, existing);
+    if (!this.addObject(runner, spec).ok) return null;
+    this.changed('material', 'app', { materialId: spec.id, reason: 'the action focus named it' });
+    return spec.id;
+  }
+
+  /** Adds a declared object to the running lesson and looks for it. */
+  private addObject(runner: ProcedureRunner, spec: ObjectSpec): ToolOutcome {
+    const r = runner.addObject(spec);
+    if (!r.ok) return r;
+    this.deps.registry.add(spec, this.deps.clock.now());
+    this.track(this.locate([spec.id]));
+    return { ok: true, result: null };
   }
 
   /** A step the coach wrote: confirmed by the coach or learner, outlining the materials it uses. */
@@ -1253,29 +1354,64 @@ export class LessonController {
 
   // ---- other tools -----------------------------------------------------------------------------
 
-  private highlight(objectId: string, style: HighlightStyle): ToolOutcome {
+  private highlight(
+    objectId: string,
+    style: HighlightStyle,
+    lookFor: string | undefined,
+    callId: string,
+  ): ToolOutcome {
     const { bus, clock, registry } = this.deps;
-    const spec = registry.spec(objectId);
-    if (!spec) {
-      const known =
-        registry
-          .allSpecs()
-          .map((s) => s.id)
-          .join(', ') || 'none';
-      return {
-        ok: false,
-        error: `Unknown object "${objectId}". Objects in this lesson: ${known}.`,
-      };
-    }
-    bus.emit('overlay.highlight', { t: clock.now(), objectId, style, source: 'coach' });
-    if (!registry.get(objectId)) {
-      this.track(this.locate([objectId]));
+    const target = this.highlightTarget(objectId, lookFor, callId);
+    if (!target.ok) return target;
+    const { id, added } = target;
+    bus.emit('overlay.highlight', { t: clock.now(), objectId: id, style, source: 'coach' });
+    // `added` tells the coach session the call changed the plan (a cancelled one is reported).
+    const material =
+      added || id !== objectId ? { material_id: id, ...(added ? { added: true } : {}) } : {};
+    if (!registry.get(id)) {
+      this.track(this.locate([id]));
       return {
         ok: true,
-        result: { shown: false, note: 'The headset cannot show it yet; describe where it is.' },
+        result: {
+          shown: false,
+          ...material,
+          note: 'The headset cannot show it yet; describe where it is.',
+        },
       };
     }
-    return { ok: true, result: { shown: true } };
+    return { ok: true, result: { shown: true, ...material } };
+  }
+
+  /**
+   * The lesson object a highlight lights: a declared one, else, with look_for during a lesson, one
+   * the coach names now, added as a material (or the material it already has by that name).
+   */
+  private highlightTarget(
+    objectId: string,
+    lookFor: string | undefined,
+    callId: string,
+  ): { ok: true; id: string; added: boolean } | { ok: false; error: string } {
+    const { registry } = this.deps;
+    if (registry.spec(objectId)) return { ok: true, id: objectId, added: false };
+    const runner = this.activeRunner();
+    const look = lookFor?.trim();
+    const label = objectId.replace(/[_-]+/g, ' ').trim();
+    const existing = registry.allSpecs();
+    if (runner && look && label && !(this.planning && !this.planning.revision)) {
+      const same = existing.find((o) => sameText(o.label, label));
+      if (same) return { ok: true, id: same.id, added: false };
+      const spec = newObject(label, coachLook(label, look), existing, objectId);
+      const r = this.addObject(runner, spec);
+      if (!r.ok) return r;
+      this.changed('material', 'coach', { callId, materialId: spec.id });
+      return { ok: true, id: spec.id, added: true };
+    }
+    const known = existing.map((s) => s.id).join(', ') || 'none';
+    const how = runner ? ' For something the plan lacks, give look_for.' : '';
+    return {
+      ok: false,
+      error: `Unknown object "${objectId}". Objects in this lesson: ${known}.${how}`,
+    };
   }
 
   private async showDemo(stepId?: string): Promise<ToolOutcome> {

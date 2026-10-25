@@ -24,6 +24,7 @@ export const ApiPaths = {
   planCheck: '/api/plans/check',
   planCriteria: '/api/plans/criteria',
   visionLocate: '/api/vision/locate',
+  visionFocus: '/api/vision/focus',
   sceneAsk: '/api/scene/ask',
   episodes: '/api/episodes',
   episode: (id: string) => `/api/episodes/${seg(id)}`,
@@ -278,6 +279,76 @@ export const LocateResponseSchema = z.object({
     ),
 });
 
+// The action focus: Gemini Robotics-ER 2, at minimal thinking, looks at one sharp frame and says
+// where the step's objects are and which thing the learner should touch next. Its boxes outrank
+// jev's (the tracker takes them as anchors, tracker/TRACK.md), its words for each object become what
+// jev is told about it, and an action item the plan never declared comes back with words of its own
+// so the lesson can follow it. Like the tracker's answers, it feeds the learner's view and the
+// recording only, never a Gemini coach.
+export const FocusObjectSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1).max(60).describe('Spoken name, e.g. "blue washer cap"'),
+  phrase: z
+    .string()
+    .min(1)
+    .max(60)
+    .optional()
+    .describe("2-5 word noun phrase naming its kind, the detector's subject"),
+  query: z
+    .string()
+    .min(1)
+    .max(300)
+    .describe('The standalone visual description the lesson finds it by now'),
+});
+export const FocusRequestSchema = z.object({
+  image: ImagePayloadSchema.describe('One sharp current view (about 1024 px wide)'),
+  goal: z.string().max(300).optional().describe('The lesson goal'),
+  step: z.object({
+    instruction: z.string().min(1).max(200),
+    doneWhen: z.string().max(200).optional(),
+  }),
+  objects: z
+    .array(FocusObjectSchema)
+    .max(8)
+    .describe("The step's show items first, in rank order, then the lesson's other objects"),
+});
+export const FocusDetectionSchema = z.object({
+  id: z.string().describe('A request object id'),
+  found: z.boolean(),
+  box: NormalizedBoxSchema.nullable(),
+  point: NormalizedPointSchema.nullable().describe('The center of its graspable part'),
+  confidence: z.number().min(0).max(1),
+  description: z
+    .string()
+    .max(300)
+    .nullable()
+    .describe(
+      'When found: a sharper standalone description of this one object as it looks in the view ' +
+        '(color, material, shape, size, markings, and where it is relative to its neighbors)',
+    ),
+});
+export const FocusActionSchema = z
+  .object({
+    id: z
+      .string()
+      .nullable()
+      .describe('The request object to act on, or null when it is something the request omits'),
+    label: z.string().min(1).max(60),
+    phrase: z.string().min(1).max(60).describe('2-5 word noun phrase, e.g. "red reset button"'),
+    description: z.string().min(1).max(300).describe('Standalone visual description of it'),
+    found: z.boolean(),
+    box: NormalizedBoxSchema.nullable(),
+    point: NormalizedPointSchema.nullable(),
+    confidence: z.number().min(0).max(1),
+  })
+  .describe('The one physical thing the learner should touch, move or operate next for the step');
+export const FocusResponseSchema = z.object({
+  detections: z.array(FocusDetectionSchema).describe('One per request object, in its order'),
+  action: FocusActionSchema.nullable().describe('null when the step needs nothing touched'),
+  model: z.string(),
+  latencyMs: z.number().nonnegative(),
+});
+
 export const SceneObjectSchema = z.object({
   id: z.string(),
   label: z.string(),
@@ -427,6 +498,11 @@ export type LocateRequest = z.infer<typeof LocateRequestSchema>;
 export type Detection = z.output<typeof DetectionSchema>;
 export type DetectionInput = z.input<typeof DetectionSchema>;
 export type LocateResponse = z.infer<typeof LocateResponseSchema>;
+export type FocusObject = z.infer<typeof FocusObjectSchema>;
+export type FocusRequest = z.infer<typeof FocusRequestSchema>;
+export type FocusDetection = z.infer<typeof FocusDetectionSchema>;
+export type FocusAction = z.infer<typeof FocusActionSchema>;
+export type FocusResponse = z.infer<typeof FocusResponseSchema>;
 export type SceneObject = z.infer<typeof SceneObjectSchema>;
 export type SceneAskRequest = z.infer<typeof SceneAskRequestSchema>;
 export type SceneRef = z.infer<typeof SceneRefSchema>;

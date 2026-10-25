@@ -15,6 +15,20 @@ describe('coach tools', () => {
     });
   });
 
+  it('lets a highlight say what something the plan lacks looks like', () => {
+    expect(
+      parseToolArgs('highlight', { object_id: 'red_button', look_for: 'small red button' }),
+    ).toEqual({
+      ok: true,
+      name: 'highlight',
+      args: { object_id: 'red_button', style: 'target', look_for: 'small red button' },
+    });
+    expect(toolParametersJsonSchema('highlight').required).toEqual(['object_id']);
+    expect(parseToolArgs('highlight', { object_id: 'x', look_for: 'y'.repeat(201) }).ok).toBe(
+      false,
+    );
+  });
+
   it('returns a readable error for missing arguments instead of throwing', () => {
     const r = parseToolArgs('complete_step', { step_id: 'cap', evidence: 'seen' });
     expect(r.ok).toBe(false);
@@ -50,6 +64,7 @@ describe('coach tools', () => {
   it('describes each tool with a JSON Schema that marks required arguments', () => {
     expect(COACH_TOOL_NAMES).toEqual([
       'start_lesson',
+      'end_lesson',
       'revise_plan',
       'add_step',
       'update_step',
@@ -61,6 +76,7 @@ describe('coach tools', () => {
       'look_closer',
     ]);
     expect(toolParametersJsonSchema('start_lesson').required).toEqual(['goal']);
+    expect(toolParametersJsonSchema('end_lesson').required).toEqual(['reason']);
     expect(toolParametersJsonSchema('look_closer').required).toEqual(['question']);
     expect(toolParametersJsonSchema('revise_plan').required).toEqual(['reason']);
     expect(toolParametersJsonSchema('add_step').required).toEqual(['text', 'done_when']);

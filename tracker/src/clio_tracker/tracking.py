@@ -29,6 +29,9 @@ frame) pick which track that is, and its box becomes the prompt's anchor. Betwee
   people at 0.77 to 0.86 cosine, the same person across views at 0.95 to 0.97 on bus.jpg).
 - **What is returned is steadied** (smooth.py): the box, outline and points are filtered in
   the scene's frame of reference, so the camera's motion is never smoothed or delayed.
+- **Another finder's box outranks jev's** (an anchor in objects mode, Gemini Robotics-ER 2's):
+  it is placed as jev's is, but never as stale, and never set aside for a target that merely
+  looks like its view. `holds` says whether a later jev box agrees with where it is followed.
 
 With a segmenter (segment.py) the outline is its mask instead of YOLOE's: cut out on jev's
 frame, and again whenever asked, then carried to every frame by a RegionFollower (follow.py) on
@@ -138,6 +141,9 @@ class Sighting:
     # (YOLOE's mask, or its last shape at the predicted box while coasting) or "part-box" (a
     # part's box, rounded, or its last shape there).
     source: str | None = None
+    # The finder that last placed the object, found or not: "jev", "er" (an anchor, TRACK.md),
+    # or None before any. Objects mode's `source`.
+    finder: str | None = None
 
 
 @dataclass
@@ -166,6 +172,7 @@ class ObjectTracker:
     absent: bool = False  # jev's last answer: not in view
     doubt: int = 0  # consecutive frames the target looked unlike itself
     confirmed_t: float | None = None
+    placed_by: str | None = None  # the finder that last placed it: "jev", or "er" for an anchor
 
     def __post_init__(self) -> None:
         p = self.params
@@ -182,6 +189,7 @@ class ObjectTracker:
         )
         self._history: deque[tuple[int, float, dict[int, np.ndarray]]] = deque()
         self._pending: tuple[np.ndarray, float] | None = None  # jev's box, carried to now
+        self._placed: np.ndarray | None = None  # the last finder's box, carried to now
         self._fresh: _Fresh | None = None
         self._last_t: float | None = None
         self._fps = 15.0
@@ -303,6 +311,8 @@ class ObjectTracker:
             self._fresh.box = warp_box(self._fresh.box, camera)
         if self._pending is not None:
             self._pending = (warp_box(self._pending[0], camera), self._pending[1])
+        if self._placed is not None:
+            self._placed = warp_box(self._placed, camera)
         self._smooth.moved(camera)
 
     def _candidates(
@@ -545,15 +555,24 @@ class ObjectTracker:
         appearance: np.ndarray | None,
         carry: np.ndarray | None = None,
         mask: MaskCrop | None = None,
+        finder: str = "jev",
     ) -> str:
         """Apply jev's answer about frame `seq`: a box in frame pixels and its visual prompt.
         `carry` is how the camera moved from that frame to the newest one (motion.py), if known.
-        `mask` is the segmenter's cut of jev's box on that frame, for the follower.
+        `mask` is the segmenter's cut of jev's box on that frame, for the follower. `finder`
+        names who placed it: "jev", or another finder whose box outranks jev's ("er", an
+        anchor), which is placed even when older than jev's last answer, and on its own box
+        rather than on a look-alike that resembles its view.
 
-        Returns what changed, for the log. Answers older than one already applied are ignored.
+        Returns what changed, for the log. jev's answers older than one already applied are
+        ignored.
         """
         previous = self.target_id
-        change = self._identify(seq, t, present, box, appearance, carry)
+        change = self._identify(seq, t, present, box, appearance, carry, finder != "jev")
+        if change not in ("stale", "absent"):
+            assert box is not None
+            self.placed_by = finder
+            self._placed = warp_box(box, carry)
         if self.follower is None or change == "stale":
             return change
         if self.target_id is None or self.target_id != previous:
@@ -575,11 +594,12 @@ class ObjectTracker:
         box: np.ndarray | None,
         appearance: np.ndarray | None,
         carry: np.ndarray | None,
+        outranks: bool = False,
     ) -> str:
-        """`identified`, apart from the follower."""
-        if seq < self._applied_seq:
+        """`identified`, apart from the follower and the finder."""
+        if seq < self._applied_seq and not outranks:
             return "stale"
-        self._applied_seq = seq
+        self._applied_seq = max(self._applied_seq, seq)
         if not present or box is None or appearance is None:
             self.absent = True
             self.target_id = self.target_by = None
@@ -593,10 +613,11 @@ class ObjectTracker:
         previous = self.target_id
         view = _unit(appearance)
         self._views.append(view)
-        if not snapshot and previous is not None and self.running is not None:
+        if not snapshot and previous is not None and self.running is not None and not outranks:
             # jev looked at a frame from before any track existed (e.g. while its first answer
             # was still on the way), so there is nothing to match its box to. Keep a target
-            # that looks like what jev saw instead of dropping it.
+            # that looks like what jev saw instead of dropping it. (Not for a box that outranks
+            # jev's: a look-alike elsewhere is what it is there to correct.)
             if float(view @ self.running) >= p.reacquire_similarity:
                 self.anchor = view
                 return "kept: looks like it"
@@ -640,27 +661,44 @@ class ObjectTracker:
         best_id = self._best(tracks, box)
         if best_id is None:
             return None
-        seen: set[int] = set()
-        while best_id in self._successor and best_id not in seen:
-            seen.add(best_id)
-            best_id = self._successor[best_id]
+        best_id = self._resolve(best_id)
         return best_id if self._alive(best_id) else None
+
+    def _resolve(self, tid: int) -> int:
+        """The track that continued track `tid`'s object (_continue_nearby), else `tid`."""
+        seen: set[int] = set()
+        while tid in self._successor and tid not in seen:
+            seen.add(tid)
+            tid = self._successor[tid]
+        return tid
 
     def _best(self, tracks: dict[int, np.ndarray] | None, box: np.ndarray) -> int | None:
         """_match before following successors: the id of the track on that frame."""
         if not tracks:
             return None
-        p = self.params
         ids = list(tracks)
         stacked = np.stack([tracks[i] for i in ids])
-        overlaps = iou(stacked, box)[:, 0]
-        inside = _overlap(stacked, box)
-        ok = (overlaps >= p.match_iou) | (
-            (inside >= p.match_inside) & (overlaps >= p.match_iou / 2)
-        )
+        ok = _lands(stacked, box, self.params)
         if not ok.any():
             return None
-        return ids[int(np.argmax(np.where(ok, overlaps, -1.0)))]
+        return ids[int(np.argmax(np.where(ok, iou(stacked, box)[:, 0], -1.0)))]
+
+    def holds(self, seq: int, box: np.ndarray, carry: np.ndarray | None = None) -> bool:
+        """Whether a finder's box on frame `seq` (frame pixels) is on the object as followed
+        now. When the target's track was there on that frame, the box must be matched to it as
+        `identified` would match it; otherwise the box, carried to now by `carry`, must land on
+        the target's box on the last frame (IoU `match_iou`, or one inside the other), else on
+        its box waiting for a candidate, else on the last finder's box, carried by the camera
+        since. With none of those there is nothing to disagree with: True."""
+        tid = self.target_id
+        snapshot = self._snapshot(seq)
+        if tid is not None and snapshot and any(self._resolve(k) == tid for k in snapshot):
+            return self._match(snapshot, box) == tid
+        pending = self._pending[0] if self._pending is not None else None
+        here = next((b for b in (self._tracked, pending, self._placed) if b is not None), None)
+        if here is None:
+            return True
+        return bool(_lands(warp_box(box, carry)[None], here, self.params)[0])
 
     def container(
         self,
@@ -843,6 +881,15 @@ class _Detections:
 
     def __getitem__(self, mask: np.ndarray) -> _Detections:
         return _Detections(self.xyxy[mask], self.conf[mask])
+
+
+def _lands(boxes: np.ndarray, box: np.ndarray, p: TrackerParams) -> np.ndarray:
+    """For each of (N, 4) boxes, whether `box` lands on it: IoU `match_iou`, or the smaller of
+    the two `match_inside` inside the other (a part and its whole) at half that IoU."""
+    overlaps = iou(boxes, box)[:, 0]
+    return (overlaps >= p.match_iou) | (
+        (_overlap(boxes, box) >= p.match_inside) & (overlaps >= p.match_iou / 2)
+    )
 
 
 def _overlap(boxes: np.ndarray, box: np.ndarray) -> np.ndarray:

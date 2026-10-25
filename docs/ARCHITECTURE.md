@@ -159,7 +159,9 @@ Once per XR frame:
 ### 5.3 The "teach anything" flow (`domain/session/lesson-controller.ts`)
 
 ```
- coach hears the goal ─► start_lesson(goal, template_id?)   [answers at once; coach keeps talking]
+ coach infers the goal ─► start_lesson(goal, template_id?)  [answers at once; coach keeps talking]
+   ├─ replace: a lesson running, being planned or being written ends at once (its episode
+   │           aborted, its steps and lights gone); the result names it
    ├─ draft:   a curated lesson (template_id), else camera snapshots + goal ─► POST /api/plans
    │           {stage: first} ─► validated Procedure: step 1 as a short card, the rest an outline
    │           (+ warnings); slow (12 s)? the coach is told;
@@ -176,8 +178,10 @@ Once per XR frame:
    ├─ per step: briefing (in the tool result that moved the focus, else narrated) · show items found
    │            and outlined (Spotlight; followed live through /track objects mode while the
    │            tracker runs, else looked at again every few seconds; §5.6) · demo auto-played
-   ├─ edit:    add_step / update_step / complete_step / add_material ─► runner ─► plan.changed
-   │           (recorded as plan.updated); each result repeats the plan
+   ├─ light:   while a step is focused, something to touch: its show items, else its targets and
+   │           its action's objects; the action focus's item; the coach's highlights (§5.6)
+   ├─ edit:    add_step / update_step / complete_step / add_material / highlight(look_for)
+   │           ─► runner ─► plan.changed (recorded as plan.updated); each result repeats the plan
    ├─ watch:   step watcher: once, POST /api/plans/criteria; then frames from the step's start
    │           and now + step, looks, mix-ups, criteria ─► POST /api/plans/check, quick while
    │           far, careful and two at once when close ─► "looks done" or "did something else"
@@ -196,7 +200,8 @@ other lesson. They are also the golden demos and the planner's examples.
 
 The server gives the planner 40 s, a retry included, and the headset gives up at 45 s. When the
 coach writes the steps itself, the HUD keeps its planning text until the first `add_step`. A new
-`start_lesson` replaces a re-plan that is still running. The design, with the recital and the
+`start_lesson` replaces whatever came before, at once: a re-plan, a lesson being planned or
+written, or the one running, whose episode ends aborted. The design, with the recital and the
 failure cases, is in [coach-plan.md](coach-plan.md).
 
 ### 5.4 Procedure engine (`domain/procedure`)
@@ -260,33 +265,59 @@ the tracker answers on `/track` (on by default; `?live=0` turns it off):
 
 ```
  LiveTracking (domain/session): every declared object for the whole lesson (not hidden zones or
-   points, 8 at most): the focused step's show items first in rank order, then what the coach
-   highlights (5 s; the closer look's too), then the rest of the plan; one phrase per object for
-   the whole lesson. Only show items and highlights are lit (isShown); the rest is recorded.
+   points, 8 at most), what is lit first (overlay/lights.ts): the focused step's show items in
+   rank order, else its targets and its action's objects; the action focus's item; what the
+   coach highlights (a target for the step, a hint 5 s; the closer look's too). Then the rest of
+   the plan, unlit, for the recording. One phrase per object for the whole lesson; its words are
+   the action focus's once it has some (refine), until the plan's words for it change.
     ─► {type: objects} on /track (tracker/TRACK.md) ─► YOLOE-26 + ByteTrack on every frame,
        jev about once a second for all of them together
  camera frames (480 px, FrameStream, only while the session is shown and the set is not empty)
-    ─► one detection per object per frame
+    ─► one detection per object per frame (box, outline, state, score, source: jev | er)
     ─► LiveObjects (domain/world), per object: head pose at the frame's time, the depth it last
        measured (DepthMemory) or a new measurement (depth sensing, then hit-test, then planes),
        placeOutline, OutlineMotion (One Euro, latency predicted away)
-    ─► LiveHighlightsPresenter: the primary page's glow per object, depth-occluded, named
+    ─► LiveHighlightsPresenter: the primary page's glow per lit object, depth-occluded, named
     ─► registry.observe (detector, ~5 Hz, never while held; measured only when seen and measured
        on that frame) · registry.lose · TrackedObjectSample ─► observations.ndjson
+ ActionFocus (below) ─► LiveTracker.anchor ─► {type: anchor, source: er} on /track
+```
+
+**The action focus** (`domain/session/action-focus.ts`) corrects jev with Robotics-ER 2, whose
+boxes are more accurate. It runs with a camera, the live tracker and a Gemini key; `?focus=0`
+turns it off:
+
+```
+ a step entered, every 5 s while it stays focused, 0.5 s after a coach highlight; one at a time
+    ─► one 1024 px frame (CameraFocusFrames), goal, step, LiveTracking's objects (lit first)
+       ─► POST /api/vision/focus
+         └─ server: Robotics-ER 2, minimal thinking: a box and fresh words per object, and the
+            one thing to touch next
+    ─► sure boxes (confidence 0.5 or more) ─► {type: anchor} on /track: outranks jev for 6 s
+    ─► their words ─► LiveTracking.refine: what jev is told about the object from now on
+    ─► the action item ─► lit for the rest of the step; one the plan lacks, seen surely, is
+       declared by the lesson first (LessonController.declareObject, a material added by the app)
+    ─► focus.answered (the desk lab draws it) · a focus.answered annotation (the recording)
+ an answer for a step or a lesson that is over is dropped; 3 failures in a row pause it for 30 s
 ```
 
 The session asks for depth sensing when the tracker answered before entering AR. While the
 tracker follows the show items, Spotlight stops looking at them again (its one-shot looks stay),
 and `OutlinesPresenter` leaves an object whose live light is on to it. When the tracker is down
-or drops, everything falls back to Spotlight and the connection keeps retrying. The dependency is
-one way: the plan and the coach say what to follow, and nothing the tracker sees reaches the
-coach.
+or drops, everything falls back to Spotlight, `OverlayModel`'s rings light the same set as the
+tracker would, and the connection keeps retrying. The dependency is one way: the plan, the coach
+and the action focus say what to follow, and nothing the tracker or the action focus sees
+reaches the coach.
+
+An anchor for an object the set does not have yet (an action item the lesson has just declared)
+waits up to 2 s for the set that has it; without a tracker, or before the set is sent on a new
+connection, anchors are dropped.
 
 Tracking is layered. Each layer covers the others' blind spots:
 
 | Layer                  | When                                                                                                                           | How                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Accuracy                                                 |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| **Live tracking**      | every camera frame for every declared object while the tracker runs; lit only for what the step shows and the coach highlights | `/track` objects mode (above): YOLOE-26 + ByteTrack, jev about once a second. Each outline is placed at the object's distance measured along its camera rays (depth sensing, then hit-test) with the head pose of its frame, then smoothed. Registry estimates are `detector`, flagged not measured when coasting or at a reused distance                                                                                                                         | depth-sensing accuracy                                   |
+| **Live tracking**      | every camera frame for every declared object while the tracker runs; lit for what the learner should touch (overlay/lights.ts) | `/track` objects mode (above): YOLOE-26 + ByteTrack, jev about once a second, Robotics-ER 2's boxes as anchors every 5 s. Each outline and box is placed at the object's distance measured along its camera rays (depth sensing, then hit-test) with the head pose of its frame, then smoothed. Registry estimates are `detector`, flagged not measured when coasting or at a reused distance                                                                     | depth-sensing accuracy                                   |
 | **Camera grounding**   | plan start, step start, after a release, on `highlight`; every few seconds without the tracker                                 | A passthrough camera frame and each object's words (the step's show description, else its tracking query) go to `/api/vision/locate` (Gemini spatial understanding → 2D point + box, or an HTTP finder such as jev → outline). `liftDetection` casts camera rays using the head pose at capture time: depth comes from where the box's bottom meets a real surface (WebXR plane detection, falling back to the workspace plane), height from the detection point. | ±1–2 cm for static props when calibrated (see dev-setup) |
 | **Held objects**       | while pinched or fist-gripped                                                                                                  | `GraspTracker` attaches the object to the wrist with the grip offset, so it rides the 90 Hz hand tracking with no camera latency                                                                                                                                                                                                                                                                                                                                  | hand-tracking accuracy                                   |
 | **Pinch registration** | the camera can't find something                                                                                                | The next free-space pinch registers the next missing object (current step's targets first). It counts as trusted only when exactly one object was missing; otherwise it draws outlines, but a Gemini coach's checks don't use it                                                                                                                                                                                                                                  | fingertip accuracy                                       |
@@ -303,12 +334,14 @@ Camera facts that shaped this (October 2026):
 ### 5.7 Coach (`domain/coach`, `adapters/gemini`, `adapters/scripted`)
 
 **Two models.** The coach is two models working at the same time:
-- **The voice** is the realtime model (`gemini-3.8-live`, native audio in and out). It is the only
+- **The voice** is the realtime model (`gemini-3.8-live-extended-thinking`, native audio in and
+  out, thinking at LOW). It is the only
   one that talks with the learner. It sees one small frame every 4 s, listens, speaks, and calls
   the tools. It never waits on the smart model.
 - **The smart model** is Gemini Robotics-ER 2 (`gemini-robotics-er-2-preview`). It plans and
   re-plans lessons (`/api/plans`), watches whether the step is done (`/api/plans/check`), finds
-  objects (`/api/vision/locate`) and takes a closer look when the voice asks (`/api/scene/ask`). It
+  objects (`/api/vision/locate`), boxes the next thing to touch for the tracker
+  (`/api/vision/focus`, §5.6) and takes a closer look when the voice asks (`/api/scene/ask`). It
   never speaks to the learner.
 
 They talk only in words. The voice hands work to the smart model through tools that never hold it
@@ -316,6 +349,15 @@ up: `start_lesson` and `revise_plan` answer at once and the plan arrives later a
 narration, and `look_closer` is non-blocking (below). The smart model's results reach the voice
 as narrations, through the narration gate, or as `look_closer`'s result, and the voice says them in
 its own words. Coordinates and detections go only to the AR side.
+
+**The voice leads.** It infers the goal from what the learner says or shows and calls
+`start_lesson` without an interview, saying in one short sentence what it starts. On "no, that's
+not what I want" it stops, says so in a few words and acts on what they do want: `start_lesson`
+replaces the running lesson at once, `update_step` or `revise_plan` fixes a wrong step, and when
+they name nothing, `end_lesson` ends the lesson without another and it asks what they want. Every
+time it asks the learner to touch, move or operate something, it calls `highlight` (target) on
+that thing in the same turn, before saying it, with `look_for` when the plan lacks it
+([coach-plan.md](coach-plan.md)).
 
 **A closer look** (`domain/session/closer-look.ts`). The voice's frames are small and blurry, and
 in tests it called a table with a large knife on it "safe". So whenever the learner asks whether
@@ -341,7 +383,7 @@ about 1 s after it arrives, so 3 to 4 s after the question.
 
 `CoachSession` wires a `RealtimeAgent` to:
 - the mic (16 kHz PCM) and the speaker (24 kHz PCM, barge-in flush);
-- the `CoachToolbox`, which validates and records the nine tools;
+- the `CoachToolbox`, which validates and records the eleven tools;
 - the `Narrator`, which turns lesson events into `[app]` narrations. For a Gemini coach they wait
   while either side is talking (up to 6 s), then go out merged into one message. A briefing for a
   step that lost focus meanwhile is dropped;
@@ -354,12 +396,13 @@ Tools:
 | Tool                                                               | What it does                                             |
 | ------------------------------------------------------------------ | -------------------------------------------------------- |
 | `start_lesson(goal, context?, template_id?)`                       | starts a lesson; the draft arrives as an `[app]` message |
+| `end_lesson(reason)`                                               | ends the lesson at once without starting another         |
 | `revise_plan(reason)`                                              | re-plans the steps not done yet through the planner      |
 | `add_step(text, done_when, after_step_id?, objects?)`              | adds a step, at the end by default                       |
 | `update_step(step_id, text?, done_when?, note?, status?, reason?)` | rewrites, notes, skips, reopens or refocuses a step      |
 | `complete_step(step_id, reason, evidence)`                         | a step is done; `evidence` is `seen` or `heard`          |
 | `add_material(label, look_for?)`                                   | something the plan didn't list, e.g. a funnel            |
-| `highlight(object_id, style?)`                                     | emphasizes an object (locates it if unknown)             |
+| `highlight(object_id, style?, look_for?)`                          | lights an object; `look_for` adds one the plan lacks     |
 | `show_demo(step_id?)`                                              | plays the step's demonstration                           |
 | `flag_mistake(kind, message)`                                      | a coach-noticed mistake, shown and labeled               |
 | `look_closer(question)`                                            | asks the smart model; non-blocking, answers in 1 to 3 s  |
@@ -386,6 +429,7 @@ watcher never completes a step itself. Every answer is recorded as a `step.watch
 distances, pinches, detections, or missing and registered objects. It is told only what the
 learner can see: whether a highlight or a demonstration is showing, so it doesn't point at an
 outline that isn't there. `highlight` answers `shown: false` while the object has no position yet.
+The action focus's boxes and words go only to the tracker and the lights.
 Checks and mistake rules see only trusted positions: hand tracking, markers, manual placements, the
 mat (`layout`) on a calibrated workspace, and a pinch that registered the only missing object. A
 held object keeps the trust of where it was measured. The HUD and the recording still get
@@ -393,7 +437,12 @@ everything. Under local authority (the scripted coach, no coach, `record_demo`, 
 connection that is down), checks use every position, as before, and a Gemini coach isn't told rule
 mistakes. The scripted coach can't see, so it still hears about missing objects and pinches.
 
-**Gemini Live** (`gemini-3.8-live`):
+**Gemini Live** (`gemini-3.8-live-extended-thinking`; `GEMINI_LIVE_MODEL=gemini-3.8-live` is the
+same build without thinking, about 2 s quicker to call a tool):
+- **Thinking voice:** it closes the session on a `BLOCKING` declaration, on a response's
+  `scheduling` and without a thinking level (MINIMAL is refused), so the adapter declares the tools
+  without `behavior`, answers without `scheduling` and asks for LOW (`adapters/gemini/live-model.ts`).
+  It then waits for every answer, `look_closer`'s included.
 - **Relay transport (default):** the SDK connects to the laptop, which injects the key, so the
   headset needs no key and no internet.
 - **Direct transport:** ephemeral tokens.
@@ -456,6 +505,7 @@ A stale briefing dropped at that point is a `coach.narration_dropped` annotation
 | `POST /api/plans/check`                                               | the step watcher: frames + step → `done`, `not_done` or `unsure`, progress, what was wrong   |
 | `POST /api/plans/criteria`                                            | the step watcher, once per step: start frame + step → 2 to 4 criteria a camera can confirm   |
 | `POST /api/vision/locate`                                             | the object finder: Gemini, or any HTTP finder at `CLIO_VISION_URL` (docs/object-finder.md)   |
+| `POST /api/vision/focus`                                              | the action focus (Robotics-ER 2): frame + step → boxes, words for jev, the thing to touch    |
 | `GET /api/episodes[/:id[/frames\|events\|objects]]`                   | browse / replay                                                                              |
 | `POST /api/scene/ask`                                                 | the voice's closer look: frames + question → hazard, answer in words, points (smart model)   |
 | `GET /api/procedures[/:id]`                                           | curated (`procedures/`) + generated (`data/plans/`)                                          |

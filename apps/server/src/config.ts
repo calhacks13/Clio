@@ -4,7 +4,8 @@ import { prettifyError, z } from 'zod';
 /** The monorepo root. pnpm runs scripts with cwd `apps/server`, so never resolve against cwd. */
 export const REPO_ROOT = resolve(import.meta.dirname, '..', '..', '..');
 
-export const DEFAULT_LIVE_MODEL = 'gemini-3.8-live';
+/** The voice: 3.8 Live with thinking (at LOW), a little sharper than plain gemini-3.8-live. */
+export const DEFAULT_LIVE_MODEL = 'gemini-3.8-live-extended-thinking';
 /** Gemini Robotics-ER 2: embodied reasoning (pointing, success detection, task plans). */
 export const ROBOTICS_ER_MODEL = 'gemini-robotics-er-2-preview';
 export const DEFAULT_PLANNER_MODEL = ROBOTICS_ER_MODEL;

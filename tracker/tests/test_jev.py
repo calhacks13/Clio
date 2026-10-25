@@ -1,4 +1,4 @@
-"""The jev client (from the jev finder, unchanged): the request, the gate, no retries."""
+"""The jev client (from the jev finder): the request, the gate, no retries."""
 
 from __future__ import annotations
 
@@ -44,11 +44,13 @@ def test_one_request_asks_noul_and_box_for_every_object(fake_jev):
     asset = body["assets"][asset_id]
     assert asset["type"] == "image" and asset["format"] == "jpg"
     assert base64.b64decode(asset["data_base64"]) == JPEG
-    # The phrase fills the benchmarked templates; the description is context for Box only.
+    # The phrase fills the benchmarked templates. With a description, Noul asks about the one it
+    # describes (the phrase alone is any of its kind), and Box gets it as context.
     assert body["questions"] == {
         "present_washer_cap": {
             "type": "noul",
-            "instructions": "Is there a blue washer fluid cap visible in `photo`?",
+            "instructions": "Is the blue washer fluid cap described below visible in `photo`? "
+            "Description: Round blue cap with a spray symbol, at the front left.",
         },
         "target_washer_cap": {
             "type": "box",

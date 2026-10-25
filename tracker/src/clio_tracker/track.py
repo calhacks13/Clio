@@ -12,7 +12,10 @@ covering less than half of it) is followed by part.py instead, never as the whol
 In objects mode (an `objects` message, for a lesson), the page names several objects in words
 instead and gets one `detections` answer per frame. jev places them about once a second, in one
 call for all that are due, and each is followed as `POST /locate` with a session follows it
-(session.py), in a TrackerSession of the connection's own.
+(session.py), in a TrackerSession of the connection's own. An `anchor` is Gemini Robotics-ER 2's
+box for one of them, on a frame the page captured a few seconds ago: the session places the
+object from it as from a jev answer, and it outranks jev's answers for a while; its words, if
+any, are what jev is told about the object from then on.
 
 With a segmenter (segment.py), each target's outline is its mask: jev's box is cut out of jev's
 frame as a keyframe, and again around the target whenever its tracker doubts the mask it has,
@@ -60,6 +63,7 @@ MAX_HEADER_BYTES = 4096
 # page's 15 frames a second, about 50 KB each.
 FRAMES_KEPT = 300
 MAX_OBJECTS = 8  # followed at once in objects mode; the rest of a longer set is ignored
+ANCHOR_SOURCES = ("er",)  # who may send an anchor's box: Gemini Robotics-ER 2
 WORD = re.compile(r"\w")
 
 
@@ -90,7 +94,20 @@ class ObjectSet:
     objects: list[Query]
 
 
-Command = TargetBox | ObjectSet | None  # None is `clear`
+@dataclass(frozen=True)
+class Anchor:
+    """Objects mode: another finder's box for one object of the set, on the frame the page
+    captured at `t` (ms, the frames' clock). `query`, when given, is what jev is told about the
+    object from now on."""
+
+    id: str
+    t: float
+    box: tuple[float, float, float, float]
+    source: str = "er"
+    query: str | None = None
+
+
+Command = TargetBox | ObjectSet | Anchor | None  # None is `clear`
 
 
 def parse_frame(data: bytes) -> tuple[FrameHeader, bytes]:
@@ -115,7 +132,7 @@ def parse_frame(data: bytes) -> tuple[FrameHeader, bytes]:
 
 
 def parse_command(text: str) -> Command:
-    """A text message: a target box, a set of objects, or None for `clear`."""
+    """A text message: a target box, a set of objects, an anchor, or None for `clear`."""
     try:
         message = json.loads(text)
     except json.JSONDecodeError as e:
@@ -125,22 +142,47 @@ def parse_command(text: str) -> Command:
         return None
     if kind == "objects":
         return _object_set(message.get("objects"))
+    if kind == "anchor":
+        return _anchor(message)
     if kind != "target":
-        raise BadMessage(f"Unknown message type {kind!r}: send target, objects or clear.")
-    seq, box, name = message.get("seq"), message.get("box"), message.get("name")
+        raise BadMessage(f"Unknown message type {kind!r}: send target, objects, anchor or clear.")
+    seq, name = message.get("seq"), message.get("name")
     if not _is_int(seq):
         raise BadMessage("The target needs the integer seq of the frame jev measured.")
-    if not (isinstance(box, list) and len(box) == 4 and all(_is_number(v) for v in box)):
-        raise BadMessage("The target box must be [left, top, right, bottom].")
-    x0, y0, x1, y1 = (float(v) for v in box)
-    if not (0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1):
-        raise BadMessage("The target box must be in 0..1 with left < right and top < bottom.")
+    box = _box(message.get("box"), "target")
     if name is not None and not isinstance(name, str):
         raise BadMessage("The target name must be a string.")
     part = message.get("part")
     if part is not None and not isinstance(part, bool):
         raise BadMessage("The target's part must be true or false.")
-    return TargetBox(seq, [x0, y0, x1, y1], name, bool(part))
+    return TargetBox(seq, list(box), name, bool(part))
+
+
+def _box(box, what: str) -> tuple[float, float, float, float]:
+    """A message's box: [left, top, right, bottom] in 0..1, origin top left."""
+    if not (isinstance(box, list) and len(box) == 4 and all(_is_number(v) for v in box)):
+        raise BadMessage(f"The {what} box must be [left, top, right, bottom].")
+    x0, y0, x1, y1 = (float(v) for v in box)
+    if not (0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1):
+        raise BadMessage(f"The {what} box must be in 0..1 with left < right and top < bottom.")
+    return x0, y0, x1, y1
+
+
+def _anchor(message: dict) -> Anchor:
+    """An `anchor` message, checked as an object of an `objects` message is."""
+    oid, t, source, query = (message.get(k) for k in ("id", "t", "source", "query"))
+    if not isinstance(oid, str) or not 0 < len(oid) <= 200:
+        raise BadMessage("The anchor needs the id of an object, 1 to 200 characters.")
+    if not _is_number(t):
+        raise BadMessage(f"{oid}: the anchor needs the capture time t of the frame it boxed.")
+    box = _box(message.get("box"), "anchor")
+    if source is not None and source not in ANCHOR_SOURCES:
+        raise BadMessage(f"{oid}: the anchor's source must be one of {', '.join(ANCHOR_SOURCES)}.")
+    if query is not None:
+        query = query.strip() if isinstance(query, str) else ""
+        if not WORD.search(query) or len(query) > 1000:
+            raise BadMessage(f"{oid}: the anchor's query must be words, at most 1000 characters.")
+    return Anchor(oid, float(t), box, source or ANCHOR_SOURCES[0], query)
 
 
 def _object_set(objects) -> ObjectSet:
@@ -421,6 +463,19 @@ class ObjectsTracker:
             log.info("Track: objects %s", ", ".join(ids) or "none")
         self.objects = list(objects)
 
+    def anchor(self, anchor: Anchor) -> None:
+        """Another finder's box for an object of the set: the session places the object from it
+        on the next frame. Its query replaces what jev is told about the object; the phrase
+        stays, so the track goes on. An id outside the set is logged and skipped."""
+        followed = next((q for q in self.objects if q.id == anchor.id), None)
+        if followed is None:
+            log.warning("Track: an anchor for %s, which is not followed; skipped", anchor.id)
+            return
+        if anchor.query is not None and anchor.query != followed.query:
+            words = Query(followed.id, anchor.query, followed.phrase)
+            self.objects = [words if q.id == anchor.id else q for q in self.objects]
+        self.session.anchor(anchor.id, anchor.t, anchor.box, anchor.source)
+
     def step(self, header: FrameHeader, jpeg: bytes) -> dict:
         """Follows every object on one frame and answers with the detections message."""
         started = perf_counter()
@@ -436,7 +491,7 @@ class ObjectsTracker:
         ms["decode"] = _ms(started)
         tracking = perf_counter()
         image = FrameImage(jpeg, "image/jpeg", rgb)
-        sightings, size, _ = self.session.follow(image, self.objects)
+        sightings, size, _ = self.session.follow(image, self.objects, header.t)
         ms["track"] = _ms(tracking)
         detections = [_tracked(q.id, s, size) for q, s in zip(self.objects, sightings, strict=True)]
         found = [d["found"] for d in detections]
@@ -480,14 +535,17 @@ def _tracked(object_id: str, s: Sighting, size: tuple[int, int] | None = None) -
         "contact": shape.contact if shape else None,
         "score": round(s.confidence, 3) if found else None,
         "track": s.track_id if found else None,
+        # the finder that last placed it, found or not: jev, er (an anchor), or null before any
+        "source": s.finder,
     }
 
 
 class Modes:
     """A /track connection's mode (TRACK.md): one target until the page sends `objects`, then
     objects until it sends a `target`. Switching either way drops what the other mode followed.
-    The objects' TrackerSession is made on the first `objects` and kept for the connection, so
-    a jev call still on the way counts against the one in flight if objects come back."""
+    An `anchor` is for objects mode; in target mode it is logged and skipped. The objects'
+    TrackerSession is made on the first `objects` and kept for the connection, so a jev call
+    still on the way counts against the one in flight if objects come back."""
 
     def __init__(self, target: StreamTracker, session: Callable[[], TrackerSession]):
         self.target = target
@@ -498,7 +556,13 @@ class Modes:
 
     def command(self, command: Command) -> None:
         """Applies a message before the next frame."""
-        if isinstance(command, ObjectSet):
+        if isinstance(command, Anchor):
+            if self.in_objects_mode:
+                assert self.objects is not None
+                self.objects.anchor(command)
+            else:
+                log.warning("Track: an anchor for %s in target mode; skipped", command.id)
+        elif isinstance(command, ObjectSet):
             if not self.in_objects_mode:
                 self.target.reset()
                 self.in_objects_mode = True

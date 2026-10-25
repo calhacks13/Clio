@@ -88,8 +88,9 @@ export const ShowItemSchema = z
   .object({
     object: SlugSchema.describe('The declared object this item outlines'),
     role: HighlightRoleSchema.optional().describe(
-      'Its highlight color by meaning (apps/headset/DESIGN.md). Left out: containers and ' +
-        'regions are destinations, the first other item is what to act on',
+      "Its highlight color by meaning (apps/headset/DESIGN.md). Left out: what the step's " +
+        'action moves is what to act on and its target the destination; otherwise containers ' +
+        'and regions are destinations and the first other item is what to act on',
     ),
     phrase: z
       .string()

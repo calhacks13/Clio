@@ -1,5 +1,5 @@
 /// <reference path="../../src/adapters/render/troika.d.ts" />
-import { parseProcedure, type Step } from '@clio/protocol';
+import { type Procedure, parseProcedure, type Step } from '@clio/protocol';
 import type { WebGLRenderer } from 'three';
 import { Object3D } from 'three';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -89,6 +89,14 @@ const procedure = parseProcedure({
   ],
 });
 const [OPEN, DONE] = procedure.steps as [Step, Step];
+/** The plan once the lesson has declared the sponge (the action focus's item, say). */
+const withSponge = parseProcedure({
+  ...procedure,
+  objects: [
+    ...procedure.objects,
+    { id: 'sponge', label: 'yellow sponge', placement: { method: 'detect' } },
+  ],
+});
 
 const DEG = Math.PI / 180;
 const model: CameraModel = {
@@ -101,11 +109,11 @@ const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 const xrFrame = { session: { inputSources: [] } } as unknown as XRFrame;
 const frame = {} as XRFrame;
 
-function setup() {
+function setup({ plan = () => procedure }: { plan?: () => Procedure } = {}) {
   const bus = new Emitter<AppEvents>();
   const clock = new ManualClock(1000);
   const registry = new ObjectRegistry(bus);
-  registry.load(procedure.objects, 0);
+  registry.load(withSponge.objects, 0);
   const poses = new PoseHistory();
   poses.push(0, { p: [0, 1.25, 0], q: quatFromAxisAngle([1, 0, 0], -20 * DEG) });
   const sockets: FakeSocket[] = [];
@@ -118,7 +126,7 @@ function setup() {
     camera,
     surfaces: { cast: () => null },
     workspace: () => new Workspace({ p: [0, 0.72, -0.5], q: [0, 0, 0, 1] }),
-    procedure: () => procedure,
+    procedure: plan,
     trackerPort: 8790,
     frameWidth: null,
     hideHeld: false,
@@ -297,6 +305,77 @@ describe('LiveTracker', () => {
     expect(live.panelMasks).toHaveLength(2);
     live.stop();
     expect(live.panelMasks).toEqual([]);
+  });
+
+  it("hands Robotics-ER's boxes to the tracker as anchors, only for the set it follows", async () => {
+    const { live, sockets, start, enter } = setup();
+    const anchor = {
+      id: 'cap',
+      box: [0.4, 0.5, 0.5, 0.6] as [number, number, number, number],
+      t: 980,
+      query: 'Round blue plastic cap with a yellow ring',
+    };
+    // No tracker yet: dropped.
+    live.anchor(anchor);
+    const connected = live.connect();
+    sockets[0]?.accept();
+    await connected;
+    // Connected, but the set is not sent yet (still target mode): dropped.
+    live.anchor(anchor);
+    expect(sockets[0]?.messages).toEqual([]);
+    start();
+    enter(OPEN);
+    live.perceive(frame, 1000);
+    live.anchor(anchor);
+    // Not in the set: dropped.
+    live.anchor({ ...anchor, id: 'sponge' });
+    const { query: _words, ...bare } = anchor;
+    live.anchor(bare);
+    expect(sockets[0]?.messages.slice(1)).toEqual([
+      { type: 'anchor', ...anchor, source: 'er' },
+      { type: 'anchor', ...bare, source: 'er' },
+    ]);
+    // A new connection is in target mode until the set is sent again.
+    vi.useFakeTimers();
+    sockets[0]?.drop();
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+    sockets[1]?.accept();
+    live.anchor(anchor);
+    expect(sockets[1]?.messages).toEqual([]);
+    live.perceive(frame, 1016);
+    live.anchor(anchor);
+    expect(sockets[1]?.messages.at(-1)).toEqual({ type: 'anchor', ...anchor, source: 'er' });
+    live.stop();
+  });
+
+  it('holds an anchor for an object the set lacks until the set has it, for a moment', async () => {
+    let plan = procedure;
+    const { live, sockets, start, enter, bus, clock } = setup({ plan: () => plan });
+    const connected = live.connect();
+    sockets[0]?.accept();
+    await connected;
+    start();
+    enter(OPEN);
+    live.perceive(frame, 1000);
+    const anchor = { id: 'sponge', box: [0.6, 0.6, 0.7, 0.7] as [number, number, number, number] };
+    live.anchor({ ...anchor, t: 990 });
+    // The lesson declares the sponge: the next set has it, then its anchor follows.
+    plan = withSponge;
+    bus.emit('plan.changed', { t: 1001, rev: 2, op: 'add', stepId: null });
+    live.perceive(frame, 1016);
+    const sent = sockets[0]?.messages ?? [];
+    expect(sent.slice(-2)).toEqual([
+      expect.objectContaining({ type: 'objects' }),
+      { type: 'anchor', ...anchor, t: 990, source: 'er' },
+    ]);
+    // One for an object that never joins goes after a while, unsent.
+    live.anchor({ ...anchor, id: 'kettle', t: 1020 });
+    clock.advance(2500);
+    live.perceive(frame, 1040);
+    live.perceive(frame, 1056);
+    expect(sockets[0]?.messages.some((m) => (m as { id?: string }).id === 'kettle')).toBe(false);
+    live.stop();
   });
 
   it("puts the tracker's answers in the registry as the camera's untrusted detector", async () => {

@@ -43,6 +43,74 @@ To test the planner alone on hard scenes, open `http://localhost:5173/bench.html
 To see every UI in its states and iterate on it with hot reload, open
 `http://localhost:5173/gallery.html` (states are data in `apps/headset/src/gallery/states.ts`).
 
+### Desk lab
+
+The desk lab runs a whole lesson on the laptop's camera and microphone, without the headset: the
+voice coach, the planner, the step watcher, the tracker and Robotics-ER's action focus, with what
+the tracker follows drawn over the webcam picture.
+
+```bash
+pnpm dev                                   # server on :8787, page on :5173
+pnpm tracker                               # the tracker on :8790 (without it, nothing is followed)
+open http://localhost:5173/desk.html       # Chrome; allow the camera and the microphone
+```
+
+Press **Start**: a browser lets a page play sound only after a click. Then talk to it as you would
+on the headset ("I want to water the basil"), type the same into the text box, or write a goal and
+press **Start lesson**. Wear headphones: the coach's voice on the speakers reaches the microphone.
+
+**What runs.** `apps/headset/src/desk/desk-lab.ts` composes the headset's own lesson: Gemini Live
+over the relay with the server's live model (the scripted coach without a key), the planner and the
+curated lessons, the step watcher, the closer look, the tracker in objects mode and the action
+focus, whose boxes anchor the tracker. What needs the room is stood in for or left out. An object
+the finder or the tracker sees gets a stand-in position on a flat table, so the lesson knows it was
+found and `highlight` shows it. There are no hands, so hand checks never pass: Done or the coach
+completes a step. There are no ghost-hand demos, and nothing is recorded.
+
+**The picture.** The webcam is not mirrored, so the boxes line up. Each object the tracker follows
+has its outline, its bounding box and a tag (label, tracking state, who placed it last, `jev` or
+`er`, and the score). A lit object (the step shows it, the coach highlights it, or ER named it as the
+next thing to touch) glows in its role color; one followed only for the data is a thin white line.
+ER's boxes are dashed and fade over 1.5 s, and the next thing to touch has a dot and a "next:" tag.
+
+**The panel.**
+- **Lesson**: the phase, the goal, the steps (✓ done, – skipped, ● the focused one), what is lit and
+  the step watcher's last answer.
+- **Conversation**: the learner and the coach as transcribed, typed turns, and the `[app]` messages
+  the voice was sent.
+- **Coach tool calls**: every call with its arguments and result, and a count per tool. A yellow
+  `highlight 0` stays until the voice calls `highlight`.
+- **Robotics-ER focus**: each look, with its latency, how old its frame was, the next thing to touch
+  (marked when the lesson declared it from ER's words) and ER's words for each object.
+- **Tracker**: the connection, frames per second, the time to an answer, the objects followed, lit
+  and found, who placed them, and the object finder's last one-shot look.
+
+**Controls.** **Coach** switches between Gemini Live and the scripted coach and restarts the voice.
+**Camera** picks any camera Chrome sees: an iPhone (Continuity Camera) or a USB camera looking down
+at the table gets closer to the headset's view. **Mute mic** sends the voice silence. The text box
+sends a typed turn to the voice as the learner's own words. **Start lesson** starts the goal as
+`start_lesson` would, and **Done** is the learner's Done button.
+
+| Option                              | Default  | Meaning                                                 |
+| ----------------------------------- | -------- | ------------------------------------------------------- |
+| `coach=gemini\|scripted`            | `gemini` | voice coach (falls back to scripted without a key)      |
+| `goal=…`                            |          | plan this lesson on Start                               |
+| `procedure=<id>`                    |          | run a curated lesson on Start                           |
+| `focus=0`                           | on       | no action focus (Robotics-ER is never asked)            |
+| `mic=0`                             | on       | start with the microphone muted                         |
+| `frame=640\|512\|480\|320`          | `640`    | width of the frames streamed to the tracker             |
+| `tracker=<port>`                    |          | a tracker on this local port instead of the proxied one |
+| `transport`, `voice`, `showRefresh` |          | as on the headset (§4)                                  |
+
+From the console, `window.desk` drives it: `desk.say('…')`, `desk.goal('…')`, `desk.done()`,
+`desk.coach('scripted')`, `desk.mute()`, and reads it: `desk.plan()`, `desk.objects()`,
+`desk.stats()`, `desk.tools.entries`, `desk.bus`, `desk.lesson`.
+
+To run it beside another Clio on the default ports, give each part its own:
+`CLIO_SERVER_PORT=8797 CLIO_VISION_URL=http://127.0.0.1:8794/locate pnpm dev:server`,
+`uv run --project tracker --extra coreml clio-tracker --port 8794`, and
+`CLIO_SERVER_URL=http://127.0.0.1:8797 CLIO_TRACKER_URL=http://127.0.0.1:8794 pnpm --filter @clio/headset exec vite --port 5177`.
+
 ## 3. Quest 3
 
 1. **Developer mode:** in the Meta Horizon phone app, go to your headset → Developer Mode. This
@@ -92,20 +160,22 @@ offset, adjust `DEFAULT_HEAD_FROM_CAMERA`, or better, implement marker self-cali
 
 ## 4. URL options
 
-| Option                        | Default             | Meaning                                                                       |
-| ----------------------------- | ------------------- | ----------------------------------------------------------------------------- |
-| `coach=gemini\|scripted\|off` | `gemini`            | voice coach (falls back to scripted without a key)                            |
-| `transport=relay\|direct`     | `relay`             | Gemini through the laptop, or with an ephemeral token                         |
-| `goal=…`                      |                     | plan this lesson right away                                                   |
-| `procedure=<id>`              |                     | run a saved lesson (e.g. `shirt-fold`, `ph-indicator`)                        |
-| `mode=learn\|record_demo`     | `learn`             | `record_demo`: an expert records ghost-hand demos                             |
-| `calibrate=1`                 | off                 | pinch two table corners first                                                 |
-| `camera=0`                    | on                  | disable the passthrough camera (pinch to register objects)                    |
-| `autoDemo=0`                  | on                  | don't auto-play each step's demo                                              |
-| `emulate=1`                   | auto on desktop dev | IWER Quest 3 emulator                                                         |
-| `debug=1`                     | off                 | HUD, tracked-hand overlay, hidden zones, workspace outline                    |
-| `voice=<name>`                |                     | Gemini prebuilt voice (e.g. `Kore`)                                           |
-| `showRefresh=<ms>`            | `3000`              | how often to look again at what the step shows (0: only when the step starts) |
+| Option                        | Default             | Meaning                                                                                 |
+| ----------------------------- | ------------------- | --------------------------------------------------------------------------------------- |
+| `coach=gemini\|scripted\|off` | `gemini`            | voice coach (falls back to scripted without a key)                                      |
+| `transport=relay\|direct`     | `relay`             | Gemini through the laptop, or with an ephemeral token                                   |
+| `goal=…`                      |                     | plan this lesson right away                                                             |
+| `procedure=<id>`              |                     | run a saved lesson (e.g. `shirt-fold`, `ph-indicator`)                                  |
+| `mode=learn\|record_demo`     | `learn`             | `record_demo`: an expert records ghost-hand demos                                       |
+| `calibrate=1`                 | off                 | pinch two table corners first                                                           |
+| `camera=0`                    | on                  | disable the passthrough camera (pinch to register objects)                              |
+| `autoDemo=0`                  | on                  | don't auto-play each step's demo                                                        |
+| `emulate=1`                   | auto on desktop dev | IWER Quest 3 emulator                                                                   |
+| `debug=1`                     | off                 | HUD, tracked-hand overlay, hidden zones, workspace outline                              |
+| `live=0`                      | on                  | don't follow the lesson's objects with the tracker's `/track` (Spotlight looks instead) |
+| `focus=0`                     | on                  | no Robotics-ER 2 action focus (it needs the camera, the tracker and a Gemini key)       |
+| `voice=<name>`                |                     | Gemini prebuilt voice (e.g. `Kore`)                                                     |
+| `showRefresh=<ms>`            | `3000`              | how often to look again at what the step shows (0: only when the step starts)           |
 
 ## 5. Data
 

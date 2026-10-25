@@ -87,6 +87,42 @@ def test_jev_looks_again_once_per_interval_not_per_frame(setup):
     assert len(jev.calls) == 2
 
 
+def test_an_object_jev_says_is_out_of_view_waits_the_interval_not_the_next_frame(setup):
+    # Asked again on every answer, an object that really is out of sight (in a closed fridge)
+    # kept jev busy eight times a second on a Quest.
+    _, jev, executor, _, frame = setup
+    frame(Thing(at(500), B))  # no cup in view: the fake jev answers not present
+    executor.run_all()
+    for _ in range(14):  # just under a second at 15 fps
+        frame(Thing(at(500), B))
+        executor.run_all()
+    assert len(jev.calls) == 1
+    frame(Thing(at(500), B), dt=0.1)
+    executor.run_all()
+    assert len(jev.calls) == 2
+
+
+def test_new_words_for_an_object_out_of_view_are_asked_about_at_once(setup):
+    _, jev, executor, _, frame = setup
+    frame(Thing(at(500), B))
+    executor.run_all()
+    sharper = Query("cup", "The blue ceramic cup inside the open cupboard", "blue cup")
+    frame(Thing(at(500), B), queries=(sharper,))
+    executor.run_all()
+    assert jev.calls == [[CUP], [sharper]]
+
+
+def test_an_object_jev_finds_again_is_asked_about_soon_once_lost(setup):
+    session, jev, executor, _, frame = setup
+    frame(Thing(at(500), B))
+    executor.run_all()  # out of view
+    jev.answers.append({"cup": (0.9, norm_box(at(100)))})
+    frame(Thing(at(100), A), dt=1.1)
+    executor.run_all()
+    frame(Thing(at(100), A))  # jev's answer applies on the next frame: found
+    assert len(jev.calls) == 2 and "cup" not in session._absent
+
+
 def test_no_more_than_max_in_flight(vision):
     clock, jev, executor = Clock(), FakeIdentifier(), ManualExecutor()
     session = TrackerSession(
@@ -341,6 +377,71 @@ def test_objects_mode_outline_comes_from_the_segmenter(vision, segmenter):
     assert cup["found"] and cup["state"] == "tracking"
     assert bounds(cup["outline"]) == pytest.approx(list(norm_box(JEV)), abs=2 / 960)
     assert cup["box"] == pytest.approx(list(norm_box(JEV)), abs=2 / 960)
+
+
+def anchored_lesson(vision, segmenter=None):
+    """A connection's Modes in objects mode on the cup (jev never answers), streaming `texture`
+    moved `shift` px right; FakeVision takes `things`, then the scenes laid out after them."""
+    jev, executor, clock, segmenting = FakeIdentifier(), ManualExecutor(), Clock(), ManualExecutor()
+    refresher = Refresher(segmenter, segmenting, clock=clock) if segmenter else None
+
+    def session() -> TrackerSession:
+        settings = SessionSettings()
+        return TrackerSession(
+            vision, jev, executor, settings, clock, segmenter=segmenter, refresher=refresher
+        )
+
+    modes = Modes(StreamTracker(vision), session)
+    modes.command(ObjectSet([CUP]))
+
+    def play(seq: int, shift: int = 0, things: tuple = ()) -> dict:
+        clock.t += 1 / 15
+        picture = np.ascontiguousarray(np.roll(texture(), shift, axis=1))
+        ok, jpeg = cv2.imencode(".jpg", picture)  # gray, so BGR or RGB alike
+        assert ok
+        vision.scenes.append(list(things))
+        header = FrameHeader(seq, 1000.0 + 66 * seq, 960, 720)
+        (cup,) = modes.step(header, jpeg.tobytes())["detections"]
+        return cup
+
+    return SimpleNamespace(modes=modes, play=play, segmenting=segmenting, jev=jev)
+
+
+def test_an_anchor_far_from_every_frame_is_carried_from_the_nearest_by_the_cameras_motion(vision):
+    from clio_tracker.track import Anchor
+
+    lesson = anchored_lesson(vision)
+    for seq in range(3):  # the camera pans: the picture moves 40 px right a frame
+        lesson.play(seq, 40 * seq, (Thing(at(100 + 40 * seq), A),))
+    # ER's frame was captured 200 ms before frame 0: no frame is near it, frame 0 the nearest.
+    lesson.modes.command(Anchor("cup", 1000.0 - 200, norm_box(at(100))))
+    lesson.play(3, 120, (Thing(at(220), A),))
+    cup = lesson.play(4, 160, (Thing(at(260), A),))
+    # Carried by the camera from frame 0 to now, it lands on the cup (where it was boxed, it
+    # would not).
+    assert cup["found"] and cup["source"] == "er"
+    assert cup["box"] == pytest.approx(list(norm_box(at(260))), abs=4 / 960)
+
+
+def test_an_anchors_box_is_cut_out_of_its_own_frame(vision, segmenter):
+    from clio_tracker.track import Anchor
+
+    lesson = anchored_lesson(vision, segmenter)
+    for seq in range(3):
+        lesson.play(seq, 0, (Thing(at(100), A),))
+    lesson.modes.command(Anchor("cup", 1000.0 + 66, norm_box(JEV)))  # boxed on frame 1
+    vision.scenes.append([Thing(at(100), A)])  # frame 1 again, encoded for the anchor
+    lesson.play(3, 0, (Thing(at(100), A),))
+    assert len(lesson.segmenting.pending) == 1  # the anchor's keyframe
+    lesson.segmenting.run_all()
+    ((_, _, box),) = segmenter.calls
+    assert box == pytest.approx(JEV)
+    for seq in range(4, 8):
+        cup = lesson.play(seq, 0, (Thing(at(100), A),))
+    session = lesson.modes.objects.session
+    assert session._objects["cup"].follower.reference_seq == 2  # the session's count of frame 1
+    assert cup["found"] and cup["source"] == "er"
+    assert bounds(cup["outline"]) == pytest.approx(list(norm_box(JEV)), abs=2 / 960)
 
 
 def test_the_session_carries_on_without_the_segmenter_once_its_executor_is_shut_down(

@@ -12,9 +12,10 @@ vi.mock('../../src/adapters/render/text', () => ({
   },
 }));
 
+import { ApiClient } from '../../src/adapters/net/api-client';
 import type { TrackerSocket } from '../../src/adapters/net/tracker-client';
 import type { XrRuntime } from '../../src/adapters/xr/xr-session';
-import { ClioApp } from '../../src/app/clio-app';
+import { type ActionFocusWiring, ClioApp, createActionFocus } from '../../src/app/clio-app';
 import { LiveTracker } from '../../src/app/live-tracker';
 import { ManualClock } from '../../src/core/clock';
 import { Emitter } from '../../src/core/emitter';
@@ -53,6 +54,11 @@ class FakeSocket implements TrackerSocket {
   /** The camera frames sent (binary). */
   get frames(): number {
     return this.sent.filter((d) => typeof d !== 'string').length;
+  }
+
+  /** The JSON messages sent. */
+  get messages(): { type: string; [key: string]: unknown }[] {
+    return this.sent.filter((d) => typeof d === 'string').map((d) => JSON.parse(d as string));
   }
 }
 
@@ -151,6 +157,119 @@ async function streaming() {
   };
   return { bus, clock, live, socket, answer };
 }
+
+/** A server whose action focus finds the cap, sure of it, in sharper words. */
+function focusServer() {
+  const asked: { url: string; body: { objects: { id: string }[] } }[] = [];
+  const fetch = (async (url: string, init?: RequestInit) => {
+    asked.push({ url, body: JSON.parse(String(init?.body)) });
+    const answer = {
+      detections: [
+        {
+          id: 'cap',
+          found: true,
+          box: [0.4, 0.5, 0.5, 0.6],
+          point: [0.45, 0.55],
+          confidence: 0.9,
+          description: 'Round blue plastic cap with a yellow ring, front left',
+        },
+      ],
+      action: null,
+      model: 'gemini-robotics-er-2-preview',
+      latencyMs: 900,
+    };
+    return new Response(JSON.stringify(answer), { status: 200 });
+  }) as typeof globalThis.fetch;
+  return { api: new ApiClient('', fetch), asked };
+}
+
+describe('createActionFocus', () => {
+  beforeEach(() => {
+    vi.stubGlobal('document', {
+      visibilityState: 'visible',
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      createElement: () => ({
+        width: 0,
+        height: 0,
+        getContext: () => ({ drawImage() {} }),
+        toDataURL: () => 'data:image/jpeg;base64,AAAA',
+      }),
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const wiring = async (extra: Partial<ActionFocusWiring> = {}) => {
+    const { bus, clock, live, socket } = await streaming();
+    const { api, asked } = focusServer();
+    const view = {
+      procedure: () => procedure,
+      label: (id: string) => (id === 'cap' ? 'washer cap' : id),
+      plan: () => null,
+    };
+    const camera = {
+      capture: async () => ({ t: clock.now(), width: 1280, height: 960, jpegBase64: '/9j/4AAQ' }),
+    };
+    const w: ActionFocusWiring = {
+      bus,
+      clock,
+      api,
+      camera,
+      live,
+      lesson: { declareObject: () => null, view: () => view },
+      wanted: true,
+      gemini: true,
+      ...extra,
+    };
+    return { w, bus, clock, live, socket, asked };
+  };
+
+  it('runs only with a camera, the live tracker and a Gemini key, unless turned off', async () => {
+    const { w, live } = await wiring();
+    expect(createActionFocus(w)).not.toBeNull();
+    expect(createActionFocus({ ...w, wanted: false })).toBeNull();
+    expect(createActionFocus({ ...w, gemini: false })).toBeNull();
+    expect(createActionFocus({ ...w, camera: null })).toBeNull();
+    expect(createActionFocus({ ...w, live: null })).toBeNull();
+    live.stop();
+  });
+
+  it('asks Robotics-ER about the step, anchors the tracker with its box and tells jev its words', async () => {
+    const { w, bus, clock, live, socket, asked } = await wiring();
+    const focus = createActionFocus(w);
+    const detach = focus?.attach();
+    bus.emit('step.entered', {
+      t: clock.now(),
+      stepId: 'open',
+      index: 0,
+      instruction: 'Open the cap.',
+      targets: ['cap'],
+    });
+    await focus?.tick(clock.now());
+    expect(asked.map((a) => [a.url, a.body.objects.map((o) => o.id)])).toEqual([
+      ['/api/vision/focus', ['cap']],
+    ]);
+    const words = 'Round blue plastic cap with a yellow ring, front left';
+    expect(socket.messages.at(-1)).toEqual({
+      type: 'anchor',
+      id: 'cap',
+      t: clock.now(),
+      box: [0.4, 0.5, 0.5, 0.6],
+      source: 'er',
+      query: words,
+    });
+    // From now on jev is told ER's words for the cap; its phrase stays, so its track goes on.
+    live.perceive({} as XRFrame, clock.now());
+    expect(socket.messages.at(-1)).toEqual({
+      type: 'objects',
+      objects: [{ id: 'cap', phrase: 'blue washer cap', query: words }],
+    });
+    detach?.();
+    live.stop();
+  });
+});
 
 describe('ClioApp', () => {
   beforeEach(() => {

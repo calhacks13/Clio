@@ -4,14 +4,14 @@
 
 Any lesson starts from a goal ("help me fix my windshield wiper", "help me do the acid-base
 titration"). The coach turns the goal and what the camera sees into a list of steps, changes the
-list as the lesson goes, and judges when each step is done. The tracker, the segmenter and jev help
-the learner see (outlines, ghost hands) and label the dataset. They never feed a Gemini coach,
-which judges from the camera. The scripted coach can't see, so it is still told about missing and
-pinched objects.
+list as the lesson goes, and judges when each step is done. The tracker, the segmenter, jev and
+the action focus help the learner see (outlines, ghost hands, what to touch next) and label the
+dataset. They never feed a Gemini coach, which judges from the camera. The scripted coach can't
+see, so it is still told about missing and pinched objects.
 
-A Gemini coach is two models at once: the voice (`gemini-3.8-live`), which talks with the learner,
-and the smart model (Robotics-ER 2), which plans, watches the steps and takes a closer look when
-the voice asks. Only the voice speaks; the smart model's results reach it as text
+A Gemini coach is two models at once: the voice (`gemini-3.8-live-extended-thinking`), which talks
+with the learner, and the smart model (Robotics-ER 2), which plans, watches the steps and takes a
+closer look when the voice asks. Only the voice speaks; the smart model's results reach it as text
 ([The smart model](#the-smart-model)).
 
 This document is the design. [ARCHITECTURE.md](ARCHITECTURE.md) is the map, and
@@ -56,6 +56,31 @@ RunnerState.step              // the focused step: the one the HUD shows and the
 
 The coach's own notes are kept beside the plan, one optional note per step. They appear in the
 recital and in the recorded snapshots, not in the `Procedure`.
+
+### Starting, and changing course
+
+The voice starts lessons itself. When the learner says or shows what they are about to do (a
+streaky wiper, a jug of washer fluid in hand at an open hood), it infers the goal and calls
+`start_lesson` at once, saying in one short sentence what it starts. It asks one short question
+only when there is no plausible goal.
+
+A new `start_lesson` replaces whatever came before, at once: a lesson being planned (its plan is
+dropped when it lands), one the coach is writing, or the one running. The running one is aborted
+before the call answers, so its episode ends `aborted`, its steps leave the HUD and its lights go
+out before the new plan exists; the new lesson is a new episode. The result names what it
+replaced (`replaced`). The same goal again while it is being planned (a replay after a reconnect)
+answers `already` and changes nothing.
+
+That is how the voice takes "no". On "no", "that's not what I want", "stop" or "wrong thing" it
+stops, acknowledges in a few words and acts on what they do want: a new goal is a new
+`start_lesson`; a wrong step is `update_step`, or `revise_plan` when much is wrong. If they don't
+say what they want, it calls `end_lesson` and asks in a few words.
+
+`end_lesson(reason)` ends the lesson at once without starting another. A running lesson is
+aborted with the reason, so its episode ends `aborted`, its steps leave the HUD, every light goes
+out and the action focus stops; a lesson being planned or written is dropped. The HUD then asks
+what they want to do, and the result names what ended (`ended`). With no lesson it answers ok,
+with a note.
 
 ### Who writes the first draft
 
@@ -232,12 +257,13 @@ step twice.
 | Tool                                                               | What it does                                             |
 | ------------------------------------------------------------------ | -------------------------------------------------------- |
 | `start_lesson(goal, context?, template_id?)`                       | starts a lesson; the draft arrives as an `[app]` message |
+| `end_lesson(reason)`                                               | ends the lesson without starting another                 |
 | `revise_plan(reason)`                                              | re-plans the steps not done yet through the planner      |
 | `add_step(text, done_when, after_step_id?, objects?)`              | adds a step, at the end by default                       |
 | `update_step(step_id, text?, done_when?, note?, status?, reason?)` | rewrites, notes, skips, reopens or refocuses a step      |
 | `complete_step(step_id, reason, evidence)`                         | a step is done; `evidence` is `seen` or `heard`          |
 | `add_material(label, look_for?)`                                   | something the plan didn't list, e.g. a funnel            |
-| `highlight(object_id, style?)`                                     | emphasizes an object in AR                               |
+| `highlight(object_id, style?, look_for?)`                          | lights an object; `look_for` adds one the plan lacks     |
 | `show_demo(step_id?)`                                              | plays the ghost-hand demonstration                       |
 | `flag_mistake(kind, message)`                                      | a correction, shown and labeled                          |
 | `look_closer(question)`                                            | asks the smart model about a fresh frame (non-blocking)  |
@@ -251,6 +277,17 @@ Text and `done_when` can change only on steps that aren't done; a note can go on
 rewording keeps the step's outlines, demonstration and checks, so it must keep the step's intent.
 To change what a step does, the coach skips it and adds a new one.
 
+`highlight` lights one object. The voice calls it every time it asks the learner to touch, move or
+operate something, in the same turn and before it says it. Its `target` stays lit until the step
+changes or another `target` replaces it; `attention` lasts 5 s and `warning` is a 600 ms pulse. With
+`look_for` during a lesson, an `object_id` the plan doesn't have is added as a material (under that
+id when it is a free, valid one) and lit, and the result gives its `material_id` and `added: true`;
+without `look_for`, an unknown id is an error that lists the lesson's objects. A coach's `look_for`,
+here and in `add_material`, describes one particular instance: color, material, shape, size,
+markings and where it is relative to its neighbors. When it leaves out what the thing is, the app
+puts the name in front ("funnel, white plastic, on the fender"), so the words jev and the outlines
+go by stand alone.
+
 `revise_plan` keeps every done and skipped step and replaces the steps still to do, including ones
 the coach added. While it runs, `add_step` is refused, and so is `update_step` with text,
 `done_when` or a status, with a message to wait for the new plan. A note is accepted only on a done
@@ -260,6 +297,26 @@ step completed meanwhile stays done. A new `start_lesson` replaces a re-plan tha
 `complete_step` replaces `advance_step`. Its `step_id` is required, so the coach always says which
 step it means. Work the learner did off camera is a completion with evidence `heard`, not a skip.
 Errors list the valid ids so the coach can correct itself.
+
+## What is lit
+
+While a step is focused, something glows whenever there is something to do. `overlay/lights.ts`
+holds the rules, and the live tracker (`LiveTracking`) and the fallback while it is down
+(`OverlayModel`'s rings around Spotlight's outlines) light the same set:
+- the step's show items, in rank order; a step that shows nothing lights its targets, then its
+  action's objects (what the action moves is what to act on, where it goes is the destination);
+- the action focus's item, for the rest of the step, until it names another
+  ([The smart model](#the-smart-model));
+- the coach's highlights: a `target` for the step, `attention` for 5 s, `warning` as a pulse.
+
+Each lit object's color comes from its role (`stepRole` in `overlay/accents.ts`, for every
+renderer): the plan's own role for a show item, else what the step's hands do with it (what the
+action moves is what to act on, where it goes is the destination, whatever its kind: a mug picked
+up by its handle is cyan, not yellow), else its place and kind (a container or region is a
+destination, the first other item is what to act on).
+
+The tracker follows the plan's other objects too, unlit, for the recording. A step with no
+objects at all lights nothing until the action focus names one.
 
 ## Keeping the coach in sync
 
@@ -293,7 +350,8 @@ Errors list the valid ids so the coach can correct itself.
    a briefing that arrives together with "Plan revised", whose recital already has the new step.
 5. **Cancelled calls.** When the learner barges in and Gemini cancels a tool call that already
    changed the plan, the coach is told the call was applied, with the recital. A call that had
-   failed is not reported.
+   failed is not reported. A `highlight` counts only when its result says it added a material
+   (`added: true`).
 
 ## The smart model
 
@@ -305,6 +363,7 @@ thinking. Each part runs on its own and never makes the voice wait:
 | a plan, a revised plan | `start_lesson`, `revise_plan` | an `[app]` narration ("Plan ready", "Plan revised") |
 | is the step done?      | nothing: the step watcher     | an `[app]` narration ("Step watcher: … looks done") |
 | a closer look          | `look_closer(question)`       | the call's result, which it says when it is idle    |
+| what to touch next     | nothing: the action focus     | never: it feeds the learner's view and the data     |
 
 Narrations go through the gate above, so they never cut the learner off. Nothing the smart model
 returns is spoken by anyone but the voice.
@@ -327,6 +386,25 @@ that are lesson objects are lifted into the scene with the head pose of the fram
 saw, and highlighted; `highlighted` names them, so the voice can say "the one I've highlighted".
 Thinking stays minimal, a median of about 1.9 s with the hazard field: low was no more accurate
 on which and where questions and took about 0.5 s longer.
+
+**The action focus** (`domain/session/action-focus.ts`). jev, the tracker's finder, answers about
+once a second but goes by words alone, and often picks the wrong one of two look-alikes; the smart
+model sees better. While a step is focused, `ActionFocus` sends it one sharp frame
+(`POST /api/vision/focus`, minimal thinking) with the goal, the step and what the tracker follows
+(lit first, 8 at most): as the step is entered, every 5 s from the start of the last look, and
+once more 0.5 s after a coach highlight. One look runs at a time, and an answer for a step or a
+lesson that is over is dropped. The answer boxes each object, describes it again as it looks now,
+and names the one thing to touch next:
+- a box it is sure of (found, confidence 0.5 or more) anchors the tracker (`anchor`,
+  tracker/TRACK.md), which prefers it to jev's answers for 6 s;
+- the sure object's description becomes the words jev gets for it (`LiveTracking.refine`) until
+  the plan's words for it change; its phrase stays, so the track goes on;
+- the action item is lit for the rest of the step. When the plan lacks it and the smart model saw
+  it surely, the lesson declares it in the smart model's words, once
+  (`LessonController.declareObject`, a material added by the app), as the planner would have.
+
+Three failures in a row (503 without a Gemini key) pause it for 30 s. The voice hears none of it;
+a declared object reaches it only as one of the plan's materials.
 
 ## Completion
 
@@ -442,11 +520,12 @@ Gemini coach isn't told rule mistakes then, because those rules saw untrusted po
 
 The AR side still reads the focused step to know what to outline, so the dependency runs one way:
 the plan feeds perception, and perception never feeds a Gemini coach. The live tracker works the
-same way: it is told what to follow (every declared object for the whole lesson, with the focused
-step's show items first, and for 5 s what the coach highlights; only those two are lit) and
-nothing it sees comes back. Its positions reach the registry as `detector`
-estimates, it adds no narrated events, and `highlight` still answers only `shown`. The scripted
-coach can't see, so it still hears about missing objects and pinches, as on main.
+same way: it is told what to follow (every declared object for the whole lesson, with what is lit
+first: [What is lit](#what-is-lit)) and nothing it sees comes back. So does the action focus: its
+boxes and words go to the tracker, and its action item only to the lights. Their positions reach
+the registry as `detector` estimates, they add no narrated events, and `highlight` still answers
+only `shown` (and `material_id` for an object it added). The scripted coach can't see, so it still
+hears about missing objects and pinches, as on main.
 
 ## Recording
 
@@ -480,6 +559,11 @@ changing it.
   empty when every object had a position). A lesson that ends sooner has only `lesson.first_step`.
   Because the look comes after the recording starts, its `object.detected` events are in the
   episode, and the objects it places are not in `meta.objects` but arrive as `object.registered`.
+- Every action focus answer is an `annotation` with label `focus.answered` and data `{ stepId,
+  model, latencyMs, frameAgeMs, detections, action, actionId }`: the detections and the action as
+  the smart model gave them, boxes in 0..1 of a frame `frameAgeMs` older than the annotation, and
+  the lesson object lit for the action. A failed look records `{ stepId, error }`. An object it
+  declared is a `plan.updated` with op `material` and by `app`.
 - Every closer look is an `annotation` with label `coach.look_closer` and data
   `{ callId, model, latencyMs, refs }`, refs with their points. Refs on lesson objects are also
   `object.detected` events, with the question as the description.
@@ -496,6 +580,7 @@ changing it.
 | Planner fails or times out      | the coach writes the steps with `add_step`                                 |
 | Step watcher down or not set up | no suggestions; the coach and the Done button still complete steps         |
 | Closer look slow or failing     | after 8 s the voice is told there was no closer look, and asks the learner |
+| Action focus failing            | the step's own lights stay; after 3 failures in a row it pauses for 30 s   |
 | Connection drops during a look  | the answer goes to the next connection as an `[app]` narration             |
 | Gemini reconnecting             | local authority until it's back; queued narrations and a recap on return   |
 | Gemini gives up reconnecting    | local authority for the rest of the lesson: checks and the Done button     |

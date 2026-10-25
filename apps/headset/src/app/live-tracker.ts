@@ -27,6 +27,7 @@ import type { Clock } from '../core/clock';
 import { createLogger } from '../core/log';
 import type { AppBus } from '../domain/events';
 import { ObjectTrackRecorder } from '../domain/recording/object-track-recorder';
+import type { FocusAnchor, FocusAnchors } from '../domain/session/action-focus';
 import { isShown, LiveTracking } from '../domain/session/live-tracking';
 import type { DepthSource } from '../domain/world/depth-source';
 import type { SurfaceRaycaster } from '../domain/world/grounding';
@@ -41,10 +42,12 @@ import type { Workspace } from '../domain/world/workspace';
 // (LiveTracking); it follows each object on every frame and asks jev about them itself, about once
 // a second. Each answer is placed in the room at the object's measured distance (LiveObjects) and
 // drawn with the primary page's depth-correct glow, and the registry and the recording hear about
-// it as the camera's untrusted `detector`. Without the tracker (not running, or the connection
-// dropped) nothing is streamed and the lesson's own looks (Spotlight) carry on as before, while the
-// connection keeps retrying. The Quest runs hot, so frames go out only while the session is shown
-// and something is being followed.
+// it as the camera's untrusted `detector`. Robotics-ER's boxes from the action focus come back in
+// as anchors: the tracker places the object from them and trusts them over jev for a while
+// (tracker/TRACK.md). Without the tracker (not running, or the connection dropped) nothing is
+// streamed and the lesson's own looks (Spotlight) carry on as before, while the connection keeps
+// retrying. The Quest runs hot, so frames go out only while the session is shown and something is
+// being followed.
 
 const log = createLogger('live');
 /** Entering AR waits this long for the tracker, to know whether to ask for depth sensing (ms). */
@@ -53,6 +56,11 @@ const CONNECT_WAIT_MS = 800;
 const MAX_PENDING = 4;
 /** Sent frames whose size is remembered, for the recording. */
 const SIZES_KEPT = 32;
+/**
+ * An anchor for an object the set does not have yet (an action item the lesson has just declared)
+ * waits this long for the set that has it (ms).
+ */
+const ANCHOR_WAIT_MS = 2000;
 
 export interface LiveTrackerDeps {
   bus: AppBus;
@@ -76,11 +84,12 @@ export interface LiveTrackerDeps {
   socket?: (url: string) => TrackerSocket;
 }
 
-export class LiveTracker {
+export class LiveTracker implements FocusAnchors {
   readonly presenter: LiveHighlightsPresenter;
   /** The real hands in the depth buffer, so a light behind a hand stays behind it. */
   readonly occluders = new HandOccluders();
-  private readonly tracking: LiveTracking;
+  /** What is followed and lit, and in which words (the action focus asks ER about these). */
+  readonly tracking: LiveTracking;
   private readonly objects: LiveObjects;
   private readonly client: TrackerClient;
   private readonly stream: FrameStream;
@@ -94,6 +103,10 @@ export class LiveTracker {
   /** The set (as JSON) last sent on this connection, and the one last followed. */
   private sent: string | null = null;
   private followed: string | null = null;
+  /** The ids of the set last sent on this connection: the only ones an anchor may name. */
+  private sentIds = new Set<string>();
+  /** Anchors for objects the set does not have yet, by id (the newest), each until a time. */
+  private readonly waitingAnchors = new Map<string, { anchor: FocusAnchor; until: number }>();
   private highlights: LiveHighlight[] = [];
   private masks: Placement[] = [];
   private readonly onVisibility = () => this.updateStreaming();
@@ -132,6 +145,8 @@ export class LiveTracker {
         if (open) return;
         // A new connection starts in target mode, without the set: it is sent again.
         this.sent = null;
+        this.sentIds.clear();
+        this.waitingAnchors.clear();
         this.pending.length = 0;
         this.objects.reset();
         this.masks = [];
@@ -203,6 +218,22 @@ export class LiveTracker {
     return this.highlights.some((h) => h.id === id);
   }
 
+  /**
+   * The action focus's FocusAnchors: Robotics-ER's box for a followed object goes to the tracker,
+   * which places the object from it and trusts it over jev for a while. Dropped without a tracker
+   * and before the set was sent on this connection (objects mode). One for an object the set does
+   * not have yet (an action item the lesson has just declared) waits a moment for the set that has
+   * it; any other is dropped then.
+   */
+  anchor(anchor: FocusAnchor): void {
+    if (!this.client.connected || this.sent === null) return;
+    if (this.sentIds.has(anchor.id)) {
+      this.sendAnchor(anchor);
+      return;
+    }
+    this.waitingAnchors.set(anchor.id, { anchor, until: this.deps.clock.now() + ANCHOR_WAIT_MS });
+  }
+
   /** Perceive stage: what to follow, depth reads, and the tracker's answers since the last frame. */
   perceive(frame: XRFrame, t: number): void {
     this.tracking.update(t);
@@ -268,6 +299,7 @@ export class LiveTracker {
     this.sensing = null;
     this.depth = null;
     this.occluders.hide();
+    this.waitingAnchors.clear();
     this.highlights = [];
     this.masks = [];
   }
@@ -284,7 +316,26 @@ export class LiveTracker {
       this.objects.follow(objects.map((o) => o.id));
       this.followed = key;
     }
-    if (key !== this.sent && this.client.send({ type: 'objects', objects })) this.sent = key;
+    if (key !== this.sent && this.client.send({ type: 'objects', objects })) {
+      this.sent = key;
+      this.sentIds = new Set(objects.map((o) => o.id));
+    }
+    this.flushAnchors();
+  }
+
+  /** Anchors that waited for the set: sent once it has their object, dropped when out of time. */
+  private flushAnchors(): void {
+    if (this.waitingAnchors.size === 0) return;
+    const now = this.deps.clock.now();
+    for (const [id, { anchor, until }] of this.waitingAnchors) {
+      if (this.sentIds.has(id)) this.sendAnchor(anchor);
+      else if (until > now) continue;
+      this.waitingAnchors.delete(id);
+    }
+  }
+
+  private sendAnchor({ id, box, t, query }: FocusAnchor): void {
+    this.client.send({ type: 'anchor', id, t, box, source: 'er', ...(query ? { query } : {}) });
   }
 
   /** Stream only while the session is shown (not covered by the system menu) and something is followed. */
