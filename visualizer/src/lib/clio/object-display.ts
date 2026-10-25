@@ -57,10 +57,15 @@ export const SCENE_COLORS = {
   table: { light: "#FFFFFF", dark: "#1F232C" },
   gridCell: { light: "#E0E6EE", dark: "#252B35" },
   gridSection: { light: "#CDD6E2", dark: "#303742" },
-  /** The room scan's global mesh, lit: a quiet step off the canvas. */
-  roomSurface: { light: "#E3E8EE", dark: "#1A1D24" },
-  /** Furniture volumes' edges in the room scan: the stronger hairline. */
-  roomVolumeEdge: { light: "#BCC8D6", dark: "#3B4350" },
+  /**
+   * The room scan's walls and floor, opaque and lit (DESIGN.md, "Room scan"): clearly off the
+   * canvas in both themes, so they read as solid, and well below the measured marks.
+   */
+  roomSurface: { light: "#DEE3E9", dark: "#2C313A" },
+  /** Raised surfaces: the scan's furniture volumes and the detected tops, a step off the walls. */
+  roomVolume: { light: "#F2F4F7", dark: "#454C59" },
+  /** Their edges, legible on them in both themes. */
+  roomVolumeEdge: { light: "#A3AFBE", dark: "#687284" },
 } satisfies Record<string, ThemedColor>;
 
 export const themed = (color: ThemedColor, theme: Theme): string =>

@@ -18,7 +18,11 @@ import type { FileRef, ModelFile } from "@/lib/clio/scene-files";
 import { ROS_TO_RENDER } from "@/lib/scene";
 import { useTheme, type Theme } from "@/utils/theme";
 import { DetectionsLayer } from "./layers/detections";
-import { EnvironmentLayer, workspaceBounds } from "./layers/environment";
+import {
+  EnvironmentLayer,
+  raisedPlanes,
+  workspaceBounds,
+} from "./layers/environment";
 import { BACKDROP_LAYER } from "./layers/gltf";
 import { HandsLayer } from "./layers/hands";
 import { HeadLayer } from "./layers/head";
@@ -39,10 +43,13 @@ import { SceneFetchContext } from "./use-scene-file";
 // compiled-objects.ts.
 //
 // The Quest room scan (layers/room.tsx) and each object's generated model (layers/model.tsx) are
-// binary files read only while their toggle is on (scene-files.ts). The room is drawn first, on
-// its own layer, and everything else over it with a fresh depth buffer (BackdropPass), so the
-// room never hides the table, the hands or the objects; the grid then fades out nearer, around the
-// table, so it does not lie across the whole room.
+// binary files read only while their toggle is on (scene-files.ts). The room is solid context: its
+// surfaces, and the detected raised planes drawn solid when there is no room (environment.tsx), go
+// on the backdrop layer, and so, while there is a backdrop, do the grid and the rest of the
+// environment's context, tested against the room's depth so a wall hides the grid lines beyond it
+// (layers/solid.ts). BackdropPass draws that layer first and everything measured over it with a
+// fresh depth buffer, so the room never hides the hands, the head, the objects or the robots; the
+// grid also fades out nearer, around the table, so it does not lie across the whole room.
 
 /** Where the scene reads the viewed time: integer microseconds of recording time. */
 export interface SceneClock {
@@ -196,6 +203,13 @@ export default function ClioScene({
     [],
   );
   const layer: LayerProps = { capture, clock, revision, theme, debug };
+  // Context draws as a backdrop while there is a room, or a detected top drawn solid without one.
+  const backdrop = useMemo(
+    () =>
+      room !== null ||
+      (environment !== null && raisedPlanes(environment, capture).length > 0),
+    [room, environment, capture],
+  );
 
   return (
     <div className={className ?? "relative h-full w-full"}>
@@ -229,7 +243,7 @@ export default function ClioScene({
             models,
           ]}
         />
-        {room && <BackdropPass />}
+        {backdrop && <BackdropPass />}
         <CameraRig position={view.position} target={view.target} />
         {/* The table plane: ROS z = 0 is the renderer's y = 0. */}
         <Grid
@@ -242,6 +256,7 @@ export default function ClioScene({
           sectionColor={themed(SCENE_COLORS.gridSection, theme)}
           fadeDistance={room ? GRID_FADE_IN_ROOM : GRID_FADE}
           infiniteGrid
+          layers={backdrop ? BACKDROP_LAYER : 0}
         />
         <SceneFetchContext.Provider value={sceneFetch ?? null}>
           <SceneLayers
@@ -258,6 +273,7 @@ export default function ClioScene({
             body={body}
             room={room}
             models={models}
+            backdrop={backdrop}
           />
         </SceneFetchContext.Provider>
         <OrbitControls makeDefault target={view.target} />
@@ -279,6 +295,8 @@ export interface SceneLayersProps extends LayerProps {
   body?: BodyDoc | null;
   room?: FileRef | null;
   models?: ReadonlyMap<string, ModelFile>;
+  /** Context draws on the backdrop layer (ClioScene decides; the room needs it). */
+  backdrop?: boolean;
 }
 
 /** Every layer of one capture, inside the group that turns ROS into the renderer's frame. */
@@ -295,6 +313,7 @@ export function SceneLayers({
   body = null,
   room = null,
   models = NO_MODELS,
+  backdrop = room !== null,
   ...layer
 }: SceneLayersProps) {
   return (
@@ -303,7 +322,12 @@ export function SceneLayers({
       {room && (
         <RoomLayer file={room} theme={layer.theme} debug={layer.debug} />
       )}
-      <EnvironmentLayer {...layer} environment={environment} />
+      <EnvironmentLayer
+        {...layer}
+        environment={environment}
+        backdrop={backdrop}
+        fillRaised={room === null}
+      />
       <HeadLayer {...layer} framesLoadedToUs={framesLoadedToUs} />
       <HandsLayer
         {...layer}
@@ -363,9 +387,10 @@ function SceneLights({ theme }: { theme: Theme }) {
 }
 
 /**
- * Draws the backdrop layer (the room scan) first, then everything else over it with a cleared
- * depth buffer, so context never hides measured data. Mounted only while a room is drawn; it takes
- * over react-three-fiber's render for that time.
+ * Draws the backdrop layer (the room scan or the solid detected tops, with the grid and the
+ * environment's context) first, then everything else over it with a cleared depth buffer, so
+ * context never hides measured data. Mounted only while there is a backdrop; it takes over
+ * react-three-fiber's render for that time.
  */
 function BackdropPass() {
   useFrame(({ gl, scene, camera }) => {

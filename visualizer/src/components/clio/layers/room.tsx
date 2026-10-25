@@ -8,6 +8,7 @@ import { useEffect } from "react";
 import {
   Box3,
   type BufferGeometry,
+  type DataTexture,
   DoubleSide,
   EdgesGeometry,
   FrontSide,
@@ -31,22 +32,24 @@ import {
   W_TO_ROS,
   windToward,
 } from "./gltf";
+import { grainTexture, solidLook } from "./solid";
 
 // The Quest room scan (Space Setup, read by WebXR mesh detection) the compile keeps as room.glb, in
 // W: one root node per mesh named by its id, its transform the mesh pose in W and its extras
-// {kind, label, global}. It is context, measured before the episode, so it stays as quiet as the
-// grid and never hides measured data: it draws on the backdrop layer, under everything else
-// (gltf.ts). The global mesh is a lightly lit surface a step off the canvas, wound to face the
-// room's middle and drawn front faces only, so from outside the room the near walls drop away,
-// with its creases as faint edges. Furniture volumes are translucent in the table color with their
-// edges in the stronger hairline, labelled in Debug. Every node keeps its own transform: the whole
-// file sits in one group turned from W to ROS, inside the scene's ROS group.
+// {kind, label, global}. It is context, measured before the episode, so it never hides measured
+// data: it draws on the backdrop layer, under everything else (gltf.ts). Every surface is solid
+// (solid.ts): opaque, with a fine matte grain, flat shaded so each face reads by its facing. The
+// global mesh (the walls and the floor) is wound to face the room's middle and drawn front faces
+// only, so a wall between the camera and the room (seen from behind) is not drawn: from outside the
+// room the near walls drop away like a dollhouse's and the far walls and the floor stay, with the
+// mesh's creases as faint edges. Furniture volumes (tables, couches, shelves) are solid blocks a
+// step lighter than the walls, edged in a stronger line, labelled in Debug. Every node keeps its own
+// transform: the whole file sits in one group turned from W to ROS, inside the scene's ROS group.
 
 /** A crease sharper than this between two triangles draws as an edge. */
 const SURFACE_CREASE_DEG = 40;
 const VOLUME_CREASE_DEG = 30;
 const SURFACE_EDGE_OPACITY = 0.7;
-const VOLUME_OPACITY = 0.3;
 
 /** One mesh of the scan, as its extras name it. */
 export interface RoomPart {
@@ -72,6 +75,8 @@ export interface RoomScanView {
     volume: MeshLambertMaterial;
     volumeEdge: LineBasicMaterial;
   };
+  /** The grain both surfaces carry, released with the scan. */
+  grain: DataTexture;
 }
 
 const KINDS = new Set<string>([
@@ -99,31 +104,25 @@ function extrasOf(mesh: Mesh, root: Group) {
 }
 
 /**
- * The parsed scan, ready to draw: its own materials (colored by the layer for the theme), each
- * global mesh wound to face its middle with normals for the light, and edges for every mesh.
+ * The parsed scan, ready to draw: its own solid materials (colored by the layer for the theme),
+ * each global mesh wound to face its middle, and edges for every mesh. The surfaces write their
+ * depth a little behind themselves (solid.ts), so their own edges never flicker on them.
  */
 export function prepareRoomScan(root: Group): RoomScanView {
+  const grain = grainTexture();
   const materials = {
-    surface: new MeshLambertMaterial({
-      side: FrontSide,
-      // Behind its own edges, so they never flicker on it.
-      polygonOffset: true,
-      polygonOffsetFactor: 1,
-      polygonOffsetUnits: 1,
-    }),
+    // Front faces only: the dollhouse cut.
+    surface: new MeshLambertMaterial({ side: FrontSide, flatShading: true }),
     surfaceEdge: new LineBasicMaterial({
       transparent: true,
       opacity: SURFACE_EDGE_OPACITY,
     }),
-    volume: new MeshLambertMaterial({
-      side: DoubleSide,
-      transparent: true,
-      opacity: VOLUME_OPACITY,
-      depthWrite: false,
-      flatShading: true,
-    }),
+    // A volume is closed; both sides, in case a scan winds it inward.
+    volume: new MeshLambertMaterial({ side: DoubleSide, flatShading: true }),
     volumeEdge: new LineBasicMaterial(),
   };
+  solidLook(materials.surface, grain, { depthBias: true });
+  solidLook(materials.volume, grain, { depthBias: true });
   root.updateMatrixWorld(true);
   const replaced = new Set<Material>();
   const wound = new Set<BufferGeometry>();
@@ -141,7 +140,6 @@ export function prepareRoomScan(root: Group): RoomScanView {
       geometry.computeBoundingBox();
       const middle = (geometry.boundingBox as Box3).getCenter(new Vector3());
       windToward(geometry, middle);
-      geometry.computeVertexNormals();
     }
     mesh.material = extras.global ? materials.surface : materials.volume;
     const edges = new LineSegments(
@@ -164,7 +162,7 @@ export function prepareRoomScan(root: Group): RoomScanView {
   // The file's own materials (none, or GLTFLoader's default) are never drawn.
   for (const m of replaced) m.dispose();
   onBackdrop(root);
-  return { root, parts, materials };
+  return { root, parts, materials, grain };
 }
 
 /** room.glb as the room layer draws it; a file that is not a GLB throws, so it reads as invalid. */
@@ -172,9 +170,10 @@ export async function loadRoomScan(bytes: ArrayBuffer): Promise<RoomScanView> {
   return prepareRoomScan(await parseGlb(bytes));
 }
 
-/** Releases the scan's geometries (the edges' too) and materials. */
+/** Releases the scan's geometries (the edges' too), materials and grain. */
 export function disposeRoomScan(scan: RoomScanView): void {
   disposeTree(scan.root);
+  scan.grain.dispose();
 }
 
 const muted = "text-[11px] font-medium text-fg-muted whitespace-nowrap";
@@ -202,7 +201,7 @@ export function RoomLayer({
   const { surface, surfaceEdge, volume, volumeEdge } = scan.materials;
   surface.color.set(themed(SCENE_COLORS.roomSurface, theme));
   surfaceEdge.color.set(themed(SCENE_COLORS.gridSection, theme));
-  volume.color.set(themed(SCENE_COLORS.table, theme));
+  volume.color.set(themed(SCENE_COLORS.roomVolume, theme));
   volumeEdge.color.set(themed(SCENE_COLORS.roomVolumeEdge, theme));
   return (
     <group quaternion={W_TO_ROS} name="room-scan">
