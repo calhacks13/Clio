@@ -403,11 +403,9 @@ describe("reading a compiled episode", () => {
     expect(stale.compile).toBe("stale");
     expect(stale.environment).not.toBeNull();
 
-    const next = syntheticDerived(EPISODE, {
-      compiledAt: "2026-10-24T12:09:00.000Z",
-    });
+    // While a recompile waits or runs, the detail reports the compile still on disk.
     for (const state of ["queued", "running"] as const) {
-      server.compiled(next, state);
+      server.compiled(COMPILED, state);
       expect(await loader.step()).toBe(DERIVED_COMPILING_EVERY_MS);
       const shown = loader.getSnapshot();
       expect(shown.compile).toBe(state);
@@ -416,10 +414,36 @@ describe("reading a compiled episode", () => {
     }
     expect(server.derivedRequests().length).toBe(4);
 
-    server.compiled(next, "ok");
+    // The new compile is swapped in before its run is reported done: it is read at once.
+    const next = syntheticDerived(EPISODE, {
+      compiledAt: "2026-10-24T12:09:00.000Z",
+    });
+    server.compiled(next, "running");
     await loader.step();
     expect(loader.getSnapshot().compiledAt).toBe(next.manifest.compiledAt);
     expect(server.derivedRequests().length).toBe(8);
+
+    server.compiled(next, "ok");
+    await loader.step();
+    expect(server.derivedRequests().length).toBe(8);
+  });
+
+  test("a page opened while a recompile is queued or running shows the compile on disk", async () => {
+    for (const state of ["queued", "running"] as const) {
+      const server = new FakeServer();
+      server.compiled(COMPILED, state);
+      const loader = loaderOn(server);
+
+      expect(await loader.step()).toBe(DERIVED_COMPILING_EVERY_MS);
+      const shown = loader.getSnapshot();
+      expect(shown.compile).toBe(state);
+      expect(shown.compiledAt).toBe(COMPILED.manifest.compiledAt);
+      expect(shown.environment).toEqual(COMPILED.environment);
+      expect(shown.retarget).toEqual(COMPILED.retarget);
+      expect(shown.tracks).toEqual(COMPILED.tracks);
+      expect(shown.shapes).toEqual(COMPILED.shapes);
+      expect(compileStatus(shown, "finished")?.label).toBe("Compiling");
+    }
   });
 
   test("a failed recompile keeps the last documents and shows its error", async () => {
@@ -776,29 +800,44 @@ describe("reading the rebuilt scene's state", () => {
     await loader.step();
     const built = loader.getSnapshot().scene;
 
-    const rebuilt = syntheticScene(EPISODE, COMPILED.manifest, {
-      builtAt: "2026-10-24T12:08:00.000Z",
-    }).doc;
+    // While a build waits or runs, the detail reports the scene still on disk.
     for (const state of ["queued", "running"] as const) {
-      server.scene = { state, scene: rebuilt, error: null };
+      server.scene = {
+        state,
+        scene: JSON.parse(JSON.stringify(SCENE.doc)),
+        error: null,
+      };
       // A build under way is polled like a compile under way.
       expect(await loader.step()).toBe(DERIVED_COMPILING_EVERY_MS);
       expect(loader.getSnapshot().sceneState).toBe(state);
       expect(loader.getSnapshot().scene).toBe(built);
     }
+    // For an instant while the new build is swapped in, there is none on disk.
+    server.scene = { state: "running", scene: null, error: null };
+    await loader.step();
+    expect(loader.getSnapshot().scene).toBe(built);
+
+    const rebuilt = syntheticScene(EPISODE, COMPILED.manifest, {
+      builtAt: "2026-10-24T12:08:00.000Z",
+    }).doc;
+    server.scene = { state: "running", scene: rebuilt, error: null };
+    await loader.step();
+    expect(loader.getSnapshot().scene?.builtAt).toBe(rebuilt.builtAt);
     server.scene = { state: "ok", scene: rebuilt, error: null };
     expect(await loader.step()).toBe(DERIVED_SETTLED_EVERY_MS);
     expect(loader.getSnapshot().scene?.builtAt).toBe(rebuilt.builtAt);
   });
 
-  test("a scene building before any was shown shows none", async () => {
-    const server = new FakeServer();
-    server.compiled(COMPILED);
-    server.scene = { state: "running", scene: SCENE.doc, error: null };
-    const loader = loaderOn(server);
-    await loader.step();
-    expect(loader.getSnapshot().sceneState).toBe("running");
-    expect(loader.getSnapshot().scene).toBeNull();
+  test("a page opened while a scene build is queued or running shows the scene on disk", async () => {
+    for (const state of ["queued", "running"] as const) {
+      const server = new FakeServer();
+      server.compiled(COMPILED);
+      server.scene = { state, scene: SCENE.doc, error: null };
+      const loader = loaderOn(server);
+      await loader.step();
+      expect(loader.getSnapshot().sceneState).toBe(state);
+      expect(loader.getSnapshot().scene).toEqual(SCENE.doc);
+    }
   });
 
   test("a failed or never-built scene has no SceneDoc", async () => {

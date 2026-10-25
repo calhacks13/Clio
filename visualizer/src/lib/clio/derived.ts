@@ -28,9 +28,10 @@ import type { EpisodeStatus } from "./types";
 // never delays or changes the live following of raw frames, events and
 // objects.
 //
-// Each turn reads the episode's detail for its compile state. Once that is ok
-// or stale, the manifest's artifacts that a layer draws (DRAWN_KINDS) are read
-// and parsed with the @clio/protocol schemas, and read again only when
+// Each turn reads the episode's detail for its compile state and the manifest
+// of the compile on disk. Once there is one, its artifacts that a layer draws
+// (DRAWN_KINDS) are read and parsed with the @clio/protocol schemas, even while
+// a recompile is queued or running, and read again only when
 // manifest.compiledAt changes. A 404 or a file that does not parse means that
 // artifact is not compiled, never that the episode is gone: ClioSource alone
 // decides that.
@@ -99,8 +100,8 @@ export interface DerivedState {
    */
   sceneState: CompileState | null;
   /**
-   * The last scene build, while its state is ok or stale; a build queued or running keeps the one
-   * shown before. Null otherwise.
+   * The last scene build, while its state is ok or stale, or while another is queued or running.
+   * Null otherwise.
    */
   scene: SceneDoc | null;
   /** Why the last scene build failed. */
@@ -330,10 +331,11 @@ export class ClioDerivedSource {
       });
       return;
     }
-    // A compile queued or running keeps the documents of the last one.
+    // The manifest is the compile on disk, whatever the queue is doing: a compile is swapped in
+    // whole (pipeline builddir.py), so one queued or running shows the last, even on a page just
+    // opened, and the new one as soon as it is swapped in.
     this.#set({ compile: state, manifest, compileError: error, ...scene });
-    const readable = state === "ok" || state === "stale";
-    if (!readable || manifest.compiledAt === this.#state.compiledAt) return;
+    if (manifest.compiledAt === this.#state.compiledAt) return;
     // One failed read abandons the others: the whole compile is read again.
     const reads = new AbortController();
     const both = AbortSignal.any([signal, reads.signal]);
@@ -401,8 +403,9 @@ export class ClioDerivedSource {
   }
 
   /**
-   * The scene fields of a detail's `scene`. Like a compile's documents, the SceneDoc is taken from
-   * a build that is ok or stale, kept while another is queued or running, and dropped otherwise.
+   * The scene fields of a detail's `scene`. Like a compile's manifest, the SceneDoc is the build
+   * on disk, swapped in whole: one queued or running shows the last, and keeps the one shown
+   * through the instant there is none on disk between the two renames. Failed or none, no scene.
    */
   #scene(raw: unknown): SceneFields {
     const parsed = EpisodeSceneStatusSchema.safeParse(raw);
@@ -418,7 +421,7 @@ export class ClioDerivedSource {
         state === "ok" || state === "stale"
           ? mine
           : building
-            ? this.#state.scene
+            ? (mine ?? this.#state.scene)
             : null,
       sceneError: error,
     };
