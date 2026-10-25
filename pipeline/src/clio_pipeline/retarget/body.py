@@ -31,9 +31,11 @@ smoothed without lag.
    turning or shifting the body. Every joint stays in a human range (human.py).
 6. Arms without a hand. Across a longer dropout the arm lowers to hang at the side on a
    minimum-jerk path and comes back up to meet the hand where it reappears, in time for it.
-7. Legs. Feet stay planted in the G1's stance around the pelvis; a foot steps to its stance spot
-   when it is more than STEP_M away or the body turned more than STEP_YAW_RAD. Each leg is solved
-   for its ankle, sole flat.
+   Hanging, it swings against its own side's leg as the feet pass each other.
+7. Legs. The Quest never sees the feet, so the G1 walks the way a G1 would when its pelvis moves
+   the way the learner's did (gait.py): planted feet while the body sways, alternating steps on a
+   minimum-jerk swing while it walks or turns. The hips sink a little where a step spreads the
+   feet beyond the legs' reach. Each leg is solved for its foot, sole flat.
 8. Fingers. The Dex3 joints close with the pinch, from open at PINCH_OPEN_M to closed at
    PINCH_CLOSED_M, and relax half closed without a hand.
 
@@ -51,6 +53,7 @@ import numpy as np
 from ..episode import Episode
 from ..frames import HANDS, quat_rotate
 from ..resample import MAX_FRAME_GAP_MS, Resampled, resample_episode
+from .gait import FootPlan, plan_footsteps
 from .human import (
     ARM_REST_LEFT,
     LEG_MIRRORED,
@@ -88,8 +91,6 @@ STANDING_PERCENTILE = 90  # of the head's height: the learner standing
 MIN_STANDING_HEAD_M = 1.2  # a seated learner still maps to a standing G1
 ADULT_EYE_HEIGHT_M = 1.62  # the neck model's adult
 CROUCH_PELVIS_M = 0.38  # the lowest pelvis height the legs are asked for
-STEP_M = 0.18
-STEP_YAW_RAD = np.radians(35)
 PINCH_OPEN_M = 0.08
 PINCH_CLOSED_M = 0.02
 FINGER_CLOSE = 0.8  # of each finger joint's range toward closed
@@ -117,6 +118,13 @@ PALM_FAST_TURN = 4.0  # rad/s: turning this fast gets the light smoothing
 WRIST_SMOOTHING_S = 0.08
 HEAD_SMOOTHING_S = 0.03  # sigma, the eyes
 REST_MOVE_S = 0.7  # lowering the arm to rest, and raising it back
+ARM_SWING = 0.6  # rad of shoulder pitch per m one foot is ahead of the other, arm hanging
+
+# Walking (gait.py plans the steps).
+LEG_REACH = 0.985  # of the straight leg, hip to ankle, a planted foot is held within
+KNEE_SEED_RAD = 0.25
+CEILING_SPREAD_S = 0.12  # the hips start sinking this long before a step needs it
+CEILING_SMOOTHING_S = 0.08
 
 # Trunk.
 TRUNK_YAW_SMOOTHING_S = 0.25
@@ -317,6 +325,8 @@ def solve_body(
     )
     trunk = _estimate_trunk(model, eyes, head_q, hands, valid, rate)
     swivel, q_ref, fit = _choose_elbows(model, hands, trunk)
+    plan = _plan_feet(model, r.t, trunk, valid)
+    ceiling = _pelvis_ceiling(model, plan, trunk, valid, rate)
 
     joints = model.joint_names
     q = np.full((m, len(joints)), np.nan)
@@ -333,7 +343,7 @@ def solve_body(
             yaw=float(trunk.yaw[k]),
             pelvis=trunk.pelvis[k],
             trunk=trunk.angles[k],
-            pelvis_z=(CROUCH_PELVIS_M, model.pelvis_height),
+            pelvis_z=(CROUCH_PELVIS_M, float(ceiling[k])),
             eyes=eyes[k],
             tcp=tuple(hands.p[k, i] if hands.target[k, i] else None for i in range(2)),  # type: ignore[arg-type]
             R_tcp=tuple(hands.R[k, i] if hands.target[k, i] else None for i in range(2)),  # type: ignore[arg-type]
@@ -354,10 +364,12 @@ def solve_body(
             if hands.measured[k, i] and sol.residual[i] is not None:
                 residual[k, i] = sol.residual[i] / scale
         q[k, 12:15] = x[5:8]
+    swing = _arm_swing(model, plan, trunk, hands.target, valid, rate)
     for i in range(2):
         arm_q[:, i] = _rest_through_gaps(arm_q[:, i], hands.target[:, i], valid, model, i, rate)
+        arm_q[:, i, 0] += swing[:, i]
 
-    legs_q = _legs(model, root_world, valid)
+    legs_q = _legs(model, root_world, plan, valid)
     fingers = _fingers(model, r.pinch, hands.measured, valid, rate)
     for k in np.flatnonzero(valid):
         q[k] = np.concatenate([legs_q[k, 0], legs_q[k, 1], q[k, 12:15], *arm_q[k], fingers[k]])
@@ -633,35 +645,78 @@ def _rest_through_gaps(q, have, valid, model: G1Model, side: int, rate: float) -
     return q
 
 
-def _legs(model: G1Model, root_world: np.ndarray, valid: np.ndarray) -> np.ndarray:
-    """(M, 2, 6) leg joints: planted feet, stepping when the body moved or turned (step 7)."""
+def _plan_feet(model: G1Model, t: np.ndarray, trunk: _Trunk, valid: np.ndarray) -> FootPlan:
+    """Footsteps under the estimated pelvis (step 7)."""
+    return plan_footsteps(
+        t,
+        np.where(valid[:, None], trunk.pelvis, np.nan),
+        np.where(valid, trunk.yaw, np.nan),
+        stance=np.array([p[:2] for p in model.stance]),
+        ankle_height=model.ankle_height,
+        leg_length=-float(model.legs[0].points(np.zeros(6))[-1][2]),
+    )
+
+
+def _pelvis_ceiling(model: G1Model, plan: FootPlan, trunk: _Trunk, valid, rate: float):
+    """(M,) the highest the pelvis may be with each planted foot within its leg's reach: a step
+    spreads the feet, and the hips sink a little between them."""
+    ceiling = np.full(len(valid), model.pelvis_height)
+    for i in range(2):
+        points = model.legs[i].points(np.zeros(6))
+        hip, reach = points[2], LEG_REACH * float(np.linalg.norm(points[-1] - points[2]))
+        planted = valid & np.isnan(plan.swing[:, i]) & ~np.isnan(plan.ankle[:, i, 0])
+        for k in np.flatnonzero(planted):
+            hip_w = trunk.pelvis[k] + _yaw_matrix(float(trunk.yaw[k])) @ hip
+            d = float(np.hypot(*(hip_w - plan.ankle[k, i])[[0, 2]]))
+            top = plan.ankle[k, i, 1] + np.sqrt(max(reach * reach - d * d, 0.0)) - hip[2]
+            ceiling[k] = min(ceiling[k], top)
+    window = max(1, round(CEILING_SPREAD_S * rate))
+    held = np.array([ceiling[max(0, k - window) : k + window + 1].min() for k in range(len(valid))])
+    held = gaussian_smooth(held, CEILING_SMOOTHING_S * rate, valid)
+    return np.clip(held, CROUCH_PELVIS_M + 0.05, model.pelvis_height)
+
+
+def _legs(model: G1Model, root_world: np.ndarray, plan: FootPlan, valid) -> np.ndarray:
+    """(M, 2, 6) leg joints: each leg solved for its foot in the plan, sole flat (step 7)."""
     m = len(root_world)
     out = np.zeros((m, 2, 6))
-    feet: list[tuple[np.ndarray, float] | None] = [None, None]
     q_leg = [sided(LEG_STANDING, side, LEG_MIRRORED) for side in range(2)]
     for k in np.flatnonzero(valid):
         T = root_world[k]
         pelvis, R_root = T[:3, 3], T[:3, :3]
-        yaw = float(np.arctan2(-R_root[2, 0], R_root[0, 0]))
-        Y = _yaw_matrix(yaw)
         for i in range(2):
-            spot = pelvis + Y @ model.stance[i]
-            spot[1] = model.ankle_height
-            planted = feet[i]
-            if (
-                planted is None
-                or np.linalg.norm((planted[0] - spot)[[0, 2]]) > STEP_M
-                or abs(_wrap(planted[1] - yaw)) > STEP_YAW_RAD
-            ):
-                planted = (spot, yaw)
-                feet[i] = planted
-            foot_R = R_root.T @ _yaw_matrix(planted[1])
-            sol = solve_ik(
-                model.legs[i], foot_R, R_root.T @ (planted[0] - pelvis), q_leg[i], _LEG_IK
-            )
-            q_leg[i] = sol.q
-            out[k, i] = sol.q
+            ankle, yaw = plan.ankle[k, i], plan.yaw[k, i]
+            if not np.isnan(ankle).any():
+                foot_R = R_root.T @ _yaw_matrix(float(yaw))
+                # A straight knee cannot tell which way to bend: start it bent.
+                seed = q_leg[i].copy()
+                seed[3] = max(seed[3], KNEE_SEED_RAD)
+                sol = solve_ik(model.legs[i], foot_R, R_root.T @ (ankle - pelvis), seed, _LEG_IK)
+                q_leg[i] = sol.q
+            out[k, i] = q_leg[i]
     return out
+
+
+def _arm_swing(model: G1Model, plan: FootPlan, trunk: _Trunk, have, valid, rate) -> np.ndarray:
+    """(M, 2) shoulder pitch added to an arm hanging without a hand: it swings against the leg
+    on its own side as the feet pass each other (step 6)."""
+    fwd = np.stack([np.cos(trunk.yaw), np.zeros(len(valid)), -np.sin(trunk.yaw)], axis=1)
+    ahead = np.nan_to_num(np.einsum("mfi,mi->mf", plan.ankle - trunk.pelvis[:, None], fwd))
+    lead = ahead[:, 0] - ahead[:, 1]  # the left foot ahead of the right
+    swing = np.zeros((len(valid), 2))
+    move = REST_MOVE_S * rate
+    for i in range(2):
+        # How far into hanging the arm is: none at a hand, fully once it had time to get there.
+        away = np.full(len(valid), np.inf)
+        frames = np.flatnonzero(have[:, i])
+        if len(frames):
+            index = np.arange(len(valid))
+            nearest = np.searchsorted(frames, index).clip(0, len(frames) - 1)
+            before = frames[(nearest - 1).clip(0)]
+            away = np.minimum(np.abs(index - frames[nearest]), np.abs(index - before))
+        hanging = np.where(have[:, i], 0.0, min_jerk(away / move))
+        swing[:, i] = (1.0 if i == 0 else -1.0) * ARM_SWING * lead * hanging
+    return np.where(valid[:, None], swing, 0.0)
 
 
 def _fingers(model: G1Model, pinch, measured, valid, rate: float) -> np.ndarray:

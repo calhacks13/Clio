@@ -116,9 +116,11 @@ def clean_tracking(
     not see (its direction from the head is more than `max_behind` rad from the head's `forward`
     (M, 3)); when it sticks out more than `spike` (m) from the midpoint of the samples on either
     side while they agree; or when reaching it from the last good sample would take more than
-    `max_speed` (m/s) or `max_turn` (rad/s). A run of tracking shorter than `min_run` frames
+    `max_speed` (m/s) or `max_turn` (rad/s). The samples on either side of a glitch go with it
+    (resampling blended them with it), and a run of tracking shorter than `min_run` frames
     between dropouts is a blip."""
-    good = tracked & ~np.isnan(p).any(axis=1) & ~np.isnan(head).any(axis=1)
+    present = tracked & ~np.isnan(p).any(axis=1) & ~np.isnan(head).any(axis=1)
+    good = present.copy()
     offset = np.nan_to_num(p - head)
     distance = np.linalg.norm(offset, axis=1)
     good &= distance <= max_reach
@@ -141,6 +143,10 @@ def clean_tracking(
                 good[k] = False
                 continue
         last = k
+    # A grid sample next to a glitch was interpolated with it: drop it too.
+    glitch = present & ~good
+    good[1:] &= ~glitch[:-1]
+    good[:-1] &= ~glitch[1:]
     for a, b in runs(good):
         if b - a < min_run:
             good[a:b] = False

@@ -61,6 +61,7 @@ class ArmModel:
     wrist_in_tcp: np.ndarray  # (3,) the wrist from the palm point, palm frame, wrist straight
     pitch_origin: np.ndarray  # (3, 3) the shoulder pitch joint's fixed rotation
     roll_offset: float  # the roll joint's fixed rotation about x (undoes the pitch frame's tilt)
+    elbow_offset: float  # the model's elbow angle with the G1's at zero (the links' offsets)
     limits: np.ndarray  # (7, 2) the human ranges
 
     @classmethod
@@ -69,6 +70,9 @@ class ArmModel:
         origins = state.origins
         pitch, roll = (urdf.joints[name] for name in chain.joint_names[:2])
         r = roll.origin[:3, :3]
+        u = _unit(origins[3] - origins[1])
+        f = _unit(origins[5] - origins[3])
+        along = float(f @ u)
         return cls(
             side=side,
             shoulder=origins[1],
@@ -77,6 +81,7 @@ class ArmModel:
             wrist_in_tcp=origins[5] - (state.p + state.R @ tcp),
             pitch_origin=pitch.origin[:3, :3],
             roll_offset=float(np.arctan2(r[2, 1], r[1, 1])),
+            elbow_offset=float(np.arctan2(along, np.linalg.norm(f - along * u))),
             limits=limits,
         )
 
@@ -123,8 +128,9 @@ def model_joints(model: ArmModel, S, E, W, R_tcp) -> np.ndarray:
     b = np.arcsin(np.clip(-Rp[..., 1, 2], -1.0, 1.0))
     yaw = np.arctan2(Rp[..., 1, 0], Rp[..., 1, 1])
     pitch = np.arctan2(Rp[..., 0, 2], Rp[..., 2, 2])
-    elbow = np.arctan2(sin_e, perp)
-    c, s = np.cos(elbow), np.sin(elbow)
+    bend = np.arctan2(sin_e, perp)
+    elbow = bend - model.elbow_offset
+    c, s = np.cos(bend), np.sin(bend)
     zero, one = np.zeros_like(c), np.ones_like(c)
     R_e = np.stack(
         [np.stack([c, zero, s], -1), np.stack([zero, one, zero], -1), np.stack([-s, zero, c], -1)],

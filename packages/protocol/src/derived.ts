@@ -424,17 +424,25 @@ export const BodyDocSchema = z.object({
   scale: z
     .number()
     .positive()
-    .describe("The G1's eye height over the learner's standing head height"),
+    .describe(
+      "The G1's eye height over the learner's standing head height: the G1 is posed at its own size and drawn at 1 / scale",
+    ),
   standingHeadM: z
     .number()
     .positive()
     .describe("The learner's standing head height above the floor"),
   joints: z.array(z.string()).describe('URDF joint names, the order of every q row'),
-  root: z.array(Pose7Schema.nullable()).describe('Pelvis pose, W (the G1 is z-up, x forward)'),
+  root: z
+    .array(Pose7Schema.nullable())
+    .describe(
+      "Pelvis pose, W, of the G1 drawn at the learner's size (1 / scale), so its head and palms land on the measured ones (the G1 is z-up, x forward; before profile version 2, at the G1's size)",
+    ),
   q: z.array(z.array(z.number()).nullable()).describe('Joint values, rad'),
   handResidualM: z
     .array(z.array(z.number().nonnegative().nullable()).length(2))
-    .describe('How far each palm (left, right) stayed from the scaled hand; null when untracked'),
+    .describe(
+      "How far each palm (left, right) stayed from the measured hand, at the learner's size; null where the hand was not measured",
+    ),
   summary: z.object({
     frames: z.number().int().nonnegative(),
     meanHandResidualM: z.number().nonnegative().nullable(),
