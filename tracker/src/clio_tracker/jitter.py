@@ -404,9 +404,10 @@ class _FakeSegmenter:
         return MaskCrop(np.full((rows, cols), 10.0, np.float32), (x1, y1), 1.0)
 
 
-def load_jitter_segmenter(name: str):
-    """`fake`, else a name `load_segmenter` knows (`none` is None, `auto` the default one)."""
-    return _FakeSegmenter() if name == "fake" else load_segmenter(name)
+def load_jitter_segmenter(name: str, device: str = "auto"):
+    """`fake`, else a name `load_segmenter` knows (`none` is None, `auto` the default one), on
+    `device` (torch's: auto, mps, cuda or cpu)."""
+    return _FakeSegmenter() if name == "fake" else load_segmenter(name, device)
 
 
 def play(
@@ -790,6 +791,7 @@ def run(
     flag_parts: bool = True,
     segmenter: str = "none",
     pace: bool = False,
+    device: str = "auto",
 ) -> int:
     from . import track
     from .vision import default_models_dir, load_vision
@@ -801,7 +803,7 @@ def run(
     sequences = build(scenes, seconds)
     print(f"{len(sequences)} sequences of {seconds:g} s rendered in {perf_counter() - t0:.1f} s")
     vision = load_vision(model, backend)
-    cutter = load_jitter_segmenter(segmenter)
+    cutter = load_jitter_segmenter(segmenter, device)
     print(f"segmenter: {cutter.name if cutter is not None else 'none'}")
     impls: list[tuple[str, object, object]] = []
     if baseline is not None:

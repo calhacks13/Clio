@@ -105,7 +105,8 @@ class TrackerSession:
         self._asked: dict[str, float] = {}
         self._last_ask: dict[str, float] = {}
         self._in_flight: dict[str, int] = {}
-        self._frames: dict[int, tuple[Encoding, np.ndarray]] = {}  # frames jev is looking at
+        # Frames jev is looking at: their YOLOE pass, and their pixels for a segmenter's keyframe.
+        self._frames: dict[int, tuple[Encoding, np.ndarray | None]] = {}
         self._keyframes: dict[str, tuple[int, int]] = {}  # jev's frame, and the newest then
         self._refreshed_last: str | None = None  # the object the last refresh was for
         self._done: queue.SimpleQueue[_Ask] = queue.SimpleQueue()
@@ -261,7 +262,7 @@ class TrackerSession:
         for q in due:
             self._last_ask[q.id] = now
             self._in_flight[q.id] = self._in_flight.get(q.id, 0) + 1
-        self._frames[seq] = (enc, image.rgb)
+        self._frames[seq] = (enc, image.rgb if self.refresher is not None else None)
 
         def work() -> None:
             try:
@@ -294,7 +295,7 @@ class TrackerSession:
                 box = self._apply(answer, ask, frame, now, took)
                 if box is not None:
                     boxes[answer.id] = box
-            if boxes and self.refresher is not None:
+            if boxes and self.refresher is not None and frame[1] is not None:
                 # jev's boxes, cut out of jev's frame in one job (the frame is encoded once);
                 # each mask reaches its tracker through `drain` on a later frame.
                 if self._segmenter(Refresher.submit_keyframes, ask.seq, frame[1], boxes):
@@ -322,7 +323,7 @@ class TrackerSession:
         self,
         answer: Identification,
         ask: _Ask,
-        frame: tuple[Encoding, np.ndarray],
+        frame: tuple[Encoding, np.ndarray | None],
         now: float,
         took: float,
     ) -> np.ndarray | None:

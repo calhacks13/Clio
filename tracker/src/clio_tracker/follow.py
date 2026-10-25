@@ -278,9 +278,9 @@ def _estimate(
 def _fit(
     a: np.ndarray, b: np.ndarray, p: FollowParams
 ) -> tuple[np.ndarray | None, np.ndarray, str]:
-    """A full affine when `affine_inliers` points agree on one that stretches as a part can
-    (`_plausible`), else a similarity, on the same points, when `min_inliers` agree on one;
-    None when neither. With the inlier mask and which it is."""
+    """A full affine when `affine_inliers` points agree on one that moves as a part can
+    (`_plausible`), else a similarity, on the same points, when `min_inliers` agree on one that
+    does too; None when neither. With the inlier mask and which it is."""
     for estimate, need, kind in (
         (cv2.estimateAffine2D, p.affine_inliers, "affine"),
         (cv2.estimateAffinePartial2D, p.min_inliers, "similarity"),
@@ -288,18 +288,19 @@ def _fit(
         if len(a) < need:
             continue
         m, keep = estimate(a, b, method=cv2.RANSAC, ransacReprojThreshold=2.0)
-        if m is None or keep is None or keep.sum() < need:
-            continue
-        if kind == "affine" and not _plausible(m):
+        if m is None or keep is None or keep.sum() < need or not _plausible(m):
             continue
         return m.astype(np.float64), keep.ravel() == 1, kind
     return None, np.zeros(len(a), dtype=bool), "none"
 
 
 def _plausible(m: np.ndarray) -> bool:
-    """Whether the 2x3 `m` stretches no more than a part can from one frame to the next: each
-    singular value of its linear part within STRETCH, the larger at most SKEW times the
-    smaller. (Nearly collinear points leave an affine free to stretch across them.)"""
+    """Whether the 2x3 `m` moves a region no more than a part can from one frame to the next:
+    no mirror image (a determinant above 0), each singular value of its linear part within
+    STRETCH (for a similarity, its scale), the larger at most SKEW times the smaller. (Nearly
+    collinear points leave an affine free to stretch across them.)"""
+    if np.linalg.det(m[:, :2]) <= 0:
+        return False
     big, small = np.linalg.svd(m[:, :2], compute_uv=False)
     return STRETCH[0] <= small and big <= STRETCH[1] and big <= SKEW * small
 

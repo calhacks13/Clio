@@ -278,6 +278,16 @@ def segmented(vision, segmenter):
     )
 
 
+def test_the_frame_jev_looks_at_is_kept_whole_only_for_a_segmenter(setup, segmented):
+    session, _, _, _, frame = setup
+    frame(Thing(at(100), A))
+    ((enc, rgb),) = session._frames.values()  # jev is looking at it
+    assert rgb is None and enc is not None  # its YOLOE pass is all an answer needs
+    segmented.frame(Thing(at(100), A))
+    ((_, rgb),) = segmented.session._frames.values()
+    assert rgb is not None and rgb.shape == (720, 960, 3)  # for jev's keyframe
+
+
 def test_session_keyframe_after_jev_answer(segmented):
     s = segmented
     s.jev.answers.append({"cup": (0.93, norm_box(JEV))})

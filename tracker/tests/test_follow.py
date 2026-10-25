@@ -307,6 +307,17 @@ def test_estimate_keeps_the_affine_a_part_can_make():
     assert _estimate(points[:5], points[:5]) == (None, 0, "none")  # fewer than min_inliers
 
 
+def test_a_mirror_or_a_scale_no_part_makes_is_no_motion():
+    # A reflection fits an affine exactly with singular values of 1, and three times the size in
+    # one frame fits a similarity exactly: neither is a part moving from one frame to the next
+    points = np.random.default_rng(3).uniform(0, 90, (40, 2)).astype(np.float32)
+    assert _estimate(points, points * [-1, 1] + [200, 0]) == (None, 0, "none")
+    assert _estimate(points, points * 3 + [5, 5]) == (None, 0, "none")
+    m, inliers, kind = _estimate(points, points * 1.5 + [5, 5])  # half as big again: it can
+    assert kind == "affine" and inliers == len(points)
+    np.testing.assert_allclose(m, [[1.5, 0, 5], [0, 1.5, 5]], atol=1e-3)
+
+
 def test_scale_change_is_followed():
     frames = scene(16, grow=(1.02, 1.02), start=(150, 120))
     f = RegionFollower()

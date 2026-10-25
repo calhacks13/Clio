@@ -337,4 +337,5 @@ def _jitter(settings: Settings, args: argparse.Namespace) -> int:
         args.flag_parts,
         segmenter=segmenter,
         pace=args.pace if args.pace is not None else segmenter != "none",
+        device=settings.device,
     )

@@ -159,9 +159,12 @@ those. A request with a `session` (the lesson's) is answered from tracking state
 YOLOE-26 and ByteTrack follow each object on every frame (about 35 ms a round trip on an M5),
 jev is asked which object the words mean only about once a second, in the background, and the
 answer carries `refreshMs: 50`, so outlines follow moving objects at 10 to 15 frames a second.
-With `--segmenter`, the tracker's outlines are SAM 2.1 masks for whole objects and parts alike
-(the contract is unchanged). The primary demo page also streams frames to its WebSocket `/track`
-([tracker/TRACK.md](../tracker/TRACK.md)).
+SAM 2.1 is on by default (`CLIO_TRACKER_SEGMENTER=auto`, which is Small; `none` turns it off):
+for whole objects and parts alike, its mask is the tracker's outline while the follower that
+carries it from frame to frame is sure of itself and agrees with YOLOE's box (or, for an object
+too plain to follow, while the mask carried by the camera's motion still agrees), and YOLOE's
+mask otherwise; the contract is unchanged. The primary demo page also streams frames to its
+WebSocket `/track` ([tracker/TRACK.md](../tracker/TRACK.md)).
 
 ## Minimal adapter
 
