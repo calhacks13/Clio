@@ -113,6 +113,9 @@ class Sam2Segmenter:
             pixels = self.processor(images=rgb, return_tensors="pt")["pixel_values"]
             embeddings = self.model.get_image_embeddings(pixels.to(self.device))
             self._wait()  # MPS and CUDA queue the work; the cost belongs to this call
+            if self.device == "mps":
+                # Without this, back-to-back calls swing from 120 ms to 2 s.
+                self._torch.mps.empty_cache()
         return SegEncoding(width, height, embeddings)
 
     def _wait(self) -> None:
@@ -145,6 +148,8 @@ class Sam2Segmenter:
                 binarize=False,
             )[0]
             logits = full[0, 0].float().cpu().numpy()
+            if self.device == "mps":  # .cpu() has waited for the device; see encode
+                self._torch.mps.empty_cache()
         return crop_mask(logits, np.array([x1, y1, x2, y2]))
 
 
