@@ -36,42 +36,28 @@ const scene = {
   frame: 'workspace',
   compiledAt: '2026-10-25T10:15:30.000Z',
   inputs: [{ name: 'derived/manifest.json', bytes: 120, sha256: 'a'.repeat(64) }],
-  options: { models: 'gemini-cad', splatSteps: 7000 },
-  stages: [{ name: 'splat', status: 'ok' }],
+  options: { models: 'gemini-cad' },
+  stages: [{ name: 'models', status: 'ok' }],
   keyframes: 48,
-  room: { file: 'room-colored.glb', source: 'quest-scene', coloredShare: 0.81, keyframes: 48 },
-  splat: {
-    file: 'splat.ply',
-    trainer: { name: 'brush', version: '0.3.0' },
-    steps: 7000,
-    keyframes: 48,
-    splats: 410_000,
-    init: 'room-scan',
-  },
   objects: [model],
 };
 
 describe('rebuilt scene', () => {
-  it('parses a scene with a colored room, a splat and a generated model', () => {
+  it('parses a scene with a generated model', () => {
     const doc = SceneDocSchema.parse(scene);
     expect(doc.objects[0]?.placement.rotationSource).toBe('shape');
   });
 
-  it('allows an object without a model, and a scene without room or splat', () => {
-    const bare = {
-      ...scene,
-      room: null,
-      splat: null,
-      objects: [{ ...model, model: null, cad: null }],
-    };
+  it('allows an object without a model', () => {
+    const bare = { ...scene, objects: [{ ...model, model: null, cad: null }] };
     expect(SceneDocSchema.safeParse(bare).success).toBe(true);
   });
 
   it('serves only plain file names of the kinds a scene writes', () => {
-    for (const name of ['scene.json', 'splat.ply', 'model-cup_a.glb', 'crop-cup_a-1.jpg']) {
+    for (const name of ['scene.json', 'model-cup_a.glb', 'crop-cup_a-1.jpg']) {
       expect(SCENE_FILE_NAME.test(name)).toBe(true);
     }
-    for (const name of ['../scene.json', 'splat-input', 'x.exe', '.hidden.json']) {
+    for (const name of ['../scene.json', 'splat.ply', 'x.exe', '.hidden.json']) {
       expect(SCENE_FILE_NAME.test(name)).toBe(false);
     }
     expect(DERIVED_FILE_NAME.test('room.glb')).toBe(true);

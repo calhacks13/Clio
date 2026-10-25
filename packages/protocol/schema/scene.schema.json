@@ -78,17 +78,10 @@
             "gemini-cad",
             "command"
           ]
-        },
-        "splatSteps": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991,
-          "description": "0: no splat was asked for"
         }
       },
       "required": [
-        "models",
-        "splatSteps"
+        "models"
       ],
       "additionalProperties": false
     },
@@ -122,125 +115,8 @@
     "keyframes": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 9007199254740991
-    },
-    "room": {
-      "anyOf": [
-        {
-          "type": "object",
-          "properties": {
-            "file": {
-              "type": "string",
-              "pattern": "^[a-z0-9][a-z0-9._-]{0,95}\\.(json|glb|ply|jpg)$",
-              "description": "\"room-colored.glb\": the room scan with COLOR_0 per vertex, in W"
-            },
-            "source": {
-              "type": "string",
-              "const": "quest-scene"
-            },
-            "coloredShare": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1,
-              "description": "Share of vertices at least one keyframe saw; the rest keep a neutral gray"
-            },
-            "keyframes": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 9007199254740991,
-              "description": "Keyframes the colors came from"
-            }
-          },
-          "required": [
-            "file",
-            "source",
-            "coloredShare",
-            "keyframes"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "splat": {
-      "anyOf": [
-        {
-          "type": "object",
-          "properties": {
-            "file": {
-              "type": "string",
-              "pattern": "^[a-z0-9][a-z0-9._-]{0,95}\\.(json|glb|ply|jpg)$",
-              "description": "\"splat.ply\": 3D Gaussian splatting PLY, positions in W"
-            },
-            "trainer": {
-              "type": "object",
-              "properties": {
-                "name": {
-                  "type": "string"
-                },
-                "version": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                }
-              },
-              "required": [
-                "name",
-                "version"
-              ],
-              "additionalProperties": false
-            },
-            "steps": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            },
-            "keyframes": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
-              "description": "Images it was trained on"
-            },
-            "splats": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 9007199254740991
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Gaussians in the file, if read"
-            },
-            "init": {
-              "type": "string",
-              "enum": [
-                "room-scan",
-                "depth",
-                "random"
-              ],
-              "description": "Where the starting points came from: the colored room scan, depth samples, or none"
-            }
-          },
-          "required": [
-            "file",
-            "trainer",
-            "steps",
-            "keyframes",
-            "splats",
-            "init"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "maximum": 9007199254740991,
+      "description": "Keyframes the episode has with their image"
     },
     "objects": {
       "type": "array",
@@ -272,7 +148,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "pattern": "^[a-z0-9][a-z0-9._-]{0,95}\\.(json|glb|ply|jpg)$"
+                "pattern": "^[a-z0-9][a-z0-9._-]{0,95}\\.(json|glb|jpg)$"
               },
               {
                 "type": "null"
@@ -284,7 +160,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "pattern": "^[a-z0-9][a-z0-9._-]{0,95}\\.(json|glb|ply|jpg)$"
+                "pattern": "^[a-z0-9][a-z0-9._-]{0,95}\\.(json|glb|jpg)$"
               },
               {
                 "type": "null"
@@ -299,7 +175,7 @@
               "properties": {
                 "file": {
                   "type": "string",
-                  "pattern": "^[a-z0-9][a-z0-9._-]{0,95}\\.(json|glb|ply|jpg)$"
+                  "pattern": "^[a-z0-9][a-z0-9._-]{0,95}\\.(json|glb|jpg)$"
                 },
                 "keyframe": {
                   "type": "string",
@@ -474,8 +350,6 @@
     "options",
     "stages",
     "keyframes",
-    "room",
-    "splat",
     "objects"
   ],
   "additionalProperties": false,
