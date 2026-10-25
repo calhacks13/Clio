@@ -22,6 +22,7 @@ export const ApiPaths = {
   plans: '/api/plans',
   plan: (id: string) => `/api/plans/${seg(id)}`,
   planCheck: '/api/plans/check',
+  planCriteria: '/api/plans/criteria',
   visionLocate: '/api/vision/locate',
   sceneAsk: '/api/scene/ask',
   episodes: '/api/episodes',
@@ -155,8 +156,29 @@ export const StepCheckRequestSchema = z.object({
     .max(4)
     .optional()
     .describe('Mistakes that look like success, e.g. "picking up the milk, not the yogurt drink"'),
+  criteria: z
+    .array(z.string().min(1).max(200))
+    .max(4)
+    .optional()
+    .describe(
+      'What must all be visible for done, from /api/plans/criteria, e.g. "cup A is pink". ' +
+        'Each is judged on its own, and the step is done only when every one is met',
+    ),
+  quick: z
+    .boolean()
+    .optional()
+    .describe(
+      'A quick look: less thinking, a sooner answer. The watcher uses one to notice a change ' +
+        'while the step is far from done, never to confirm one',
+    ),
 });
 export const StepCheckVerdictSchema = z.enum(['done', 'not_done', 'unsure']);
+export const StepCriterionMetSchema = z.enum(['yes', 'no', 'unsure']);
+export const StepCheckCriterionSchema = z.object({
+  text: z.string(),
+  met: StepCriterionMetSchema.describe('unsure: out of view, hidden or too blurred to tell'),
+  seen: z.string().optional().describe('What the model saw of it, in a few words'),
+});
 export const StepCheckResponseSchema = z.object({
   verdict: StepCheckVerdictSchema,
   observation: z.string().describe('What the model saw, in a few words'),
@@ -184,6 +206,28 @@ export const StepCheckResponseSchema = z.object({
     .nullable()
     .optional()
     .describe('The object that decided the verdict, in the newest view'),
+  criteria: z
+    .array(StepCheckCriterionSchema)
+    .optional()
+    .describe("The request's criteria as judged, in order: what is met and what is not yet"),
+});
+/** The step's done-when as criteria a camera can confirm, asked once when the step gains focus. */
+export const StepCriteriaRequestSchema = StepCheckRequestSchema.pick({
+  goal: true,
+  step: true,
+  objects: true,
+  confusions: true,
+}).extend({
+  images: z
+    .array(ImagePayloadSchema)
+    .max(2)
+    .optional()
+    .describe('Views from when the step started, so the criteria can say which object is which'),
+});
+export const StepCriteriaResponseSchema = z.object({
+  criteria: z.array(z.string()).min(1).max(4),
+  model: z.string(),
+  latencyMs: z.number().nonnegative(),
 });
 
 export const LocateRequestSchema = z.object({
@@ -375,6 +419,10 @@ export type StepCheckObject = z.infer<typeof StepCheckObjectSchema>;
 export type StepCheckRequest = z.infer<typeof StepCheckRequestSchema>;
 export type StepCheckVerdict = z.infer<typeof StepCheckVerdictSchema>;
 export type StepCheckResponse = z.infer<typeof StepCheckResponseSchema>;
+export type StepCriterionMet = z.infer<typeof StepCriterionMetSchema>;
+export type StepCheckCriterion = z.infer<typeof StepCheckCriterionSchema>;
+export type StepCriteriaRequest = z.infer<typeof StepCriteriaRequestSchema>;
+export type StepCriteriaResponse = z.infer<typeof StepCriteriaResponseSchema>;
 export type LocateRequest = z.infer<typeof LocateRequestSchema>;
 export type Detection = z.output<typeof DetectionSchema>;
 export type DetectionInput = z.input<typeof DetectionSchema>;

@@ -17,12 +17,14 @@ import {
   ProcedureListResponseSchema,
   type StepCheckRequest,
   StepCheckResponseSchema,
+  StepCriteriaResponseSchema,
 } from '@clio/protocol';
 import { describe, expect, it } from 'vitest';
 import type { BenchDeps } from '../src/deps';
 import { type BenchModels, restPlanRequest } from '../src/services/bench';
 import type { BenchJudge, JudgeRequest } from '../src/services/bench-judge';
 import type { Planner, PlannerRequest } from '../src/services/planner';
+import type { StepChecker } from '../src/services/step-check';
 import { BenchCheckStore } from '../src/storage/bench-check-store';
 import { BenchStore } from '../src/storage/bench-store';
 import { ProcedureStore } from '../src/storage/procedure-store';
@@ -69,10 +71,16 @@ function fakeModels(
         if (answer instanceof Error) throw answer;
         return answer ?? '';
       },
-      async checkStep(request) {
+    }),
+    checker: (model): StepChecker => ({
+      model,
+      async check(request) {
         checks.push({ ...request, model });
         if (options.check instanceof Error) throw options.check;
         return options.check ?? '{"verdict":"done","observation":"the cap is off"}';
+      },
+      async criteria() {
+        return '{"criteria":["The cap is off."]}';
       },
     }),
     judge: (model): BenchJudge => ({
@@ -339,6 +347,24 @@ describe('POST /api/bench/check', () => {
       images: [IMAGE],
     });
     expect(res.status).toBe(502);
+  });
+});
+
+describe('POST /api/bench/criteria', () => {
+  it("writes a step's criteria with the chosen model", async () => {
+    const h = await benchHarness();
+    const res = await h.request('POST', BenchPaths.criteria, {
+      goal: 'Refill the washer fluid',
+      step: { id: 'open-cap', instruction: 'Open the cap.', doneWhen: 'The cap is off.' },
+      images: [IMAGE],
+      model: 'gemini-3.8-flash',
+    });
+    expect(res.status).toBe(200);
+    expect(StepCriteriaResponseSchema.parse(await res.json())).toEqual({
+      criteria: ['The cap is off.'],
+      model: 'gemini-3.8-flash',
+      latencyMs: 1_000,
+    });
   });
 });
 
@@ -754,9 +780,13 @@ describe('watcher tests', () => {
     ]);
   });
 
-  it('asks the saved look again with any model and grades the answer', async () => {
+  it('asks the saved look again with any model, as the headset asks, and grades the answer', async () => {
     const models = fakeModels({
-      check: '{"verdict":"done","observation":"holding a white carton"}',
+      check: JSON.stringify({
+        criteria: [{ met: 'yes', seen: 'a white carton in hand' }],
+        observation: 'holding a white carton',
+        verdict: 'done',
+      }),
     });
     const h = await benchHarness(models);
     const { test } = await createTest(h);
@@ -768,9 +798,17 @@ describe('watcher tests', () => {
     expect(run).toMatchObject({
       model: 'gemini-3.8-flash',
       expect: 'wrong',
-      result: { ok: true, answer: { verdict: 'done', observation: 'holding a white carton' } },
+      result: {
+        ok: true,
+        answer: {
+          verdict: 'done',
+          observation: 'holding a white carton',
+          criteria: [{ text: 'The cap is off.', met: 'yes', seen: 'a white carton in hand' }],
+        },
+      },
       passed: false,
     });
+    // The step's criteria first, from its start view, as the headset asks them.
     expect(models.checks[0]).toEqual({
       goal: 'Get a yogurt drink from the fridge',
       step: STEP,
@@ -778,6 +816,7 @@ describe('watcher tests', () => {
       before: [BEFORE],
       objects: OBJECTS,
       confusions: CONFUSIONS,
+      criteria: ['The cap is off.'],
       model: 'gemini-3.8-flash',
     });
     expect(h.logger.lines.some((l) => l.includes('said done, FAIL'))).toBe(true);

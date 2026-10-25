@@ -78,6 +78,7 @@ describe('watcher test list', () => {
     expect(html).toContain('src="/frames/before-1.jpg"');
     expect(html).toContain('src="/frames/now-1.jpg"');
     expect(html).toContain('<option value="wrong" selected>wrong</option>');
+    expect(html).toContain('<option value="unsure" >unsure</option>');
     expect(html).toContain('When saved, robotics-er-2-preview said');
     expect(html).toContain('Run with 2 models');
     expect(html).toContain('<li class="fail"');
@@ -92,5 +93,30 @@ describe('watcher test list', () => {
     });
     expect(html).toContain('<span class="verdict fail">failed</span> Step check failed: quota');
     expect(renderCheckRun({ ...failedRun, passed: true })).toContain('<li class="pass"');
+  });
+
+  it('shows how a run was asked and each criterion as judged', () => {
+    const html = renderCheckRun({
+      ...failedRun,
+      variant: 'quick, criteria seen',
+      result: {
+        ok: true,
+        answer: {
+          verdict: 'not_done',
+          observation: 'cup C is blue-green too',
+          criteria: [
+            { text: 'Cup B is blue-green', met: 'yes', seen: 'teal' },
+            { text: 'Cup C is still purple', met: 'no', seen: 'blue-green' },
+            { text: 'Cup A is pink', met: 'unsure' },
+          ],
+        },
+      },
+    });
+    expect(html).toContain('quick, criteria seen, 1.4 s');
+    expect(html).toContain('<span class="criterion yes" title="teal">✓ Cup B is blue-green</span>');
+    expect(html).toContain(
+      '✗ Cup C is still purple <span class="muted">(blue-green)</span></span>',
+    );
+    expect(html).toContain('<span class="criterion unsure" title="">? Cup A is pink</span>');
   });
 });

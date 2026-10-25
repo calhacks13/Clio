@@ -7,6 +7,7 @@ import {
   type ObjectState,
   type PlanStage,
   type Procedure,
+  type StepCheckCriterion,
 } from '@clio/protocol';
 import type { Emitter } from '../core/emitter';
 import type { Pose, Vec3 } from '../core/math';
@@ -51,17 +52,27 @@ export interface InternalEvents {
   'plan.slow': Timed<{ goal: string; elapsedMs: number }>;
   /** The plan or a step's status changed. Read the new plan from LessonView.plan(). */
   'plan.changed': Timed<{ rev: number; op: PlanOp; stepId: string | null }>;
-  /** The step watcher thinks a step looks done (base64 JPEG it judged by). The coach decides. */
-  'step.looks_done': Timed<{ stepId: string; observation: string; image: string | null }>;
+  /**
+   * The step watcher thinks a step looks done (base64 JPEG it judged by), with the step's criteria
+   * as the last look judged them (all met). The coach decides.
+   */
+  'step.looks_done': Timed<{
+    stepId: string;
+    observation: string;
+    image: string | null;
+    criteria?: StepCheckCriterion[];
+  }>;
   /**
    * The step watcher thinks the learner did something else instead, e.g. "picked up the milk,
-   * not the yogurt drink" (base64 JPEG it judged by). The coach decides whether to correct them.
+   * not the yogurt drink" (base64 JPEG it judged by), with the step's criteria as judged. The
+   * coach decides whether to correct them.
    */
   'step.looks_wrong': Timed<{
     stepId: string;
     wrong: string;
     observation: string;
     image: string | null;
+    criteria?: StepCheckCriterion[];
   }>;
   /** The step watcher saw a danger near the hands (a blade, something hot), whatever the step. */
   'step.hazard': Timed<{ stepId: string; hazard: string; image: string | null }>;

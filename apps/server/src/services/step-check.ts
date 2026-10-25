@@ -1,7 +1,11 @@
 import {
+  type StepCheckCriterion,
   type StepCheckRequest,
   type StepCheckResponse,
+  type StepCheckVerdict,
   StepCheckVerdictSchema,
+  type StepCriteriaRequest,
+  StepCriterionMetSchema,
 } from '@clio/protocol';
 import type { Content, Part } from '@google/genai';
 import { isRecord, parseModelJson } from './model-json';
@@ -19,11 +23,24 @@ import { fromGeminiPoint } from './vision';
 // them with now, the way Robotics-ER is trained to detect success. Every look also names a hazard
 // near the hands, whatever the step: Robotics-ER only reliably mentions a knife when asked
 // (docs/robotics-er.md), and this way the watcher keeps an eye out at no extra cost.
+//
+// A step can come with criteria (step-criteria.ts): the done-when state split into things a camera
+// can confirm one at a time ("cup B is blue-green", "cup C is still purple"). The model judges
+// each on its own, and the step is done only when every one is met, whatever the model concluded:
+// the coach then hears what is met and what is not.
 
 export type StepCheckAnswer = Pick<
   StepCheckResponse,
-  'verdict' | 'observation' | 'progress' | 'wrong' | 'evidence' | 'hazard'
+  'verdict' | 'observation' | 'progress' | 'wrong' | 'evidence' | 'hazard' | 'criteria'
 >;
+
+/** Port: the smart model judging one step. Both answer the model's raw JSON text. */
+export interface StepChecker {
+  readonly model: string;
+  check(request: StepCheckRequest): Promise<string>;
+  /** The step's done-when as criteria (step-criteria.ts). */
+  criteria(request: StepCriteriaRequest): Promise<string>;
+}
 
 /** The observation goes to the coach as part of a narration, so it stays short. */
 export const MAX_OBSERVATION_CHARS = 160;
@@ -31,15 +48,18 @@ export const MAX_OBSERVATION_CHARS = 160;
 export const MAX_WRONG_CHARS = 120;
 /** And so does a hazard. */
 export const MAX_HAZARD_CHARS = 100;
+/** What the model saw of one criterion. */
+export const MAX_SEEN_CHARS = 80;
 const MAX_LABEL_CHARS = 60;
 
 const VERDICTS = StepCheckVerdictSchema.options;
+const MET = StepCriterionMetSchema.options;
 
 export const STEP_CHECK_INSTRUCTION = [
   'You judge one step of a hands-on task from headset camera views. The learner wears the ' +
     'headset, so the views show what they see, newest last. You get the goal, the step, its ' +
     'done-when state (how things look once the step is finished), and often what the ' +
-    "step's objects look like and mistakes that look like success.",
+    "step's objects look like, mistakes that look like success, and criteria.",
   '',
   'How to judge:',
   "1. Find the step's object in the newest view and what the learner is doing with it. Tell " +
@@ -50,6 +70,11 @@ export const STEP_CHECK_INSTRUCTION = [
   '3. With views from the start of the step, compare them with now: what changed, and is that ' +
     'change the step being done?',
   '4. Count a hand only where you see it. Never assume one is holding something.',
+  '5. Judge each criterion on its own, in the newest view: yes when you see it hold, no when ' +
+    'you see it fail, unsure when you cannot see it (out of view, cut off, hidden, blurred). ' +
+    'Never fill in what a hand or the edge of the view hides, not from the start of the step ' +
+    'and not from other clues (a bottle that looks unused): if the object the step changes is ' +
+    'hidden, the step is unsure. The step is done only when every criterion is yes.',
   '',
   'Answer:',
   '- `hazard`: first, whatever the step, a danger in view where the learner works, even when it ' +
@@ -59,6 +84,8 @@ export const STEP_CHECK_INSTRUCTION = [
   '- `evidence`: the object that decides it, in the newest view: its `label` and its `point`, ' +
     '[y, x] normalized to 0-1000, on the object itself, not on the hand. null when no object ' +
     'in view decides it.',
+  '- `criteria`: one entry per criterion, in the order given: `met` (yes, no or unsure) and ' +
+    '`seen`, what you see of it, in at most 10 words.',
   '- `observation`: what you see that decides it, in at most 15 words.',
   '- `wrong`: when the learner did something else instead (the wrong object, a listed ' +
     'mistake), what they did in at most 12 words, e.g. "opened the red cap, not the blue ' +
@@ -66,7 +93,7 @@ export const STEP_CHECK_INSTRUCTION = [
   '- `progress`: how far along the step is, from 0 (not started) to 100 (done).',
   '- `verdict`:',
   '  - done: only when the done-when state is clearly visible in the newest view, with the ' +
-    'right object.',
+    'right object, and every criterion is yes.',
   '  - not_done: when it is visibly not yet true, or the learner did something else.',
   '  - unsure: when you cannot tell, for example the place or object the step is about is out ' +
     'of view, cut off by the edge or hidden, hands are in the way, or the view is blurred or ' +
@@ -75,9 +102,21 @@ export const STEP_CHECK_INSTRUCTION = [
   'Never guess. Judge only what the views show, not what the learner has probably done by now.',
 ].join('\n');
 
+/**
+ * With no criteria given, the model can write its own as it answers (`inline`): the same split of
+ * the done-when state, made on every look rather than once per step.
+ */
+const INLINE_CRITERIA =
+  'No criteria are given: write 2 to 4 yourself, things that must all be true in the newest view ' +
+  'for the step to be done (the end state on the right object, how to tell that object from ' +
+  'look-alikes, what must stay as it was), each as `text` in at most 10 words, and judge them.';
+
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
 
-function checkText({ goal, step, images, before, objects, confusions }: StepCheckRequest): string {
+function checkText(
+  { goal, step, images, before, objects, confusions, criteria }: StepCheckRequest,
+  inline: boolean,
+): string {
   const doneWhen = step.doneWhen?.trim();
   const lines = [
     `Goal: ${goal}`,
@@ -97,6 +136,14 @@ function checkText({ goal, step, images, before, objects, confusions }: StepChec
     lines.push('Mistakes that look like success (not done):');
     for (const c of confusions) lines.push(`- ${c.trim()}`);
   }
+  if (criteria?.length) {
+    lines.push('Criteria (done only when every one is met):');
+    criteria.forEach((c, i) => {
+      lines.push(`${i + 1}. ${c.trim()}`);
+    });
+  } else if (inline) {
+    lines.push(INLINE_CRITERIA);
+  }
   const now = plural(images.length, 'camera view');
   lines.push(
     before?.length
@@ -115,7 +162,7 @@ const imagePart = ({ mimeType, data }: StepCheckRequest['images'][number]): Part
  * One user turn: the views first, then the goal, the step and its done-when state. With views
  * from the start of the step, each group gets a heading, the start first.
  */
-export function stepCheckContents(request: StepCheckRequest): Content[] {
+export function stepCheckContents(request: StepCheckRequest, { inline = false } = {}): Content[] {
   const { images, before } = request;
   const parts: Part[] = before?.length
     ? [
@@ -125,16 +172,41 @@ export function stepCheckContents(request: StepCheckRequest): Content[] {
         ...images.map(imagePart),
       ]
     : images.map(imagePart);
-  parts.push({ text: checkText(request) });
+  parts.push({ text: checkText(request, inline) });
   return [{ role: 'user', parts }];
 }
 
 /**
  * Structured output for the answer. Gemini has no maxLength, so limits are in words. The model
- * writes the fields in this order, so it points at the object and says what it sees before it
- * gives the verdict.
+ * writes the fields in this order, so it points at the object, judges each criterion and says
+ * what it sees before it gives the verdict. `criteria` is a count (one entry per given
+ * criterion), `inline` (the model writes its own) or 0 (none).
  */
-export function stepCheckJsonSchema(): JsonSchema {
+export function stepCheckJsonSchema(criteria: number | 'inline' = 0): JsonSchema {
+  const judged: JsonSchema = {
+    met: { type: 'string', enum: [...MET] },
+    seen: { type: 'string', description: 'What you see of it, in at most 10 words' },
+  };
+  const criteriaSchema: JsonSchema | null =
+    criteria === 'inline'
+      ? {
+          type: 'array',
+          minItems: 2,
+          maxItems: 4,
+          items: {
+            type: 'object',
+            properties: { text: { type: 'string' }, ...judged },
+            required: ['text', 'met', 'seen'],
+          },
+        }
+      : criteria > 0
+        ? {
+            type: 'array',
+            minItems: criteria,
+            maxItems: criteria,
+            items: { type: 'object', properties: judged, required: ['met', 'seen'] },
+          }
+        : null;
   return {
     type: 'object',
     properties: {
@@ -157,6 +229,7 @@ export function stepCheckJsonSchema(): JsonSchema {
         },
         required: ['label', 'point'],
       },
+      ...(criteriaSchema ? { criteria: criteriaSchema } : {}),
       observation: {
         type: 'string',
         description: `What you see that decides it, in at most 15 words (${MAX_OBSERVATION_CHARS} characters)`,
@@ -168,7 +241,15 @@ export function stepCheckJsonSchema(): JsonSchema {
       progress: { type: 'integer', description: 'How far along the step is, 0 to 100' },
       verdict: { type: 'string', enum: [...VERDICTS] },
     },
-    required: ['hazard', 'evidence', 'observation', 'wrong', 'progress', 'verdict'],
+    required: [
+      'hazard',
+      'evidence',
+      ...(criteriaSchema ? ['criteria'] : []),
+      'observation',
+      'wrong',
+      'progress',
+      'verdict',
+    ],
   };
 }
 
@@ -178,8 +259,12 @@ const NOTHING_WRONG = /^(?:none|nothing|n\/?a|null|no|-)?\.?$/i;
 const NO_HAZARD =
   /^(?:none|nothing|n\/?a|null|no|-)?\.?$|^(?:no|none)\b.*\b(?:hazard|danger|visible|seen)/i;
 
-/** Reads the model's answer. Throws a readable Error when it is not JSON or has a bad value. */
-export function parseStepCheck(text: string): StepCheckAnswer {
+/**
+ * Reads the model's answer. `given` are the request's criteria, matched to the answer's by order;
+ * without them, criteria the model wrote itself are read with their text. Throws a readable Error
+ * when the answer is not JSON or has a bad value.
+ */
+export function parseStepCheck(text: string, given: readonly string[] = []): StepCheckAnswer {
   const json = parseModelJson(text);
   if (!json.ok) throw new Error(json.error);
   const answer = json.value;
@@ -196,10 +281,11 @@ export function parseStepCheck(text: string): StepCheckAnswer {
   const hazard = typeof answer.hazard === 'string' ? answer.hazard.trim() : '';
   const progress = answer.progress;
   const evidence = parseEvidence(answer.evidence);
+  const criteria = parseCriteria(answer.criteria, given);
   const somethingElse = !NOTHING_WRONG.test(wrong);
   return {
     // The learner did something else: whatever the model concluded, that step is not done.
-    verdict: somethingElse && verdict.data === 'done' ? 'not_done' : verdict.data,
+    verdict: somethingElse && verdict.data === 'done' ? 'not_done' : bound(verdict.data, criteria),
     observation: answer.observation.trim().slice(0, MAX_OBSERVATION_CHARS),
     ...(typeof progress === 'number' && Number.isFinite(progress)
       ? { progress: Math.round(Math.min(100, Math.max(0, progress))) }
@@ -207,7 +293,43 @@ export function parseStepCheck(text: string): StepCheckAnswer {
     ...(somethingElse ? { wrong: wrong.slice(0, MAX_WRONG_CHARS) } : {}),
     ...(NO_HAZARD.test(hazard) ? {} : { hazard: hazard.slice(0, MAX_HAZARD_CHARS) }),
     ...(evidence === undefined ? {} : { evidence }),
+    ...(criteria.length ? { criteria } : {}),
   };
+}
+
+/**
+ * A "done" holds only when every criterion is met: one that is not makes it not done, and one
+ * the model could not see makes it unsure. Other verdicts stand.
+ */
+function bound(verdict: StepCheckVerdict, criteria: readonly StepCheckCriterion[]) {
+  if (verdict !== 'done') return verdict;
+  if (criteria.some((c) => c.met === 'no')) return 'not_done';
+  if (criteria.some((c) => c.met === 'unsure')) return 'unsure';
+  return verdict;
+}
+
+/**
+ * The criteria as judged: the given ones in order (a missing or unreadable judgement is unsure),
+ * or those the model wrote itself.
+ */
+function parseCriteria(raw: unknown, given: readonly string[]): StepCheckCriterion[] {
+  const entries = Array.isArray(raw) ? raw : [];
+  const judge = (entry: unknown, text: string): StepCheckCriterion => {
+    const record = isRecord(entry) ? entry : {};
+    const met = StepCriterionMetSchema.safeParse(record.met);
+    const seen = typeof record.seen === 'string' ? record.seen.trim() : '';
+    return {
+      text,
+      met: met.success ? met.data : 'unsure',
+      ...(seen ? { seen: seen.slice(0, MAX_SEEN_CHARS) } : {}),
+    };
+  };
+  if (given.length) return given.map((text, i) => judge(entries[i], text));
+  return entries.flatMap((entry) =>
+    isRecord(entry) && typeof entry.text === 'string' && entry.text.trim()
+      ? [judge(entry, entry.text.trim().slice(0, MAX_SEEN_CHARS))]
+      : [],
+  );
 }
 
 /** `{ label, point: [y, x] in 0..1000 }` → ours, [x, y] in 0..1. Null for none or a bad one. */

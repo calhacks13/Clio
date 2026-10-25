@@ -178,9 +178,10 @@ Once per XR frame:
    │            tracker runs, else looked at again every few seconds; §5.6) · demo auto-played
    ├─ edit:    add_step / update_step / complete_step / add_material ─► runner ─► plan.changed
    │           (recorded as plan.updated); each result repeats the plan
-   ├─ watch:   step watcher: frames from the step's start and now + step, looks, mix-ups
-   │           ─► POST /api/plans/check, again 1 s after each answer ─► "looks done" or "did
-   │           something else" twice in a row? the coach gets the frame and decides
+   ├─ watch:   step watcher: once, POST /api/plans/criteria; then frames from the step's start
+   │           and now + step, looks, mix-ups, criteria ─► POST /api/plans/check, quick while
+   │           far, careful and two at once when close ─► "looks done" or "did something else"
+   │           twice in a row? the coach gets the frame and which criteria, and decides
    └─ revise_plan(reason) ─► POST /api/plans {revise: {planId, fromStepIndex, base}}
                              ─► runner.replacePlan (by step id)
 ```
@@ -368,12 +369,16 @@ moved, `now`, the new step's briefing, so the coach never hears a step twice. De
 
 **The step watcher** (`domain/session/step-watcher.ts`) is the coach's second pair of eyes.
 Gemini Live only takes a turn when someone speaks, so a step finished in silence would go
-unnoticed. While a step has focus and nobody is talking, the watcher sends a fresh 1024 px frame,
-the frame from when the step gained focus, the step's text and `doneWhen`, what its objects look
-like and its mistakes to `POST /api/plans/check`, and looks again 1 s after each answer (about
-every 2.5 s). When two answers in a row say `done`, or that the learner did something else (took
-the milk, not the yogurt drink), the coach gets the frame and a suggestion, and decides. The
-watcher never completes a step itself. Every answer is recorded as a `step.watch` annotation.
+unnoticed. When a step gains focus it asks `POST /api/plans/criteria` once for the step's
+criteria (its done-when as things a camera can confirm). While a step has focus and nobody is
+talking, the watcher sends a fresh 1024 px frame, the frame from when the step gained focus, the
+step's text and `doneWhen`, what its objects look like, its mistakes and its criteria to
+`POST /api/plans/check`: quick looks one at a time while the step looks far from done, careful
+ones, two at once, when it looks close. When two answers in a row say `done` (the second careful,
+every criterion met), or that the learner did something else (took the milk, not the yogurt
+drink), the coach gets the frame and a suggestion with the criteria met or not, and decides. The
+watcher never completes a step itself. Every answer is recorded as a `step.watch` annotation
+(coach-plan.md, Completion).
 
 **The perception boundary.** When the coach is Gemini in learn mode, it never hears positions,
 distances, pinches, detections, or missing and registered objects. It is told only what the
@@ -430,6 +435,7 @@ A stale briefing dropped at that point is a `coach.narration_dropped` annotation
 | `POST /api/coach/token`                                               | ephemeral Live token (direct transport)                                                      |
 | `POST /api/plans`, `GET /api/plans/:id`                               | the planner: goal + images (+ revision) → validated `Procedure`, stored in `data/plans/`     |
 | `POST /api/plans/check`                                               | the step watcher: frames + step → `done`, `not_done` or `unsure`, progress, what was wrong   |
+| `POST /api/plans/criteria`                                            | the step watcher, once per step: start frame + step → 2 to 4 criteria a camera can confirm   |
 | `POST /api/vision/locate`                                             | the object finder: Gemini, or any HTTP finder at `CLIO_VISION_URL` (docs/object-finder.md)   |
 | `GET /api/episodes[/:id[/frames\|events\|objects]]`                   | browse / replay                                                                              |
 | `POST /api/scene/ask`                                                 | the voice's closer look: frames + question → hazard, answer in words, points (smart model)   |

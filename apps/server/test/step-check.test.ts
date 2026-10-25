@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { JsonSchema } from '../src/services/plan-schema';
 import {
   parseStepCheck,
   STEP_CHECK_INSTRUCTION,
@@ -38,6 +39,11 @@ describe('STEP_CHECK_INSTRUCTION', () => {
     'hands are in the way',
     'What you cannot see is unsure, not not_done.',
     'Never guess.',
+    'Judge each criterion on its own, in the newest view',
+    'Never fill in what a hand or the edge of the view hides',
+    'if the object the step changes is hidden, the step is unsure',
+    'The step is done only when every criterion is yes.',
+    'one entry per criterion, in the order given',
   ])('covers %j', (phrase) => {
     expect(STEP_CHECK_INSTRUCTION).toContain(phrase);
   });
@@ -135,7 +141,68 @@ describe('stepCheckContents', () => {
   });
 });
 
+describe('stepCheckContents with criteria', () => {
+  it('numbers the criteria after the hints, or asks the model for its own when inline', () => {
+    const request = {
+      goal: 'Test an acid and a base',
+      step: STEP,
+      images: [IMAGE],
+      criteria: [" Cup A's liquid is pink. ", 'Cups B and C are still purple.'],
+    };
+    expect(stepCheckContents(request)[0]?.parts?.at(-1)?.text).toBe(
+      [
+        'Goal: Test an acid and a base',
+        'Step: Add vinegar to cup A.',
+        'Done when: Cup A has turned pink.',
+        'Criteria (done only when every one is met):',
+        "1. Cup A's liquid is pink.",
+        '2. Cups B and C are still purple.',
+        "Attached: 1 camera view from the learner's headset, newest last.",
+        'Is the step done?',
+      ].join('\n'),
+    );
+    const plain = { goal: 'Test an acid', step: STEP, images: [IMAGE] };
+    expect(stepCheckContents(plain, { inline: true })[0]?.parts?.at(-1)?.text).toContain(
+      'No criteria are given: write 2 to 4 yourself',
+    );
+    expect(stepCheckContents(plain)[0]?.parts?.at(-1)?.text).not.toContain('criteria');
+  });
+});
+
 describe('stepCheckJsonSchema', () => {
+  it('asks for one judgement per given criterion before the observation', () => {
+    const schema = stepCheckJsonSchema(2);
+    expect(Object.keys(schema.properties as object)).toEqual([
+      'hazard',
+      'evidence',
+      'criteria',
+      'observation',
+      'wrong',
+      'progress',
+      'verdict',
+    ]);
+    expect((schema.properties as Record<string, unknown>).criteria).toEqual({
+      type: 'array',
+      minItems: 2,
+      maxItems: 2,
+      items: {
+        type: 'object',
+        properties: {
+          met: { type: 'string', enum: ['yes', 'no', 'unsure'] },
+          seen: { type: 'string', description: 'What you see of it, in at most 10 words' },
+        },
+        required: ['met', 'seen'],
+      },
+    });
+    expect(schema.required).toContain('criteria');
+    const inline = stepCheckJsonSchema('inline').properties as Record<string, JsonSchema>;
+    expect(inline.criteria).toMatchObject({
+      minItems: 2,
+      maxItems: 4,
+      items: { required: ['text', 'met', 'seen'] },
+    });
+  });
+
   it('asks for a hazard, the evidence and what it sees before the verdict, in the subset Gemini supports', () => {
     const schema = stepCheckJsonSchema();
     expect(Object.keys(schema.properties as object)).toEqual([
@@ -292,6 +359,59 @@ describe('parseStepCheck', () => {
     expect(() => parseStepCheck('{"observation":"Hard to say."}')).toThrow(
       'The step check verdict (missing) is not one of done, not_done, unsure',
     );
+  });
+
+  it('judges the given criteria in order, a missing or unreadable one as unsure', () => {
+    const answer = {
+      criteria: [{ met: 'yes', seen: ' cup A is pink ' }, { met: 'maybe' }],
+      observation: 'Cup A is pink.',
+      verdict: 'not_done',
+    };
+    const given = ['Cup A is pink.', 'Cup B is purple.', 'Cup C is purple.'];
+    expect(parseStepCheck(JSON.stringify(answer), given).criteria).toEqual([
+      { text: 'Cup A is pink.', met: 'yes', seen: 'cup A is pink' },
+      { text: 'Cup B is purple.', met: 'unsure' },
+      { text: 'Cup C is purple.', met: 'unsure' },
+    ]);
+  });
+
+  it('reads the criteria the model wrote itself when none were given', () => {
+    const answer = {
+      criteria: [
+        { text: ' Cup A is pink ', met: 'yes', seen: 'pink' },
+        { text: '', met: 'no' },
+        { met: 'no' },
+        'Cup B is purple',
+      ],
+      observation: 'Cup A is pink.',
+      verdict: 'done',
+    };
+    expect(parseStepCheck(JSON.stringify(answer))).toMatchObject({
+      verdict: 'done',
+      criteria: [{ text: 'Cup A is pink', met: 'yes', seen: 'pink' }],
+    });
+    expect(parseStepCheck('{"verdict":"done","observation":"o"}')).not.toHaveProperty('criteria');
+  });
+
+  it('holds a done back while a criterion is not met or could not be seen', () => {
+    const answer = (...met: string[]) =>
+      JSON.stringify({
+        criteria: met.map((m) => ({ met: m, seen: 's' })),
+        observation: 'o',
+        verdict: 'done',
+      });
+    const given = ['one', 'two'];
+    expect(parseStepCheck(answer('yes', 'yes'), given).verdict).toBe('done');
+    expect(parseStepCheck(answer('yes', 'no'), given).verdict).toBe('not_done');
+    expect(parseStepCheck(answer('unsure', 'no'), given).verdict).toBe('not_done');
+    expect(parseStepCheck(answer('yes', 'unsure'), given).verdict).toBe('unsure');
+    // Criteria never turn another verdict into done: the model saw something they missed.
+    const notDone = JSON.stringify({
+      criteria: [{ met: 'yes' }, { met: 'yes' }],
+      observation: 'Still on the shelf.',
+      verdict: 'not_done',
+    });
+    expect(parseStepCheck(notDone, given).verdict).toBe('not_done');
   });
 
   it('throws a readable error without an observation or an object', () => {

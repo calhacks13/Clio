@@ -1,4 +1,4 @@
-import type { BenchCheckExpect, StepCheckVerdict } from '@clio/protocol';
+import type { BenchCheckExpect, StepCheckCriterion, StepCheckVerdict } from '@clio/protocol';
 import type { StepProgress, WatchLook, WatchSession } from './live-watch';
 import { esc, shortModel } from './plan-view';
 
@@ -40,7 +40,7 @@ export function verdictLabel(verdict: StepCheckVerdict): string {
 }
 
 export function expectText(expect: BenchCheckExpect): string {
-  return expect === 'done' ? 'done' : expect === 'not_done' ? 'not done' : 'wrong';
+  return expect === 'not_done' ? 'not done' : expect;
 }
 
 function intervalLabel(ms: number): string {
@@ -165,7 +165,19 @@ export function lookText(look: WatchLook): string {
   const hazard = look.hazard
     ? ` · <span class="verdict hazard">hazard</span> ${esc(look.hazard)}`
     : '';
-  return `${wrong}<span class="verdict ${look.verdict}">${verdictLabel(look.verdict)}</span> ${esc(look.observation ?? '')}${along}${hazard}`;
+  return `${wrong}<span class="verdict ${look.verdict}">${verdictLabel(look.verdict)}</span> ${esc(look.observation ?? '')}${along}${hazard}${criteriaText(look.criteria)}`;
+}
+
+const MET_MARK = { yes: '✓', no: '✗', unsure: '?' } as const;
+
+/** Each criterion as judged: "✓ cup A is pink · ✗ cup C is still purple (blue-green)". */
+export function criteriaText(criteria: readonly StepCheckCriterion[] | undefined): string {
+  if (!criteria?.length) return '';
+  const items = criteria.map(
+    (c) =>
+      `<span class="criterion ${c.met}" title="${esc(c.seen ?? '')}">${MET_MARK[c.met]} ${esc(c.text)}${c.met !== 'yes' && c.seen ? ` <span class="muted">(${esc(c.seen)})</span>` : ''}</span>`,
+  );
+  return `<span class="criteria">${items.join(' · ')}</span>`;
 }
 
 /** The frame a look judged, with the point that decided it when the model gave one. */
@@ -281,6 +293,7 @@ export function renderSaveTest(look: WatchLook, goal: string): string {
         ${option('done', 'done', 'The step is done in this frame')}
         ${option('not_done', 'not done', 'Not done yet; unsure also passes')}
         ${option('wrong', 'wrong', 'Not done, and it must say what the learner did instead')}
+        ${option('unsure', 'unsure', 'The frame cannot tell: hidden, out of view or blurred')}
       </div>
       <label>Title <input name="title" maxlength="120" required value="${esc(title.slice(0, 120))}"></label>
       <div class="row">

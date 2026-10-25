@@ -46,6 +46,8 @@ More thinking was not better for our calls:
 | --------------------------- | ------------------- | ------------ | -------------- | ----------- |
 | step check, clear case      | 1.0-1.4 s           | 1.1 s        | 1.6-1.9 s      | 0.9-1.0 s   |
 | step check, 12 hard cases   | 9/12 right          | 6-7/12       | 6-7/12         | 9/12        |
+| step check, 30 painted      | 56/60, 1.3 s        | 29/30, 1.7 s |                |             |
+| ... with criteria           | 29/30, 1.4 s        | 30/30, 2.0 s |                |             |
 | object finder (2 objects)   | 2.3 s               |              | 4.9 s          | 1.7 s       |
 | full plan                   | 6.4 s, 8/12 met     | 10.1 s       | 18.8 s, 7/12   | 5.6 s, 4/12 |
 | stage 1 card, step 1 starts | 2.7-3.9 s           | 5.3-9.1 s    |                |             |
@@ -53,7 +55,10 @@ More thinking was not better for our calls:
 | pH outline tests the base   | 6 of 10, now 7 of 7 | 7 of 7       |                |             |
 
 With thinking on, the step check repeatedly invented "the dropper is held in the learner's hand"
-when no hand was in view. Pointing, boxes, yes/no state, counting and spatial relations were as
+when no hand was in view. On the planner bench's 30 painted watcher tests (October 2026, see
+below) the step check was right on every done, not done and wrong case at minimal and at low; what
+both got wrong was the frames they could not read. Minimal more so: for a cup hidden behind a
+hand it said "not done, cup A is still purple", and for one out of view, not done. Pointing, boxes, yes/no state, counting and spatial relations were as
 accurate at minimal as at high. Trajectories, polygons and custom multi-image JSON were better
 with some thinking. Whole plans need low or more. The planner's short first stage (the card) gets
 its first step as right at minimal as at low, 2 to 3 s sooner, but at minimal 4 of 10 pH
@@ -94,7 +99,38 @@ of the card's rows is from its first version.
   every part of the goal, in order, fixed it (7 of 7). It still doesn't read cup A's pink as the
   acid test already done, so no pH plan keeps the spare cup C as the control.
 - **Out of view**: models answered `not_done` rather than `unsure` when the target was cropped
-  out of the frame; the step check says that hidden or out-of-view means unsure.
+  out of the frame; the step check says that hidden or out-of-view means unsure. Behind a hand
+  it still reasoned from other clues ("the vinegar bottle is untouched, so cup A has no vinegar"):
+  at low it said unsure in 1 of 8 looks, and in 2 of 4 once the prompt said that a hidden object
+  is unsure whatever other clues say.
+- **Criteria it adds**: asked to split a done-when into criteria, it sometimes adds a condition the
+  done-when doesn't state: an amount from the instruction ("about 5 mL"), or that the bottle is
+  back on the table. The prompt forbids both; the amount still came back in 1 of 4 sets.
+
+## The step watcher's measurements
+
+On 30 watcher tests painted with `gemini-3-pro-image` (first-person views of the pH table, a fridge,
+a desk and a basil pot: clearly done, not done, half done, the look-alike or wrong cup, a listed
+mistake, a hand hiding the result, out of view, dark and blurred, a step back, a comparison with a
+control cup), October 2026. Every configuration was right on every done, not done and wrong case
+except where noted, and none said done when it wasn't. The scenes are clean, so treat the
+differences as directional.
+
+| Check                                  | Looks | Passed | Unsure right | Median | p90   |
+| -------------------------------------- | ----- | ------ | ------------ | ------ | ----- |
+| low, the old prompt (before)           | 90    | 87     | 6/9          | 1.8 s  | 2.5 s |
+| low, the new prompt                    | 30    | 29     | 2/3          | 1.7 s  | 2.2 s |
+| minimal                                | 60    | 56     | 2/6          | 1.3 s  | 1.5 s |
+| low + criteria (first prompt)          | 60    | 59     | 5/6          | 2.1 s  | 2.7 s |
+| low + criteria (careful look, final)   | 30    | 30     | 3/3          | 2.0 s  | 2.5 s |
+| minimal + criteria (quick look, final) | 30    | 29     | 3/3          | 1.4 s  | 1.6 s |
+
+Criteria cost about 0.3 s a look (their own call, about 1.4 s, is made once per step). The quick
+look's one miss was a criterion that asked for the instruction's 5 mL. With the watcher's
+schedule (quick looks while far, careful ones close, a confirming look at once), a simulation on
+these latencies puts a done in front of the coach in 4.1 to 5.2 s instead of 6.6 s
+([coach-plan.md](coach-plan.md)). Other models were not compared: on these scenes Robotics-ER 2 at
+low left nothing to win.
 - **Masks**: not supported. The documented mask prompt returned boxes or nothing, and base64 PNG
   masks came back corrupt, once looping to the output limit (260 s). Outlines stay boxes, or come
   from a segmenting finder (`CLIO_VISION_URL`). Polygons can be asked for at default thinking

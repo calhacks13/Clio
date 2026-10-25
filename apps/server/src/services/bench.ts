@@ -13,8 +13,10 @@ import { type BenchJudge, parseJudgement } from './bench-judge';
 import type { GenerateContentApi, ModelListApi } from './gemini';
 import { createGeminiJudge } from './gemini-judge';
 import { createGeminiPlanner, type GeminiPlannerOptions } from './gemini-planner';
+import { createGeminiStepChecker, type GeminiStepCheckerOptions } from './gemini-step-check';
 import { generatePlan, type PlanRequestBody } from './plan-service';
 import type { Planner } from './planner';
+import type { StepChecker } from './step-check';
 
 // The planner bench (docs/planner-bench.md): runs the headset's own planning path (prompt,
 // validation, retry) with any model and records what happened, so a failure is a result to look
@@ -26,6 +28,8 @@ export interface BenchModels {
   readonly plannerModel: string;
   readonly judgeModel: string;
   planner(model: string, options?: GeminiPlannerOptions): Planner;
+  /** The step watcher's question on any model. */
+  checker(model: string, options?: GeminiStepCheckerOptions): StepChecker;
   judge(model: string): BenchJudge;
   /** Models this key can plan with, newest first. */
   list(): Promise<string[]>;
@@ -56,6 +60,7 @@ export function createBenchModels(
     plannerModel,
     judgeModel,
     planner: (model, options) => createGeminiPlanner(ai, model, options),
+    checker: (model, options) => createGeminiStepChecker(ai, model, options),
     judge: (model) => createGeminiJudge(ai, model),
     async list() {
       if (cached && Date.now() - cached.at < MODEL_LIST_TTL_MS) return cached.names;
