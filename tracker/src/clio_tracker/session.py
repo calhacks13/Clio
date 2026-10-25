@@ -23,6 +23,13 @@ A refresh asked before jev's newest box for the object arrived, and a keyframe o
 box, are dropped when they come back: they cut out what jev may since have replaced. jev's
 keyframe itself replaces the follower's mask even when a refresh of a newer frame landed while
 jev answered.
+
+In objects mode an anchor (TRACK.md) is another finder's box for one object: Gemini Robotics-ER
+2's, on a sharp frame the page captured a few seconds ago. It goes the way of a jev answer, on
+the next frame: matched on the streamed frame captured nearest it (the session keeps the
+streamed frames and their capture times for this), cut out of that frame as a keyframe, and
+never stale. For anchor_hold_s after it, jev's answers about the object give way: one that says
+it is not in view, or puts it elsewhere, is ignored.
 """
 
 from __future__ import annotations
@@ -31,6 +38,7 @@ import logging
 import queue
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from concurrent.futures import Executor
 from dataclasses import dataclass, field
@@ -41,7 +49,7 @@ import numpy as np
 from .follow import RegionFollower
 from .geometry import normalize_box
 from .identify import FrameImage, Identification, Identifier, Query
-from .motion import CameraMotion
+from .motion import CameraMotion, warp_box
 from .refresh import Refreshed, Refresher
 from .segment import Segmenter
 from .tracking import ObjectTracker, Sighting, TrackerParams
@@ -58,6 +66,10 @@ class SessionSettings:
     identify_backoff_max_s: float = 16.0  # the longest wait for the next call while jev fails
     present_threshold: float = 0.5  # jev's Noul probability that counts as "in view"
     forget_after_s: float = 10.0  # an object nobody asks about is dropped after this
+    # Anchors (objects mode): another finder's box for an object, Gemini Robotics-ER 2's.
+    anchor_match_s: float = 0.12  # a streamed frame captured this near it is the anchor's frame
+    anchor_hold_s: float = 6.0  # after an anchor, jev's answers that disagree are ignored this long
+    anchor_frames: int = 300  # streamed frames kept to find an anchor's: 20 s at 15 a second
     tracker: TrackerParams = field(default_factory=TrackerParams)
 
 
@@ -68,6 +80,14 @@ class _Ask:
     generations: dict[str, int]
     answers: list[Identification] | None = None
     error: BaseException | None = None
+
+
+@dataclass(frozen=True)
+class _Anchor:
+    id: str
+    t: float  # the capture time of the frame it was boxed on (ms, the streamed frames' clock)
+    box: tuple[float, float, float, float]  # normalized xyxy
+    finder: str  # "er"
 
 
 @dataclass
@@ -114,6 +134,12 @@ class TrackerSession:
         self._wait_s = 0.0  # and the wait they set before the next call
         self._retry_at = -np.inf
         self._camera = CameraMotion()
+        # Streamed frames by seq, with their capture time (ms, the page's clock) and JPEG, to find
+        # an anchor's frame; anchors waiting for the next frame; when each object was last
+        # anchored.
+        self._kept: OrderedDict[int, tuple[float, bytes]] = OrderedDict()
+        self._anchors: list[_Anchor] = []
+        self._anchored: dict[str, float] = {}
 
     @property
     def in_flight(self) -> int:
@@ -125,23 +151,30 @@ class TrackerSession:
         return detections, timings
 
     def follow(
-        self, image: FrameImage, queries: list[Query]
+        self, image: FrameImage, queries: list[Query], t: float | None = None
     ) -> tuple[list[Sighting], tuple[int, int], FrameTimings]:
         """One frame: a YOLOE pass, a step of each object's tracker, and jev asked about the
-        objects that are due. Answers each object's sighting, in order, and the frame's size."""
+        objects that are due. Answers each object's sighting, in order, and the frame's size.
+        `t` is the frame's capture time on the page's clock (ms) when it is streamed (objects
+        mode): the frame is kept, so an anchor can name it."""
         with self._lock:
             started = self._clock()
             enc = self.vision.encode(image.rgb)
             encoded = self._clock()
             self._seq += 1
             seq = self._seq
+            if t is not None:
+                self._keep(seq, t, image.data)
             self._apply_answers(encoded, seq)
             trackers = [self._tracker_for(q, encoded) for q in queries]
+            self._apply_anchors(image, enc, seq, encoded)
             camera = self._camera.update(image.rgb, seq)
             if self.refresher is None:
                 sightings = [tr.step(enc, seq, encoded, self.vision, camera) for tr in trackers]
             else:
                 sightings = self._follow(image.rgb, enc, seq, encoded, camera, queries, trackers)
+            for s, tr in zip(sightings, trackers, strict=True):
+                s.finder = tr.placed_by
             self._ask(image, enc, seq, encoded, queries, trackers)
             self._forget(encoded)
             done = self._clock()
@@ -201,10 +234,19 @@ class TrackerSession:
 
     def drop(self, ids: Iterable[str]) -> None:
         """Stops following these objects now (objects mode left them out of its set). A jev
-        answer about them that is still on the way is ignored, as for re-worded objects."""
+        answer about them that is still on the way is ignored, as for re-worded objects, and
+        so is an anchor waiting for the next frame."""
         with self._lock:
             for oid in ids:
                 self._drop(oid)
+
+    def anchor(
+        self, oid: str, t: float, box: tuple[float, float, float, float], finder: str
+    ) -> None:
+        """Another finder (`finder`, "er") boxed object `oid` at `box` (normalized xyxy) on the
+        frame captured at `t` (ms, the streamed frames' clock). Placed on the next frame."""
+        with self._lock:
+            self._anchors.append(_Anchor(oid, t, box, finder))
 
     # --- objects ---------------------------------------------------------------------------
 
@@ -222,6 +264,7 @@ class TrackerSession:
             self._generation += 1
             self._generations[q.id] = self._generation
             self._last_ask.pop(q.id, None)
+            self._anchored.pop(q.id, None)
         self._asked[q.id] = now
         return tr
 
@@ -235,6 +278,72 @@ class TrackerSession:
         self._asked.pop(oid, None)
         self._last_ask.pop(oid, None)
         self._keyframes.pop(oid, None)
+        self._anchored.pop(oid, None)
+        self._anchors = [a for a in self._anchors if a.id != oid]
+
+    def _keep(self, seq: int, t: float, jpeg: bytes) -> None:
+        self._kept[seq] = (t, jpeg)
+        while len(self._kept) > self.settings.anchor_frames:
+            self._kept.popitem(last=False)
+
+    # --- anchors ---------------------------------------------------------------------------
+
+    def _apply_anchors(self, image: FrameImage, enc: Encoding, seq: int, now: float) -> None:
+        """The anchors that came since the last frame, before frame `seq` is followed, each
+        placed as a jev answer is: on the streamed frame captured nearest its time, if within
+        anchor_match_s; else carried from the nearest one to this frame by the camera's motion
+        since; else (no earlier frame kept, or this one the nearest) on this frame, as if
+        measured on it. An object not placed yet is placed on the next frame either way."""
+        anchors, self._anchors = self._anchors, []
+        for a in anchors:
+            tr = self._objects.get(a.id)
+            if tr is None:
+                continue  # left out of the set, or forgotten, since
+            near = min(self._kept, key=lambda k: abs(self._kept[k][0] - a.t), default=None)
+            gap_ms = abs(self._kept[near][0] - a.t) if near is not None else np.inf
+            kept = None
+            if near is not None and near != seq and gap_ms <= self.settings.anchor_match_s * 1000:
+                kept = _decode(self._kept[near][1])
+            if near is not None and kept is not None:
+                # Its own frame: matched to the track there, carried to now as jev's box is.
+                on, on_enc, rgb = near, self.vision.encode(kept), kept
+                carry = self._camera.since(near)
+                box = _pixels(a.box, on_enc)
+                how = f"on frame {near} ({gap_ms:.0f} ms off)"
+            else:
+                on, on_enc, rgb, carry = seq, enc, image.rgb, None
+                box = _pixels(a.box, enc)
+                how = f"on frame {seq}"
+                if near is not None and near != seq:
+                    box = warp_box(box, self._camera.since(near))
+                    how = f"carried from frame {near} ({gap_ms:.0f} ms off) to frame {seq}"
+            appearance = self.vision.prompts(on_enc, box)[0]
+            change = tr.identified(on, now, True, box, appearance, carry, finder=a.finder)
+            self._anchored[a.id] = now
+            log.info(f"{a.id}: {a.finder} boxed it, {how}: {change}")
+            self._cut(on, rgb, {a.id: box}, seq)
+
+    def _outranked(
+        self, oid: str, tr: ObjectTracker, seq: int, present: bool, box, carry, now: float
+    ) -> float | None:
+        """How long ago an anchor placed the object, when jev's answer about frame `seq` gives
+        way to it: within anchor_hold_s of the anchor, an answer that it is not in view, or a
+        box elsewhere than the object as followed now (ObjectTracker.holds). Else None."""
+        since = now - self._anchored.get(oid, -np.inf)
+        if since >= self.settings.anchor_hold_s:
+            return None
+        return None if present and tr.holds(seq, box, carry) else since
+
+    def _cut(
+        self, seq: int, rgb: np.ndarray | None, boxes: dict[str, np.ndarray], newest: int
+    ) -> None:
+        """Finders' boxes on frame `seq`, cut out of it as keyframes in one segmenter job (the
+        frame is encoded once); each mask reaches its tracker through `drain` on a later frame.
+        `newest` is the frame being followed."""
+        if boxes and self.refresher is not None and rgb is not None:
+            if self._segmenter(Refresher.submit_keyframes, seq, rgb, boxes):
+                for oid in boxes:
+                    self._keyframes[oid] = (seq, newest)
 
     # --- jev -------------------------------------------------------------------------------
 
@@ -295,12 +404,7 @@ class TrackerSession:
                 box = self._apply(answer, ask, frame, now, took)
                 if box is not None:
                     boxes[answer.id] = box
-            if boxes and self.refresher is not None and frame[1] is not None:
-                # jev's boxes, cut out of jev's frame in one job (the frame is encoded once);
-                # each mask reaches its tracker through `drain` on a later frame.
-                if self._segmenter(Refresher.submit_keyframes, ask.seq, frame[1], boxes):
-                    for oid in boxes:
-                        self._keyframes[oid] = (ask.seq, newest)
+            self._cut(ask.seq, frame[1], boxes, newest)
 
     def _failed(self, error: BaseException | None, now: float) -> None:
         """Tracking goes on, and nothing is sent until a wait has passed: a fast failure (an
@@ -327,26 +431,27 @@ class TrackerSession:
         now: float,
         took: float,
     ) -> np.ndarray | None:
-        """Tell the object's tracker; jev's box in frame pixels when it is to be cut out."""
+        """Tell the object's tracker, unless an anchor outranks the answer; jev's box in frame
+        pixels when it is to be cut out."""
         enc, _ = frame
         tr = self._objects.get(answer.id)
         if tr is None or self._generations.get(answer.id) != ask.generations.get(answer.id):
             return None  # the object was dropped or re-worded since
         present = answer.present >= self.settings.present_threshold and answer.box is not None
-        box = appearance = None
-        if present:
-            lb = enc.letterbox
-            size = np.array([lb.width, lb.height, lb.width, lb.height], dtype=np.float32)
-            box = np.asarray(answer.box, dtype=np.float32) * size
-            appearance = self.vision.prompts(enc, box)[0]
-        change = tr.identified(ask.seq, now, present, box, appearance, self._camera.since(ask.seq))
+        box = _pixels(answer.box, enc) if present else None
+        carry = self._camera.since(ask.seq)
         seen = (
             f"in view ({answer.present:.2f})" if present else f"not in view ({answer.present:.2f})"
         )
-        log.info(
-            f"{answer.id}: {self.identifier.name} says {seen} on frame {ask.seq}, "
-            f"{took:.1f} s later: {change}"
-        )
+        said = f"{answer.id}: {self.identifier.name} says {seen} on frame {ask.seq}"
+        said += f", {took:.1f} s later"
+        anchored = self._outranked(answer.id, tr, ask.seq, present, box, carry, now)
+        if anchored is not None:
+            log.info(f"{said}: ignored, anchored {anchored:.1f} s ago")
+            return None
+        appearance = self.vision.prompts(enc, box)[0] if box is not None else None
+        change = tr.identified(ask.seq, now, present, box, appearance, carry)
+        log.info(f"{said}: {change}")
         return box if present and change != "stale" else None
 
 
@@ -385,6 +490,19 @@ def _detection(object_id: str, s: Sighting, size: tuple[int, int]) -> dict:
 
 def _norm(phrase: str | None) -> str:
     return " ".join((phrase or "").lower().split())
+
+
+def _pixels(box: Iterable[float], enc: Encoding) -> np.ndarray:
+    """A normalized xyxy box in the pixels of the frame `enc` encodes."""
+    lb = enc.letterbox
+    size = np.array([lb.width, lb.height, lb.width, lb.height], dtype=np.float32)
+    return np.asarray(tuple(box), dtype=np.float32) * size
+
+
+def _decode(jpeg: bytes) -> np.ndarray | None:
+    """RGB pixels of a kept frame (it was decoded once already), or None."""
+    bgr = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+    return None if bgr is None or bgr.size == 0 else cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
 
 class Sessions:
