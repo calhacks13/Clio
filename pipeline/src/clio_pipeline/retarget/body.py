@@ -17,12 +17,13 @@ smoothed without lag.
    and the palm frames are smoothed a little. The palm point is halfway from the wrist to the
    middle knuckle; the palm frame comes from the wrist and knuckles (human.py).
 3. Trunk. A neck model puts the neck's pivot under the eyes (human.py), where the G1's neck
-   goes. The trunk faces between where the head looks and where the hands are, turning less
-   than the head (a neck turns too), and the pelvis turns slower still. When the head drops below
-   standing, a learner looking down is taken to bend over at the hips and a learner looking ahead
-   to crouch; the pelvis then sits behind and below the neck along a trunk that leans that much,
-   the lean shared between the hips and the waist, and short sways of the head lean the trunk
-   rather than move the pelvis.
+   goes. The trunk faces between where the head faces and where the hands are, turning less than
+   the head (a neck turns too), and the pelvis turns slower still. Where the learner stands is
+   anchored by the frames they stand up in (motion.lazy_track): bent over, the hips stay put and
+   the trunk leans from them to the neck, the lean shared between the hips and the waist, and
+   faces the way it leans. So a head that drops while the learner looks down bends the G1 over,
+   one that drops looking ahead crouches it, and short sways lean the trunk rather than move the
+   pelvis. The body also stays behind the hands.
 4. Elbows. Each arm's swivel is chosen for the whole episode at once (swivel.py): the elbow
    a person would use for that hand, smoothly.
 5. Upper body. Pelvis, waist and arms are solved together each frame (upper_body.py), the palm
@@ -70,6 +71,7 @@ from .motion import (
     clean_tracking,
     fill_short_gaps,
     gaussian_smooth,
+    lazy_track,
     min_jerk,
     runs,
     smooth_angle,
@@ -135,7 +137,8 @@ HANDS_PULL = 0.6  # how much the hands' direction turns the trunk, against the h
 LOOK_DOWN_BEND = (0.15, 0.6)  # rad of looking down: from here the drop is a bend, fully here
 MAX_LEAN_RAD = 1.2
 LEAN_SMOOTHING_S = 0.2
-PELVIS_SMOOTHING_S = 0.35
+STANCE_FOLLOW_S = 0.3  # where the learner stands follows the upright neck this closely
+BENT_TRUST = 0.02  # a fully bent frame's say in it: bent over, the hips stay put
 WAIST_SHARE = (0.4, 0.5)  # of the trunk's lean forward and sideways taken by the waist
 # The front of the body in the torso frame: a palm closer in than BODY_FRONT, within the body's
 # width and height, would be inside it.
@@ -481,8 +484,13 @@ def _estimate_trunk(model: G1Model, eyes, head_q, hands: _Hands, valid, rate: fl
     """The trunk estimate, step 3 of the module docstring."""
     m = len(eyes)
     neck = neck_pivot(np.nan_to_num(eyes), np.nan_to_num(head_q) + [0, 0, 0, 1e-9], model.neck_size)
-    forward = quat_rotate(np.nan_to_num(head_q) + [0, 0, 0, 1e-9], np.array([0.0, 0.0, -1.0]))
-    head_yaw = np.arctan2(-forward[:, 2], forward[:, 0])
+    q_head = np.nan_to_num(head_q) + [0, 0, 0, 1e-9]
+    forward = quat_rotate(q_head, np.array([0.0, 0.0, -1.0]))
+    up = quat_rotate(q_head, np.array([0.0, 1.0, 0.0]))
+    # Where the head faces: the gaze flattened onto the floor loses its heading as the learner
+    # looks straight down (or up), but then the top of the head points that way.
+    facing = forward - np.sign(forward[:, 1:2]) * up
+    head_yaw = np.arctan2(-facing[:, 2], facing[:, 0])
     look_down = -np.arcsin(np.clip(forward[:, 1], -1.0, 1.0))
 
     # Face between the head and the hands.
@@ -495,26 +503,49 @@ def _estimate_trunk(model: G1Model, eyes, head_q, hands: _Hands, valid, rate: fl
         pull = 0.5 * HANDS_PULL * np.clip(dist / 0.15, 0.0, 1.0)
         w = np.where(hands.measured[:, i] & ahead, pull, 0.0)
         face = face + w[:, None] * np.nan_to_num(unit)
-    trunk_yaw = smooth_angle(
+    facing_yaw = smooth_angle(
         np.arctan2(-face[:, 1], face[:, 0]), TRUNK_YAW_SMOOTHING_S * rate, valid
     )
-    trunk_yaw = head_yaw + np.clip(_wrap_array(trunk_yaw - head_yaw), -NECK_TURN_RAD, NECK_TURN_RAD)
-    trunk_yaw = smooth_angle(trunk_yaw, 2.0, valid)
-    pelvis_yaw = smooth_angle(trunk_yaw, PELVIS_YAW_SMOOTHING_S * rate, valid)
-    waist_yaw = np.clip(_wrap_array(trunk_yaw - pelvis_yaw), -WAIST_TURN_RAD, WAIST_TURN_RAD)
+    facing_yaw = head_yaw + np.clip(
+        _wrap_array(facing_yaw - head_yaw), -NECK_TURN_RAD, NECK_TURN_RAD
+    )
 
-    # Bend or crouch: how far the neck is below standing, and whether the learner looks down.
+    # Bend or crouch. Where the learner stands is anchored by the frames they stand up in: bent
+    # over, the hips stay there while the neck goes out over the hands (it does not swing round
+    # with the head as they look about), and the lean is where the neck is from them. A drop of
+    # the head while looking down guesses the stance of a learner who stays bent.
     trunk_len = _trunk_length(model)
     R_t, p_t = model.waist.tip(np.zeros(3))
     standing_neck = model.pelvis_height + float((p_t + R_t @ model.neck_in_torso)[2])
     drop = np.clip(standing_neck - neck[:, 1], 0.0, None)
     lo, hi = LOOK_DOWN_BEND
     bend = np.clip((look_down - lo) / (hi - lo), 0.0, 1.0)
-    lean = bend * np.arccos(np.clip(1.0 - drop / trunk_len, np.cos(MAX_LEAN_RAD), 1.0))
+    guess = bend * np.arccos(np.clip(1.0 - drop / trunk_len, np.cos(MAX_LEAN_RAD), 1.0))
+    ahead = np.stack([np.cos(facing_yaw), np.zeros(m), -np.sin(facing_yaw)], axis=1)
+    stand = neck - trunk_len * np.sin(guess)[:, None] * ahead
+    trust = 1.0 - (1.0 - BENT_TRUST) * bend
+    stand = lazy_track(stand, trust, (STANCE_FOLLOW_S * rate) ** 2, valid)
+    offset = (neck - stand) * [1.0, 0.0, 1.0]
+    reach = np.linalg.norm(offset, axis=1)
+    most = trunk_len * np.sin(MAX_LEAN_RAD)
+    over = reach > most
+    stand[over] = neck[over] - offset[over] * (most / reach[over])[:, None]
+    lean = np.arcsin(np.clip(np.minimum(reach, most) / trunk_len, 0.0, 1.0))
     lean = gaussian_smooth(lean, LEAN_SMOOTHING_S * rate, valid)
+
+    # Bent forward, the trunk faces the way it leans.
+    lean_yaw = np.arctan2(-offset[:, 2], offset[:, 0])
+    toward = np.clip((reach - 0.05) / 0.1, 0.0, 1.0) * (np.cos(lean_yaw - facing_yaw) > -0.2)
+    blend = (1.0 - toward)[:, None] * np.stack(
+        [np.cos(facing_yaw), -np.sin(facing_yaw)], axis=1
+    ) + toward[:, None] * np.stack([np.cos(lean_yaw), -np.sin(lean_yaw)], axis=1)
+    trunk_yaw = smooth_angle(
+        np.arctan2(-blend[:, 1], blend[:, 0]), TRUNK_YAW_SMOOTHING_S * rate, valid
+    )
+    pelvis_yaw = smooth_angle(trunk_yaw, PELVIS_YAW_SMOOTHING_S * rate, valid)
+    waist_yaw = np.clip(_wrap_array(trunk_yaw - pelvis_yaw), -WAIST_TURN_RAD, WAIST_TURN_RAD)
     fwd = np.stack([np.cos(trunk_yaw), np.zeros(m), -np.sin(trunk_yaw)], axis=1)
-    pelvis_h = neck - trunk_len * np.sin(lean)[:, None] * fwd
-    pelvis_h = gaussian_smooth(pelvis_h, PELVIS_SMOOTHING_S * rate, valid)
+    pelvis_h = stand
 
     angles, pelvis = _place_trunk(model, neck, pelvis_h, pelvis_yaw, waist_yaw, lean, valid)
 

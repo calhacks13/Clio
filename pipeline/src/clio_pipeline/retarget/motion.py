@@ -87,6 +87,37 @@ def smooth_rotations_adaptive(
     return out
 
 
+def lazy_track(x: np.ndarray, weight: np.ndarray, stiffness: float, valid: np.ndarray):
+    """(M, D) the path that stays near x (M, D) where `weight` (M,) is high and moves as little
+    as it can elsewhere: the minimum of sum w |p - x|^2 + stiffness * sum |p[k+1] - p[k]|^2 over
+    each run of valid samples (a tridiagonal solve, zero-phase). Where the weight is 1 it follows
+    x with a time constant of about sqrt(stiffness) samples; where it is small it barely moves."""
+    x = np.asarray(x, dtype=np.float64)
+    out = x.copy()
+    for a, b in runs(valid):
+        n = b - a
+        w = np.asarray(weight[a:b], dtype=np.float64)
+        diag = w + 2.0 * stiffness
+        diag[0] -= stiffness
+        diag[-1] -= stiffness
+        if n == 1:
+            diag[0] = w[0]
+        rhs = w[:, None] * x[a:b]
+        # Thomas algorithm: off-diagonals are all -stiffness.
+        c = np.zeros(n)
+        d = np.zeros_like(rhs)
+        c[0] = -stiffness / diag[0]
+        d[0] = rhs[0] / diag[0]
+        for k in range(1, n):
+            denom = diag[k] + stiffness * c[k - 1]
+            c[k] = -stiffness / denom
+            d[k] = (rhs[k] + stiffness * d[k - 1]) / denom
+        for k in range(n - 2, -1, -1):
+            d[k] -= c[k] * d[k + 1]
+        out[a:b] = d
+    return out
+
+
 def smooth_angle(a: np.ndarray, sigma: float, valid: np.ndarray) -> np.ndarray:
     """Angles (rad) smoothed like `gaussian_smooth` after unwrapping each valid run."""
     out = np.asarray(a, dtype=np.float64).copy()

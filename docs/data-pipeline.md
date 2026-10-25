@@ -266,10 +266,12 @@ every estimate looks ahead and is smoothed without lag.
   0.35 s are bridged on a smooth reach, and the palm frame (from the wrist and knuckles) is
   smoothed more while the hand is still than while it turns.
 - **Trunk.** A neck model puts the neck's pivot under the eyes. The trunk faces between where
-  the head looks and where the hands are and turns less than the head; the pelvis turns slower
-  still. When the head drops, a learner looking down bends over at the hips and one looking ahead
-  crouches; short sways lean the trunk rather than move the pelvis, and the body stays behind the
-  hands (a palm is never inside the torso).
+  the head faces and where the hands are and turns less than the head; the pelvis turns slower
+  still. Where the learner stands is anchored by the frames they stand up in: bent over, the hips
+  stay there and the trunk leans from them to the neck (it does not swing round with the head as
+  the learner looks about), so a head that drops while looking down bends the G1 over at the hips
+  and one that drops looking ahead crouches it. Short sways lean the trunk rather than move the
+  pelvis, and the body stays behind the hands (a palm is never inside the torso).
 - **Elbows.** The palm's position and orientation leave each arm one freedom, the elbow's swivel
   around the shoulder-wrist line. It is chosen for the whole episode at once (`retarget/swivel.py`,
   dynamic programming): the elbow a person would use for that hand, scored by joint comfort,
