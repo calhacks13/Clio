@@ -393,10 +393,14 @@ def several(vision, segmenter, ids: str):
 
 
 def test_three_objects_placed_by_one_jev_answer_each_get_a_keyframe(vision, segmenter):
+    encodes = []
+    encode = segmenter.encode
+    segmenter.encode = lambda rgb: encodes.append(1) or encode(rgb)
     session, frame = several(vision, segmenter, "abc")
     for _ in range(6):
         frame()
-    assert [call[2][0] for call in segmenter.calls[:3]] == pytest.approx([100, 400, 700])
+    assert [call[2][0] for call in segmenter.calls] == pytest.approx([100, 400, 700])
+    assert len(encodes) == 1  # one job: jev's frame encoded once for the three boxes
     assert [session._objects[k].follower.reference_seq for k in "abc"] == [1, 1, 1]
 
 

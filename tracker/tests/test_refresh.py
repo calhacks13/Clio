@@ -251,7 +251,7 @@ def test_non_keyframe_is_refused_while_any_keyframe_waits():
     refresher, _, executor, clock = make()
     refresher.submit("a", 1, frame(), BOX)
     refresher.submit("x", 2, frame(), BOX, keyframe=True)
-    refresher.submit("y", 2, frame(), BOX, keyframe=True)
+    refresher.submit("y", 3, frame(), BOX, keyframe=True)  # another frame's: a job of its own
     executor.run_all()
     refresher.drain()  # x goes
     executor.run_all()  # x is done, y still waits
@@ -263,6 +263,49 @@ def test_non_keyframe_is_refused_while_any_keyframe_waits():
     refresher.drain()
     clock.t += 1.0
     assert refresher.submit("a", 4, frame(), BOX)
+
+
+class Counting(FakeSegmenter):
+    """Counts the frames it encodes, too."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.encodes = 0
+
+    def encode(self, rgb: np.ndarray) -> SegEncoding:
+        self.encodes += 1
+        return super().encode(rgb)
+
+
+def test_the_keyframes_of_one_jev_answer_are_one_job_that_encodes_the_frame_once():
+    segmenter, executor, clock = Counting(), ManualExecutor(), Clock()
+    refresher = Refresher(segmenter, executor, clock=clock)
+    boxes = {key: BOX + i for i, key in enumerate("xyz")}
+    assert refresher.submit_keyframes(2, frame(), boxes)
+    assert refresher.in_flight == 1 and len(executor.pending) == 1
+    clock.t += 1.0
+    assert not refresher.submit("a", 3, frame(), BOX)  # refused while the job runs
+    executor.run_all()
+    done = refresher.drain()
+    assert [(r.key, r.seq, r.keyframe) for r in done] == [(k, 2, True) for k in "xyz"]
+    assert all(np.array_equal(r.box, boxes[r.key]) for r in done)
+    assert segmenter.encodes == 1
+    assert [call[2] for call in segmenter.calls] == [tuple(BOX + i) for i in range(3)]
+    assert refresher.submit("a", 3, frame(), BOX)  # accepted once the job has run
+
+
+def test_a_newer_keyframe_takes_its_key_out_of_an_older_waiting_job():
+    refresher, segmenter, executor, _ = make()
+    refresher.submit("a", 1, frame(), BOX)
+    refresher.submit_keyframes(2, frame(), {"x": BOX + 1, "y": BOX + 2})
+    refresher.submit_keyframes(3, frame(), {"z": BOX + 3, "x": BOX + 4})  # x's newer view
+    refresher.submit_keyframes(3, frame(), {"z": BOX + 5})  # frame 3 again: the same job
+    done = []
+    for _ in range(3):
+        executor.run_all()
+        done += refresher.drain()
+    assert [(r.key, r.seq) for r in done] == [("a", 1), ("y", 2), ("z", 3), ("x", 3)]
+    assert [call[2] for call in segmenter.calls] == [tuple(BOX + i) for i in (0, 2, 5, 4)]
 
 
 def test_a_keyframe_when_idle_goes_after_those_already_waiting():

@@ -13,12 +13,12 @@ track that was there, several frames ago.
 objects mode (TRACK.md) has one of its own and steps it on every frame it streams.
 
 With a segmenter (segment.py), each object's outline is its mask. The frame jev looks at is
-kept whole too, so jev's box is cut out of that very frame as a keyframe when the answer comes;
-between answers a tracker that doubts the mask it has asks for its object to be cut out of the
-newest frame again, one object at a time and the objects in turn. Each object's region follower
-(follow.py), made with its tracker and kept as long as it, carries the latest mask to every
-frame. The segmenter runs off the frame thread (refresh.py), and a mask is applied on the first
-frame after it is ready.
+kept whole too, so jev's boxes are cut out of that very frame as keyframes when the answer
+comes, in one segmenter job that encodes the frame once; between answers a tracker that doubts
+the mask it has asks for its object to be cut out of the newest frame again, one object at a
+time and the objects in turn. Each object's region follower (follow.py), made with its tracker
+and kept as long as it, carries the latest mask to every frame. The segmenter runs off the
+frame thread (refresh.py), and a mask is applied on the first frame after it is ready.
 A refresh asked before jev's newest box for the object arrived, and a keyframe older than that
 box, are dropped when they come back: they cut out what jev may since have replaced. jev's
 keyframe itself replaces the follower's mask even when a refresh of a newer frame landed while
@@ -289,8 +289,17 @@ class TrackerSession:
             if self._failures:
                 log.info(f"{self.identifier.name} answers again, after {self._failures} failed")
             self._failures, self._retry_at = 0, -np.inf
+            boxes = {}  # the objects jev placed, to cut out of jev's frame
             for answer in ask.answers:
-                self._apply(answer, ask, frame, now, took, newest)
+                box = self._apply(answer, ask, frame, now, took)
+                if box is not None:
+                    boxes[answer.id] = box
+            if boxes and self.refresher is not None:
+                # jev's boxes, cut out of jev's frame in one job (the frame is encoded once);
+                # each mask reaches its tracker through `drain` on a later frame.
+                if self._segmenter(Refresher.submit_keyframes, ask.seq, frame[1], boxes):
+                    for oid in boxes:
+                        self._keyframes[oid] = (ask.seq, newest)
 
     def _failed(self, error: BaseException | None, now: float) -> None:
         """Tracking goes on, and nothing is sent until a wait has passed: a fast failure (an
@@ -316,12 +325,12 @@ class TrackerSession:
         frame: tuple[Encoding, np.ndarray],
         now: float,
         took: float,
-        newest: int,
-    ) -> None:
-        enc, rgb = frame
+    ) -> np.ndarray | None:
+        """Tell the object's tracker; jev's box in frame pixels when it is to be cut out."""
+        enc, _ = frame
         tr = self._objects.get(answer.id)
         if tr is None or self._generations.get(answer.id) != ask.generations.get(answer.id):
-            return  # the object was dropped or re-worded since
+            return None  # the object was dropped or re-worded since
         present = answer.present >= self.settings.present_threshold and answer.box is not None
         box = appearance = None
         if present:
@@ -330,11 +339,6 @@ class TrackerSession:
             box = np.asarray(answer.box, dtype=np.float32) * size
             appearance = self.vision.prompts(enc, box)[0]
         change = tr.identified(ask.seq, now, present, box, appearance, self._camera.since(ask.seq))
-        if present and change != "stale" and self.refresher is not None:
-            # jev's box, cut out of jev's frame; the mask reaches the tracker through `drain` on
-            # a later frame.
-            if self._segmenter(Refresher.submit, answer.id, ask.seq, rgb, box, True):
-                self._keyframes[answer.id] = (ask.seq, newest)
         seen = (
             f"in view ({answer.present:.2f})" if present else f"not in view ({answer.present:.2f})"
         )
@@ -342,6 +346,7 @@ class TrackerSession:
             f"{answer.id}: {self.identifier.name} says {seen} on frame {ask.seq}, "
             f"{took:.1f} s later: {change}"
         )
+        return box if present and change != "stale" else None
 
 
 def outdated(r: Refreshed, keyframe: tuple[int, int] | None) -> bool:
