@@ -26,6 +26,92 @@ import { depthChunk, INTERIOR_POINTS } from './depth-occlusion';
 
 export const SLICES = 7;
 
+/**
+ * GLSL for a fragment stage (after depthChunk, needs GLOW_DEPTH > 0): occlusion(world, front), how
+ * much of a point a real surface hides (0..1), where `front` is how far the object's own front is
+ * in front of it (m). The glow and the boxes around tracked objects (box-view.ts) share it, so both
+ * hide behind the same things.
+ */
+export const occlusionChunk = /* glsl */ `
+  uniform float occlusionOn;
+  uniform float occlusionMargin;
+  uniform float occlusionFalloff;
+  uniform float occlusionFilter;
+  uniform float occlusionSoftness;
+  uniform float occlusionNearOff;
+  uniform float occlusionNearOn;
+
+  // How much of the test applies at planar depth z (m): none up close, where the map cannot be
+  // trusted, all of it from occlusionNearOn (nearFade in TS).
+  float nearFade(float z) {
+    return smoothstep(occlusionNearOff, occlusionNearOn, z);
+  }
+
+  // One texel's test: a real surface nearer than the object's front by more than the margin.
+  float texelHidden(ivec2 p, float glow, float front) {
+    float real = realDepthAt(p);
+    if (real <= 0.0) return 0.0;
+    return smoothstep(occlusionMargin, occlusionMargin + occlusionFalloff, glow - real - front);
+  }
+
+  // Hidden (0..1), smooth at the edges: the depth map is coarse (320 texels across the view on
+  // Quest), so the nearest texels' tests are blended and the blend is cut a little past one
+  // half over a narrow band, keeping the edge tight to what is in front (a wide band reads as a
+  // halo around a hand). 'cubic' blends 4 x 4 texels with cubic B-spline weights, whose
+  // contours are curvature-continuous: no texel shows. 'smooth' blends 3 x 3 with quadratic
+  // B-spline weights (round, faint texel ripples); 'bilinear' 2 x 2, as percentage-closer
+  // filtering does for shadow maps (texel corners show).
+  float occlusion(vec3 world, float front) {
+    if (occlusionOn < 0.5) return 0.0;
+    vec3 t = depthTexel(world);
+    if (t.z <= 0.0) return 0.0;
+    float near = nearFade(t.z);
+    if (near <= 0.0) return 0.0;
+    float h = 0.0;
+    if (occlusionFilter < 0.5) {
+      vec2 f = t.xy - 0.5;
+      ivec2 p = ivec2(floor(f)) - 1;
+      vec2 u = fract(f);
+      vec2 u2 = u * u;
+      vec2 u3 = u2 * u;
+      vec2 w0 = (1.0 - 3.0 * u + 3.0 * u2 - u3) / 6.0;
+      vec2 w1 = (4.0 - 6.0 * u2 + 3.0 * u3) / 6.0;
+      vec2 w2 = (1.0 + 3.0 * u + 3.0 * u2 - 3.0 * u3) / 6.0;
+      vec2 w3 = u3 / 6.0;
+      for (int j = 0; j < 4; j++) {
+        float wy = j == 0 ? w0.y : j == 1 ? w1.y : j == 2 ? w2.y : w3.y;
+        for (int i = 0; i < 4; i++) {
+          float wx = i == 0 ? w0.x : i == 1 ? w1.x : i == 2 ? w2.x : w3.x;
+          h += wx * wy * texelHidden(p + ivec2(i, j), t.z, front);
+        }
+      }
+    } else if (occlusionFilter > 1.5) {
+      vec2 f = t.xy - 0.5;
+      ivec2 p = ivec2(floor(f));
+      vec2 w = fract(f);
+      float a = texelHidden(p, t.z, front);
+      float b = texelHidden(p + ivec2(1, 0), t.z, front);
+      float c = texelHidden(p + ivec2(0, 1), t.z, front);
+      float d = texelHidden(p + ivec2(1, 1), t.z, front);
+      h = mix(mix(a, b, w.x), mix(c, d, w.x), w.y);
+    } else {
+      ivec2 p = ivec2(floor(t.xy));
+      vec2 s = fract(t.xy) - 0.5;
+      vec2 lo = 0.5 * (0.5 - s) * (0.5 - s);
+      vec2 mid = 0.75 - s * s;
+      vec2 hi = 0.5 * (0.5 + s) * (0.5 + s);
+      for (int j = -1; j <= 1; j++) {
+        float wy = j < 0 ? lo.y : j > 0 ? hi.y : mid.y;
+        for (int i = -1; i <= 1; i++) {
+          float wx = i < 0 ? lo.x : i > 0 ? hi.x : mid.x;
+          h += wx * wy * texelHidden(p + ivec2(i, j), t.z, front);
+        }
+      }
+    }
+    return smoothstep(0.55 - occlusionSoftness, 0.55 + occlusionSoftness, h) * near;
+  }
+`;
+
 export const glowVertexShader = /* glsl */ `
   varying vec2 vUv;
   varying vec3 vEye;
@@ -112,93 +198,17 @@ export const glowFragmentShader = /* glsl */ `
   varying vec3 vWorld;
   #if GLOW_DEPTH > 0
     ${depthChunk}
-    uniform float occlusionOn;
-    uniform float occlusionMargin;
-    uniform float occlusionFalloff;
+    ${occlusionChunk}
     uniform int vizMode;
-    uniform float occlusionFilter;
-    uniform float occlusionSoftness;
-    uniform float occlusionNearOff;
-    uniform float occlusionNearOn;
     uniform float maxFront;
     flat varying float vFront;
     flat varying vec3 vSurface;
-
-    // How much of the test applies at planar depth z (m): none up close, where the map cannot be
-    // trusted, all of it from occlusionNearOn (nearFade in TS).
-    float nearFade(float z) {
-      return smoothstep(occlusionNearOff, occlusionNearOn, z);
-    }
 
     // The object's own front at this point of the quad (m in front of the plane): the fitted
     // plane where it is further forward than the single depth, within [0, maxFront].
     float frontAt(vec2 uv) {
       float planeFront = vSurface.x + vSurface.y * (uv.x - 0.5) + vSurface.z * (uv.y - 0.5);
       return max(vFront, clamp(planeFront, 0.0, maxFront));
-    }
-
-    // One texel's test: a real surface nearer than the object's front by more than the margin.
-    float texelHidden(ivec2 p, float glow, float front) {
-      float real = realDepthAt(p);
-      if (real <= 0.0) return 0.0;
-      return smoothstep(occlusionMargin, occlusionMargin + occlusionFalloff, glow - real - front);
-    }
-
-    // Hidden (0..1), smooth at the edges: the depth map is coarse (320 texels across the view on
-    // Quest), so the nearest texels' tests are blended and the blend is cut a little past one
-    // half over a narrow band, keeping the edge tight to what is in front (a wide band reads as a
-    // halo around a hand). 'cubic' blends 4 x 4 texels with cubic B-spline weights, whose
-    // contours are curvature-continuous: no texel shows. 'smooth' blends 3 x 3 with quadratic
-    // B-spline weights (round, faint texel ripples); 'bilinear' 2 x 2, as percentage-closer
-    // filtering does for shadow maps (texel corners show).
-    float occlusion(vec3 world, float front) {
-      if (occlusionOn < 0.5) return 0.0;
-      vec3 t = depthTexel(world);
-      if (t.z <= 0.0) return 0.0;
-      float near = nearFade(t.z);
-      if (near <= 0.0) return 0.0;
-      float h = 0.0;
-      if (occlusionFilter < 0.5) {
-        vec2 f = t.xy - 0.5;
-        ivec2 p = ivec2(floor(f)) - 1;
-        vec2 u = fract(f);
-        vec2 u2 = u * u;
-        vec2 u3 = u2 * u;
-        vec2 w0 = (1.0 - 3.0 * u + 3.0 * u2 - u3) / 6.0;
-        vec2 w1 = (4.0 - 6.0 * u2 + 3.0 * u3) / 6.0;
-        vec2 w2 = (1.0 + 3.0 * u + 3.0 * u2 - 3.0 * u3) / 6.0;
-        vec2 w3 = u3 / 6.0;
-        for (int j = 0; j < 4; j++) {
-          float wy = j == 0 ? w0.y : j == 1 ? w1.y : j == 2 ? w2.y : w3.y;
-          for (int i = 0; i < 4; i++) {
-            float wx = i == 0 ? w0.x : i == 1 ? w1.x : i == 2 ? w2.x : w3.x;
-            h += wx * wy * texelHidden(p + ivec2(i, j), t.z, front);
-          }
-        }
-      } else if (occlusionFilter > 1.5) {
-        vec2 f = t.xy - 0.5;
-        ivec2 p = ivec2(floor(f));
-        vec2 w = fract(f);
-        float a = texelHidden(p, t.z, front);
-        float b = texelHidden(p + ivec2(1, 0), t.z, front);
-        float c = texelHidden(p + ivec2(0, 1), t.z, front);
-        float d = texelHidden(p + ivec2(1, 1), t.z, front);
-        h = mix(mix(a, b, w.x), mix(c, d, w.x), w.y);
-      } else {
-        ivec2 p = ivec2(floor(t.xy));
-        vec2 s = fract(t.xy) - 0.5;
-        vec2 lo = 0.5 * (0.5 - s) * (0.5 - s);
-        vec2 mid = 0.75 - s * s;
-        vec2 hi = 0.5 * (0.5 + s) * (0.5 + s);
-        for (int j = -1; j <= 1; j++) {
-          float wy = j < 0 ? lo.y : j > 0 ? hi.y : mid.y;
-          for (int i = -1; i <= 1; i++) {
-            float wx = i < 0 ? lo.x : i > 0 ? hi.x : mid.x;
-            h += wx * wy * texelHidden(p + ivec2(i, j), t.z, front);
-          }
-        }
-      }
-      return smoothstep(0.55 - occlusionSoftness, 0.55 + occlusionSoftness, h) * near;
     }
   #endif
 

@@ -36,6 +36,11 @@ export interface AppConfig {
   frameWidth: number | null;
   /** Keep an object's live light on while it is in hand (0: hide it, as the other outlines do). */
   liveHeld: boolean;
+  /**
+   * Robotics-ER 2's action focus: every few seconds it boxes the step's objects for the tracker and
+   * names the next thing to touch (needs the camera, the live tracker and a Gemini key).
+   */
+  focus: boolean;
 }
 
 const DEFAULTS: AppConfig = {
@@ -56,6 +61,7 @@ const DEFAULTS: AppConfig = {
   trackerPort: null,
   frameWidth: null,
   liveHeld: true,
+  focus: true,
 };
 
 function oneOf<T extends string>(value: string | null, allowed: readonly T[], fallback: T): T {
@@ -101,5 +107,6 @@ export function readConfig(search: string): AppConfig {
     trackerPort: whole(q.get('tracker')),
     frameWidth: whole(q.get('frame')),
     liveHeld: flag(q.get('liveHeld'), DEFAULTS.liveHeld),
+    focus: flag(q.get('focus'), DEFAULTS.focus),
   };
 }

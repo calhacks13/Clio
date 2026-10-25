@@ -21,12 +21,13 @@ describe('readConfig', () => {
       trackerPort: null,
       frameWidth: null,
       liveHeld: true,
+      focus: true,
     });
   });
 
   it('reads options from the URL', () => {
     const c = readConfig(
-      '?coach=scripted&mode=record_demo&procedure=shirt-fold&goal=fold%20a%20shirt&debug=1&emulate=1&calibrate=1&camera=0&autoDemo=0&voice=Kore&transport=direct&showRefresh=5000&table=off&live=0&tracker=8791&frame=640&liveHeld=0',
+      '?coach=scripted&mode=record_demo&procedure=shirt-fold&goal=fold%20a%20shirt&debug=1&emulate=1&calibrate=1&camera=0&autoDemo=0&voice=Kore&transport=direct&showRefresh=5000&table=off&live=0&tracker=8791&frame=640&liveHeld=0&focus=0',
     );
     expect(c).toEqual({
       coach: 'scripted',
@@ -46,6 +47,7 @@ describe('readConfig', () => {
       trackerPort: 8791,
       frameWidth: 640,
       liveHeld: false,
+      focus: false,
     });
   });
 
