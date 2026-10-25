@@ -30,7 +30,14 @@ import { limitBody, parseBody, safeId } from './request';
 // @clio/protocol exports the schema but not this type.
 type EpisodeFinishResponse = z.infer<typeof EpisodeFinishResponseSchema>;
 
-export function episodeRoutes({ episodes, derived, scenes, compiler, limits }: ServerDeps): Hono {
+export function episodeRoutes({
+  episodes,
+  derived,
+  scenes,
+  compiler,
+  sceneBuilder,
+  limits,
+}: ServerDeps): Hono {
   const app = new Hono();
   const missing = (id: string) => notFound(`No episode "${id}"`);
   const existing = async (param: string | undefined) => {
@@ -57,20 +64,25 @@ export function episodeRoutes({ episodes, derived, scenes, compiler, limits }: S
   };
 
   /**
-   * scene.json on disk, checked against the compile it was built from. `manifest` is the compile
-   * on disk, null when there is none this server can read.
+   * The scene builder's queue first; then scene.json on disk, checked against the compile it was
+   * built from. `manifest` is the compile on disk, null when there is none this server can read.
    */
   const sceneStatus = async (
     id: string,
     manifest: CompileManifest | null,
   ): Promise<EpisodeSceneStatus> => {
+    const job = sceneBuilder?.state(id) ?? 'idle';
+    const error = sceneBuilder?.lastError(id) ?? null;
     const read = await scenes.readScene(id);
+    const scene = read.status === 'ok' ? read.scene : null;
+    if (job !== 'idle') return { state: job, scene, error };
     // Built by a pipeline whose scene.json this server cannot read, or damaged: build it again.
-    if (read.status === 'invalid') return { state: 'stale', scene: null, error: null };
-    if (read.status === 'missing') return { state: 'none', scene: null, error: null };
-    const { scene } = read;
-    const current = manifest !== null && sameInstant(scene.compiledAt, manifest.compiledAt);
-    return { state: current ? 'ok' : 'stale', scene, error: null };
+    if (read.status === 'invalid') return { state: 'stale', scene, error };
+    if (scene) {
+      const current = manifest !== null && sameInstant(scene.compiledAt, manifest.compiledAt);
+      return { state: current ? 'ok' : 'stale', scene, error };
+    }
+    return { state: error === null ? 'none' : 'failed', scene, error };
   };
 
   app.post('/api/episodes', limitBody(limits.jsonBytes), async (c) => {
@@ -124,6 +136,21 @@ export function episodeRoutes({ episodes, derived, scenes, compiler, limits }: S
     // Asked for by hand: compile again even when the compile on disk is up to date.
     compiler.enqueue(id, { force: true });
     const state = compiler.state(id) === 'running' ? 'running' : 'queued';
+    return c.json({ ok: true, state } satisfies EpisodeCompileResponse, 202);
+  });
+
+  app.post('/api/episodes/:id/scene', async (c) => {
+    const id = await existing(c.req.param('id'));
+    if (!sceneBuilder) {
+      throw new ApiError(
+        503,
+        'scene_not_configured',
+        'Scene builds are off: set CLIO_SCENE=auto on the server, with compiling on (CLIO_COMPILE=auto and uv installed)',
+      );
+    }
+    // Asked for by hand: build again even when the scene on disk is up to date.
+    sceneBuilder.enqueue(id, { force: true });
+    const state = sceneBuilder.state(id) === 'running' ? 'running' : 'queued';
     return c.json({ ok: true, state } satisfies EpisodeCompileResponse, 202);
   });
 

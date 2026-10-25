@@ -5,6 +5,7 @@ import type { RestMode } from './services/plan-service';
 import type { Planner } from './services/planner';
 import type { PrimaryObjectFinder } from './services/primary-object';
 import type { SceneAsker } from './services/scene';
+import type { SceneBuilder } from './services/scene-builder';
 import type { StepChecker } from './services/step-check';
 import type { TokenMinter } from './services/token-minter';
 import type { VisionLocator } from './services/vision';
@@ -76,6 +77,8 @@ export interface AppDeps {
   primary?: PrimaryObjectFinder | null;
   /** Compiles finished episodes in the background: null (or absent) when compiling is off. */
   compiler?: EpisodeCompiler | null;
+  /** Builds compiled episodes' scenes in the background: null (or absent) when that is off. */
+  sceneBuilder?: SceneBuilder | null;
   now?: () => Date;
   logger?: Logger;
   limits?: Partial<BodyLimits>;
@@ -90,7 +93,8 @@ type OptionalServices =
   | 'scene'
   | 'bench'
   | 'primary'
-  | 'compiler';
+  | 'compiler'
+  | 'sceneBuilder';
 
 export interface ServerDeps extends Required<Omit<AppDeps, 'limits' | OptionalServices>> {
   tokenMinter: TokenMinter | null;
@@ -102,6 +106,7 @@ export interface ServerDeps extends Required<Omit<AppDeps, 'limits' | OptionalSe
   bench: BenchDeps | null;
   primary: PrimaryObjectFinder | null;
   compiler: EpisodeCompiler | null;
+  sceneBuilder: SceneBuilder | null;
   limits: BodyLimits;
 }
 
@@ -117,6 +122,7 @@ export function resolveDeps(deps: AppDeps): ServerDeps {
     bench: deps.bench ?? null,
     primary: deps.primary ?? null,
     compiler: deps.compiler ?? null,
+    sceneBuilder: deps.sceneBuilder ?? null,
     now: deps.now ?? (() => new Date()),
     logger: deps.logger ?? consoleLogger,
     limits: { ...DEFAULT_LIMITS, ...deps.limits },

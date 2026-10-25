@@ -3,8 +3,8 @@ import { basename, join } from 'node:path';
 import type { CompileManifest, SceneDoc } from '@clio/protocol';
 import { isMissing } from '../src/storage/files';
 
-// Drives fake-clio-cli.mjs, the stand-in for the pipeline's `clio compile` (see the script), and
-// builds the documents the pipeline writes.
+// Drives fake-clio-cli.mjs, the stand-in for the pipeline's `clio compile` and `clio scene` (see
+// the script), and builds the documents the pipeline writes.
 
 /** A valid manifest.json listing `inputs` as [name, bytes]. */
 export function manifestWith(
@@ -72,7 +72,7 @@ export function sceneDoc(episodeId: string, compiledAt: string): SceneDoc {
 
 const FAKE_CLIO = join(import.meta.dirname, 'fake-clio-cli.mjs');
 
-/** The compile command for the fake: node, the script, then the script's own options. */
+/** The pipeline command for the fake: node, the script, then the script's own options. */
 export function fakeClio(...options: string[]): string[] {
   return [process.execPath, FAKE_CLIO, ...options];
 }
@@ -82,9 +82,10 @@ export interface FakeRun {
   pid: number;
   /** Everything after the script path, its own options included. */
   argv: string[];
+  command: 'compile' | 'scene';
   /** The episode id. */
   key: string;
-  /** Whether the run was asked to skip an up-to-date compile (`--if-stale`). */
+  /** Whether the run was asked to skip an up-to-date output (`--if-stale`). */
   ifStale: boolean;
 }
 
@@ -101,9 +102,11 @@ export async function fakeRuns(logPath: string): Promise<FakeRun[]> {
     .split('\n')
     .filter((line) => line !== '')
     .map((line) => {
-      const run = JSON.parse(line) as Omit<FakeRun, 'key' | 'ifStale'>;
-      const target = run.argv[run.argv.indexOf('compile') + 1] ?? '';
-      return { ...run, key: basename(target), ifStale: run.argv.includes('--if-stale') };
+      const run = JSON.parse(line) as Omit<FakeRun, 'command' | 'key' | 'ifStale'>;
+      const split = run.argv.findIndex((arg) => arg === 'compile' || arg === 'scene');
+      const command = run.argv[split] === 'scene' ? 'scene' : 'compile';
+      const key = basename(run.argv[split + 1] ?? '');
+      return { ...run, command, key, ifStale: run.argv.includes('--if-stale') };
     });
 }
 

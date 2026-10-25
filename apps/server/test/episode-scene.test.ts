@@ -1,13 +1,22 @@
 import { mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { ApiErrorSchema, ApiPaths, EpisodeDetailResponseSchema } from '@clio/protocol';
-import { describe, expect, it } from 'vitest';
-import { manifestWith, sceneDoc } from './compile-fixtures';
-import { episodeCreate } from './fixtures';
-import { type Harness, harness } from './harness';
+import {
+  ApiErrorSchema,
+  ApiPaths,
+  EpisodeCompileResponseSchema,
+  EpisodeDetailResponseSchema,
+} from '@clio/protocol';
+import { describe, expect, it, onTestFinished } from 'vitest';
+import { ProcessEpisodeCompiler } from '../src/services/episode-compiler';
+import { ProcessSceneBuilder } from '../src/services/scene-builder';
+import { fakeClio, fakeRuns, manifestWith, openGate, sceneDoc, steer } from './compile-fixtures';
+import { episodeCreate, finishBody } from './fixtures';
+import { type Harness, harness, tempDir } from './harness';
 
-// The rebuilt scene (`clio scene`, data/scenes/<id>/): its file route and its status in the
-// episode detail.
+// The rebuilt scene (`clio scene`, data/scenes/<id>/): building it after the finish compile, the
+// build route, its file route and its status in the episode detail. The app runs the real
+// ProcessEpisodeCompiler and ProcessSceneBuilder, wired as the server wires them, spawning
+// fake-clio-cli.mjs in place of `uv run clio`.
 
 const COMPILED_AT = '2026-10-24T03:20:00.000Z';
 
@@ -17,12 +26,78 @@ async function create(h: Harness): Promise<string> {
   return ((await res.json()) as { episodeId: string }).episodeId;
 }
 
-async function sceneOf(h: Harness, id: string) {
+async function detailOf(h: Harness, id: string) {
   const res = await h.request('GET', ApiPaths.episode(id));
   expect(res.status).toBe(200);
-  const scene = EpisodeDetailResponseSchema.parse(await res.json()).scene;
-  if (!scene) throw new Error('The detail has no scene status');
-  return scene;
+  const { derived, scene } = EpisodeDetailResponseSchema.parse(await res.json());
+  if (!derived || !scene) throw new Error('The detail has no derived or scene status');
+  return { derived, scene };
+}
+
+const sceneOf = async (h: Harness, id: string) => (await detailOf(h, id)).scene;
+
+async function finish(h: Harness, id: string): Promise<void> {
+  const res = await h.request('POST', ApiPaths.episodeFinish(id), finishBody());
+  expect(res.status).toBe(200);
+}
+
+/** POST /api/episodes/:id/scene; ApiPaths has no entry for it. */
+const buildPath = (id: string) => `${ApiPaths.episode(id)}/scene`;
+
+async function rebuild(h: Harness, id: string) {
+  const res = await h.request('POST', buildPath(id));
+  expect(res.status).toBe(202);
+  return EpisodeCompileResponseSchema.parse(await res.json());
+}
+
+/** The app with a compiler and a scene builder; `gated` holds every build at its start. */
+async function building({ gated = false } = {}) {
+  const control = await tempDir();
+  const compileControl = await tempDir();
+  if (!gated) await openGate(control);
+  await openGate(compileControl);
+  const logPath = join(control, 'runs.ndjson');
+  let compiler: ProcessEpisodeCompiler | undefined;
+  let builder: ProcessSceneBuilder | undefined;
+  const h = await harness({
+    compiler: (dirs) => {
+      compiler = new ProcessEpisodeCompiler({
+        command: fakeClio('--control', compileControl),
+        ...dirs,
+        onCompiled: (id, run) => builder?.afterCompile(id, run),
+      });
+      return compiler;
+    },
+    sceneBuilder: (dirs) => {
+      builder = new ProcessSceneBuilder({
+        command: fakeClio('--log', logPath, '--control', control),
+        ...dirs,
+        models: 'primitive',
+      });
+      return builder;
+    },
+  });
+  if (!compiler || !builder) throw new Error('The harness did not build the compiler and builder');
+  const [c, b] = [compiler, builder];
+  onTestFinished(() => {
+    c.close();
+    b.close();
+  });
+  return {
+    h,
+    compiler: c,
+    builder: b,
+    control,
+    settled: async () => {
+      await c.idle();
+      await b.idle();
+    },
+    /** Each build's episode, and `force` when it ran without `--if-stale`. */
+    kinds: async () =>
+      (await fakeRuns(logPath))
+        .filter((r) => r.event === 'start')
+        .map((r) => (r.ifStale ? r.key : `${r.key} force`)),
+  };
 }
 
 async function errorOf(res: Response) {
@@ -45,6 +120,115 @@ const compiled = (h: Harness, id: string, compiledAt = COMPILED_AT) =>
 
 const built = (h: Harness, id: string, compiledAt = COMPILED_AT) =>
   put(h.scenesDir, id, 'scene.json', JSON.stringify(sceneDoc(id, compiledAt)));
+
+describe('building the scene after the finish compile', () => {
+  it('compiles, then builds the scene in the background, and reports each step', async () => {
+    const { h, builder, control, settled } = await building({ gated: true });
+    const id = await create(h);
+    await finish(h, id);
+    await expect.poll(() => builder.state(id)).toBe('running');
+    const during = await detailOf(h, id);
+    expect(during.derived.state).toBe('ok');
+    expect(during.scene).toEqual({ state: 'running', scene: null, error: null });
+
+    await openGate(control);
+    await settled();
+    const after = await detailOf(h, id);
+    expect(after.scene.state).toBe('ok');
+    expect(after.scene.error).toBeNull();
+    expect(after.scene.scene).toMatchObject({
+      episodeId: id,
+      compiledAt: after.derived.manifest?.compiledAt,
+      options: { models: 'primitive' },
+    });
+    const model = await h.request('GET', ApiPaths.episodeScene(id, 'model-cup_a.glb'));
+    expect(model.status).toBe(200);
+    expect(model.headers.get('content-type')).toBe('model/gltf-binary');
+  });
+
+  it('reports a failed build with the end of its stderr, beside the last scene if any', async () => {
+    const { h, control, settled } = await building();
+    const id = await create(h);
+    await steer(control, id, 'fail', 'Traceback (most recent call last):\nKeyError: cup_a\n');
+    await finish(h, id);
+    await settled();
+    const error = 'Traceback (most recent call last):\nKeyError: cup_a';
+    expect(await sceneOf(h, id)).toEqual({ state: 'failed', scene: null, error });
+
+    await rm(join(control, `${id}.fail`));
+    await rebuild(h, id);
+    await settled();
+    const ok = await sceneOf(h, id);
+    expect(ok).toMatchObject({ state: 'ok', error: null });
+
+    // A failed rebuild leaves the scene there, still of the current compile.
+    await steer(control, id, 'fail', 'boom\n');
+    await rebuild(h, id);
+    await settled();
+    expect(await sceneOf(h, id)).toEqual({ ...ok, error: 'boom' });
+
+    // A new compile whose build fails leaves a stale scene.
+    expect((await h.request('POST', ApiPaths.episodeCompile(id))).status).toBe(202);
+    await settled();
+    expect(await sceneOf(h, id)).toEqual({ ...ok, state: 'stale', error: 'boom' });
+  });
+});
+
+describe('POST /api/episodes/:id/scene', () => {
+  it('queues a forced build and answers 202 with where it stands', async () => {
+    const { h, builder, control, settled, kinds } = await building({ gated: true });
+    const [a, b] = [await create(h), await create(h)];
+    for (const id of [a, b]) await compiled(h, id);
+    expect(await rebuild(h, a)).toEqual({ ok: true, state: 'running' });
+    expect(await rebuild(h, b)).toEqual({ ok: true, state: 'queued' });
+    expect(await rebuild(h, a)).toEqual({ ok: true, state: 'running' });
+    expect((await sceneOf(h, b)).state).toBe('queued');
+
+    await openGate(control);
+    await settled();
+    expect(await kinds()).toEqual([`${a} force`, `${b} force`, `${a} force`]);
+    expect(builder.state(a)).toBe('idle');
+    for (const id of [a, b]) expect((await sceneOf(h, id)).state).toBe('ok');
+  });
+
+  it('builds again even when the scene is up to date', async () => {
+    const { h, settled, kinds } = await building();
+    const id = await create(h);
+    await finish(h, id);
+    await settled();
+    const before = (await sceneOf(h, id)).scene;
+    await rebuild(h, id);
+    await settled();
+    expect(await kinds()).toEqual([id, `${id} force`]);
+    const after = await sceneOf(h, id);
+    expect(after.state).toBe('ok');
+    expect(after.scene?.builtAt).not.toBe(before?.builtAt);
+  });
+
+  it('answers 404 for an unknown episode and 400 for an unsafe id', async () => {
+    const { h } = await building();
+    const missing = await h.request('POST', buildPath('ep-nope'));
+    expect(missing.status).toBe(404);
+    expect((await errorOf(missing)).code).toBe('not_found');
+    const unsafe = await h.request('POST', '/api/episodes/..%2Fdata/scene');
+    expect(unsafe.status).toBe(400);
+    expect((await errorOf(unsafe)).code).toBe('invalid_id');
+  });
+
+  it('answers 503 when scene builds are off', async () => {
+    const h = await harness();
+    const id = await create(h);
+    const res = await h.request('POST', buildPath(id));
+    expect(res.status).toBe(503);
+    const error = await errorOf(res);
+    expect(error.code).toBe('scene_not_configured');
+    expect(error.message).toMatch(/CLIO_SCENE=auto/);
+    // The status still reads what is on disk.
+    await compiled(h, id);
+    await built(h, id);
+    expect((await sceneOf(h, id)).state).toBe('ok');
+  });
+});
 
 describe('GET /api/episodes/:id/scene/:name', () => {
   it('serves each scene file uncached, with its content type and length', async () => {

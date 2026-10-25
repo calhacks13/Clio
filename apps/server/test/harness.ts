@@ -6,6 +6,7 @@ import { createApp } from '../src/app';
 import type { AppDeps } from '../src/deps';
 import type { Logger } from '../src/log';
 import type { EpisodeCompiler } from '../src/services/episode-compiler';
+import type { SceneBuilder } from '../src/services/scene-builder';
 import { ClipStore } from '../src/storage/clip-store';
 import { DerivedStore } from '../src/storage/derived-store';
 import { EpisodeStore } from '../src/storage/episode-store';
@@ -13,8 +14,9 @@ import { ProcedureStore } from '../src/storage/procedure-store';
 import { SceneStore } from '../src/storage/scene-store';
 
 // Builds the real app on real stores rooted in a fresh temp dir. Only Gemini-backed services are
-// fakes, and tests pass those in explicitly. A compiler can be built on the harness's own dirs, so a
-// test can run the real ProcessEpisodeCompiler against a fake `clio`.
+// fakes, and tests pass those in explicitly. A compiler and a scene builder can be built on the
+// harness's own dirs, so a test can run the real ProcessEpisodeCompiler and ProcessSceneBuilder
+// against a fake `clio`.
 
 export async function tempDir(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'clio-server-'));
@@ -54,15 +56,24 @@ export function sequence(...values: number[]): () => number {
 export interface CompilerDirs {
   episodesDir: string;
   derivedDir: string;
+  scenesDir: string;
   logger: CapturedLogger;
 }
 
 export interface HarnessOptions
   extends Partial<
-    Omit<AppDeps, 'episodes' | 'derived' | 'scenes' | 'procedures' | 'clips' | 'compiler'>
+    Omit<
+      AppDeps,
+      'episodes' | 'derived' | 'scenes' | 'procedures' | 'clips' | 'compiler' | 'sceneBuilder'
+    >
   > {
   rand?: () => number;
   compiler?: EpisodeCompiler | null | ((dirs: CompilerDirs) => EpisodeCompiler);
+  /** Built after the compiler, which a factory gets beside the dirs. */
+  sceneBuilder?:
+    | SceneBuilder
+    | null
+    | ((dirs: CompilerDirs & { compiler: EpisodeCompiler | null }) => SceneBuilder);
 }
 
 export interface Harness {
@@ -78,6 +89,7 @@ export interface Harness {
   procedures: ProcedureStore;
   clips: ClipStore;
   compiler: EpisodeCompiler | null;
+  sceneBuilder: SceneBuilder | null;
   request(
     method: string,
     path: string,
@@ -96,15 +108,18 @@ export async function harness(options: HarnessOptions = {}): Promise<Harness> {
   const derivedDir = join(dataDir, 'derived');
   const scenesDir = join(dataDir, 'scenes');
   const logger = captureLogger();
-  const { rand, compiler: compilerOption, ...deps } = options;
+  const { rand, compiler: compilerOption, sceneBuilder: builderOption, ...deps } = options;
   const now = deps.now ?? (() => new Date());
   const episodes = new EpisodeStore(episodesDir, { now, rand, logger });
   const derived = new DerivedStore(derivedDir, { logger });
   const scenes = new SceneStore(scenesDir, { logger });
+  const dirs = { episodesDir, derivedDir, scenesDir, logger };
   const compiler =
-    typeof compilerOption === 'function'
-      ? compilerOption({ episodesDir, derivedDir, logger })
-      : (compilerOption ?? null);
+    typeof compilerOption === 'function' ? compilerOption(dirs) : (compilerOption ?? null);
+  const sceneBuilder =
+    typeof builderOption === 'function'
+      ? builderOption({ ...dirs, compiler })
+      : (builderOption ?? null);
   const procedures = new ProcedureStore({
     curatedDir: proceduresDir,
     plansDir: join(dataDir, 'plans'),
@@ -123,6 +138,7 @@ export async function harness(options: HarnessOptions = {}): Promise<Harness> {
     procedures,
     clips,
     compiler,
+    sceneBuilder,
   });
   return {
     dataDir,
@@ -137,6 +153,7 @@ export async function harness(options: HarnessOptions = {}): Promise<Harness> {
     procedures,
     clips,
     compiler,
+    sceneBuilder,
     request(method, path, body, headers = {}) {
       const init: RequestInit = { method, headers };
       if (body instanceof Uint8Array || typeof body === 'string') {
