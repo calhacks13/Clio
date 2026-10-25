@@ -34,7 +34,14 @@ export const SURFACE_COLORS: Record<SurfaceKind, number> = {
 /** The room's whole scanned mesh is dense; drawn dim, so the furniture volumes stand out. */
 export const GLOBAL_MESH_COLOR = 0x4a5560;
 
-export const HAND_COLORS = { left: 0x4fe3ff, right: 0xff6fd8 } as const;
+/** A hand skeleton's colors: each hand, and its pinch ring while the hand pinches. */
+export interface HandColors {
+  left: number;
+  right: number;
+  pinch: number;
+}
+
+export const HAND_COLORS: HandColors = { left: 0x4fe3ff, right: 0xff6fd8, pinch: 0xffffff };
 
 /** Shown above a plane: its semantic label as reported, capitalized. */
 export function surfaceTitle(label: string | undefined): string {

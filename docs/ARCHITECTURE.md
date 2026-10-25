@@ -163,7 +163,8 @@ Once per XR frame:
    camera frames to the model when they're due.
 5. **Record.** `EpisodeRecorder.recordFrame`.
 6. **Present.** Presenters read an `OverlaySnapshot` plus the active demonstration, and the widget
-   presenters the board's snapshot. The live glow, the hands' depth occluders and the widget dock
+   presenters the board's snapshot. The live glow, the hands' depth occluders, the learner's live
+   hand skeletons (read straight from the XR frame, `tracking/hands.ts`) and the widget dock
    (updated right after the step card, whose pose it copies) are in the world frame; the rest,
    including a timer's chip beside its object, in the workspace frame.
 

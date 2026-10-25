@@ -14,12 +14,14 @@ import {
   SphereGeometry,
   Vector3,
 } from 'three';
-import { HAND_COLORS } from './palette';
+import { HAND_COLORS, type HandColors } from './palette';
 import { PinchLatch } from './pinch-latch';
 
 // Both hands as skeletons: a sphere per joint (sized by the joint radius the runtime reports) and
 // a thin rod per bone, plus a ring at the pinch point that lights up while the hand pinches. Joint
 // poses are read straight from the XRFrame into fixed buffers, so nothing is allocated per frame.
+// The tracking pages draw them in HAND_COLORS; a lesson passes its own (clio-app.ts). The
+// material is opaque, so the skeleton draws before the hands' depth occluders and stays visible.
 
 const N = HAND_JOINTS.length;
 const THUMB_TIP = HAND_JOINTS.indexOf('thumb-tip');
@@ -52,14 +54,14 @@ class HandSkeleton {
   private readonly bones: InstancedMesh;
   private readonly ring: Mesh;
   private readonly ringIdle: MeshBasicMaterial;
-  private readonly ringLit = new MeshBasicMaterial({ color: 0xffffff, side: DoubleSide });
+  private readonly ringLit: MeshBasicMaterial;
   private readonly latch = new PinchLatch();
   private readonly matrices = new Float32Array(16 * N);
   private readonly radii = new Float32Array(N);
   private spaces: XRJointSpace[] = [];
   private source: XRHand | null = null;
 
-  constructor(color: number) {
+  constructor(color: number, pinch: number) {
     const material = new MeshStandardMaterial({
       color,
       emissive: color,
@@ -76,6 +78,7 @@ class HandSkeleton {
       color: new Color(color).multiplyScalar(0.4),
       side: DoubleSide,
     });
+    this.ringLit = new MeshBasicMaterial({ color: pinch, side: DoubleSide });
     this.ring = new Mesh(new RingGeometry(0.012, 0.016, 40), this.ringIdle);
     this.object.add(this.joints, this.bones, this.ring);
     this.object.visible = false;
@@ -163,10 +166,12 @@ class HandSkeleton {
 export class HandsView {
   readonly object = new Group();
   readonly tracked: Record<Handedness, boolean> = { left: false, right: false };
-  private readonly left = new HandSkeleton(HAND_COLORS.left);
-  private readonly right = new HandSkeleton(HAND_COLORS.right);
+  private readonly left: HandSkeleton;
+  private readonly right: HandSkeleton;
 
-  constructor() {
+  constructor(colors: HandColors = HAND_COLORS) {
+    this.left = new HandSkeleton(colors.left, colors.pinch);
+    this.right = new HandSkeleton(colors.right, colors.pinch);
     this.object.add(this.left.object, this.right.object);
   }
 

@@ -1,4 +1,7 @@
+import { HAND_JOINTS } from '@clio/protocol';
+import { type Mesh, type MeshBasicMaterial, type MeshStandardMaterial, Quaternion } from 'three';
 import { describe, expect, it } from 'vitest';
+import { HandsView } from '../../src/tracking/hands';
 import { surfaceKind, surfaceTitle } from '../../src/tracking/palette';
 import { PinchLatch } from '../../src/tracking/pinch-latch';
 import { type Point2, polygonCentroid, polygonGrid } from '../../src/tracking/polygon';
@@ -134,5 +137,38 @@ describe('PinchLatch', () => {
     latch.update(0.01, 0);
     expect(latch.update(null, 100)).toBe(true);
     expect(latch.update(null, 200)).toBe(false);
+  });
+});
+
+describe('HandsView', () => {
+  /** A frame with only a left hand, every joint at the origin: the tips touch, so it pinches. */
+  const leftHandFrame = (): XRFrame => {
+    const joints = new Map<string, object>(HAND_JOINTS.map((name) => [name, { jointName: name }]));
+    const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+    return {
+      session: {
+        inputSources: [{ handedness: 'left', hand: { get: (name: string) => joints.get(name) } }],
+      },
+      fillPoses: (spaces: unknown[], _space: unknown, out: Float32Array) => {
+        for (let i = 0; i < spaces.length; i++) out.set(identity, i * 16);
+        return true;
+      },
+      fillJointRadii: (_spaces: unknown[], out: Float32Array) => {
+        out.fill(0.01);
+        return true;
+      },
+    } as unknown as XRFrame;
+  };
+
+  it('draws a tracked hand in its given colors and lights the pinch ring', () => {
+    const view = new HandsView({ left: 0x9aa7b8, right: 0x9aa7b8, pinch: 0xd7dfe8 });
+    view.update(leftHandFrame(), {} as XRReferenceSpace, 0, new Quaternion());
+    expect(view.tracked).toEqual({ left: true, right: false });
+    const parts = view.object.children[0]?.children ?? [];
+    const joints = parts[0] as Mesh;
+    const ring = parts[2] as Mesh;
+    expect((joints.material as MeshStandardMaterial).color.getHex()).toBe(0x9aa7b8);
+    expect((ring.material as MeshBasicMaterial).color.getHex()).toBe(0xd7dfe8);
+    expect(view.object.children[1]?.visible).toBe(false);
   });
 });

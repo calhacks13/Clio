@@ -1,35 +1,29 @@
 import { Group } from 'three';
 import type { PresentContext, Presenter } from '../presenter';
 import { GloveHand } from './glove-hand';
-import { HandMesh } from './hand-mesh';
 
-/** Solid demonstration gloves (workspace frame), plus optional debug skeletons for tracking. */
+/**
+ * Solid demonstration gloves (workspace frame). The learner's own tracked hands are drawn by the
+ * app's live skeleton (tracking/hands.ts), not here.
+ */
 export class GhostHandsPresenter implements Presenter {
   readonly object = new Group();
   private readonly ghost = {
     left: new GloveHand(),
     right: new GloveHand(),
   };
-  private readonly tracked = {
-    left: new HandMesh(0xffffff, 0.18),
-    right: new HandMesh(0xffffff, 0.18),
-  };
 
   constructor() {
-    for (const h of [this.ghost.left, this.ghost.right, this.tracked.left, this.tracked.right]) {
-      this.object.add(h.object);
-    }
+    this.object.add(this.ghost.left.object, this.ghost.right.object);
   }
 
   update(ctx: PresentContext): void {
     this.ghost.left.update(ctx.demoHands?.left ?? null);
     this.ghost.right.update(ctx.demoHands?.right ?? null);
-    this.tracked.left.update(ctx.debug ? (ctx.hands?.left ?? null) : null);
-    this.tracked.right.update(ctx.debug ? (ctx.hands?.right ?? null) : null);
   }
 
   dispose(): void {
-    for (const h of [this.ghost.left, this.ghost.right, this.tracked.left, this.tracked.right])
-      h.dispose();
+    this.ghost.left.dispose();
+    this.ghost.right.dispose();
   }
 }

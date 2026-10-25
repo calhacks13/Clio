@@ -1,4 +1,5 @@
 import { EPISODE_FEATURE, type HealthResponse, type Procedure } from '@clio/protocol';
+import { Quaternion } from 'three';
 import { MicCapture } from '../adapters/audio/mic-capture';
 import type { SpeakerOutput } from '../adapters/audio/voice-output';
 import { passthroughCameraRecord } from '../adapters/camera/camera-meta';
@@ -65,6 +66,8 @@ import { PoseHistory } from '../domain/world/pose-history';
 import { RoomScanRecorder } from '../domain/world/room-scan';
 import { chooseTablePlane, fitTable, type TablePlane } from '../domain/world/table-snap';
 import { Workspace, workspaceInFrontOf } from '../domain/world/workspace';
+import { HandsView } from '../tracking/hands';
+import type { HandColors } from '../tracking/palette';
 import { coachHandlers, coachWidgets } from './coach-widgets';
 import type { AppConfig } from './config';
 import { KeyframeCapture } from './keyframe-capture';
@@ -77,7 +80,8 @@ import { LiveTracker } from './live-tracker';
 // with a Gemini key Robotics-ER 2's action focus boxes the step's objects for it every few seconds
 // and names the next thing to touch (?focus=0 turns it off). With ?scan=1 the recording keeps the
 // Quest room scan and a few camera keyframes of the work beside the lesson (docs/room-scene.md).
-// The coach's widgets (docs/widgets.md) sit beside the step card unless ?widgets=0.
+// The coach's widgets (docs/widgets.md) sit beside the step card unless ?widgets=0. The learner's
+// tracked hands are drawn live as skeletons (tracking/hands.ts), straight from each XR frame.
 
 const log = createLogger('app');
 const PINCH_NEAREST_M = 0.15;
@@ -88,6 +92,11 @@ const PLAN_FRAME_MS = 450;
 const TABLE_WAIT_MS = 2000;
 /** The work area a keyframe looks at without a plan or known objects: [width, depth] (m). */
 const DEFAULT_WORK_SIZE: readonly [number, number] = [0.6, 0.4];
+/**
+ * The learner's live hand skeletons: neutral slate, so a hand never reads as a highlight accent
+ * (apps/headset/DESIGN.md), and a light slate pinch ring.
+ */
+const LESSON_HAND_COLORS: HandColors = { left: 0x9aa7b8, right: 0x9aa7b8, pinch: 0xd7dfe8 };
 
 export interface ClioAppOptions {
   config: AppConfig;
@@ -122,6 +131,8 @@ export class ClioApp {
   private readonly widgets: WidgetBoard | null;
   private readonly overlay: OverlayModel;
   private readonly sampler = new FrameSampler();
+  private readonly hands = new HandsView(LESSON_HAND_COLORS);
+  private readonly headOrientation = new Quaternion();
   private readonly surfaces = new XrPlaneSurfaces();
   private readonly planes = new XrPlaneReader((err) =>
     log.warn(`room planes unavailable (${String(err)})`),
@@ -299,6 +310,7 @@ export class ClioApp {
     ];
     for (const p of this.workspacePresenters) this.scene.workspaceRoot.add(p.object);
     for (const p of this.worldPresenters) this.scene.worldRoot.add(p.object);
+    this.scene.worldRoot.add(this.hands.object);
     if (this.live) this.scene.worldRoot.add(this.live.occluders.object);
 
     // Live observations come many times a second; they would drown the log.
@@ -411,6 +423,8 @@ export class ClioApp {
 
     // 6. Present.
     this.live?.prepare(frame, runtime.space);
+    this.headOrientation.fromArray(world.head.q);
+    this.hands.update(frame, runtime.space, t, this.headOrientation);
     const ctx: PresentContext = {
       t,
       dt,

@@ -172,8 +172,19 @@ about color.
 
 Demonstrations use solid off-white (`#f2f6fa`) gloves with a filled, softly rounded palm,
 continuous fingers and a cyan cuff. Articulation still follows the original 25-joint clip;
-the glove is illustrative geometry, never a new measurement. The tracking/debug skeleton stays
+the glove is illustrative geometry, never a new measurement. The learner's live skeleton stays
 separate. Use opaque, depth-tested surfaces so overlapping fingers read as one hand.
+
+## Live hands
+
+The learner's own hands are always drawn during a session, live from hand tracking (Peter,
+2026-10-25): a sphere per joint at half the reported joint radius and a thin rod per bone, the
+same geometry as `/tracking.html`. Both hands are neutral slate `#9AA7B8`, never a highlight
+accent, so a hand never reads as something to grab or a place to put it. A ring between thumb
+and index sits at the pinch point facing the eye, dim slate at rest and light slate `#D7DFE8`,
+slightly larger, while the hand pinches (the app's own pinch thresholds). The skeleton is opaque
+and draws before the hands' depth occluders, so it stays visible over the real hand while the
+glow behind the hand stays hidden. The tracking pages keep their cyan and pink hands.
 
 Movement is a thick cyan (`#24d4ed`) three-dimensional tube (up to 12mm across) with a broad
 arrowhead, a start bead and a yellow (`#ffd23f`) destination ring. The whole route remains
