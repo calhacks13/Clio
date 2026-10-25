@@ -266,6 +266,7 @@ async function main(): Promise<void> {
     {
       create: async () => episodeId,
       append: (id, batch) => http.append(id, batch),
+      putMedia: (id, name, body) => http.putMedia(id, name, body),
       finish: (id, done) => http.finish(id, done),
     },
     meta,

@@ -1,6 +1,7 @@
 import {
   appendFile,
   cp,
+  mkdir,
   readdir,
   readFile,
   rename,
@@ -374,6 +375,43 @@ describe('PUT /api/episodes/:id/media/:name', () => {
     const res = await h.request('PUT', ApiPaths.episodeMedia(id, 'audio.webm'), 'too many bytes');
     expect(res.status).toBe(413);
     expect(await readdir(join(h.dataDir, 'episodes', id, 'media'))).toEqual([]);
+  });
+});
+
+describe('media sizes for staleness checks', () => {
+  it('lists the media files and measures them as media/<name>', async () => {
+    const h = await fixedHarness();
+    const id = await create(h);
+    expect(await h.episodes.listMedia(id)).toEqual([]);
+    for (const [name, bytes] of [
+      ['room-scan-1.glb', 5],
+      ['keyframe-0001.jpg', 3],
+    ] as const) {
+      expect(
+        (await h.request('PUT', ApiPaths.episodeMedia(id, name), new Uint8Array(bytes))).status,
+      ).toBe(200);
+    }
+    // An upload in progress and a directory are not media files.
+    await writeFile(join(h.episodesDir, id, 'media', '.0b1c.part'), 'x');
+    await mkdir(join(h.episodesDir, id, 'media', 'thumbs'));
+    expect(await h.episodes.listMedia(id)).toEqual(['keyframe-0001.jpg', 'room-scan-1.glb']);
+
+    const sizes = await h.episodes.fileSizes(id, [
+      'meta.json',
+      'media/room-scan-1.glb',
+      'media/room-scan-2.glb',
+    ]);
+    expect([...sizes.keys()]).toEqual(['meta.json', 'media/room-scan-1.glb']);
+    expect(sizes.get('media/room-scan-1.glb')).toBe(5);
+    for (const name of [
+      'media/../meta.json',
+      'media/thumbs/a.jpg',
+      'media/.0b1c.part',
+      '../meta.json',
+    ]) {
+      expect(() => h.episodes.fileSizes(id, [name]), name).toThrow(/Unsafe episode path/);
+    }
+    expect(await h.episodes.listMedia('ep-nope')).toEqual([]);
   });
 });
 

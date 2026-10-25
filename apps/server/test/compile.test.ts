@@ -3,7 +3,6 @@ import { join, relative } from 'node:path';
 import {
   ApiErrorSchema,
   ApiPaths,
-  type CompileManifest,
   EpisodeCompileResponseSchema,
   EpisodeDetailResponseSchema,
 } from '@clio/protocol';
@@ -12,8 +11,8 @@ import {
   type ProcessCompilerOptions,
   ProcessEpisodeCompiler,
 } from '../src/services/episode-compiler';
-import { COMPILE_INPUTS, isStale } from '../src/storage/derived-store';
-import { fakeClio, fakeRuns, openGate, steer } from './compile-fixtures';
+import { COMPILE_INPUTS, inputsToCheck, isStale } from '../src/storage/derived-store';
+import { fakeClio, fakeRuns, manifestWith, openGate, steer } from './compile-fixtures';
 import { entered, episodeCreate, finishBody, frame, objectTrack, observation } from './fixtures';
 import { type Harness, harness, tempDir } from './harness';
 
@@ -101,34 +100,6 @@ async function snapshot(dir: string): Promise<Map<string, Buffer>> {
     files.set(relative(dir, path), await readFile(path));
   }
   return files;
-}
-
-function manifestWith(inputs: [string, number][]): CompileManifest {
-  return {
-    schema: 'clio.derived/1',
-    episodeId: 'ep-a',
-    compiledAt: '2026-10-24T03:20:00.000Z',
-    compiler: { name: 'clio-pipeline', version: '0.2.0' },
-    fps: 30,
-    inputs: inputs.map(([name, bytes]) => ({ name, bytes, sha256: 'a'.repeat(64) })),
-    retarget: [],
-    stages: [],
-    artifacts: [],
-    quality: {
-      usable: false,
-      reasons: ['not finished'],
-      finished: false,
-      outcome: null,
-      batches: null,
-      durationMs: 0,
-      frames: 0,
-      frameRateHz: null,
-      maxFrameGapMs: null,
-      hands: { left: 0, right: 0 },
-      objects: [],
-      validationIssues: 0,
-    },
-  };
 }
 
 describe('compiling after finish', () => {
@@ -289,6 +260,20 @@ describe('GET /api/episodes/:id/derived/:name', () => {
     }
   });
 
+  it('serves the room scan as binary glTF', async () => {
+    const h = await harness();
+    const id = await create(h);
+    const glb = new Uint8Array([0x67, 0x6c, 0x54, 0x46, 2, 0, 0, 0, 0, 255]);
+    await mkdir(join(h.derivedDir, id), { recursive: true });
+    await writeFile(join(h.derivedDir, id, 'room.glb'), glb);
+    const res = await h.request('GET', ApiPaths.episodeDerived(id, 'room.glb'));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('model/gltf-binary');
+    expect(res.headers.get('content-length')).toBe(String(glb.length));
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(glb);
+  });
+
   it('serves whatever the compiler wrote, with no compiler running', async () => {
     const h = await harness();
     const id = await create(h);
@@ -314,10 +299,16 @@ describe('GET /api/episodes/:id/derived/:name', () => {
       '-tracks.json',
       'tracks.json%00.txt',
       `${'a'.repeat(100)}.json`,
+      'room.GLB',
+      'room.gltf',
+      'splat.ply',
+      'crop-cup_a-1.jpg',
     ]) {
       const res = await h.request('GET', `/api/episodes/${id}/derived/${name}`);
       expect(res.status, name).toBe(400);
-      expect((await errorOf(res)).code).toBe('invalid_name');
+      const error = await errorOf(res);
+      expect(error.code).toBe('invalid_name');
+      expect(error.message).toMatch(/ending in \.json or \.glb$/);
     }
     const unsafe = await h.request('GET', '/api/episodes/..%2Fepisodes/derived/manifest.json');
     expect(unsafe.status).toBe(400);
@@ -355,6 +346,43 @@ describe('the derived status in GET /api/episodes/:id', () => {
       `${JSON.stringify(objectTrack(9))}\n`,
     );
     expect(await derivedOf(h, id)).toEqual({ ...ok, state: 'stale' });
+  });
+
+  it('goes stale when a room scan arrives, changes or vanishes after the compile', async () => {
+    const { h, compiler } = await compiling();
+    const id = await create(h);
+    const upload = async (name: string, bytes: number) => {
+      const res = await h.request('PUT', ApiPaths.episodeMedia(id, name), new Uint8Array(bytes));
+      expect(res.status).toBe(200);
+    };
+    const recompile = async () => {
+      expect((await h.request('POST', ApiPaths.episodeCompile(id))).status).toBe(202);
+      await compiler.idle();
+      expect((await derivedOf(h, id)).state).toBe('ok');
+    };
+    await upload('room-scan-1.glb', 64);
+    await finish(h, id);
+    await compiler.idle();
+    const ok = await derivedOf(h, id);
+    expect(ok.state).toBe('ok');
+    expect(ok.manifest?.inputs.map((i) => i.name)).toContain('media/room-scan-1.glb');
+
+    // Keyframes and video are not compile inputs.
+    await upload('keyframe-0001.jpg', 32);
+    await upload('egocentric.webm', 32);
+    expect((await derivedOf(h, id)).state).toBe('ok');
+
+    await upload('room-scan-2.glb', 64);
+    expect((await derivedOf(h, id)).state).toBe('stale');
+    await recompile();
+
+    await upload('room-scan-1.glb', 128);
+    expect((await derivedOf(h, id)).state).toBe('stale');
+    await recompile();
+
+    await rm(join(h.episodesDir, id, 'media', 'room-scan-2.glb'));
+    expect((await derivedOf(h, id)).state).toBe('stale');
+    await recompile();
   });
 
   it('reports none, ok and stale without a compiler too', async () => {
@@ -481,8 +509,56 @@ describe('isStale', () => {
   });
 
   it('ignores what is not a compile input', () => {
-    const manifest = manifestWith([...listed, ['media/egocentric.webm', 52_000]]);
-    expect(isStale(manifest, new Map([...current, ['notes.txt', 10]]))).toBe(false);
+    const others = new Map([
+      ...current,
+      ['notes.txt', 10],
+      ['media/egocentric.webm', 52_000],
+      ['media/keyframe-0001.jpg', 81_000],
+    ]);
+    expect(isStale(manifestWith(listed), others)).toBe(false);
+  });
+
+  it('is stale when a media file it read changed size or vanished', () => {
+    const scan = 'media/room-scan-1.glb';
+    const manifest = manifestWith([...listed, [scan, 2048]]);
+    expect(isStale(manifest, new Map([...current, [scan, 2048]]))).toBe(false);
+    expect(isStale(manifest, new Map([...current, [scan, 4096]]))).toBe(true);
+    expect(isStale(manifest, current)).toBe(true);
+  });
+
+  it('is stale when a room scan arrived that it did not read', () => {
+    const manifest = manifestWith([...listed, ['media/room-scan-1.glb', 2048]]);
+    const sizes = new Map([...current, ['media/room-scan-1.glb', 2048]]);
+    expect(isStale(manifest, new Map([...sizes, ['media/room-scan-2.glb', 900]]))).toBe(true);
+    // From a pipeline before room scans: the first one makes it stale too.
+    expect(isStale(manifestWith(listed), sizes)).toBe(true);
+  });
+});
+
+describe('inputsToCheck', () => {
+  it('names the compile inputs, the media the manifest lists and every room scan in media/', () => {
+    const manifest = manifestWith([
+      ['meta.json', 900],
+      ['media/room-scan-1.glb', 2048],
+      ['media/egocentric.webm', 52_000],
+    ]);
+    const media = ['egocentric.webm', 'keyframe-0001.jpg', 'room-scan-1.glb', 'room-scan-2.glb'];
+    expect(inputsToCheck(manifest, media)).toEqual([
+      ...COMPILE_INPUTS,
+      'media/room-scan-1.glb',
+      'media/egocentric.webm',
+      'media/room-scan-2.glb',
+    ]);
+  });
+
+  it('leaves out a listed media name it could not stat safely', () => {
+    const manifest = manifestWith([
+      ['media/../meta.json', 900],
+      ['media/.hidden.glb', 3],
+    ]);
+    expect(inputsToCheck(manifest, [])).toEqual([...COMPILE_INPUTS]);
+    // Unmeasured, so it reads as vanished.
+    expect(isStale(manifest, new Map())).toBe(true);
   });
 });
 

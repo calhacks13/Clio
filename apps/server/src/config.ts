@@ -1,4 +1,5 @@
 import { isAbsolute, resolve } from 'node:path';
+import { type ModelBackend, ModelBackendSchema } from '@clio/protocol';
 import { prettifyError, z } from 'zod';
 
 /** The monorepo root. pnpm runs scripts with cwd `apps/server`, so never resolve against cwd. */
@@ -56,12 +57,30 @@ export interface Config {
   pipelineDir: string;
   /** Absolute robot profile files, each compiled into retarget-<profile>.json. Empty: none. */
   retargetProfiles: string[];
+  /**
+   * auto: after each compile, build the episode's scene (`clio scene`: a model of every object).
+   * off: never. Builds follow compiles, so they are off whenever compiling is.
+   */
+  scene: 'auto' | 'off';
+  /** How scene builds make object models. gemini-cad sends crops of each object to Google. */
+  sceneModels: ModelBackend;
+  /** How long one scene build may run; null for the builder's default. */
+  sceneTimeoutMs: number | null;
 }
 
 // `.env.example` ships `KEY=` lines, so a blank value means "use the default".
 const blank = (v: unknown) => (typeof v === 'string' && v.trim() === '' ? undefined : v);
 const text = (fallback: string) => z.preprocess(blank, z.string().trim().default(fallback));
 const optionalText = z.preprocess(blank, z.string().trim().optional());
+const autoOrOff = () =>
+  z.preprocess(
+    blank,
+    z
+      .string()
+      .trim()
+      .pipe(z.enum(['auto', 'off']))
+      .default('auto'),
+  );
 const optionalHttpUrl = z.preprocess(
   blank,
   z
@@ -88,6 +107,8 @@ const originList = (fallback: readonly string[]) =>
       )
       .pipe(z.array(httpOrigin).min(1, { error: 'List at least one origin, or leave it blank' })),
   );
+
+const DAY_MS = 24 * 60 * 60_000;
 
 const commaList = (v: string) =>
   v
@@ -120,16 +141,24 @@ const EnvSchema = z.object({
   CLIO_PRIMARY_FINDER_URL: optionalHttpUrl,
   CLIO_RELAY_LOG: optionalText,
   CLIO_CORS_ORIGINS: originList(DEFAULT_CORS_ORIGINS),
-  CLIO_COMPILE: z.preprocess(
-    blank,
-    z
-      .string()
-      .trim()
-      .pipe(z.enum(['auto', 'off']))
-      .default('auto'),
-  ),
+  CLIO_COMPILE: autoOrOff(),
   CLIO_PIPELINE_DIR: optionalText,
   CLIO_RETARGET_PROFILES: profileList,
+  CLIO_SCENE: autoOrOff(),
+  CLIO_SCENE_MODELS: z.preprocess(
+    blank,
+    z.string().trim().pipe(ModelBackendSchema).default('primitive'),
+  ),
+  // Past a day, Node's timers overflow and would stop every build at once.
+  CLIO_SCENE_TIMEOUT_MS: z.preprocess(
+    blank,
+    z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(DAY_MS, { error: 'At most a day (86400000)' })
+      .optional(),
+  ),
 });
 
 export function loadConfig(
@@ -166,7 +195,30 @@ export function loadConfig(
       profiles.length === 1 && profiles[0] === 'none'
         ? []
         : profiles.map((profile) => resolveFrom(repoRoot, profile)),
+    scene: e.CLIO_SCENE,
+    sceneModels: e.CLIO_SCENE_MODELS,
+    sceneTimeoutMs: e.CLIO_SCENE_TIMEOUT_MS ?? null,
   };
+}
+
+/** For the startup log: what a scene build after each compile will do, and what leaves the laptop. */
+export function describeSceneBuilds(
+  config: Config,
+  ready: { gemini: boolean; scene: boolean },
+): string {
+  if (!ready.scene) {
+    return config.scene === 'off' ? 'off (CLIO_SCENE=off)' : 'off, since compiling is off';
+  }
+  switch (config.sceneModels) {
+    case 'primitive':
+      return 'on (object models: primitive, offline)';
+    case 'gemini-cad':
+      return ready.gemini
+        ? 'on (object models: gemini-cad, which sends crops of each object to Google)'
+        : 'on (object models: gemini-cad, but GEMINI_API_KEY is not set, so primitives)';
+    case 'command':
+      return 'on (object models: command, which runs CLIO_MODEL_COMMAND)';
+  }
 }
 
 function resolveFrom(root: string, value: string): string {
