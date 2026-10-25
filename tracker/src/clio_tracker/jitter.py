@@ -23,6 +23,7 @@ separate the tracker's own wobble from real movement:
 - `box f2f` / `mask f2f`: IoU of each frame's box / outline with the previous frame's moved by
   the true camera motion: 1.0 is perfectly steady. `swaps`: frames where the outline changed
   so much (IoU under 0.5) that it reads as a different mask.
+- `refreshes`: segmenter calls over the sequence (0 without a segmenter).
 - `ms`: time in `step`, per frame (`p95` too), and the part of it after YOLOE's pass.
 
 Part scenes (`PART_SCENES`) follow one part of an object, as the primary demo's `?focus=part`
@@ -30,7 +31,13 @@ does: the camera frames the part, jev's box is the part's and the target says `"
 (`--no-part-flag` leaves it out, to try telling a part from the whole by itself). Their numbers
 are summed up apart from the whole objects'. Two of them move the part on its own (`Scene.motion`):
 `jaw-slide` slides it along the object and `plate-swing` swings it narrow and back, while the
-whole object stays put and the true box follows the part.
+whole object stays put and the true box follows the part. The photo's own part is erased where
+the moved one leaves it, so no copy of it stays behind. These two have a `moving` row of their
+own and are left out of `parts`, which stays comparable with earlier runs.
+
+`--segmenter` (`auto`, `none` or a SAM 2.1 size; `run` also takes `fake`, a segmenter that fills
+each box, for tests) gives the tracker a segmenter and a refresher as `/track` has them, and has
+the look outlined by the segmenter instead of YOLOE. A `--baseline` copy gets neither.
 
 `--baseline DIR` loads another copy of the package (a directory holding a `clio_tracker`
 package, e.g. `git archive HEAD tracker/src | tar -x -C /tmp/base`) and runs it on the same
@@ -44,6 +51,7 @@ import importlib.util
 import json
 import math
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from time import perf_counter
@@ -52,12 +60,17 @@ import cv2
 import numpy as np
 
 from .geometry import iou
+from .segment import SegEncoding, load_segmenter
 
 OUT_W, OUT_H = 480, 360
 FPS = 25.0
 JPEG_QUALITY = 70  # the page's 0.7
 REPO = Path(__file__).resolve().parents[3]
 JEV_FUN = Path.home() / "Desktop" / "Jev fun" / "data" / "images"
+# Photo pixels beside a moving part that tile over the place it leaves. One column smears the
+# photo's edge across it; a wider strip tiles into a comb of vertical edges (8 px read as a scale
+# of its own on the caliper), a texture the real scene does not have.
+ERASE_STRIP = 1
 
 
 @dataclass(frozen=True)
@@ -140,10 +153,12 @@ def _move_part(
 ) -> tuple[np.ndarray, np.ndarray]:
     """The photo with its part moved on its own at `t` seconds, and the part's box now.
 
-    Both are in photo pixels, before the camera. The patch is pasted over the photo, so the hole
-    it leaves is the photo's own pixels. `slide` shifts it along x by up to a quarter of its
-    width, back and forth every 2 seconds; `swing` pivots it on its right edge, its width going
-    from full to half and back every 3 seconds.
+    Both are in photo pixels, before the camera. The part's old place is first painted over with
+    the strip of photo beside it (`ERASE_STRIP` wide, tiled across the place) on the side the
+    part moves away from, so no copy of the part stays behind, and then the patch is pasted.
+    `slide` shifts it along x by up to a quarter of its width, back and forth every 2 seconds;
+    `swing` pivots it on its right edge, its width going from full to half and back every 3
+    seconds.
     """
     x1, y1, x2, y2 = (int(round(v)) for v in part)
     w = x2 - x1
@@ -151,9 +166,11 @@ def _move_part(
     out = bgr.copy()
     if motion == "slide":
         dx = int(round(0.25 * w * math.sin(2 * np.pi * 0.5 * t)))
+        _erase(out, bgr, (x1, y1, x2, y2), "left" if dx >= 0 else "right")
         out[y1:y2, x1 + dx : x2 + dx] = patch
         return out, np.array([x1 + dx, y1, x2 + dx, y2], dtype=np.float64)
     if motion == "swing":
+        _erase(out, bgr, (x1, y1, x2, y2), "right")  # the hinge is the right edge
         narrow = max(1, int(round(w * (0.75 + 0.25 * math.cos(2 * np.pi * t / 3)))))
         k = narrow / w  # scale x about the right edge (the hinge), as pixel centres see it
         to_hinge = np.array([[k, 0, w - narrow + 0.5 * (k - 1)], [0, 1, 0], [0, 0, 1]])
@@ -162,6 +179,20 @@ def _move_part(
         out[y1:y2, x2 - narrow : x2] = warped[:, w - narrow :]
         return out, np.array([x2 - narrow, y1, x2, y2], dtype=np.float64)
     raise ValueError(f"unknown motion {motion!r}")
+
+
+def _erase(out: np.ndarray, bgr: np.ndarray, place: tuple[int, int, int, int], side: str) -> None:
+    """Paint `place` in `out` with the strip of `bgr` just outside it on `side` ("left" or
+    "right"), tiled across the place's width. The tiles line up with the strip, so the fill
+    carries on the photo beside it."""
+    x1, y1, x2, y2 = place
+    w, sw = x2 - x1, ERASE_STRIP
+    if side == "left" and x1 >= sw:
+        out[y1:y2, x1:x2] = np.tile(bgr[y1:y2, x1 - sw : x1], (1, -(-w // sw), 1))[:, :w]
+    elif side == "right" and x2 + sw <= bgr.shape[1]:
+        out[y1:y2, x1:x2] = np.tile(bgr[y1:y2, x2 : x2 + sw], (1, -(-w // sw), 1))[:, -w:]
+    else:
+        raise ValueError(f"no photo on the {side} of {place} to erase it with")
 
 
 def render(scene: Scene, seconds: float, seed: int) -> list[Frame]:
@@ -305,6 +336,7 @@ class Played:
     step_ms: list[float] = field(default_factory=list)
     encode_ms: list[float] = field(default_factory=list)
     first: int | None = None  # the first frame after a target was sent
+    refreshes: int = 0  # segmenter calls the tracker's refresher made
 
 
 class _TimedVision:
@@ -324,52 +356,137 @@ class _TimedVision:
         return getattr(self._vision, name)
 
 
+class _CountedSegmenter:
+    """A segmenter that counts the boxes it is asked to cut out. Only the refresher's worker
+    calls it, one at a time (refresh.py), and the count is read after the worker has stopped."""
+
+    def __init__(self, segmenter):
+        self._segmenter = segmenter
+        self.name = segmenter.name
+        self.calls = 0
+
+    def encode(self, rgb):
+        return self._segmenter.encode(rgb)
+
+    def mask_in_box(self, enc, box):
+        self.calls += 1
+        return self._segmenter.mask_in_box(enc, box)
+
+
+class _FakeSegmenter:
+    """Stands in for SAM 2.1 (`--segmenter fake`): every box is its own mask, filled, at one
+    frame pixel per mask pixel. Same as the tests' FakeSegmenter, so the harness runs without
+    weights."""
+
+    name = "fake-segmenter"
+
+    def encode(self, rgb: np.ndarray) -> SegEncoding:
+        return SegEncoding(rgb.shape[1], rgb.shape[0], None)
+
+    def mask_in_box(self, enc: SegEncoding, box: np.ndarray):
+        from .vision import MaskCrop
+
+        x1, y1, x2, y2 = (float(v) for v in box)
+        rows, cols = max(1, math.ceil(y2 - y1)), max(1, math.ceil(x2 - x1))
+        return MaskCrop(np.full((rows, cols), 10.0, np.float32), (x1, y1), 1.0)
+
+
+def load_jitter_segmenter(name: str):
+    """`fake`, else a name `load_segmenter` knows (`none` is None, `auto` the default one)."""
+    return _FakeSegmenter() if name == "fake" else load_segmenter(name)
+
+
 def play(
-    seq: Sequence, track_module, vision, finder_vision, params=None, flag_parts: bool = True
+    seq: Sequence,
+    track_module,
+    vision,
+    finder_vision,
+    params=None,
+    flag_parts: bool = True,
+    segmenter=None,
+    make_tracker=None,
 ) -> Played:
-    """Stream the sequence through a fresh StreamTracker of `track_module` (track.py)."""
+    """Stream the sequence through a fresh StreamTracker of `track_module` (track.py).
+
+    With a `segmenter` the tracker gets it and a Refresher over a one-thread executor, as `/track`
+    does, and the look is outlined by it; `Played.refreshes` counts its calls. `make_tracker(vision,
+    params, **kwargs)` builds the tracker, `StreamTracker` by default; `kwargs` is `segmenter=` and
+    `refresher=` with a segmenter, else empty.
+    """
     timed = _TimedVision(vision)
-    tracker = track_module.StreamTracker(timed, params)
-    by_frame = {answered: (asked, box) for asked, answered, box in seq.looks}
-    flags = {}
-    if seq.scene.part is not None and flag_parts:
-        if "part" in {f.name for f in fields(track_module.TargetBox)}:  # not in older copies
-            flags = {"part": True}
+    kwargs: dict = {}
+    counted = executor = None
+    if segmenter is not None:
+        from .refresh import Refresher
+
+        counted = _CountedSegmenter(segmenter)
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="segment")
+        kwargs = {"segmenter": counted, "refresher": Refresher(counted, executor)}
     out = Played()
-    for i, frame in enumerate(seq.frames):
-        if i in by_frame:
-            asked, box = by_frame[i]
-            target = _target(seq, asked, box, finder_vision)
-            if target is not None:
-                tracker.command(track_module.TargetBox(asked, target, seq.scene.label, **flags))
-                out.first = i if out.first is None else out.first
-        header = track_module.FrameHeader(i, 1000.0 + i * 1000 / FPS, OUT_W, OUT_H)
-        timed.last_ms = 0.0
-        t0 = perf_counter()
-        answer = tracker.step(header, frame.jpeg)
-        out.step_ms.append((perf_counter() - t0) * 1000)
-        out.encode_ms.append(timed.last_ms)
-        out.answers.append(answer)
+    try:
+        tracker = (make_tracker or track_module.StreamTracker)(timed, params, **kwargs)
+        by_frame = {answered: (asked, box) for asked, answered, box in seq.looks}
+        flags = {}
+        if seq.scene.part is not None and flag_parts:
+            if "part" in {f.name for f in fields(track_module.TargetBox)}:  # not in older copies
+                flags = {"part": True}
+        for i, frame in enumerate(seq.frames):
+            if i in by_frame:
+                asked, box = by_frame[i]
+                target = _target(seq, asked, box, finder_vision, segmenter)
+                if target is not None:
+                    tracker.command(track_module.TargetBox(asked, target, seq.scene.label, **flags))
+                    out.first = i if out.first is None else out.first
+            header = track_module.FrameHeader(i, 1000.0 + i * 1000 / FPS, OUT_W, OUT_H)
+            timed.last_ms = 0.0
+            t0 = perf_counter()
+            answer = tracker.step(header, frame.jpeg)
+            out.step_ms.append((perf_counter() - t0) * 1000)
+            out.encode_ms.append(timed.last_ms)
+            out.answers.append(answer)
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=True)  # the call in flight finishes, so it is counted
+    if counted is not None:
+        out.refreshes = counted.calls
     return out
 
 
-_finder_cache: dict[tuple[str, int], list[float] | None] = {}
+_finder_cache: dict[tuple[str, int, str | None], list[float] | None] = {}
 
 
-def _target(seq: Sequence, asked: int, box: np.ndarray | None, vision) -> list[float] | None:
-    """What the page sends: jev's box outlined by YOLOE as Clio's /locate does (finder.py)."""
+def _target(
+    seq: Sequence, asked: int, box: np.ndarray | None, vision, segmenter=None
+) -> list[float] | None:
+    """What the page sends: jev's box outlined as Clio's /locate does it. By the segmenter when
+    there is one (its mask's box, jev's own when it cuts nothing), else by YOLOE (finder.py)."""
     if box is None:
         return None
-    key = (seq.scene.name, asked)
+    key = (seq.scene.name, asked, segmenter.name if segmenter is not None else None)
     if key not in _finder_cache:
         rgb = cv2.cvtColor(
             cv2.imdecode(np.frombuffer(seq.frames[asked].jpeg, np.uint8), cv2.IMREAD_COLOR),
             cv2.COLOR_BGR2RGB,
         )
-        outlined = vision.outline_in_box(vision.encode(rgb), box)
-        b = outlined[0] if outlined is not None and outlined[1].outline else box
+        if segmenter is not None:
+            crop = segmenter.mask_in_box(segmenter.encode(rgb), box)
+            cut = None if crop is None else _mask_box(crop)
+            b = box if cut is None else cut
+        else:
+            outlined = vision.outline_in_box(vision.encode(rgb), box)
+            b = outlined[0] if outlined is not None and outlined[1].outline else box
         _finder_cache[key] = [float(v) for v in np.asarray(b) / [OUT_W, OUT_H, OUT_W, OUT_H]]
     return _finder_cache[key]
+
+
+def _mask_box(crop) -> np.ndarray | None:
+    """The box around a mask crop's inside, in frame pixels; None when nothing is inside."""
+    ys, xs = np.nonzero(crop.logits > 0)
+    if not xs.size:
+        return None
+    ox, oy = crop.origin
+    box = np.array([xs.min(), ys.min(), xs.max() + 1, ys.max() + 1]) * crop.scale
+    return (box + [ox, oy, ox, oy]).clip(0, [OUT_W, OUT_H, OUT_W, OUT_H])
 
 
 # --- measuring it ------------------------------------------------------------------------------
@@ -508,6 +625,7 @@ def measure(seq: Sequence, played: Played) -> dict:
         "box_f2f": mean(box_f2f),
         "mask_f2f": mean(mask_f2f),
         "swaps": swaps,
+        "refreshes": played.refreshes,
         "ms": mean(played.step_ms[start:]),
         "ms_p95": p95(played.step_ms[start:]),
         "tracker_ms": mean(tracker_ms),
@@ -524,13 +642,34 @@ def summarize(results: list[dict]) -> dict:
         values = [r[key] for r in results if not (isinstance(r[key], float) and math.isnan(r[key]))]
         if key in ("lost", "coast"):
             total[key] = sum(r[key] * r["visible"] for r in results) / visible
-        elif key in ("frames", "visible", "lost_streaks", "swaps"):
+        elif key in ("frames", "visible", "lost_streaks", "swaps", "refreshes"):
             total[key] = sum(values)
         elif key == "longest_streak":
             total[key] = max(values, default=0)
         else:
             total[key] = float(np.mean(values)) if values else float("nan")
     return total
+
+
+def summary_rows(
+    sequences: list[Sequence], results: dict[str, list[dict]]
+) -> list[tuple[str, dict]]:
+    """The whole objects, the parts that stay put (`parts`) and the parts that move (`moving`)
+    summed up apart, for each implementation in `results` (its rows, one per sequence)."""
+
+    def kind(seq: Sequence) -> str:
+        if seq.scene.motion is not None:
+            return "moving"
+        return "parts" if seq.scene.part is not None else "all"
+
+    rows = []
+    for name in ("all", "parts", "moving"):
+        ks = [k for k, seq in enumerate(sequences) if kind(seq) == name]
+        if not ks:
+            continue
+        for label, rs in results.items():
+            rows.append((label, {**summarize([rs[k] for k in ks]), "scene": name}))
+    return rows
 
 
 COLUMNS = [
@@ -549,6 +688,7 @@ COLUMNS = [
     ("box_f2f", "box f2f", "{:.3f}"),
     ("mask_f2f", "mask f2f", "{:.3f}"),
     ("swaps", "swaps", "{:d}"),
+    ("refreshes", "refreshes", "{:d}"),
     ("ms", "ms", "{:.1f}"),
     ("ms_p95", "p95", "{:.1f}"),
     ("tracker_ms", "tracker", "{:.1f}"),
@@ -616,6 +756,7 @@ def run(
     out: Path | None,
     settings: list[str] | None = None,
     flag_parts: bool = True,
+    segmenter: str = "none",
 ) -> int:
     from . import track
     from .vision import default_models_dir, load_vision
@@ -627,6 +768,8 @@ def run(
     sequences = build(scenes, seconds)
     print(f"{len(sequences)} sequences of {seconds:g} s rendered in {perf_counter() - t0:.1f} s")
     vision = load_vision(model, backend)
+    cutter = load_jitter_segmenter(segmenter)
+    print(f"segmenter: {cutter.name if cutter is not None else 'none'}")
     impls: list[tuple[str, object, object]] = []
     if baseline is not None:
         load_package(baseline)
@@ -642,23 +785,21 @@ def run(
     for _, _, v in impls:
         for _ in range(3):
             v.encode(blank)
+    if cutter is not None:
+        for _ in range(2):
+            cutter.mask_in_box(cutter.encode(blank), np.array([120.0, 90.0, 360.0, 270.0]))
     results: dict[str, list[dict]] = {label: [] for label, _, _ in impls}
     for seq in sequences:
         for label, module, v in impls:
-            played = play(seq, module, v, vision, params if module is track else None, flag_parts)
+            current = module is track  # a baseline copy has no segmenter and no params
+            played = play(seq, module, v, vision, params if current else None, flag_parts,
+                          segmenter=cutter if current else None)  # fmt: skip
             results[label].append(measure(seq, played))
     rows = []
     for k in range(len(sequences)):
         for label, _, _ in impls:
             rows.append((label, results[label][k]))
-    # The whole objects and the parts are summed up apart.
-    for kind, is_part in (("all", False), ("parts", True)):
-        ks = [k for k, s in enumerate(sequences) if (s.scene.part is not None) == is_part]
-        if not ks:
-            continue
-        for label, _, _ in impls:
-            total = summarize([results[label][k] for k in ks])
-            rows.append((label, {**total, "scene": kind}))
+    rows += summary_rows(sequences, results)
     print(table(rows))
     if out is not None:
         out.write_text(json.dumps(results, indent=1, default=float))

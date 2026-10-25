@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import replace
 
 import cv2
 import numpy as np
 import pytest
 
-from clio_tracker import jitter
+from clio_tracker import cli, jitter, track
 from clio_tracker.jitter import OUT_H, OUT_W, Played, Sequence, measure, render
+from clio_tracker.refresh import Refresher
+from clio_tracker.segment import SegEncoding
+from clio_tracker.vision import MaskCrop
+from conftest import FakeVision, Thing, appearance
 
 CALIPER = jitter.SCENES[0]
 
@@ -157,3 +162,221 @@ def test_scenes_without_motion_are_unchanged():
     )
     slid = render(replace(vernier, motion="slide"), 1.0, seed=7)
     assert slid[10].jpeg != a[10].jpeg  # the comparison above is not vacuous
+
+
+def _patch_fill(bgr: np.ndarray, part, side: str) -> np.ndarray:
+    """The strip of photo just outside the part on `side`, tiled across the part's width."""
+    x1, y1, x2, y2 = (int(v) for v in part)
+    w, sw = x2 - x1, jitter.ERASE_STRIP
+    reps = -(-w // sw)
+    if side == "left":
+        return np.tile(bgr[y1:y2, x1 - sw : x1], (1, reps, 1))[:, :w]
+    return np.tile(bgr[y1:y2, x2 : x2 + sw], (1, reps, 1))[:, -w:]
+
+
+def _erased(name: str, t: float, side: str) -> None:
+    """What the moved part leaves uncovered of its original place is the tiled strip, and no
+    longer the part's own pixels."""
+    scene = _scene(name)
+    bgr = cv2.imread(str(scene.path))
+    moved, box = jitter._move_part(bgr, scene.part, t, scene.motion)
+    x1, y1, x2, y2 = (int(v) for v in scene.part)
+    uncovered = np.zeros(bgr.shape[:2], bool)
+    uncovered[y1:y2, x1:x2] = True
+    uncovered[y1:y2, int(box[0]) : int(box[2])] = False  # the moved copy covers these
+    assert uncovered.sum() > 0.2 * (x2 - x1) * (y2 - y1)
+    expected = np.zeros_like(bgr)
+    expected[y1:y2, x1:x2] = _patch_fill(bgr, scene.part, side)
+    assert np.array_equal(moved[uncovered], expected[uncovered])
+    ghost = np.abs(moved[uncovered].astype(int) - bgr[uncovered].astype(int))
+    assert ghost.mean() > 5  # the original part is gone from there
+
+
+@pytest.mark.parametrize(("t", "side"), [(0.5, "left"), (1.5, "right")])
+def test_slide_erases_the_original(t, side):
+    # Sliding right (t = 0.5 s) opens the gap on the left; sliding left, on the right.
+    _erased("jaw-slide", t, side)
+
+
+def test_swing_erases_the_original():
+    _erased("plate-swing", 1.5, "right")  # the hinge is the right edge, the gap opens on the left
+
+
+# --- the segmenter, the refreshes it costs and the summary rows -------------------------------
+
+
+class RefreshingTracker:
+    """Stands in for StreamTracker with a refresher: asks for the target's mask on every frame
+    and answers the target's box."""
+
+    def __init__(self, vision, params=None, segmenter=None, refresher=None):
+        self.refresher, self.target, self.returned = refresher, None, []
+
+    def command(self, target) -> None:
+        self.target = target
+
+    def step(self, header, jpeg: bytes) -> dict:
+        self.refresher.drain()
+        reply: dict = {"found": False, "state": "lost"}
+        if self.target is not None:
+            rgb = cv2.cvtColor(cv2.imdecode(np.frombuffer(jpeg, np.uint8), 1), cv2.COLOR_BGR2RGB)
+            box = np.array(self.target.box) * [OUT_W, OUT_H, OUT_W, OUT_H]
+            self.refresher.submit("target", header.seq, rgb, box)
+            reply = answer(box)
+        self.returned.append(reply)
+        return reply
+
+
+def _two_seconds() -> Sequence:
+    frames = render(CALIPER, 2.0, seed=7)
+    return Sequence(CALIPER, frames, jitter.looks(frames, 7))
+
+
+def test_run_with_fake_segmenter_reports_refreshes(monkeypatch):
+    # `run` loads real YOLOE, so this plays one sequence with `play`, as `run` does.
+    monkeypatch.setattr(jitter, "_finder_cache", {})
+    seq, made, trackers = _two_seconds(), [], []
+
+    def make_tracker(vision, params, **kwargs):
+        made.append(kwargs)
+        trackers.append(RefreshingTracker(vision, params, **kwargs))
+        return trackers[-1]
+
+    fake = jitter.load_jitter_segmenter("fake")
+    assert fake.name == "fake-segmenter"
+    played = jitter.play(seq, track, FakeVision(), FakeVision(), segmenter=fake,
+                         make_tracker=make_tracker)  # fmt: skip
+    r = measure(seq, played)
+    assert r["refreshes"] >= 1
+    assert isinstance(made[0]["refresher"], Refresher)
+    assert made[0]["segmenter"].name == "fake-segmenter"
+    assert made[0]["refresher"].segmenter is made[0]["segmenter"]
+    # The harness does not touch what the tracker answers.
+    assert played.answers == trackers[0].returned and len(played.answers) == len(seq.frames)
+    assert all(a is b for a, b in zip(played.answers, trackers[0].returned, strict=True))
+    assert set(played.answers[-1]) == {"found", "box", "outline", "point", "contact", "state"}
+    assert not [t for t in threading.enumerate() if t.name.startswith("segment")]  # shut down
+
+
+class Recording:
+    """A tracker that answers nothing and notes how it was built and what it was told."""
+
+    def __init__(self, *args, **kwargs):
+        self.args, self.kwargs, self.targets = args, kwargs, []
+
+    def command(self, target) -> None:
+        self.targets.append(target)
+
+    def step(self, header, jpeg: bytes) -> dict:
+        return {"found": False, "state": "lost"}
+
+
+def test_without_a_segmenter_the_tracker_is_built_as_before(monkeypatch):
+    monkeypatch.setattr(jitter, "_finder_cache", {})
+    seq, built = _two_seconds(), []
+    _, _, jev_box = seq.looks[0]
+    yoloe_box = tuple(float(v) for v in jev_box + 3)  # what YOLOE says is the object
+    vision = FakeVision()
+    vision.scenes.extend([[Thing(yoloe_box, appearance(1))]] * 5)
+
+    def make_tracker(*args, **kwargs):
+        built.append(Recording(*args, **kwargs))
+        return built[-1]
+
+    played = jitter.play(seq, track, vision, vision, make_tracker=make_tracker)
+    assert built[0].kwargs == {}  # no segmenter, no refresher
+    assert played.refreshes == 0 and measure(seq, played)["refreshes"] == 0
+    sent = built[0].targets[0]  # the look is outlined by YOLOE's box, as before
+    assert sent.box == pytest.approx(np.array(yoloe_box) / [OUT_W, OUT_H, OUT_W, OUT_H], abs=1e-6)
+
+
+class HalfSegmenter:
+    """Cuts the left half of any box."""
+
+    name = "half"
+
+    def encode(self, rgb):
+        return SegEncoding(rgb.shape[1], rgb.shape[0], None)
+
+    def mask_in_box(self, enc, box):
+        x1, y1, x2, y2 = (float(v) for v in box)
+        rows, cols = int(y2 - y1), int((x2 - x1) / 2)
+        return MaskCrop(np.full((rows, cols), 10.0, np.float32), (x1, y1), 1.0)
+
+
+class EmptySegmenter(HalfSegmenter):
+    name = "empty"
+
+    def mask_in_box(self, enc, box):
+        return None
+
+
+def test_the_look_is_outlined_by_the_segmenter_when_one_is_loaded(monkeypatch):
+    monkeypatch.setattr(jitter, "_finder_cache", {})
+    seq = _two_seconds()
+    _, _, box = seq.looks[0]
+    x1, y1, x2, y2 = (float(v) for v in box)
+    sent = jitter._target(seq, 0, box, None, HalfSegmenter())  # YOLOE (None here) is not asked
+    expected = np.array([x1, y1, (x1 + x2) / 2, y1 + int(y2 - y1)]) / ([OUT_W, OUT_H] * 2)
+    assert sent == pytest.approx(expected, abs=1.5 / OUT_W)
+    # Nothing cut out of the box: jev's own box goes on.
+    assert jitter._target(seq, 0, box, None, EmptySegmenter()) == pytest.approx(
+        box / [OUT_W, OUT_H, OUT_W, OUT_H], abs=1e-6
+    )
+
+
+def test_the_fake_segmenter_fills_the_box_and_none_is_no_segmenter():
+    assert jitter.load_jitter_segmenter("none") is None
+    fake = jitter.load_jitter_segmenter("fake")
+    crop = fake.mask_in_box(fake.encode(np.zeros((OUT_H, OUT_W, 3), np.uint8)),
+                            np.array([10.4, 20.0, 50.0, 60.0]))  # fmt: skip
+    assert crop.scale == 1.0 and crop.origin == (10.4, 20.0)
+    assert crop.logits.shape == (40, 40) and (crop.logits > 0).all()
+
+
+def _truthful(scene: jitter.Scene, refreshes: int = 0) -> tuple[Sequence, dict]:
+    frames = render(scene, 1.0, seed=7)
+    seq = Sequence(scene, frames, jitter.looks(frames, 7))
+    played = Played(first=0, refreshes=refreshes)
+    for f in frames:
+        played.answers.append(answer(f.truth) if f.truth is not None else
+                              {"found": False, "state": "lost"})  # fmt: skip
+        played.step_ms.append(20.0)
+        played.encode_ms.append(18.0)
+    return seq, measure(seq, played)
+
+
+def test_moving_scenes_have_their_own_summary_row():
+    scenes = [CALIPER, _scene("vernier"), _scene("jaw-slide"), _scene("plate-swing")]
+    made = [_truthful(s, refreshes=3) for s in scenes]
+    sequences, results = [m[0] for m in made], [m[1] for m in made]
+    rows = jitter.summary_rows(sequences, {"now": results})
+    assert [(label, r["scene"]) for label, r in rows] == [
+        ("now", "all"), ("now", "parts"), ("now", "moving")
+    ]  # fmt: skip
+    by = {r["scene"]: r for _, r in rows}
+    assert by["all"]["frames"] == results[0]["frames"]
+    assert by["parts"]["frames"] == results[1]["frames"]  # not the moving ones: comparable
+    assert by["moving"]["frames"] == results[2]["frames"] + results[3]["frames"]
+    assert by["moving"]["refreshes"] == 6 and by["parts"]["refreshes"] == 3
+    # Without moving scenes there is no moving row.
+    assert [r["scene"] for _, r in jitter.summary_rows(sequences[:2], {"now": results[:2]})] == [
+        "all", "parts"
+    ]  # fmt: skip
+
+
+def test_the_table_has_a_refreshes_column():
+    _, r = _truthful(CALIPER, refreshes=4)
+    assert r["refreshes"] == 4
+    head, row = jitter.table([("now", r)]).splitlines()
+    assert "refreshes" in head and "followed" not in head
+    end = head.index("refreshes") + len("refreshes")  # the columns are right-aligned
+    assert row[:end].split()[-1] == "4"
+
+
+@pytest.mark.parametrize("name", ["none", "sam2.1-small"])
+def test_the_jitter_command_hands_its_segmenter_to_the_harness(monkeypatch, name):
+    seen = []
+    monkeypatch.setattr(jitter, "run", lambda *args, **kwargs: seen.append(kwargs) or 0)
+    assert cli.main(["jitter", "--segmenter", name, "--scene", "jaw-slide"]) == 0
+    assert seen[0]["segmenter"] == name

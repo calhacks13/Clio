@@ -252,4 +252,5 @@ def _jitter(settings: Settings, args: argparse.Namespace) -> int:
         args.json,
         args.set,
         args.flag_parts,
+        segmenter=settings.segmenter,
     )
