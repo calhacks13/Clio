@@ -78,6 +78,7 @@ class _Ask:
     seq: int
     started: float
     generations: dict[str, int]
+    words: dict[str, str]  # each object's query as jev was asked
     answers: list[Identification] | None = None
     error: BaseException | None = None
 
@@ -140,6 +141,9 @@ class TrackerSession:
         self._kept: OrderedDict[int, tuple[float, bytes]] = OrderedDict()
         self._anchors: list[_Anchor] = []
         self._anchored: dict[str, float] = {}
+        # Objects jev last said are out of view, with the words it was asked in: they wait for
+        # the usual interval, not the next frame, until their words change.
+        self._absent: dict[str, str] = {}
 
     @property
     def in_flight(self) -> int:
@@ -265,6 +269,7 @@ class TrackerSession:
             self._generations[q.id] = self._generation
             self._last_ask.pop(q.id, None)
             self._anchored.pop(q.id, None)
+            self._absent.pop(q.id, None)
         self._asked[q.id] = now
         return tr
 
@@ -279,6 +284,7 @@ class TrackerSession:
         self._last_ask.pop(oid, None)
         self._keyframes.pop(oid, None)
         self._anchored.pop(oid, None)
+        self._absent.pop(oid, None)
         self._anchors = [a for a in self._anchors if a.id != oid]
 
     def _keep(self, seq: int, t: float, jpeg: bytes) -> None:
@@ -359,15 +365,24 @@ class TrackerSession:
         s = self.settings
         if self.in_flight >= s.identify_max_in_flight or now < self._retry_at:
             return
+        # An object with nothing to follow is asked about again as soon as jev answers, unless
+        # jev just said it is out of view in these same words: an object that really is out of
+        # sight (in a closed fridge) kept jev busy eight times a second on a Quest, all billed.
         due = [
             q
             for q, tr in zip(queries, trackers, strict=True)
-            if (tr.wants_jev_now and self._in_flight.get(q.id, 0) == 0)
+            if (
+                tr.wants_jev_now
+                and self._in_flight.get(q.id, 0) == 0
+                and self._absent.get(q.id) != q.query
+            )
             or now - self._last_ask.get(q.id, -np.inf) >= s.identify_interval_s
         ]
         if not due:
             return
-        ask = _Ask(seq, now, {q.id: self._generations[q.id] for q in due})
+        ask = _Ask(
+            seq, now, {q.id: self._generations[q.id] for q in due}, {q.id: q.query for q in due}
+        )
         for q in due:
             self._last_ask[q.id] = now
             self._in_flight[q.id] = self._in_flight.get(q.id, 0) + 1
@@ -438,6 +453,10 @@ class TrackerSession:
         if tr is None or self._generations.get(answer.id) != ask.generations.get(answer.id):
             return None  # the object was dropped or re-worded since
         present = answer.present >= self.settings.present_threshold and answer.box is not None
+        if present:
+            self._absent.pop(answer.id, None)
+        else:
+            self._absent[answer.id] = ask.words.get(answer.id, "")
         box = _pixels(answer.box, enc) if present else None
         carry = self._camera.since(ask.seq)
         # jev's box goes in the log, so a wrong placement shows whether jev or the tracker erred.

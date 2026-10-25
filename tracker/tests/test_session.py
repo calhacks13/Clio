@@ -87,6 +87,42 @@ def test_jev_looks_again_once_per_interval_not_per_frame(setup):
     assert len(jev.calls) == 2
 
 
+def test_an_object_jev_says_is_out_of_view_waits_the_interval_not_the_next_frame(setup):
+    # Asked again on every answer, an object that really is out of sight (in a closed fridge)
+    # kept jev busy eight times a second on a Quest.
+    _, jev, executor, _, frame = setup
+    frame(Thing(at(500), B))  # no cup in view: the fake jev answers not present
+    executor.run_all()
+    for _ in range(14):  # just under a second at 15 fps
+        frame(Thing(at(500), B))
+        executor.run_all()
+    assert len(jev.calls) == 1
+    frame(Thing(at(500), B), dt=0.1)
+    executor.run_all()
+    assert len(jev.calls) == 2
+
+
+def test_new_words_for_an_object_out_of_view_are_asked_about_at_once(setup):
+    _, jev, executor, _, frame = setup
+    frame(Thing(at(500), B))
+    executor.run_all()
+    sharper = Query("cup", "The blue ceramic cup inside the open cupboard", "blue cup")
+    frame(Thing(at(500), B), queries=(sharper,))
+    executor.run_all()
+    assert jev.calls == [[CUP], [sharper]]
+
+
+def test_an_object_jev_finds_again_is_asked_about_soon_once_lost(setup):
+    session, jev, executor, _, frame = setup
+    frame(Thing(at(500), B))
+    executor.run_all()  # out of view
+    jev.answers.append({"cup": (0.9, norm_box(at(100)))})
+    frame(Thing(at(100), A), dt=1.1)
+    executor.run_all()
+    frame(Thing(at(100), A))  # jev's answer applies on the next frame: found
+    assert len(jev.calls) == 2 and "cup" not in session._absent
+
+
 def test_no_more_than_max_in_flight(vision):
     clock, jev, executor = Clock(), FakeIdentifier(), ManualExecutor()
     session = TrackerSession(

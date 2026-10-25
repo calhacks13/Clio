@@ -168,7 +168,9 @@ rest of the plan, for the recording). In objects mode the tracker asks
 jev itself, as `POST /locate` with a session does ([README.md](README.md#how-it-works)): jev
 places the objects about once a second (`CLIO_TRACKER_IDENTIFY_INTERVAL_MS`), all that are due
 in one background call and sooner for an object that is new, lost or in doubt, never more
-than one call at a time. A failed call is not retried: jev is next asked after the interval,
+than one call at a time. An object jev has just said is out of view waits for the interval, not
+the next frame, until its words change: one that really is out of sight (in a closed fridge)
+would otherwise keep jev busy several times a second. A failed call is not retried: jev is next asked after the interval,
 then twice as long after each further failure, up to 16 s, and the first answer brings back the
 usual pace. YOLOE-26 and ByteTrack follow every object on every frame, with one YOLOE pass for
 all of them. Each connection in objects mode has a tracking session of its own.
