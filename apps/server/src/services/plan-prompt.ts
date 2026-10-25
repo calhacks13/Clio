@@ -113,15 +113,18 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
     'frame and nothing else, and outlines what it finds. Each item must work on its own, ' +
     'without the plan, the other steps or the other items:',
   '  - `object`: the id of the declared object it is.',
-  '  - `phrase`: 2 to 5 words naming it like a label on a box, e.g. "blue washer fluid cap". ' +
-    'No verbs, no positions.',
-  '  - `description`: one sentence of 15 to 35 words that singles out this one thing in the ' +
-    'frame, as ONE THING, NEVER A KIND says: what it is, its color, material, shape and size, ' +
-    'any text or symbols on it, which one it is among similar things, and where it is relative ' +
-    'to large things around it, as it looks at that point in the task (after earlier steps, a ' +
-    'cap may be off and lying on the fender). Describe only what a camera can see. Good: ' +
-    '"Round blue plastic cap with a windshield-spray symbol, on a white tank at the front left ' +
-    'of the engine bay, the left one of two caps." Too vague: "The washer fluid cap."',
+  '  - `phrase`: what the object finder looks for, 2 to 5 words: color or material, then a ' +
+    'concrete noun, e.g. "blue plastic cap", "white yogurt bottle". Name what stays true all ' +
+    "lesson (a cup's own color, not its contents'). Never a position, a verb, or a word as " +
+    'bare as "item", "object" or "container".',
+  '  - `description`: one standalone sentence of 15 to 35 words that names this one thing by ' +
+    'what a camera sees, as ONE THING, NEVER A KIND says: what it is, its color, material, ' +
+    'shape, size next to a hand, any text or symbols on it, its state at that point in the ' +
+    'task (after earlier steps, a cap may be off and lying on the fender), and where it is ' +
+    'next to large things that stay put and to its neighbors, enough to tell it from every ' +
+    'look-alike in view. No actions, no mention of steps. Good: "Round blue plastic cap with ' +
+    'a windshield-spray symbol, on a white tank at the front left of the engine bay, the left ' +
+    'one of two caps." Too vague: "The washer fluid cap."',
   '',
   'OBJECTS',
   '- Declare every object that any step targets, acts on or checks (a look-alike that a ' +
@@ -138,11 +141,10 @@ export const PLANNER_SYSTEM_INSTRUCTION = [
   '- `placement.method` is always "detect": the headset camera finds the object. Add ' +
     '`placement.hint` with where to look when it helps; it never replaces saying where in ' +
     '`tracking.query`.',
-  '- `tracking.query`: one sentence of 15 to 35 words that finds this one object on its own, ' +
-    'as ONE THING, NEVER A KIND says: color, shape, markings, which one it is among similar ' +
-    'things and where it is, e.g. "blue plastic cap with a windshield symbol on the white tank ' +
-    'at the front left of the engine bay, left of the yellow cap". The finder gets only this ' +
-    'sentence. Set `tracking.moves` to true for things that get picked up or carried.',
+  '- `tracking.query`: written as a show `description` is, for the object as the views show ' +
+    'it, e.g. "blue plastic cap with a windshield symbol on the white tank at the front left ' +
+    'of the engine bay, left of the yellow cap". The finder gets only this sentence. Set ' +
+    '`tracking.moves` to true for things that get picked up or carried.',
   '- `radius`: approximate size in meters (half of the largest dimension).',
   '',
   'WORKSPACE',
@@ -203,9 +205,8 @@ function firstStageText(r: PlannerRequest): string {
       '`done`, and it leaves any control untouched. outline[0] is the first step.',
     '- `objects`: only the objects the first step uses (its targets, what it shows and the ' +
       'look-alike it guards against). The later steps declare theirs when they are written. ' +
-      "An object's `look` is its tracking.query and the description its outline is found by, " +
-      'so it singles out that one thing (ONE THING, NEVER A KIND); its `phrase` names its kind ' +
-      'for the object finder.',
+      "An object's `phrase` and `look` are all the object finder gets: write them as SHOW says " +
+      'for `phrase` and `description`. The look becomes its tracking.query.',
     '- `firstStep`: that first step as a card, with the same id as outline[0]. `show` lists ' +
       'object ids. Each mistake names the object it is made with, never one the step itself ' +
       'uses: Clio speaks its message when a hand lingers at that object. Clio confirms the step ' +

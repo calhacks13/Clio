@@ -40,7 +40,9 @@ import type { Workspace } from './workspace';
 // the object's surface, for a shape fused after the episode. Those never hold up drawing.
 //
 // What it says goes three ways, labelled for what it is:
-//   drawing    every placed outline, for the live glow (views()).
+//   drawing    every placed outline and the tracker's box on its plane, for the live glow and the
+//              boxes (views()), with what the tracker last said of the object (its state, which
+//              finder placed it, its score) for the debug tags.
 //   registry   about five times a second per object, never while it is held (the hand owns it
 //              then), as a `detector` observation, the camera's untrusted source. It is `measured`
 //              only when the tracker saw the object on that frame (not coasting) and its distance
@@ -55,6 +57,9 @@ import type { Workspace } from './workspace';
 //              measured again in the background is recorded then too, so its surface samples ride
 //              along (one dropped before it was measured is recorded where it was drawn).
 
+/** Which finder placed an object last: jev, or Robotics-ER 2 through an anchor. */
+export type LiveSource = 'jev' | 'er';
+
 /** One object in one tracked frame, as the tracker reports it (tracker/TRACK.md, objects mode). */
 export interface LiveDetection {
   id: string;
@@ -68,6 +73,8 @@ export interface LiveDetection {
   score: number | null;
   /** ByteTrack's id for the track. */
   track: number | null;
+  /** The finder that last placed it; null (or left out) before any did, or from an older tracker. */
+  source?: LiveSource | null;
 }
 
 /** One tracked frame. */
@@ -82,10 +89,18 @@ export interface LiveFrame {
   detections: readonly LiveDetection[];
 }
 
+/** What the tracker last said of an object, drawn or not (for ?debug=1's tags). */
+export interface LiveStatus {
+  /** tracking, coasting, lost or unknown; null from a tracker that omits it. */
+  state: string | null;
+  source: LiveSource | null;
+  score: number | null;
+}
+
 /** What to draw for one followed object now. */
-export interface LiveView {
+export interface LiveView extends LiveStatus {
   id: string;
-  /** World space, where the object is now (its frame's latency predicted away). */
+  /** World space, where the object is now (its frame's latency predicted away), its box included. */
   placement: Placement;
   /** Bumped whenever the shape changes; between them only the center moves. */
   shapeVersion: number;
@@ -203,6 +218,8 @@ interface Followed {
   surfaceT: number;
   /** No longer followed: a measurement still running is neither drawn nor told to the registry. */
   retired: boolean;
+  /** What the newest detection said. */
+  status: LiveStatus;
 }
 
 interface Detected {
@@ -238,6 +255,7 @@ export class LiveObjects {
     for (const det of frame.detections) {
       const f = this.followed.get(det.id);
       if (!f) continue;
+      f.status = { state: det.state, source: det.source ?? null, score: det.score };
       if (det.found) this.found(f, det, frame);
       else this.notFound(f, det, frame);
     }
@@ -275,7 +293,7 @@ export class LiveObjects {
       const frame = f.motion.at(now);
       if (!frame) continue;
       const { placement, shapeVersion, holding } = frame;
-      shown.set(f.id, { id: f.id, placement, shapeVersion, holding });
+      shown.set(f.id, { id: f.id, placement, shapeVersion, holding, ...f.status });
     }
     this.shown = shown;
     return [...shown.values()];
@@ -301,6 +319,7 @@ export class LiveObjects {
       observedMeasured: false,
       surfaceT: Number.NEGATIVE_INFINITY,
       retired: false,
+      status: { state: null, source: null, score: null },
     };
   }
 

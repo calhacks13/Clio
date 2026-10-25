@@ -13,7 +13,9 @@ import { type CameraModel, intersectPlaneY } from '../../src/domain/world/camera
 import { billboard, outlinePoint } from '../../src/domain/world/outline';
 import {
   type ObjectMask,
+  placeBox,
   placeDetection,
+  placeOutline,
   surfaceOrTable,
   surfaceRays,
 } from '../../src/domain/world/placement';
@@ -137,6 +139,75 @@ describe('placeDetection', () => {
     );
     // Turned left a quarter: what was 1.2 m ahead is now 1.2 m to the left (-x).
     near(placed?.center, [-1.2, 0.984, 0]);
+  });
+
+  it("puts the finder's box on the outline's plane, each corner where the camera saw it", () => {
+    const placed = placeDetection(
+      { point: [0.5, 0.65], box: [...box], outline: contour },
+      model,
+      head,
+      surfaceOrTable(null, head),
+    );
+    if (!placed?.box) throw new Error('no box');
+    const plane = billboard(placed.center, head.p);
+    if (!plane) throw new Error('no plane');
+    const [x0, y0, x1, y1] = box;
+    const corners: [number, number][] = [
+      [x0, y0],
+      [x1, y0],
+      [x1, y1],
+      [x0, y1],
+    ];
+    placed.box.corners.forEach((corner, i) => {
+      const world = outlinePoint(plane, placed.center, corner);
+      near(placed.box?.points[i], world);
+      // On the outline's plane, and on the camera ray through the image corner.
+      expect(dot(sub(world, placed.center), plane.normal)).toBeCloseTo(0, 9);
+      near(project(world, head), corners[i] ?? [Number.NaN, Number.NaN]);
+    });
+    // It frames the contour.
+    const width = (points: readonly (readonly [number, number])[]) => {
+      const xs = points.map(([x]) => x);
+      return Math.max(...xs) - Math.min(...xs);
+    };
+    expect(width(placed.box.corners)).toBeGreaterThanOrEqual(width(placed.outline.points));
+    // Top left above bottom left, as seen from the camera (y up on the plane).
+    expect(placed.box.corners[0]?.[1]).toBeGreaterThan(placed.box.corners[3]?.[1] ?? 0);
+  });
+
+  it('lifts a box-only answer once: its box is its outline', () => {
+    const placed = placeDetection(
+      { point: null, box: [...box], outline: null },
+      model,
+      head,
+      surfaceOrTable(null, head),
+    );
+    expect(placed?.box?.corners).toEqual(placed?.outline.points);
+  });
+
+  it('gives no box when the finder gave none', () => {
+    const placed = placeOutline({ point: [0.5, 0.65], box: null, outline: contour }, head, model, {
+      center: [0, 0.98, -1.2],
+      kind: 'contact',
+    });
+    expect(placed?.outline.points).toHaveLength(contour.length);
+    expect(placed?.box).toBeUndefined();
+  });
+
+  it("lays another finder's box at the object's distance, from that frame's head pose", () => {
+    const turned: Pose = { p: [0, 1.2, 0], q: quatFromAxisAngle([0, 1, 0], Math.PI / 2) };
+    const center: Vec3 = [-1.2, 0.984, 0];
+    const placed = placeBox(box, turned, model, center);
+    if (!placed) throw new Error('no box');
+    const plane = billboard(center, turned.p);
+    if (!plane) throw new Error('no plane');
+    for (const point of placed.points) {
+      expect(dot(sub(point, center), plane.normal)).toBeCloseTo(0, 9);
+    }
+    near(project(placed.points[0] ?? [0, 0, 0], turned), [box[0], box[1]]);
+    near(project(placed.points[2] ?? [0, 0, 0], turned), [box[2], box[3]]);
+    // Nothing behind the camera.
+    expect(placeBox(box, head, model, [0, 1.2, 1])).toBeNull();
   });
 
   it('places nothing above the horizon', () => {

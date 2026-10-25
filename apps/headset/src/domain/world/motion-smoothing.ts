@@ -1,6 +1,6 @@
 import { dot, length, madd, scale, sub, type Vec3 } from '../../core/math';
 import { billboard, type ObjectOutline, outlinePoint, type Point2 } from './outline';
-import type { DepthKind, Placement } from './placement';
+import type { DepthKind, PlacedBox, Placement } from './placement';
 
 // The tracked object's outline, steadied and brought up to date before it is drawn. The tracker
 // answers ~25 masks a second, each placed in the room from a frame captured ~60-100 ms earlier,
@@ -18,6 +18,8 @@ import type { DepthKind, Placement } from './placement';
 //   velocity counts only as far as it stands out from its noise, so a still object stays put.
 // - A loss is held: the last outline stays (its prediction coasting to a stop) for `holdMs`, and
 //   only then fades, so a few missed frames don't blink it.
+// - The finder's box, when the placement has one, rides on the same anchor and is blended toward
+//   each new one at the shape's rate, so it stays around the outline and steadies with it.
 
 export interface MotionSmoothingOptions {
   /** Sideways anchor: cutoff while still (Hz). Lower is steadier and laggier. */
@@ -280,6 +282,8 @@ interface Track {
   /** Filtered shape about the anchor, and the last raw one (aligned). */
   shape: Point2[];
   rawShape: Point2[];
+  /** The finder's box about the anchor, filtered like the shape; null when the last had none. */
+  box: Point2[] | null;
   /** Each shape point's filtered velocity (m/s), their mean speed, and their residual's variance. */
   shapeVelocity: Point2[];
   shapeSpeed: number;
@@ -298,6 +302,7 @@ const copyTrack = (t: Track): Track => ({
   velocity: [...t.velocity],
   shape: t.shape.map(([x, y]): Point2 => [x, y]),
   rawShape: t.rawShape.map(([x, y]): Point2 => [x, y]),
+  box: t.box ? t.box.map(([x, y]): Point2 => [x, y]) : null,
   shapeVelocity: t.shapeVelocity.map(([x, y]): Point2 => [x, y]),
 });
 
@@ -326,7 +331,9 @@ export class OutlineMotion {
     const shape = this.shapeOf(placement.outline);
     if (!shape) return;
     const anchor2 = mean2(shape);
-    const relative = shape.map(([x, y]): Point2 => [x - anchor2[0], y - anchor2[1]]);
+    const about = ([x, y]: Point2): Point2 => [x - anchor2[0], y - anchor2[1]];
+    const relative = shape.map(about);
+    const box = placement.box ? placement.box.corners.map(about) : null;
     const plane = billboard(placement.center, eye);
     if (!plane) return;
     const anchor = outlinePoint(plane, placement.center, anchor2);
@@ -338,6 +345,7 @@ export class OutlineMotion {
       shapeKind: placement.outline.shape,
       anchor,
       relative,
+      box,
     };
 
     const previous = this.track;
@@ -450,6 +458,7 @@ export class OutlineMotion {
     shapeKind: ObjectOutline['shape'];
     anchor: Vec3;
     relative: Point2[];
+    box: Point2[] | null;
   }): Track {
     const { options } = this;
     return {
@@ -465,6 +474,7 @@ export class OutlineMotion {
       noiseRadial: 0,
       shape: s.relative.map(([x, y]): Point2 => [x, y]),
       rawShape: s.relative,
+      box: s.box,
       shapeVelocity: s.relative.map((): Point2 => [0, 0]),
       shapeSpeed: 0,
       shapeNoise: 0,
@@ -482,6 +492,7 @@ export class OutlineMotion {
       kind: DepthKind;
       anchor: Vec3;
       relative: Point2[];
+      box: Point2[] | null;
     },
   ): Track {
     const { options } = this;
@@ -540,6 +551,14 @@ export class OutlineMotion {
       return [x + a * (p[0] - x), y + a * (p[1] - y)];
     });
     track.rawShape = shape;
+    const box = s.box;
+    track.box =
+      box && track.box?.length === box.length
+        ? track.box.map(([x, y], i): Point2 => {
+            const p = box[i] as Point2;
+            return [x + a * (p[0] - x), y + a * (p[1] - y)];
+          })
+        : box;
 
     track.t = s.t;
     track.eye = s.eye;
@@ -565,11 +584,19 @@ function placementAt(center: Vec3, track: Track): Placement {
   const xs = outline.points.map(([x]) => x);
   const top = Math.max(...outline.points.map(([, y]) => y));
   const labelAt: Point2 = [(Math.min(...xs) + Math.max(...xs)) / 2, top];
+  const box: PlacedBox | null =
+    plane && track.box
+      ? {
+          corners: track.box.map(([x, y]): Point2 => [x, y]),
+          points: track.box.map((p) => outlinePoint(plane, center, p)),
+        }
+      : null;
   return {
     center,
     outline,
     points: plane ? outline.points.map((p) => outlinePoint(plane, center, p)) : [],
     label: plane ? outlinePoint(plane, center, labelAt) : center,
     depth: track.kind,
+    ...(box && { box }),
   };
 }

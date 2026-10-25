@@ -42,6 +42,11 @@ function arr(items: JsonSchema, opts: { min?: number; max?: number; description?
 }
 
 const HAND = ['left', 'right', 'either'];
+/** What the object finder looks for (jev's subject), for the show items and the cards. */
+const PHRASE =
+  'What the object finder looks for, 2 to 5 words: color or material, then a concrete noun, ' +
+  'e.g. "blue plastic cap". What stays true all lesson; never a position, a verb or a bare ' +
+  '"item", "object" or "container"';
 const HAND_POINTS = ['pinch', 'index_tip', 'thumb_tip', 'palm', 'wrist'];
 const objectId = str('An object id declared in objects');
 const radius = num(0.01, 0.5, 'Meters from the object that count as near');
@@ -151,8 +156,9 @@ const DEFS: Record<string, JsonSchema> = {
       tracking: obj(
         {
           query: str(
-            'One sentence of 15 to 35 words that finds this one object on its own: color, ' +
-              'shape, markings, which one it is among similar things, and where it is',
+            'One standalone sentence of 15 to 35 words that tells this one object from every ' +
+              'look-alike: color, material, shape, size, markings, state, and where it is next ' +
+              'to things that stay put and its neighbors',
           ),
           moves: bool('true if it gets picked up and carried during the task'),
         },
@@ -177,11 +183,12 @@ const DEFS: Record<string, JsonSchema> = {
         obj(
           {
             object: objectId,
-            phrase: str('2 to 5 words naming it, e.g. "blue washer fluid cap"'),
+            phrase: str(PHRASE),
             description: str(
-              'One sentence of 15 to 35 words that finds this one thing in a camera frame on ' +
-                'its own: what it is, color, material, shape, size, markings, which one it is ' +
-                'among similar things, and where it is at this point in the task',
+              'One standalone sentence of 15 to 35 words that tells this one thing from every ' +
+                'look-alike in view: what it is, color, material, shape, size, markings, its ' +
+                'state at this point in the task, and where it is next to things that stay put ' +
+                'and its neighbors. No actions',
             ),
           },
           ['object', 'phrase', 'description'],
@@ -251,14 +258,12 @@ const cardObject = obj(
   {
     id: str('Lowercase slug, e.g. "yogurt_drink"'),
     label: str('Short spoken name, 1 to 3 words'),
-    phrase: str(
-      '2 to 5 words naming what it is, like a label on a box, for an object detector, e.g. ' +
-        '"washer fluid cap". No colors, positions or verbs',
-    ),
+    phrase: str(PHRASE),
     look: str(
-      'One sentence of 15 to 35 words that finds this one object in a camera frame on its own: ' +
-        'what it is, color, shape, markings, which one it is among similar things (e.g. the ' +
-        'leftmost of three), and where it is next to large things that stay put',
+      'One standalone sentence of 15 to 35 words that tells this one object from every ' +
+        'look-alike in view: what it is, color, material, shape, size next to a hand, markings ' +
+        'or text, state, and where it is next to large things that stay put and its neighbors ' +
+        '(e.g. the leftmost of three). No actions, no steps',
     ),
     moves: bool('true if it gets picked up and carried during the task'),
   },

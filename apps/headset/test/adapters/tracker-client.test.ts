@@ -228,6 +228,7 @@ const detections = {
       contact: [0.44, 0.76],
       score: 0.91,
       track: 3,
+      source: 'jev',
     },
     {
       id: 'cup_b',
@@ -239,6 +240,7 @@ const detections = {
       contact: null,
       score: null,
       track: null,
+      source: null,
     },
   ],
 };
@@ -280,6 +282,17 @@ describe('objects mode', () => {
     });
   });
 
+  it('reads who placed each object last, null from a tracker that omits it or an unknown finder', () => {
+    const sources = (entries: unknown[]) => {
+      const parsed = parseTrackerMessage(JSON.stringify({ ...detections, detections: entries }));
+      return parsed?.type === 'detections' ? parsed.detections.map((d) => d.source) : null;
+    };
+    const [placed, unplaced] = detections.detections;
+    expect(sources([placed, { ...unplaced, source: 'er' }])).toEqual(['jev', 'er']);
+    const { source: _omitted, ...older } = placed as Record<string, unknown>;
+    expect(sources([older, { ...unplaced, source: 'sam' }])).toEqual([null, null]);
+  });
+
   it("reads a mask's track id, null when left out", () => {
     expect(parseTrackerMessage(JSON.stringify({ ...mask, track: 7 }))).toMatchObject({ track: 7 });
     expect(parseTrackerMessage(JSON.stringify(mask))).toMatchObject({ track: null });
@@ -310,6 +323,23 @@ describe('objects mode', () => {
     sockets[0]?.receive(detections);
     expect(frames).toHaveLength(1);
     expect(masks).toHaveLength(0);
+  });
+
+  it("sends Robotics-ER's box for an object as an anchor, only while connected", () => {
+    const { client, sockets } = setup();
+    const anchor = {
+      type: 'anchor',
+      id: 'cup_a',
+      t: 123456.7,
+      box: [0.31, 0.42, 0.58, 0.77],
+      source: 'er',
+      query: 'clear plastic cup on the left, half full of pink liquid',
+    } as const;
+    client.open();
+    expect(client.send(anchor)).toBe(false);
+    sockets[0]?.accept();
+    expect(client.send(anchor)).toBe(true);
+    expect(JSON.parse(String(sockets[0]?.sent[0]))).toEqual(anchor);
   });
 });
 
