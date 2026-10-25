@@ -208,8 +208,13 @@ def test_gemini_cad_falls_back_to_a_primitive_saying_why(scene, tmp_path):
     cup, block = results["cup"], results["block"]
     assert len(fake.calls) == 4  # three tries for the cup, one for the block (400 is final)
     assert (cup["backend"], cup["generator"], cup["cad"]) == ("primitive", None, None)
-    assert cup["note"] == "Gemini-cad failed (HTTP 502: try later), so it is a primitive."
-    assert block["note"] == "Gemini-cad failed (HTTP 400: API key not valid), so it is a primitive."
+    assert (
+        cup["note"] == "The gemini-cad backend failed (HTTP 502: try later), so it is a primitive."
+    )
+    assert (
+        block["note"]
+        == "The gemini-cad backend failed (HTTP 400: API key not valid), so it is a primitive."
+    )
     assert read_glb(tmp_path / "s" / "model-cup.glb")[0].name == "cylinder"
     assert not (tmp_path / "s" / "cad-cup.json").exists()
     assert any("cup: gemini-cad failed" in line for line in log)
@@ -411,7 +416,9 @@ def test_a_failing_command_falls_back_to_a_primitive(scene, tmp_path, body, env,
     s = settings(CLIO_MODEL_COMMAND=command(tmp_path, body), **env)
     results, _ = run(scene, tmp_path / "s", "command", s)
     assert results["cup"]["backend"] == "primitive"
-    assert why in results["cup"]["note"] and results["cup"]["note"].startswith("Command failed (")
+    assert why in results["cup"]["note"] and results["cup"]["note"].startswith(
+        "The command backend failed ("
+    )
     assert not list((tmp_path / "s").glob(".*"))
 
 

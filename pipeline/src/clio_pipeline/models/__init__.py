@@ -255,7 +255,7 @@ class _Build:
             return "command", template, None, size
         except Exception as e:  # any failure of a generator falls back to the primitive
             _clear(self.out_dir, stem, crops=False)
-            notes.append(f"{self.backend} failed ({e}), so it is a primitive")
+            notes.append(f"the {self.backend} backend failed ({e}), so it is a primitive")
             self.log(f"models: {obj['id']}: {self.backend} failed: {e}")
             return None
 

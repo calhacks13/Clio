@@ -795,7 +795,9 @@ def test_the_returned_models_are_valid_in_a_scene_doc(scene, tmp_path, monkeypat
     failed = build_object_models(
         episode, keyframes, tracks, shapes, tmp_path / "t", backend="command", settings=_settings()
     )
-    assert failed[0]["note"].startswith("Command failed (CLIO_MODEL_COMMAND is not set)")
+    assert failed[0]["note"].startswith(
+        "The command backend failed (CLIO_MODEL_COMMAND is not set)"
+    )
     assert failed[1]["model"] is None
     assert _errors(scene_doc(episode.episode_id, failed, "command"), "scene.schema.json") == []
 
