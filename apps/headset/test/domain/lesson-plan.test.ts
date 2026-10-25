@@ -1747,6 +1747,7 @@ describe('highlights the coach asks for', () => {
     ).toEqual({
       shown: false,
       material_id: 'red_button',
+      added: true,
       note: 'The headset cannot show it yet; describe where it is.',
     });
     expect(registry.spec('red_button')).toMatchObject({

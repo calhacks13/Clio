@@ -1365,7 +1365,9 @@ export class LessonController {
     if (!target.ok) return target;
     const { id, added } = target;
     bus.emit('overlay.highlight', { t: clock.now(), objectId: id, style, source: 'coach' });
-    const material = added || id !== objectId ? { material_id: id } : {};
+    // `added` tells the coach session the call changed the plan (a cancelled one is reported).
+    const material =
+      added || id !== objectId ? { material_id: id, ...(added ? { added: true } : {}) } : {};
     if (!registry.get(id)) {
       this.track(this.locate([id]));
       return {
