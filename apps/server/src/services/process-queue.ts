@@ -12,10 +12,7 @@ export type EpisodeJobState = 'idle' | 'queued' | 'running';
 export interface EpisodeJobRequest {
   /** Run even when the output on disk is up to date. Otherwise the run passes `--if-stale`. */
   force?: boolean;
-  /**
-   * Catching up rather than asked for, like the sweep's runs: it waits behind every request, and
-   * is dropped while that episode is running, since that run already reads the current files.
-   */
+  /** Catching up rather than asked for, like the sweep's runs: it waits behind every request. */
   background?: boolean;
 }
 
@@ -129,7 +126,11 @@ export class EpisodeJobQueue {
       .then(
         (ids) => {
           if (this.#closed || ids.length === 0) return;
-          for (const id of ids) this.#add({ id, force: false, swept: true });
+          for (const id of ids) {
+            // The sweep only catches up on what changed while the server was down. A running
+            // command already reads the current files, and whatever changes them asks for a run.
+            if (this.#running?.id !== id) this.#add({ id, force: false, swept: true });
+          }
           this.#logger?.info(`${this.#label} sweep: checking ${ids.length} ${this.#sweepWhat}`);
         },
         (error) => {
@@ -171,9 +172,6 @@ export class EpisodeJobQueue {
       }
       return;
     }
-    // The sweep only catches up on what changed while the server was down. A running command
-    // already reads the current files, and whatever changes them asks for a run of its own.
-    if (job.swept && this.#running?.id === job.id) return;
     this.#queued.set(job.id, job);
     this.#queue.push(job);
     this.#next();

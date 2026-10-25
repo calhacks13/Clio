@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { SceneDocSchema } from '@clio/protocol';
 import { describe, expect, it, onTestFinished } from 'vitest';
@@ -313,6 +313,24 @@ describe('scene builds after compiles', () => {
     await openGate(t.control);
     await t.settled();
     expect(await kindsOf(t)).toEqual([a, fresh, b]);
+  });
+
+  it('builds once more when a swept compile changes an episode whose build is running', async () => {
+    const t = await setup({ gated: true });
+    const id = await t.compiled();
+    t.builder.enqueue(id, { force: true });
+    await expect.poll(async () => (await t.runs()).length).toBe(1);
+    // Recorded on while the server was down: the startup sweep recompiles it.
+    await appendFile(join(t.episodesDir, id, 'objects.ndjson'), '{"t":9,"objects":[]}\n');
+    await t.compiler.sweep();
+    await t.compiler.idle();
+    expect(t.builder.state(id)).toBe('running');
+
+    await openGate(t.control);
+    await t.settled();
+    expect(await kindsOf(t)).toEqual([`${id} force`, id]);
+    const manifest = JSON.parse(await readFile(join(t.derivedDir, id, 'manifest.json'), 'utf8'));
+    expect((await t.scene(id)).compiledAt).toBe(manifest.compiledAt);
   });
 
   it('drops the queue and stops the running build when closed', async () => {
