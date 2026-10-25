@@ -1,0 +1,251 @@
+{
+  "schema": "clio.episode/1",
+  "episodeId": "ep-synthetic-room-scan",
+  "createdAt": "2026-10-25T06:00:00.000Z",
+  "mode": "learn",
+  "procedure": {
+    "id": "point-at-objects",
+    "version": 1,
+    "title": "Point at the cup and the box"
+  },
+  "operator": {
+    "role": "learner"
+  },
+  "clock": {
+    "timeline": "performance.now",
+    "startEpochMs": 1792908000000.0
+  },
+  "space": {
+    "frame": "workspace",
+    "units": "m",
+    "upAxis": "+y",
+    "worldFromWorkspace": [
+      -0.5,
+      0.74,
+      -0.3,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "calibration": "pinch_two_corners",
+    "anchored": false
+  },
+  "hands": {
+    "joints": [
+      "wrist",
+      "thumb-metacarpal",
+      "thumb-phalanx-proximal",
+      "thumb-phalanx-distal",
+      "thumb-tip",
+      "index-finger-metacarpal",
+      "index-finger-phalanx-proximal",
+      "index-finger-phalanx-intermediate",
+      "index-finger-phalanx-distal",
+      "index-finger-tip",
+      "middle-finger-metacarpal",
+      "middle-finger-phalanx-proximal",
+      "middle-finger-phalanx-intermediate",
+      "middle-finger-phalanx-distal",
+      "middle-finger-tip",
+      "ring-finger-metacarpal",
+      "ring-finger-phalanx-proximal",
+      "ring-finger-phalanx-intermediate",
+      "ring-finger-phalanx-distal",
+      "ring-finger-tip",
+      "pinky-finger-metacarpal",
+      "pinky-finger-phalanx-proximal",
+      "pinky-finger-phalanx-intermediate",
+      "pinky-finger-phalanx-distal",
+      "pinky-finger-tip"
+    ],
+    "jointFields": [
+      "px",
+      "py",
+      "pz",
+      "qx",
+      "qy",
+      "qz",
+      "qw",
+      "radius"
+    ]
+  },
+  "objects": [
+    {
+      "id": "cup",
+      "label": "red cup",
+      "position": [
+        0.3,
+        0.05,
+        -0.25
+      ],
+      "radius": 0.04,
+      "method": "detector"
+    },
+    {
+      "id": "box",
+      "label": "blue box",
+      "position": [
+        0.68,
+        0.04,
+        -0.32
+      ],
+      "radius": 0.06,
+      "method": "detector"
+    }
+  ],
+  "coach": {
+    "kind": "scripted"
+  },
+  "device": {
+    "userAgent": "clio-synth",
+    "emulated": true,
+    "xrFeatures": [
+      "local-floor",
+      "plane-detection",
+      "mesh-detection",
+      "camera-access"
+    ]
+  },
+  "app": {
+    "version": "synthetic"
+  },
+  "features": [
+    "object.flags",
+    "object.observations",
+    "object.surface",
+    "environment.planes",
+    "environment.meshes",
+    "scene.keyframes"
+  ],
+  "camera": {
+    "intrinsics": {
+      "width": 1280,
+      "height": 960,
+      "fx": 800,
+      "fy": 800,
+      "cx": 640,
+      "cy": 480
+    },
+    "headFromCamera": [
+      0.032,
+      0.02,
+      -0.025,
+      -0.1305,
+      0.0,
+      0.0,
+      0.9914
+    ],
+    "source": "default"
+  },
+  "plan": {
+    "schema": "clio.procedure/1",
+    "id": "point-at-objects",
+    "version": 1,
+    "title": "Point at the cup and the box",
+    "origin": {
+      "kind": "generated",
+      "goal": "show me the cup and the box",
+      "model": "synthetic",
+      "createdAt": "2026-10-25T05:59:50.000Z"
+    },
+    "summary": "Point at a red cup, then at the blue box beside it.",
+    "workspace": {
+      "size": [
+        1.0,
+        0.6
+      ]
+    },
+    "objects": [
+      {
+        "id": "cup",
+        "label": "red cup",
+        "kind": "container",
+        "description": "A red plastic cup standing on the left half of the table",
+        "radius": 0.04,
+        "hidden": false,
+        "placement": {
+          "method": "detect",
+          "hint": "left half of the table"
+        },
+        "tracking": {
+          "query": "red plastic cup",
+          "moves": false
+        }
+      },
+      {
+        "id": "box",
+        "label": "blue box",
+        "kind": "item",
+        "description": "A small blue cardboard box lying on the right half of the table",
+        "radius": 0.06,
+        "hidden": false,
+        "placement": {
+          "method": "detect",
+          "hint": "right half of the table"
+        },
+        "tracking": {
+          "query": "small blue cardboard box",
+          "moves": false
+        }
+      }
+    ],
+    "steps": [
+      {
+        "id": "point-cup",
+        "instruction": "Point at the red cup on the table.",
+        "doneWhen": "the learner points at the red cup",
+        "targets": [
+          "cup"
+        ],
+        "hand": "either",
+        "action": {
+          "verb": "point_at",
+          "object": "cup",
+          "hand": "either"
+        },
+        "show": [
+          {
+            "object": "cup",
+            "role": "act",
+            "phrase": "red plastic cup",
+            "description": "Red plastic cup, about 8 cm across and 10 cm tall, standing upright on the left half of the table"
+          }
+        ],
+        "success": {
+          "type": "confirm",
+          "by": "either"
+        },
+        "mistakes": []
+      },
+      {
+        "id": "point-box",
+        "instruction": "Now point at the blue box beside it.",
+        "doneWhen": "the learner points at the blue box",
+        "targets": [
+          "box"
+        ],
+        "hand": "either",
+        "action": {
+          "verb": "point_at",
+          "object": "box",
+          "hand": "either"
+        },
+        "show": [
+          {
+            "object": "box",
+            "role": "act",
+            "phrase": "small blue box",
+            "description": "Small blue cardboard box, 12 by 8 by 8 cm, lying on the right half of the table, turned a little"
+          }
+        ],
+        "success": {
+          "type": "confirm",
+          "by": "either"
+        },
+        "mistakes": []
+      }
+    ],
+    "coach": {}
+  }
+}

@@ -193,7 +193,10 @@ def _mesh_entry(mesh_id: str, recorded: dict[str, Any], nodes: list[Node]) -> di
     label = recorded.get("label", extras.get("label"))
     is_global = recorded.get("global", extras.get("global"))
     meshes = [node for node in nodes if node.mesh is not None]
-    points = [node.world_positions() for node in meshes]
+    # numpy's BLAS on macOS can report floating-point errors for large matmuls whose results are
+    # fine; the positions were checked to be finite when the scan was read.
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        points = [node.world_positions() for node in meshes]
     world = np.concatenate(points) if points else np.zeros((0, 3))
     bounds = None
     if len(world):
