@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+
 import cv2
 import numpy as np
 import pytest
 
-from clio_tracker.follow import FollowParams, RegionFollower
+from clio_tracker import follow
+from clio_tracker.follow import FollowParams, RegionFollower, _estimate
 from clio_tracker.geometry import iou
 from clio_tracker.vision import MaskCrop
 
@@ -157,6 +160,26 @@ def test_reference_older_than_current_is_ignored():
     assert iou(out.box, frames[11][1])[0, 0] > 0.95
 
 
+def test_reference_older_than_the_motion_log_is_ignored(monkeypatch, caplog):
+    monkeypatch.setattr(follow, "KEEP", 5)  # frames 5 to 9 logged: a mask from 4 can't be carried
+    frames = scene(11, move=(4, 2))
+    idle, f = RegionFollower(), RegionFollower()
+    f.set_reference(0, filled(frames[0][1]))
+    for seq, (gray, _) in enumerate(frames[:10]):
+        idle.step(seq, gray, None, seq / 25)
+        f.step(seq, gray, None, seq / 25)
+    with caplog.at_level(logging.DEBUG, logger="clio_tracker"):
+        idle.set_reference(4, filled(frames[4][1]))
+        f.set_reference(4, filled(frames[4][1]))  # newer than the current mask, still too old
+    assert not idle.active and idle.reference_seq is None
+    assert f.active and f.reference_seq == 0
+    assert [r.levelname for r in caplog.records] == ["DEBUG", "DEBUG"]
+    f.set_reference(5, filled(frames[5][1]))  # the oldest frame logged still is carried
+    assert f.reference_seq == 5
+    out = f.step(10, frames[10][0], None, 10 / 25)
+    assert out.confident and iou(out.box, frames[10][1])[0, 0] > 0.9
+
+
 def leave(speed: float, frames: int) -> tuple[list, list]:
     """The patch moving `speed` px a frame off the right edge, followed from frame 0."""
     shots = scene(frames, move=(speed, 0), start=(240, 140))
@@ -206,6 +229,43 @@ def test_frame_size_change_resets():
     assert out is not None and iou(out.box, np.array([100, 100, 260, 200]))[0, 0] > 0.95
 
 
+def test_frame_size_change_drops_a_pending_reference():
+    frames = scene(3, move=(4, 2))
+    f = RegionFollower()
+    for seq, (gray, _) in enumerate(frames):
+        f.step(seq, gray, None, seq / 25)
+    # measured on the old size and handed over just before the change; frame 3 itself is logged
+    # after it, so only the change can tell
+    f.set_reference(3, filled(frames[2][1]))
+    big = cv2.resize(frames[2][0], (640, 480))
+    assert f.step(3, big, None, 3 / 25) is None
+    assert f.step(4, big, None, 4 / 25) is None
+    assert not f.active and f.reference_seq is None
+
+
+def points_at(xs, ys) -> np.ndarray:
+    return np.array([(x, y) for x in xs for y in ys], np.float32)
+
+
+def test_affine_stretched_beyond_a_part_falls_back_to_the_similarity():
+    # mostly a vertical line, which tells nothing of stretch across it; a few points off it imply
+    # 3x across, which no part does from one frame to the next: the line's own motion is chosen
+    line, off = points_at([30], range(0, 100, 5)), points_at([0, 60], range(10, 100, 20))
+    points = np.concatenate([line, off])
+    moved = points * [3, 1] + [-60 + 4, 2]  # 3x across about x = 30, then moved by (4, 2)
+    m, inliers, kind = _estimate(points, moved)
+    assert kind == "similarity" and inliers == 20
+    np.testing.assert_allclose(m, [[1, 0, 4], [0, 1, 2]], atol=1e-3)
+
+
+def test_estimate_keeps_the_affine_a_part_can_make():
+    points = points_at(range(0, 70, 10), range(0, 100, 10))
+    m, inliers, kind = _estimate(points, points * [0.9, 1] + [3, 0])  # foreshortened by 10%
+    assert kind == "affine" and inliers == len(points)
+    np.testing.assert_allclose(m, [[0.9, 0, 3], [0, 1, 0]], atol=1e-3)
+    assert _estimate(points[:5], points[:5]) == (None, 0, "none")  # fewer than min_inliers
+
+
 def test_scale_change_is_followed():
     frames = scene(16, grow=(1.02, 1.02), start=(150, 120))
     f = RegionFollower()
@@ -243,6 +303,31 @@ def test_points_lost_are_replaced_when_reseeded():
     assert all(out.confident for out in outs[1:])
     assert outs[9].inliers < 0.85 * outs[1].inliers
     assert outs[11].inliers > 0.95 * outs[1].inliers
+
+
+def test_points_worn_down_are_seeded_again_before_doubt():
+    # a hand passing in front of a sliding part: a flat bar over a third of it, two frames at a
+    # time with two clear frames between, 4 px further across it each time, takes a few points
+    # with it each time. Once fewer than twice min_inliers are left they are seeded inside the
+    # mask again, before they run out (the age rule is kept out of it)
+    p = FollowParams(redetect_every=1000)
+    bars = range(0, PATCH_W - PATCH_W // 3 + 1, 4)  # the bar's left edge, in patch pixels
+    frames = scene(2 + 4 * len(bars) + 4, move=(3, 0), start=(45, 140))
+    hidden = set()
+    for i, left in enumerate(bars):
+        for k in (2 + 4 * i, 3 + 4 * i):
+            gray, truth = frames[k]
+            x1, y1, x2, y2 = (round(float(v)) for v in truth)
+            gray[y1:y2, x1 + left : x1 + left + PATCH_W // 3] = 128
+            hidden.add(k)
+    f = RegionFollower(p)
+    f.set_reference(0, filled(frames[0][1]))
+    outs = [f.step(seq, gray, None, seq / 25) for seq, (gray, _) in enumerate(frames)]
+    assert min(out.inliers for out in outs[1:]) < 2 * p.min_inliers  # worn down that far
+    assert all(out.confident for seq, out in enumerate(outs[1:], 1) if seq not in hidden)
+    for out, (_, truth) in zip(outs[-4:], frames[-4:], strict=True):  # in full view again
+        assert out.inliers > 4 * p.min_inliers
+        assert iou(out.box, truth)[0, 0] > 0.8
 
 
 def disc() -> MaskCrop:
@@ -287,8 +372,10 @@ def glance_camera(seq: int) -> np.ndarray | None:
     return np.array([[1.0, 0, x1 - x0], [0, 1.0, y1 - y0]])
 
 
-def follow_glance(move: Path) -> list:
-    frames = scene(len(GLANCE), move=move, pan=GLANCE, start=(80, 140))
+def follow_glance(
+    move: Path, start: tuple[float, float] = (80, 140), count: int = len(GLANCE)
+) -> list:
+    frames = scene(count, move=move, pan=GLANCE, start=start)
     f = RegionFollower()
     f.set_reference(0, filled(frames[0][1]))
     outs = [f.step(seq, gray, glance_camera(seq), seq / 25) for seq, (gray, _) in enumerate(frames)]
@@ -303,6 +390,14 @@ def test_glance_is_followed_by_seeding_the_flow_with_the_camera():
 
 def test_part_sliding_during_a_glance_is_followed():
     for out, truth in follow_glance((6, 0))[1:]:
+        assert out.confident
+        assert iou(out.box, truth)[0, 0] > 0.85
+
+
+def test_part_sliding_fast_during_a_glance_is_followed_by_its_own_last_motion():
+    # 20 px a frame against the glance, beyond the flow's reach from the camera's motion alone:
+    # the search also starts from the part's own motion on the frame before
+    for out, truth in follow_glance((-20, 0), start=(180, 140), count=8)[3:]:
         assert out.confident
         assert iou(out.box, truth)[0, 0] > 0.85
 

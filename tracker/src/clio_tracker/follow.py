@@ -6,8 +6,11 @@ as well as with the camera, and an outline that waits for the next answer freeze
 the latest mask is carried to each frame by the motion of points inside it: the same sparse
 Lucas-Kanade flow, forward-backward check and RANSAC as motion.py, seeded inside the warped
 mask rather than over the whole frame. A full affine when enough points agree (a door turning
-away foreshortens), a similarity with fewer, on a frame scaled to 480 pixels wide: about 1 ms
-a frame, plus about 2 ms to scale a 1280x960 frame down.
+away foreshortens) and it stretches no more than a part can from one frame to the next, else a
+similarity, on a frame scaled to 480 pixels wide: about 1 ms a frame, plus about 2 ms to scale
+a 1280x960 frame down. While the points can be trusted they are seeded again inside the warped
+mask every `redetect_every` frames, and as soon as fewer than twice `min_inliers` are left (a
+hand passing in front takes some with it each time), so they don't simply run out.
 
 A glance moves the whole picture 60 to 100 pixels a frame, far beyond what the flow finds on
 its own (about 15 on fine texture). So each point's search starts where the camera's motion
@@ -16,14 +19,16 @@ as motion.py starts its own from a phase correlation; the flow only finds what i
 
 A mask is measured on an older frame (jev's, or the one a refresh was asked on), so the motion
 of every frame is logged, also before there is any mask, and a mask that arrives late is
-carried by the motions since its own frame. When the points can't be trusted (too few survive,
-too few agree, the region is leaving the view) the follower says so and carries the mask by the
-camera's motion alone. It seeds no new points until a new mask arrives, so it never settles on
-the background a mask has slid onto; the tracker asks the segmenter for that new mask.
+carried by the motions since its own frame (one from before the log is ignored). When the
+points can't be trusted (too few survive, too few agree, the region is leaving the view) the
+follower says so and carries the mask by the camera's motion alone. It seeds no new points
+until a new mask arrives, so it never settles on the background a mask has slid onto; the
+tracker asks the segmenter for that new mask.
 """
 
 from __future__ import annotations
 
+import logging
 import math
 from collections import deque
 from dataclasses import dataclass
@@ -34,11 +39,15 @@ import numpy as np
 from .motion import compose
 from .vision import OUTSIDE, MaskCrop
 
+log = logging.getLogger("clio_tracker")
+
 KEEP = 300  # frames of motion remembered, for a mask measured on an older frame
 EDGE = 3  # points are seeded at least this many tracked-frame pixels inside the mask's edge
 LK = {"winSize": (15, 15), "maxLevel": 3}
 IDENTITY = np.array([[1.0, 0, 0], [0, 1.0, 0]])
 NO_POINTS = np.empty((0, 1, 2), np.float32)
+STRETCH = (0.5, 2.0)  # bounds on each singular value of one frame's affine (its linear part)
+SKEW = 1.5  # and on the larger over the smaller: beyond either it is a bad fit, not a part
 
 
 @dataclass(frozen=True)
@@ -98,8 +107,13 @@ class RegionFollower:
     def set_reference(self, seq: int, crop: MaskCrop) -> None:
         """A mask measured on frame `seq`. It takes over on the next step, carried by the motion
         logged since `seq`. A mask from before the current one's frame is ignored, as is one
-        with nothing inside."""
+        with nothing inside and one from before the oldest frame logged, which can't be carried
+        to now."""
         if (self._seq is not None and seq < self._seq) or not (crop.logits > 0).any():
+            return
+        oldest = self._log[0][0] if self._log else seq
+        if seq < oldest:
+            log.debug("Follower: frame %d's mask is older than the log (%d on)", seq, oldest)
             return
         self._seq, self._pending = seq, (seq, crop)
 
@@ -113,15 +127,16 @@ class RegionFollower:
     ) -> Followed | None:
         """Frame `seq` (the full frame, 8-bit gray) and the camera's motion from the frame before
         (None when unknown). The region on this frame, or None while there is no mask. (`t` is
-        not used: motion is measured frame to frame.)"""
+        not used: motion is measured frame to frame.) The follower keeps its own copies of both,
+        so the caller may reuse its arrays."""
         if self._size is not None and gray.shape[:2] != self._size:
-            self.clear()  # another frame size: nothing measured on the old one carries over
-            self._log.clear()
+            self.clear()  # another frame size: nothing measured on the old one carries over,
+            self._log.clear()  # a pending mask included
             self._prev = None
         prev, small = self._prev, self._shrink(gray)
         self._prev, self._size = small, gray.shape[:2]
         fresh = self._adopt(seq) if self._pending is not None else False
-        fallback = IDENTITY if camera is None else np.asarray(camera, dtype=np.float64)
+        fallback = IDENTITY if camera is None else np.array(camera, dtype=np.float64, copy=True)
         region = self._region
         if region is None:
             self._log.append((seq, fallback))
@@ -144,7 +159,10 @@ class RegionFollower:
         self._log.append((seq, m))
         if confident:
             region.age += 1
-            region.points = None if region.age >= p.redetect_every else points
+            if region.age >= p.redetect_every or len(points) < 2 * p.min_inliers:
+                region.points, region.age = None, 0  # seeded on this frame, at the next step
+            else:
+                region.points = points
             self._own = compose(estimate, cv2.invertAffineTransform(fallback))
         elif measured:
             region.points = NO_POINTS  # in doubt: no new points until a new mask
@@ -152,10 +170,12 @@ class RegionFollower:
         return self._followed(region, inliers, ratio, confident)
 
     def _shrink(self, gray: np.ndarray) -> np.ndarray:
+        """`gray` at tracking size, as an array of the follower's own: the scaled-down frame is a
+        new one already, a frame no wider than `max_width` is copied."""
         h, w = gray.shape[:2]
         self._scale = min(1.0, self.params.max_width / w)
         if self._scale == 1.0:
-            return gray
+            return gray.copy()
         size = (round(w * self._scale), round(h * self._scale))
         return cv2.resize(gray, size, interpolation=cv2.INTER_AREA)
 
@@ -191,27 +211,12 @@ class RegionFollower:
         back, ok_back, _ = cv2.calcOpticalFlowPyrLK(gray, prev, moved, behind, **lk)
         good = (ok.ravel() == 1) & (ok_back.ravel() == 1)
         good &= np.linalg.norm((back - points).reshape(-1, 2), axis=1) < p.fb_max_px
-        m, keep = self._fit(points[good], moved[good])
+        m, keep, _ = _fit(points[good], moved[good], p)
         if m is None:
             return None, 0, 0.0, NO_POINTS
         m[:, 2] /= self._scale  # back to frame pixels (the linear part is the same at any scale)
         inliers = int(keep.sum())
         return m, inliers, inliers / len(points), moved[good][keep]
-
-    def _fit(self, a: np.ndarray, b: np.ndarray) -> tuple[np.ndarray | None, np.ndarray]:
-        """A full affine when `affine_inliers` points agree on one, else a similarity when
-        `min_inliers` do; None when neither. With the inlier mask."""
-        p = self.params
-        for estimate, need in (
-            (cv2.estimateAffine2D, p.affine_inliers),
-            (cv2.estimateAffinePartial2D, p.min_inliers),
-        ):
-            if len(a) < need:
-                continue
-            m, keep = estimate(a, b, method=cv2.RANSAC, ransacReprojThreshold=2.0)
-            if m is not None and keep is not None and keep.sum() >= need:
-                return m.astype(np.float64), keep.ravel() == 1
-        return None, np.zeros(len(a), dtype=bool)
 
     def _seed(self, region: _Region, gray: np.ndarray) -> np.ndarray:
         """Corners inside the region's mask on `gray`, the frame `region.t` is for. They keep
@@ -222,7 +227,6 @@ class RegionFollower:
         inside = cv2.erode((logits > 0).astype(np.uint8), np.ones((2 * EDGE + 1,) * 2, np.uint8))
         p = self.params
         found = cv2.goodFeaturesToTrack(gray, p.max_corners, 0.01, 5, mask=inside)
-        region.age = 0
         return NO_POINTS if found is None else found
 
     def _in_view(self, box: np.ndarray) -> float:
@@ -242,6 +246,44 @@ class RegionFollower:
         origin = (float(box[0]), float(box[1]))
         logits = _paint(region.crop, region.t, origin, scale, size)
         return Followed(box, MaskCrop(logits, origin, scale), inliers, ratio, confident)
+
+
+def _estimate(
+    points: np.ndarray, moved: np.ndarray, params: FollowParams | None = None
+) -> tuple[np.ndarray | None, int, str]:
+    """The motion taking `points` to `moved` (N points, in any one unit), how many points agree
+    on it and which it is: "affine", "similarity" or "none" (and no motion), as `_fit` chooses."""
+    m, keep, kind = _fit(points, moved, params or FollowParams())
+    return m, int(keep.sum()), kind
+
+
+def _fit(
+    a: np.ndarray, b: np.ndarray, p: FollowParams
+) -> tuple[np.ndarray | None, np.ndarray, str]:
+    """A full affine when `affine_inliers` points agree on one that stretches as a part can
+    (`_plausible`), else a similarity, on the same points, when `min_inliers` agree on one;
+    None when neither. With the inlier mask and which it is."""
+    for estimate, need, kind in (
+        (cv2.estimateAffine2D, p.affine_inliers, "affine"),
+        (cv2.estimateAffinePartial2D, p.min_inliers, "similarity"),
+    ):
+        if len(a) < need:
+            continue
+        m, keep = estimate(a, b, method=cv2.RANSAC, ransacReprojThreshold=2.0)
+        if m is None or keep is None or keep.sum() < need:
+            continue
+        if kind == "affine" and not _plausible(m):
+            continue
+        return m.astype(np.float64), keep.ravel() == 1, kind
+    return None, np.zeros(len(a), dtype=bool), "none"
+
+
+def _plausible(m: np.ndarray) -> bool:
+    """Whether the 2x3 `m` stretches no more than a part can from one frame to the next: each
+    singular value of its linear part within STRETCH, the larger at most SKEW times the
+    smaller. (Nearly collinear points leave an affine free to stretch across them.)"""
+    big, small = np.linalg.svd(m[:, :2], compute_uv=False)
+    return STRETCH[0] <= small and big <= STRETCH[1] and big <= SKEW * small
 
 
 def _corners(logits: np.ndarray) -> np.ndarray:
