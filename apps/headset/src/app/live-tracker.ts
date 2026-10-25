@@ -1,4 +1,4 @@
-import type { Procedure } from '@clio/protocol';
+import type { NormalizedBox, Procedure } from '@clio/protocol';
 import type { WebGLRenderer } from 'three';
 import { captureTime, FrameStream, frameSize } from '../adapters/camera/frame-stream';
 import type { PassthroughCamera } from '../adapters/camera/passthrough-camera';
@@ -10,6 +10,7 @@ import {
   trackerUrl,
 } from '../adapters/net/tracker-client';
 import { HandOccluders } from '../adapters/render/hand-occluders';
+import { type LiveBox, LiveBoxesPresenter } from '../adapters/render/presenters/live-boxes';
 import {
   type LiveHighlight,
   LiveHighlightsPresenter,
@@ -27,10 +28,10 @@ import type { Clock } from '../core/clock';
 import { createLogger } from '../core/log';
 import type { AppBus } from '../domain/events';
 import { ObjectTrackRecorder } from '../domain/recording/object-track-recorder';
-import { isShown, LiveTracking } from '../domain/session/live-tracking';
+import { isShown, type LiveObject, LiveTracking } from '../domain/session/live-tracking';
 import type { DepthSource } from '../domain/world/depth-source';
 import type { SurfaceRaycaster } from '../domain/world/grounding';
-import { LiveObjects } from '../domain/world/live-objects';
+import { LiveObjects, type LiveView } from '../domain/world/live-objects';
 import type { ObjectRegistry } from '../domain/world/object-registry';
 import type { Placement } from '../domain/world/placement';
 import type { PoseHistory } from '../domain/world/pose-history';
@@ -41,10 +42,13 @@ import type { Workspace } from '../domain/world/workspace';
 // (LiveTracking); it follows each object on every frame and asks jev about them itself, about once
 // a second. Each answer is placed in the room at the object's measured distance (LiveObjects) and
 // drawn with the primary page's depth-correct glow, and the registry and the recording hear about
-// it as the camera's untrusted `detector`. Without the tracker (not running, or the connection
-// dropped) nothing is streamed and the lesson's own looks (Spotlight) carry on as before, while the
-// connection keeps retrying. The Quest runs hot, so frames go out only while the session is shown
-// and something is being followed.
+// it as the camera's untrusted `detector`. Each lit object's bounding box is drawn next to its glow,
+// with its name on a tag (with ?debug=1 every followed object's, its tag saying what the tracker
+// last said of it). Robotics-ER's boxes from the action focus come back in as anchors: the tracker
+// places the object from them and trusts them over jev for a while (tracker/TRACK.md). Without the
+// tracker (not running, or the connection dropped) nothing is streamed and the lesson's own looks
+// (Spotlight) carry on as before, while the connection keeps retrying. The Quest runs hot, so
+// frames go out only while the session is shown and something is being followed.
 
 const log = createLogger('live');
 /** Entering AR waits this long for the tracker, to know whether to ask for depth sensing (ms). */
@@ -53,6 +57,21 @@ const CONNECT_WAIT_MS = 800;
 const MAX_PENDING = 4;
 /** Sent frames whose size is remembered, for the recording. */
 const SIZES_KEPT = 32;
+/** An unlit object's box (?debug=1) is drawn this much fainter than a lit one's. */
+const UNLIT_BOX_OPACITY = 0.45;
+
+/**
+ * One of Robotics-ER's boxes for the tracker: the action focus's FocusAnchors port
+ * (domain/session/action-focus.ts).
+ */
+export interface FocusAnchor {
+  id: string;
+  box: NormalizedBox;
+  /** Capture time of the frame ER saw (performance.now ms). */
+  t: number;
+  /** ER's words for the object, for jev from now on. */
+  query?: string;
+}
 
 export interface LiveTrackerDeps {
   bus: AppBus;
@@ -72,12 +91,16 @@ export interface LiveTrackerDeps {
   hideHeld: boolean;
   /** IWER: its depth maps encode window depth without a far plane. */
   emulated: boolean;
+  /** ?debug=1: every followed object's box, its tag saying the tracker's state, source and score. */
+  debug?: boolean;
   /** The WebSocket (tests stand in for it). */
   socket?: (url: string) => TrackerSocket;
 }
 
 export class LiveTracker {
   readonly presenter: LiveHighlightsPresenter;
+  /** The bounding boxes next to the glow, sharing its depth occlusion. */
+  readonly boxPresenter: LiveBoxesPresenter;
   /** The real hands in the depth buffer, so a light behind a hand stays behind it. */
   readonly occluders = new HandOccluders();
   private readonly tracking: LiveTracking;
@@ -94,7 +117,10 @@ export class LiveTracker {
   /** The set (as JSON) last sent on this connection, and the one last followed. */
   private sent: string | null = null;
   private followed: string | null = null;
+  /** The ids of the set last sent on this connection: the only ones an anchor may name. */
+  private sentIds = new Set<string>();
   private highlights: LiveHighlight[] = [];
+  private boxes: LiveBox[] = [];
   private masks: Placement[] = [];
   private readonly onVisibility = () => this.updateStreaming();
 
@@ -132,6 +158,7 @@ export class LiveTracker {
         if (open) return;
         // A new connection starts in target mode, without the set: it is sent again.
         this.sent = null;
+        this.sentIds.clear();
         this.pending.length = 0;
         this.objects.reset();
         this.masks = [];
@@ -160,6 +187,9 @@ export class LiveTracker {
     this.presenter = new LiveHighlightsPresenter(() => this.highlights, {
       windowFar: deps.emulated ? 'infinite' : 'reported',
       hideHeld: deps.hideHeld,
+    });
+    this.boxPresenter = new LiveBoxesPresenter(() => this.boxes, {
+      occlusion: this.presenter.occlusion,
     });
   }
 
@@ -203,6 +233,16 @@ export class LiveTracker {
     return this.highlights.some((h) => h.id === id);
   }
 
+  /**
+   * The action focus's FocusAnchors: Robotics-ER's box for a followed object goes to the tracker,
+   * which places the object from it and trusts it over jev for a while. Dropped without a tracker,
+   * before the set was sent on this connection (objects mode), and for an object not in it.
+   */
+  anchor({ id, box, t, query }: FocusAnchor): void {
+    if (!this.sentIds.has(id)) return;
+    this.client.send({ type: 'anchor', id, t, box, source: 'er', ...(query ? { query } : {}) });
+  }
+
   /** Perceive stage: what to follow, depth reads, and the tracker's answers since the last frame. */
   perceive(frame: XRFrame, t: number): void {
     this.tracking.update(t);
@@ -223,9 +263,10 @@ export class LiveTracker {
   }
 
   /**
-   * Before the presenters: the hands' occluders, and what each live light shows now. Only the
-   * step's show items and the coach's highlights are lit; the lesson's other objects are followed
-   * for the recording alone.
+   * Before the presenters: the hands' occluders, and what each live light and box shows now. Only
+   * the step's show items and the coach's highlights are lit, each with its box; the lesson's
+   * other objects are followed for the recording alone (with ?debug=1 their boxes are drawn too,
+   * fainter).
    */
   prepare(frame: XRFrame, space: XRReferenceSpace): void {
     const { registry, clock } = this.deps;
@@ -235,22 +276,28 @@ export class LiveTracker {
       const spec = registry.spec(view.id);
       return spec && !spec.hidden ? [view.placement] : [];
     });
-    this.highlights = views.flatMap((view) => {
+    this.highlights = [];
+    this.boxes = [];
+    for (const view of views) {
       const object = this.tracking.get(view.id);
       const spec = registry.spec(view.id);
-      if (!object || !spec || !isShown(object)) return [];
-      return [
-        {
-          ...view,
-          label: spec.label,
-          rank: object.rank,
-          style: object.style,
-          accent: object.accent,
-          mode: glowModeFor(spec),
-          held: !!registry.get(view.id)?.heldBy,
-        },
-      ];
-    });
+      if (!object || !spec) continue;
+      const lit = isShown(object);
+      const held = !!registry.get(view.id)?.heldBy;
+      const box = this.boxFor(view, object, spec.label, lit, held && this.deps.hideHeld);
+      if (box) this.boxes.push(box);
+      if (!lit) continue;
+      this.highlights.push({
+        ...view,
+        label: spec.label,
+        rank: object.rank,
+        style: object.style,
+        accent: object.accent,
+        mode: glowModeFor(spec),
+        held,
+        tagged: box !== null,
+      });
+    }
   }
 
   stop(): void {
@@ -269,7 +316,31 @@ export class LiveTracker {
     this.depth = null;
     this.occluders.hide();
     this.highlights = [];
+    this.boxes = [];
     this.masks = [];
+  }
+
+  /** A followed object's box, or null when it has none or is not to be boxed now. */
+  private boxFor(
+    view: LiveView,
+    object: LiveObject,
+    label: string,
+    lit: boolean,
+    hidden: boolean,
+  ): LiveBox | null {
+    const box = view.placement.box;
+    const debug = this.deps.debug ?? false;
+    if (!box || hidden || (!lit && !debug)) return null;
+    return {
+      key: view.id,
+      center: view.placement.center,
+      corners: box.corners,
+      shapeVersion: view.shapeVersion,
+      label,
+      detail: debug ? trackerSays(view) : null,
+      accent: lit ? object.accent : { color: object.accent.color, opacity: UNLIT_BOX_OPACITY },
+      dashed: false,
+    };
   }
 
   /** Tell the tracker what to follow whenever that changes, and again on a new connection. */
@@ -284,7 +355,10 @@ export class LiveTracker {
       this.objects.follow(objects.map((o) => o.id));
       this.followed = key;
     }
-    if (key !== this.sent && this.client.send({ type: 'objects', objects })) this.sent = key;
+    if (key !== this.sent && this.client.send({ type: 'objects', objects })) {
+      this.sent = key;
+      this.sentIds = new Set(objects.map((o) => o.id));
+    }
   }
 
   /** Stream only while the session is shown (not covered by the system menu) and something is followed. */
@@ -299,4 +373,9 @@ export class LiveTracker {
     if (shown && !this.stream.streaming) this.stream.start();
     else if (!shown && this.stream.streaming) this.stream.stop();
   }
+}
+
+/** A debug tag's second line: what the tracker last said of the object. */
+function trackerSays({ state, source, score }: LiveView): string {
+  return [state ?? '–', source ?? '–', score === null ? '–' : score.toFixed(2)].join(' · ');
 }
