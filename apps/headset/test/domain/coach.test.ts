@@ -93,6 +93,7 @@ function handlers(log: string[] = []): ToolHandlers {
   };
   return {
     start_lesson: ok('start_lesson'),
+    end_lesson: ok('end_lesson'),
     revise_plan: ok('revise_plan'),
     add_step: ok('add_step'),
     update_step: ok('update_step'),
@@ -750,6 +751,7 @@ describe('CoachSession', () => {
     expect(agent.setup?.tools).toEqual(COACH_TOOL_NAMES);
     expect(agent.setup?.tools).toEqual([
       'start_lesson',
+      'end_lesson',
       'revise_plan',
       'add_step',
       'update_step',
@@ -1213,6 +1215,42 @@ describe('CoachSession', () => {
     ]);
   });
 
+  it('tells the coach of a cancelled highlight only when it added a material', async () => {
+    let finish: (outcome: { ok: true; result: unknown }) => void = () => {};
+    const { agent, seen } = await setup({
+      tools: {
+        highlight: ({ object_id }) =>
+          object_id === 'red_button'
+            ? new Promise((resolve) => (finish = resolve))
+            : { ok: true, result: { shown: true } },
+      },
+    });
+    agent.events.emit('toolCalls', {
+      calls: [
+        { id: 'c1', name: 'highlight', args: { object_id: 'cup_a' } },
+        { id: 'c2', name: 'highlight', args: { object_id: 'red_button', look_for: 'red button' } },
+        { id: 'c3', name: 'end_lesson', args: { reason: 'not what they want' } },
+      ],
+    });
+    await settle();
+    agent.events.emit('interrupted', {});
+    agent.events.emit('cancelledTools', { ids: ['c1', 'c2', 'c3'] });
+    await settle();
+    const cancelled = () =>
+      seen
+        .filter((e) => e.type === 'annotation')
+        .map((e) => (e.payload.data as { callId: string }).callId);
+    // A plain highlight changed nothing; the one still running may have.
+    expect(cancelled()).toEqual(['c3']);
+    finish({ ok: true, result: { shown: false, material_id: 'red_button', added: true } });
+    await settle();
+    expect(cancelled()).toEqual(['c3', 'c2']);
+    expect(agent.narrations.map((n) => n.text)).toEqual([
+      `[app] Your end_lesson call was already applied. ${recitePlan(planView())}`,
+      `[app] Your highlight call was already applied. ${recitePlan(planView())}`,
+    ]);
+  });
+
   describe('a non-blocking call (look_closer)', () => {
     const answer = { answer: 'Cup C is the empty one.', highlighted: ['cup C'] };
     async function looking() {
@@ -1391,6 +1429,9 @@ describe('system prompt', () => {
       /Every time you ask them to\s+touch, move or operate something, call highlight on it \(style "target"\) in that same turn,\s+before you say it/,
     );
     expect(prompt).toMatch(/If it is not in the plan, give look_for/);
+    expect(prompt).toMatch(
+      /If they did not say what they want, call end_lesson and\s+ask in a few words/,
+    );
     expect(prompt).toContain('very brief: under 15 words per turn');
   });
 
