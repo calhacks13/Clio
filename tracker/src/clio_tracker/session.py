@@ -440,9 +440,10 @@ class TrackerSession:
         present = answer.present >= self.settings.present_threshold and answer.box is not None
         box = _pixels(answer.box, enc) if present else None
         carry = self._camera.since(ask.seq)
-        seen = (
-            f"in view ({answer.present:.2f})" if present else f"not in view ({answer.present:.2f})"
-        )
+        # jev's box goes in the log, so a wrong placement shows whether jev or the tracker erred.
+        seen = f"not in view ({answer.present:.2f})"
+        if present:
+            seen = f"in view ({answer.present:.2f}) at {[round(v, 2) for v in answer.box]}"
         said = f"{answer.id}: {self.identifier.name} says {seen} on frame {ask.seq}"
         said += f", {took:.1f} s later"
         anchored = self._outranked(answer.id, tr, ask.seq, present, box, carry, now)
