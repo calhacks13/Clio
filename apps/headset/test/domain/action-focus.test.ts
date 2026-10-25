@@ -404,9 +404,12 @@ describe('ActionFocus: where the answer goes', () => {
     start();
     enter(OPEN);
     await tick(1000);
-    await looks[0]?.answer({ action: action({ id: 'jug', label: 'fluid jug' }) });
+    await looks[0]?.answer({
+      action: action({ id: 'jug', label: 'fluid jug', description: 'Blue jug in the right hand' }),
+    });
     expect(answered[0]?.actionId).toBe('jug');
     expect(anchors.map((a) => a.id)).toEqual(['jug']);
+    expect(tracking.get('jug')?.query).toBe('Blue jug in the right hand');
     expect(tracking.objects.filter(isShown).map((o) => [o.id, o.rank, o.accent.color])).toEqual([
       ['cap', 0, ACCENTS.act],
       ['jug', 1, ACCENTS.act],
