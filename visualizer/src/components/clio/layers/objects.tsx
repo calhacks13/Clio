@@ -41,8 +41,10 @@ import {
   SCENE_COLORS,
   themed,
 } from "@/lib/clio/object-display";
+import type { ModelFile } from "@/lib/clio/scene-files";
 import type { LayerProps } from "../clio-scene";
 import { fillSegments } from "./head";
+import { GeneratedModel } from "./model";
 
 // Each drawn object at the viewed time: a dot, its radius ring flat on the table, a 3 s trail and a
 // name label in its identity color. A held span puts a ring 12 mm outside the radius ring, solid
@@ -56,6 +58,11 @@ import { fillSegments } from "./head";
 // draws as a wireframe box centered on the position (the tracked point is inside the object, not
 // under it), and its measured shape (shapes.json) as points riding with the object, with the box
 // fitted around them. The trail still follows the raw estimates.
+//
+// When the rebuilt scene made a model of the object (scene.json), the model rides on the compiled
+// position too, offset and turned by its placement, in the generated look (layers/model.tsx). The
+// dot, rings, trail, label, extent box and shape points stay: the model is drawn beside what was
+// measured, never instead of it. Without a compiled series there is no model.
 
 const DOT_RADIUS = 0.012;
 const HELD_GAP = 0.012;
@@ -66,10 +73,11 @@ const EXTENT_OPACITY = 0.5;
 /** World size of one fused depth sample, about a 6 mm dot. */
 const SHAPE_POINT_SIZE = 0.006;
 const SHAPE_OPACITY = 0.85;
+const NO_MODELS: ReadonlyMap<string, ModelFile> = new Map();
 
-// Only the dot takes clicks. Lines are hit-tested within 1 m by default, and three.js raycasts
-// hidden objects too, so the ring, tick, held ring, boxes and points would catch clicks meant for
-// other objects.
+// Only the dot (and a generated model's surfaces) take clicks. Lines are hit-tested within 1 m by
+// default, and three.js raycasts hidden objects too, so the ring, tick, held ring, boxes and points
+// would catch clicks meant for other objects.
 const noRaycast = () => {};
 
 function circle(radius: number, segments = 64): BufferGeometry {
@@ -95,12 +103,15 @@ interface Track {
   trail: LineSegments;
   identity: MeshBasicMaterial;
   identityLine: LineBasicMaterial;
+  /** A generated model's outline: drawn after its surface, so only visible creases show. */
+  outline: LineBasicMaterial;
   held: MeshBasicMaterial;
 }
 
 function buildTrack(radius: number): Track {
   const identity = new MeshBasicMaterial();
   const identityLine = new LineBasicMaterial();
+  const outline = new LineBasicMaterial({ transparent: true });
   const held = new MeshBasicMaterial();
   const group = new Group();
   group.visible = false;
@@ -157,6 +168,7 @@ function buildTrack(radius: number): Track {
     trail,
     identity,
     identityLine,
+    outline,
     held,
   };
 }
@@ -171,6 +183,7 @@ function disposeTrack(track: Track): void {
   for (const g of geometries) g.dispose();
   track.identity.dispose();
   track.identityLine.dispose();
+  track.outline.dispose();
   track.held.dispose();
 }
 
@@ -301,6 +314,7 @@ function ObjectTrack({
   onSelect,
   tracks,
   shapes,
+  model,
 }: LayerProps & {
   entity: Entity;
   colorIndex: number;
@@ -308,6 +322,8 @@ function ObjectTrack({
   onSelect?: (entityId: string) => void;
   tracks: TracksDoc | null;
   shapes: ShapesDoc | null;
+  /** The object's generated model, when the scene has one and the Models toggle is on. */
+  model: ModelFile | null;
 }) {
   const radius = entity.extensions?.radius_m ?? 0.03;
   const track = useMemo(() => buildTrack(radius), [radius]);
@@ -370,6 +386,7 @@ function ObjectTrack({
     const color = at.muted ? muted : identity;
     track.identity.color.set(color);
     track.identityLine.color.set(color);
+    track.outline.color.set(color);
     if (compiled) {
       compiled.line.color.set(color);
       compiled.dots?.color.set(color);
@@ -399,6 +416,10 @@ function ObjectTrack({
         }
       >
         {compiled && <primitive object={compiled.group} />}
+        {/* A model is placed from the compiled position only. */}
+        {model && tracks && compiledTrack && (
+          <GeneratedModel file={model} outline={track.outline} />
+        )}
         <Html
           position={[0, 0, DOT_RADIUS + 0.012]}
           pointerEvents="none"
@@ -430,6 +451,7 @@ export function ObjectsLayer({
   onSelect,
   tracks,
   shapes,
+  models = NO_MODELS,
   ...layer
 }: LayerProps & {
   selectedId: string | null;
@@ -438,6 +460,8 @@ export function ObjectsLayer({
   tracks: TracksDoc | null;
   /** The compiled shapes; null draws none. */
   shapes: ShapesDoc | null;
+  /** Generated models by object id (scene-files.ts, modelFiles); none draws none. */
+  models?: ReadonlyMap<string, ModelFile>;
 }) {
   const { capture, revision } = layer;
   // New objects can appear while a live episode streams in.
@@ -458,6 +482,7 @@ export function ObjectsLayer({
           onSelect={onSelect}
           tracks={tracks}
           shapes={shapes}
+          model={models.get(entity.id) ?? null}
         />
       ))}
     </group>

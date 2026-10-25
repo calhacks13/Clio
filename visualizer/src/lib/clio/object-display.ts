@@ -57,6 +57,10 @@ export const SCENE_COLORS = {
   table: { light: "#FFFFFF", dark: "#1F232C" },
   gridCell: { light: "#E0E6EE", dark: "#252B35" },
   gridSection: { light: "#CDD6E2", dark: "#303742" },
+  /** The room scan's global mesh, lit: a quiet step off the canvas. */
+  roomSurface: { light: "#E3E8EE", dark: "#1A1D24" },
+  /** Furniture volumes' edges in the room scan: the stronger hairline. */
+  roomVolumeEdge: { light: "#BCC8D6", dark: "#3B4350" },
 } satisfies Record<string, ThemedColor>;
 
 export const themed = (color: ThemedColor, theme: Theme): string =>
