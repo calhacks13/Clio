@@ -489,6 +489,36 @@ describe('LiveTracking', () => {
     expect(tracking.get('rag')?.query).toBe('rag');
   });
 
+  it("keeps ER's words for a show item through later rebuilds, until the step words it again", () => {
+    const { bus, tracking, start, enter, highlight } = setup();
+    start();
+    enter(OPEN);
+    const words = 'Round blue cap at the front left of the engine bay';
+    tracking.refine('cap', words);
+    // Every rebuild offers the cap again in its finder's words, after its show item.
+    bus.emit('focus.answered', {
+      t: 2000,
+      frameT: 1900,
+      stepId: 'open',
+      detections: [],
+      action: null,
+      actionId: 'rag',
+      model: 'er',
+      latencyMs: 100,
+    });
+    expect(tracking.get('cap')?.query).toBe(words);
+    highlight('cap', 'attention', 2100);
+    expect(tracking.get('cap')?.query).toBe(words);
+    bus.emit('plan.changed', { t: 2200, rev: 1, op: 'edit', stepId: 'open' });
+    tracking.update(10_000);
+    expect(tracking.get('cap')?.query).toBe(words);
+    // The next step shows the cap in new words: the plan's win, and stay after a rebuild.
+    enter(POUR);
+    expect(tracking.get('cap')?.query).toBe('The open reservoir neck');
+    bus.emit('plan.changed', { t: 2300, rev: 2, op: 'edit', stepId: 'pour' });
+    expect(tracking.get('cap')?.query).toBe('The open reservoir neck');
+  });
+
   it('follows an object added to the plan at once', () => {
     const { bus, registry, tracking, start, enter, replan } = setup();
     start();
