@@ -350,8 +350,9 @@ SCENE = (Thing(WHOLE, A), Thing(OTHER, B))
 
 
 def test_part_uses_follower_mask_when_confident(vision):
-    """A confident follower's box is the part box and its mask the outline; the confidence,
-    state and track are the parent's, as they are without a follower."""
+    """A confident follower's box is the part box and its mask the outline, with the parent's
+    confidence and track. It is measured on its own pixels, so it is "tracking" also while the
+    parent coasts (YOLOE missed the whole object)."""
     base = PartRun(vision, old=True)
     follower = FakeFollower()
     run = PartRun(vision, follower)
@@ -370,11 +371,18 @@ def test_part_uses_follower_mask_when_confident(vision):
     np.testing.assert_array_equal(run.tracker.box, answer.box)
     assert s.shape is not None and s.shape.outline is not None
     assert not run.tracker.wants_refresh
+    answer = followed((457, 263, 586, 462))
+    follower.answers.append(answer)
+    before, s = base.frame(Thing(OTHER, B)), run.frame(Thing(OTHER, B))  # the whole is missed
+    assert before.state == "coasting"  # without a follower the part coasts with its parent
+    assert s.found and s.state == "tracking" and s.crop is answer.crop
+    assert (s.confidence, s.track_id) == (before.confidence, before.track_id)
 
 
-def test_part_with_no_parent_shows_the_follower_mask_and_coasts(vision):
-    """Nothing holds the part (a strip of text on a plain surface): a confident follower still
-    gives its box and mask, with the part's own coasting confidence, as without one."""
+def test_part_with_no_parent_on_its_own_pixels_is_tracking(vision):
+    """Nothing holds the part (a strip of text on a plain surface): a confident follower gives
+    its box and mask as "tracking", at a flat 0.5 that does not fade with the time since jev.
+    Once the follower is unsure, the part coasts and fades as without one."""
     base = PartRun(vision, old=True)
     follower = FakeFollower()
     run = PartRun(vision, follower)
@@ -383,14 +391,19 @@ def test_part_with_no_parent_shows_the_follower_mask_and_coasts(vision):
     base.jev(1, PART)
     run.jev(1, PART, mask=followed(PART).crop)
     assert run.tracker.parent is None
-    for k in range(3):
-        answer = followed(shifted(PART, 5 * k))
+    for k in range(20):  # 1.3 s after jev's answer
+        answer = followed(shifted(PART, 2 * k))
         follower.answers.append(answer)
         before, s = base.frame(Thing(OTHER, B)), run.frame(Thing(OTHER, B))
-        assert s.found and s.state == "coasting" and s.track_id is None
-        assert s.confidence == before.confidence
+        assert s.found and s.state == "tracking" and s.track_id is None
+        assert s.confidence == 0.5
         assert s.crop is answer.crop
         np.testing.assert_array_equal(s.measured, answer.box)
+    assert before.state == "coasting" and before.confidence < 0.47  # faded without a follower
+    follower.answers.append(followed(answer.box, confident=False))
+    before, s = base.frame(Thing(OTHER, B)), run.frame(Thing(OTHER, B))
+    assert s.found and (s.state, s.confidence, s.track_id) == ("coasting", before.confidence, None)
+    assert s.crop is not answer.crop
 
 
 def locked_part(vision, follower) -> PartRun:
@@ -407,7 +420,8 @@ def locked_part(vision, follower) -> PartRun:
 def test_part_follows_its_own_motion_out_of_parent_box(vision):
     """The door swings out of the fridge's box while the fridge stays put. A confident follower
     keeps the part on its own pixels, 200 px past the parent's box, and the parent does not pull
-    it back; once the follower is unsure, the part rides on from where it last was."""
+    it back; once the follower is unsure, the part rides on from where it last was, with the
+    parent's state as before."""
     follower = FakeFollower()
     run = locked_part(vision, follower)
     for i in range(1, 21):

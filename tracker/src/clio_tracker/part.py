@@ -28,13 +28,14 @@ With a segmenter (segment.py) the part gets a mask of its own: cut out on jev's 
 whenever asked, then carried to every frame by a RegionFollower (follow.py) on the part's own
 pixels. While the follower is confident, its box is the part box and its mask the outline, also
 where the parent's motion would never take it (a door swinging out of the fridge's box, a jaw
-sliding off the caliper's). The parent is still followed on every frame, since it is what finds
-the whole object again, and the part's confidence and state are still the parent's (with none
-in sight, a coasting part's). Otherwise the part rides and is outlined as above, and after two
-frames of doubt, or while there is no mask yet, it asks to be cut out again (`wants_refresh`):
-around the follower's box when the follower is unsure, else the part box (`refresh_box`). An
-answer from jev that puts the part box more than its own size away (another part), or says the
-part is not in view, drops the old part's mask.
+sliding off the caliper's). It is measured, not predicted: "tracking", also while the parent
+coasts or none is in sight, with the parent's confidence while it is in sight, else a flat 0.5.
+The parent is still followed on every frame, since it is what finds the whole object again.
+Otherwise the part rides, coasts and is outlined as above, and after two frames of doubt, or
+while there is no mask yet, it asks to be cut out again (`wants_refresh`): around the follower's
+box when the follower is unsure, else the part box (`refresh_box`). An answer from jev that puts
+the part box more than its own size away (another part), or says the part is not in view, drops
+the old part's mask.
 """
 
 from __future__ import annotations
@@ -52,6 +53,7 @@ from .tracking import ObjectTracker, Sighting, TrackerParams, _inside
 from .vision import Encoding, MaskCrop, YoloeVision
 
 EDGE = 0.01  # a box side within this share of the frame of its edge is cut by it
+OWN_PIXELS = 0.5  # the confidence of a part followed on its own pixels with no parent in sight
 
 
 def is_part(box: np.ndarray, whole: np.ndarray, params: TrackerParams) -> bool:
@@ -289,15 +291,15 @@ class PartTracker:
         self._shown = True
         if f is not None:
             self._follow_doubt = 0 if followed is not None else self._follow_doubt + 1
-        coasting = round(0.5 * (1 - 0.5 * age / p.part_hold_s), 3)
         if followed is not None:
+            # Measured on its own pixels, not predicted: tracking, whatever the parent does.
             crop = followed.crop
             shown, shape = self._smooth.sighted(t, box, crop, size)
+            confidence, track_id = OWN_PIXELS, None
             if held:
                 assert parent is not None
-                return Sighting(True, shown, shape, parent.confidence, parent.state,
-                                parent.track_id, box.copy(), crop)  # fmt: skip
-            return Sighting(True, shown, shape, coasting, "coasting", None, box.copy(), crop)
+                confidence, track_id = parent.confidence, parent.track_id
+            return Sighting(True, shown, shape, confidence, "tracking", track_id, box.copy(), crop)
         if held:
             assert parent is not None
             crop = parent.crop
@@ -316,7 +318,8 @@ class PartTracker:
             assert parent is not None
             return Sighting(True, shown, shape, parent.confidence, parent.state,
                             parent.track_id, box.copy(), crop)  # fmt: skip
-        return Sighting(True, shown, shape, coasting, "coasting", None, box.copy(), crop)
+        confidence = round(0.5 * (1 - 0.5 * age / p.part_hold_s), 3)
+        return Sighting(True, shown, shape, confidence, "coasting", None, box.copy(), crop)
 
     def _ride(
         self,
