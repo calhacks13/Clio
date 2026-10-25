@@ -8,6 +8,7 @@ import {
 } from "@/lib/clio/compiled-objects";
 import { inspectObject, type InspectorRow } from "@/lib/clio/lanes";
 import { drawnObjects, identityColor, themed } from "@/lib/clio/object-display";
+import { objectRest, restRow } from "@/lib/clio/object-rest";
 import { modelRows } from "@/lib/clio/scene-display";
 import type { SceneModel, ShapesDoc, TracksDoc } from "@clio/protocol";
 import type { Capture } from "@clio-viewer/capture/model";
@@ -22,6 +23,9 @@ import { useTheme } from "@/utils/theme";
 // "Model (generated)" block follows: how it was made, which measurement sized
 // and turned it, the keyframe crop it was made from and its note. Generated
 // values are muted with a dotted underline, a look of their own (DESIGN.md).
+// While no hand could reach the object the scene draws it still
+// (object-rest.ts): a "Shown" row after Position says so, inferred, and
+// Position keeps the newest estimate as measured.
 
 const VALUE_CLASS: Record<InspectorRow["basis"], string> = {
   measured: "text-fg-soft",
@@ -34,6 +38,8 @@ const VALUE_CLASS: Record<InspectorRow["basis"], string> = {
 
 export interface ObjectInspectorProps {
   capture: Capture;
+  /** Bumps when records arrive (the scene's revision), so the rest plan is shared with it. */
+  revision?: number;
   /** The object shown, or null for none. */
   entityId: string | null;
   tUs: number;
@@ -85,6 +91,7 @@ function compiledRows(
 
 export default function ObjectInspector({
   capture,
+  revision = 0,
   entityId,
   tUs,
   flagsRecorded,
@@ -109,10 +116,20 @@ export default function ObjectInspector({
     );
   }
   const index = drawnObjects(capture).findIndex((e) => e.id === entityId);
-  const rows = [
-    ...inspection.rows,
-    ...compiledRows(inspection.entityId, tracks, shapes),
-  ];
+  const rest = objectRest(
+    capture,
+    revision,
+    inspection.entityId,
+    tracks,
+    shapes,
+  );
+  const shown = rest ? restRow(rest.plan, tUs) : null;
+  const rows = [...inspection.rows];
+  if (shown) {
+    const position = rows.findIndex((row) => row.label === "Position");
+    rows.splice(position < 0 ? rows.length : position + 1, 0, shown);
+  }
+  rows.push(...compiledRows(inspection.entityId, tracks, shapes));
   const generated = model && model.id === inspection.entityId ? model : null;
   const crop = generated?.crops[0]?.file;
   const cropUrl = crop ? (sceneFileUrl?.(crop) ?? null) : null;

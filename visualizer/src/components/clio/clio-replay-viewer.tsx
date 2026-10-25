@@ -511,6 +511,7 @@ function ClioWorkspace({
             >
               <ObjectInspector
                 capture={capture}
+                revision={revision}
                 entityId={selectedId}
                 tUs={clock.tUs}
                 flagsRecorded={flagsRecorded}

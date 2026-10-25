@@ -5,7 +5,7 @@ import {
   SceneDocSchema,
   type Vec3,
 } from "@clio/protocol";
-import { rosFromW } from "@clio-viewer/capture/from-clio";
+import { buildCaptureFromClio, rosFromW } from "@clio-viewer/capture/from-clio";
 import { syntheticDerived } from "../__fixtures__/synthetic-derived";
 import {
   SYNTHETIC_TIMES,
@@ -19,6 +19,7 @@ import {
 } from "../__fixtures__/synthetic-scene";
 import { compiledObjectAt } from "../compiled-objects";
 import { rotate } from "../object-display";
+import { objectRest, restAt } from "../object-rest";
 import {
   formatModelSize,
   modelOriginAt,
@@ -184,6 +185,51 @@ describe("a model's placement", () => {
     );
     // Its bottom on the table: the plan's height above it, taken off.
     expect(modelOriginAt(COMPILED.tracks, cup, tUs)?.[2]).toBeCloseTo(0, 9);
+  });
+
+  test("out of reach, the origin stays with the object's rest pose", () => {
+    // The indicator bottle stands where the plan put it; give its compiled series a tracker's
+    // centimeter of jitter.
+    const indicator = model("indicator");
+    const tracks = {
+      ...COMPILED.tracks,
+      objects: COMPILED.tracks.objects.map((o) =>
+        o.id === "indicator"
+          ? {
+              ...o,
+              position: o.position.map((p, i) =>
+                p
+                  ? add(p, [0.01 * Math.sin(i), 0, 0.01 * Math.cos(i * 1.7)])
+                  : null,
+              ),
+            }
+          : o,
+      ),
+    };
+    const capture = buildCaptureFromClio(EPISODE);
+    const rest = objectRest(capture, 0, "indicator", tracks, COMPILED.shapes);
+    const first = rest?.plan.stretches[0];
+    if (!rest || !first)
+      throw new Error("the indicator rests before the carry");
+    const offset = rosFromW(indicator.placement.offset);
+    const placed = rosFromW(EPISODE.meta.objects[1].position);
+    expect(EPISODE.meta.objects[1].id).toBe("indicator");
+    // Still at the recorded placement for the whole stretch, while the series jitters.
+    for (let tUs = 100_000; tUs < first.endUs - 300_000; tUs += 100_000) {
+      expectClose(
+        modelOriginAt(tracks, indicator, tUs, rest.plan) ?? [],
+        add(placed, offset),
+      );
+    }
+    expect(modelOriginAt(tracks, indicator, 1_000_000)).not.toEqual(
+      add(placed, offset),
+    );
+    // While a hand is at it, the origin rides on the compiled position as is.
+    const reachedUs = (SYNTHETIC_TIMES.step2 - 200) * 1000;
+    expect(restAt(rest.plan, reachedUs)).toBeNull();
+    expect(modelOriginAt(tracks, indicator, reachedUs, rest.plan)).toEqual(
+      modelOriginAt(tracks, indicator, reachedUs),
+    );
   });
 
   test("no origin where the compiled position is null", () => {

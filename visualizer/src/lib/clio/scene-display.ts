@@ -4,14 +4,16 @@ import type { Quat, Vec3 } from "@clio-viewer/capture/model";
 import { compiledObjectAt } from "./compiled-objects";
 import type { InspectorRow } from "./lanes";
 import { rotate } from "./object-display";
+import { type RestPlan, restedPose } from "./object-rest";
 
 // What the scene and the inspector read from the room scan and the rebuilt scene
 // (docs/room-scene.md). Both are in the workspace frame W (y up). The room scan's GLB nodes carry
 // their own transforms in W, so the room layer draws them inside one group turned by W_TO_ROS_QUAT
 // (the rotation B of INTEGRATION.md, what rosFromW does to a vector) within the scene's ROS group.
-// A generated model rides on its object's compiled position: its placement (an offset from that
-// position and a yaw, in W) reaches ROS once here, and its GLB (meters, +y up, origin at the bottom
-// center) sits inside the same W_TO_ROS_QUAT turn. Pure: no DOM or three.js.
+// A generated model rides on its object's compiled position, held still with it while no hand could
+// reach it (object-rest.ts): its placement (an offset from that position and a yaw, in W) reaches
+// ROS once here, and its GLB (meters, +y up, origin at the bottom center) sits inside the same
+// W_TO_ROS_QUAT turn. Pure: no DOM or three.js.
 
 /**
  * W to ROS as a unit quaternion [x, y, z, w]: B = [[0,0,-1],[-1,0,0],[0,1,0]], so rotating a W
@@ -58,16 +60,21 @@ export function modelPointInRos(
 
 /**
  * The model origin in ROS at `tUs`: the object's compiled position at the grid frame in force,
- * plus the placement's offset. Null where the compiled position is null (nothing is drawn), as for
- * the object itself.
+ * where the object is drawn still out of reach when `rest` is its plan, plus the placement's
+ * offset. Null where the compiled position is null (nothing is drawn), as for the object itself.
  */
 export function modelOriginAt(
   tracks: TracksDoc,
   model: SceneModel,
   tUs: number,
+  rest: RestPlan | null = null,
 ): Vec3 | null {
   const at = compiledObjectAt(tracks, model.id, tUs);
-  return at ? add(at.position, modelPlacement(model).offset) : null;
+  if (!at) return null;
+  const position = rest
+    ? restedPose(rest, tUs, at.position, at.rotation).position
+    : at.position;
+  return add(position, modelPlacement(model).offset);
 }
 
 const BACKEND_LABEL: Record<SceneModel["backend"], string> = {

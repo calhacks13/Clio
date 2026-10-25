@@ -40,7 +40,9 @@ import {
   type ObjectDisplay,
   SCENE_COLORS,
   themed,
+  TRAIL_US,
 } from "@/lib/clio/object-display";
+import { objectRest, restedPose, restedTrail } from "@/lib/clio/object-rest";
 import type { ModelFile } from "@/lib/clio/scene-files";
 import type { LayerProps } from "../clio-scene";
 import { fillSegments } from "./head";
@@ -57,12 +59,17 @@ import { GeneratedModel } from "./model";
 // no position, nothing is drawn, never the raw pose the compile rejected. Its estimated extent
 // draws as a wireframe box centered on the position (the tracked point is inside the object, not
 // under it), and its measured shape (shapes.json) as points riding with the object, with the box
-// fitted around them. The trail still follows the raw estimates.
+// fitted around them. The trail follows the drawn position, compiled or raw.
 //
 // When the rebuilt scene made a model of the object (scene.json), the model rides on the compiled
 // position too, offset and turned by its placement, in the generated look (layers/model.tsx). The
 // dot, rings, trail, label, extent box and shape points stay: the model is drawn beside what was
 // measured, never instead of it. Without a compiled series there is no model.
+//
+// While no hand could be touching an object it is drawn still, at one recorded pose for that
+// stretch (object-rest.ts), whichever of the two series it follows: the group moves, so the dot,
+// rings, label, boxes, points and model all stay put, and the trail follows the drawn position, so
+// a resting object leaves none. While a hand could reach it, it is drawn exactly as tracked.
 
 const DOT_RADIUS = 0.012;
 const HELD_GAP = 0.012;
@@ -308,6 +315,7 @@ function ObjectTrack({
   entity,
   colorIndex,
   capture,
+  revision,
   clock,
   theme,
   selected,
@@ -347,6 +355,11 @@ function ObjectTrack({
     if (!compiled) return;
     return () => disposeCompiled(compiled);
   }, [compiled]);
+  // Where it rests out of reach, worked out once per records and compile, not per frame.
+  const rest = useMemo(
+    () => objectRest(capture, revision, entity.id, tracks, shapes),
+    [capture, revision, entity.id, tracks, shapes],
+  );
   const label = useRef<HTMLButtonElement | null>(null);
   // The label mounts after the canvas's first frame (Html renders through a portal), so it asks for
   // another frame to be shown or hidden.
@@ -364,23 +377,24 @@ function ObjectTrack({
 
   useFrame(() => {
     const tUs = clock.getTimeUs();
-    const raw = objectAt(capture, entity.id, tUs, {
-      trailPoints: TRAIL_POINTS,
-    });
+    // The trail comes from the drawn track below, so the raw one is not built.
     const at =
       tracks && compiledTrack
         ? fromCompiled(tracks, compiledTrack, tUs)
-        : fromRaw(raw);
+        : fromRaw(objectAt(capture, entity.id, tUs, { trailUs: 0 }));
     const { group } = track;
     group.visible = at !== null;
     track.trail.visible = group.visible;
     if (label.current)
       label.current.style.display = group.visible ? "" : "none";
     if (!at) return;
-    group.position.set(...at.position);
+    const shown = rest
+      ? restedPose(rest.plan, tUs, at.position, at.rotation)
+      : at;
+    group.position.set(...shown.position);
     // An unknown orientation never keeps a heading from another time.
-    track.heading.visible = at.rotation !== null;
-    if (at.rotation) track.heading.quaternion.set(...at.rotation);
+    track.heading.visible = shown.rotation !== null;
+    if (shown.rotation) track.heading.quaternion.set(...shown.rotation);
     track.heldSolid.visible = at.held === "recorded";
     track.heldInferred.visible = at.held === "inferred";
     const color = at.muted ? muted : identity;
@@ -395,7 +409,10 @@ function ObjectTrack({
     const attribute = track.trail.geometry.getAttribute(
       "position",
     ) as BufferAttribute;
-    const n = fillSegments(raw?.trail ?? [], attribute.array as Float32Array);
+    const lines = rest
+      ? restedTrail(rest.track, rest.plan, tUs, TRAIL_US, TRAIL_POINTS)
+      : [];
+    const n = fillSegments(lines, attribute.array as Float32Array);
     attribute.needsUpdate = true;
     track.trail.geometry.setDrawRange(0, n);
   });
