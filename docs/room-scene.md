@@ -107,7 +107,24 @@ Settings: `CLIO_SCENE_MODELS` (`triposr`, `primitive`, `command`), the TripoSR s
 
 ## Viewer
 
-`/clio/<id>` draws, under its own toggles: the room scan, shaded by kind (the global mesh as a
-quiet surface, furniture volumes by their label), and each object's model riding on its compiled
-track with the "Generated" look and the backend in the inspector. The measured dot, extent box and
-shape points stay available beside the model.
+`/clio/<id>` draws, under its own toggles: the room scan and each object's model riding on its
+compiled track with the "Generated" look and the backend in the inspector. The measured dot, extent
+box and shape points stay available beside the model.
+
+The room is drawn solid, so it reads as the room the learner stood in (`visualizer/DESIGN.md`,
+"Room scan"):
+- Walls and floor (the global mesh) are opaque and flat shaded, lit from above so each face reads
+  by its facing, with a fine matte grain made in the viewer (no image files): a small procedural
+  texture laid on in world space from the three axes, so the scan needs no texture coordinates.
+- Only faces turned into the room are drawn (the mesh is wound toward its middle). From outside
+  the room, the walls between the camera and the learner drop away, like a dollhouse's, and the
+  far walls and the floor stay; nothing of the room ever hides the hands, the objects or the
+  robots, which draw over it.
+- Furniture volumes (tables, couches, shelves) are solid blocks a step lighter than the walls,
+  with the same grain and a stronger edge line.
+- The grid and the workspace draw with the room and are tested against its depth, with 3 cm of
+  slack: a wall hides the grid lines beyond it, while the grid on a scanned table or floor, which
+  never matches calibration exactly, still shows.
+- Without a room scan (or with the Room toggle off), a detected raised plane (a level table, couch
+  or shelf top at least 10 cm above the floor) is drawn as a solid top in the same look; the
+  calibrated table top carries the grain too.

@@ -9,6 +9,7 @@ import {
 } from "@/components/clio/layers/gltf";
 import { disposeModel, loadModel } from "@/components/clio/layers/model";
 import { disposeRoomScan, loadRoomScan } from "@/components/clio/layers/room";
+import { SOLID_PROGRAM } from "@/components/clio/layers/solid";
 import { syntheticDerived } from "../__fixtures__/synthetic-derived";
 import { syntheticEpisode } from "../__fixtures__/synthetic-episode";
 import {
@@ -126,8 +127,11 @@ describe("the room scan", () => {
     // Written wound outward; every triangle now faces in.
     expect(facing(global.mesh, new THREE.Vector3(0, 1.3, 0))).toBe(1);
     expect(facing(table.mesh, new THREE.Vector3())).toBe(0);
-    expect((global.mesh.material as THREE.Material).side).toBe(THREE.FrontSide);
-    expect(global.mesh.geometry.getAttribute("normal")).toBeDefined();
+    // Front faces only: a wall seen from behind (between the camera and the
+    // room) is not drawn. Flat shaded, so each face reads by its facing.
+    const surface = global.mesh.material as THREE.MeshLambertMaterial;
+    expect(surface.side).toBe(THREE.FrontSide);
+    expect(surface.flatShading).toBe(true);
     disposeRoomScan(scan);
   });
 
@@ -140,16 +144,48 @@ describe("the room scan", () => {
       expect(part.edges.parent).toBe(part.mesh);
       expect(part.edges.geometry).toBeInstanceOf(THREE.EdgesGeometry);
     }
-    // Furniture is translucent and never hides what is behind it.
-    const volume = scan.parts[1].mesh.material as THREE.MeshLambertMaterial;
-    expect(volume.transparent).toBe(true);
-    expect(volume.depthWrite).toBe(false);
     disposeRoomScan(scan);
   });
 
-  test("disposing the scan releases every geometry and material, the edges' too", async () => {
+  test("the walls, floor and furniture are solid: opaque, grained and depth-biased", async () => {
     const scan = await loadRoomScan(buffer(ROOM.glb));
-    const all = resources(scan.root);
+    const [global, ...furniture] = scan.parts;
+    const surface = global.mesh.material as THREE.MeshLambertMaterial;
+    const volume = furniture[0].mesh.material as THREE.MeshLambertMaterial;
+    for (const part of furniture) expect(part.mesh.material).toBe(volume);
+    for (const material of [surface, volume]) {
+      expect(material.transparent).toBe(false);
+      expect(material.opacity).toBe(1);
+      expect(material.depthWrite).toBe(true);
+      expect(material.customProgramCacheKey()).toBe(SOLID_PROGRAM.biased);
+    }
+    expect(volume.flatShading).toBe(true);
+    // The grain reaches the shader as a uniform, the same texture for both.
+    const uniformsOf = (material: THREE.Material) => {
+      const shader = {
+        uniforms: {} as Record<string, THREE.IUniform>,
+        vertexShader: THREE.ShaderLib.lambert.vertexShader,
+        fragmentShader: THREE.ShaderLib.lambert.fragmentShader,
+      };
+      material.onBeforeCompile(
+        shader as unknown as THREE.WebGLProgramParametersWithUniforms,
+        undefined as unknown as THREE.WebGLRenderer,
+      );
+      return shader;
+    };
+    const a = uniformsOf(surface);
+    const b = uniformsOf(volume);
+    expect(a.uniforms.solidGrain.value).toBe(scan.grain);
+    expect(b.uniforms.solidGrain.value).toBe(scan.grain);
+    expect(a.vertexShader).toContain("vSolidWorld");
+    expect(a.vertexShader).toContain("gl_Position.z");
+    expect(a.fragmentShader).toContain("texture2D(solidGrain");
+    disposeRoomScan(scan);
+  });
+
+  test("disposing the scan releases every geometry, material and the grain, the edges' too", async () => {
+    const scan = await loadRoomScan(buffer(ROOM.glb));
+    const all = [...resources(scan.root), scan.grain];
     expect(all.filter((r) => r instanceof THREE.EdgesGeometry).length).toBe(5);
     const disposed = tracked(all);
     disposeRoomScan(scan);

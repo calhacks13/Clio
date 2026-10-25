@@ -5,6 +5,8 @@ import type { Fetch } from "@clio-viewer/api";
 import { buildCaptureFromClio, rosFromW } from "@clio-viewer/capture/from-clio";
 import type { Capture, Vec3 } from "@clio-viewer/capture/model";
 import type { SceneLayersProps } from "@/components/clio/clio-scene";
+import { BACKDROP_LAYER } from "@/components/clio/layers/gltf";
+import { SOLID_PROGRAM } from "@/components/clio/layers/solid";
 import { SceneFetchContext } from "@/components/clio/use-scene-file";
 import { syntheticDerived } from "../__fixtures__/synthetic-derived";
 import {
@@ -35,7 +37,9 @@ import { modelPlacement, modelPointInRos } from "../scene-display";
 // that their extent boxes and shape points are disposed with the rest. The
 // rebuilt case reads the room scan and the generated models through the
 // scene's fetch, as the viewer does through the proxy, and checks where they
-// land, that a hidden toggle reads nothing and that both are disposed.
+// land, that a hidden toggle reads nothing and that both are disposed. The
+// environment's raised planes are solid tops on the backdrop layer while no
+// room is drawn, and only outlines while one is.
 
 mock.module("@react-three/drei", () => ({
   Html: () => null,
@@ -169,6 +173,17 @@ function drawnResources(
   return [...found];
 }
 
+/** The solid materials' meshes in the slot's scene, by program: the raised tops and the table tops. */
+function solidMeshes(slot: SceneSlot, program: string): THREE.Mesh[] {
+  const found: THREE.Mesh[] = [];
+  slot.store?.getState().scene.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    const material = object.material as THREE.Material;
+    if (material.customProgramCacheKey() === program) found.push(object);
+  });
+  return found;
+}
+
 /** Collects garbage until `ref` is cleared, or gives up after a few rounds. */
 async function released(ref: WeakRef<object>): Promise<boolean> {
   for (let i = 0; i < 20 && ref.deref() !== undefined; i++) {
@@ -270,6 +285,42 @@ describe("the scene with a compiled episode", () => {
     await slot.show(capture, 3, { clock: at(afterUs) });
     expect(syringe().visible).toBe(true);
     await slot.clear();
+  });
+
+  test("raised planes are solid tops and, with the table top, draw on the backdrop layer", async () => {
+    const slot = new SceneSlot();
+    const environment = compiled.environment;
+    await slot.show(capture, 0, {
+      environment,
+      backdrop: true,
+      clock: at(4_000_000),
+    });
+    // The table and the shelf; not the floor or the wall.
+    const raised = solidMeshes(slot, SOLID_PROGRAM.biased);
+    expect(raised.length).toBe(2);
+    const tops = solidMeshes(slot, SOLID_PROGRAM.plain);
+    // The workspace top (hidden: the compiled table replaces it) and the compiled table's.
+    expect(tops.length).toBe(2);
+    for (const mesh of [...raised, ...tops]) {
+      expect(mesh.layers.mask).toBe(1 << BACKDROP_LAYER);
+      const material = mesh.material as THREE.Material;
+      expect(material.transparent).toBe(false);
+    }
+    for (const mesh of raised) expect(mesh.visible).toBe(true);
+    // Without a backdrop everything stays on the default layer.
+    await slot.show(capture, 1, {
+      environment,
+      backdrop: false,
+      clock: at(4_000_000),
+    });
+    for (const mesh of [...raised, ...tops]) expect(mesh.layers.mask).toBe(1);
+    const resources = drawnResources(slot);
+    const disposed = new Set<object>();
+    for (const r of resources) {
+      r.addEventListener("dispose", () => disposed.add(r));
+    }
+    await slot.clear();
+    expect(resources.filter((r) => !disposed.has(r))).toEqual([]);
   });
 
   test("the extent boxes and shape points are disposed with the rest", async () => {
@@ -410,6 +461,35 @@ describe("the scene with the room scan and generated models", () => {
         v.toArray() as Vec3,
       ),
     );
+    await slot.clear();
+  });
+
+  test("with the room drawn, raised planes keep only their outlines", async () => {
+    const slot = new SceneSlot();
+    const { fetch } = files();
+    await slot.show(
+      capture,
+      0,
+      {
+        environment: state.environment,
+        room: roomFile(state, true),
+        clock: at(11_000_000),
+      },
+      fetch,
+    );
+    await settle(slot, () => Boolean(find(slot, "room-scan")));
+    // The scan's own surfaces are solid too; the planes' tops are there but hidden.
+    const planeTops = solidMeshes(slot, SOLID_PROGRAM.biased).filter((mesh) => {
+      for (let p: THREE.Object3D | null = mesh; p; p = p.parent) {
+        if (p.name === "room-scan") return false;
+      }
+      return true;
+    });
+    expect(planeTops.length).toBe(2);
+    for (const mesh of planeTops) {
+      expect(mesh.visible).toBe(false);
+      expect(mesh.layers.mask).toBe(1 << BACKDROP_LAYER);
+    }
     await slot.clear();
   });
 
