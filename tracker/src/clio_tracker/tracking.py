@@ -29,6 +29,15 @@ frame) pick which track that is, and its box becomes the prompt's anchor. Betwee
   people at 0.77 to 0.86 cosine, the same person across views at 0.95 to 0.97 on bus.jpg).
 - **What is returned is steadied** (smooth.py): the box, outline and points are filtered in
   the scene's frame of reference, so the camera's motion is never smoothed or delayed.
+
+With a segmenter (segment.py) the outline is its mask instead of YOLOE's: cut out on jev's
+frame, and again whenever asked, then carried to every frame by a RegionFollower (follow.py) on
+the object's own pixels. While the follower is confident and its box agrees with ByteTrack's
+(IoU 0.3 or more), its box and mask are what is returned, also on a frame YOLOE missed while
+the target coasts; ByteTrack and the appearance still decide which object it is. Otherwise the
+outline is YOLOE's, as without a segmenter, and after two frames of doubt, or while there is no
+mask yet, the tracker asks for the object to be cut out again (`wants_refresh`, around
+`refresh_box`).
 """
 
 from __future__ import annotations
@@ -40,6 +49,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from .follow import Followed, FollowParams, RegionFollower
 from .geometry import Shape, iou, nms, touches_edge, valid_box
 from .motion import warp_box
 from .smooth import SmoothParams, Stabilizer
@@ -95,6 +105,9 @@ class TrackerParams:
     part_hold_s: float = 6.0  # a part with no parent in sight is carried this long after jev
     part_jump_iou: float = 0.7  # the parent's box against its last, carried by the camera
     smooth: SmoothParams = field(default_factory=SmoothParams)
+    follow: FollowParams = field(default_factory=FollowParams)
+    follow_agree_iou: float = 0.3  # the follower's box vs ByteTrack's: below this it is doubted
+    refresh_after_frames: int = 2  # frames of doubt before asking for a refresh
 
 
 @dataclass
@@ -107,7 +120,9 @@ class Sighting:
     confidence: float = 0.0
     state: str = "unknown"  # tracking | coasting | lost | absent | unknown
     track_id: int | None = None
-    measured: np.ndarray | None = None  # the tracked box, unsmoothed (predicted when coasting)
+    # The box unsmoothed: the follower's when it supplies the outline, else the tracked box
+    # (predicted when coasting).
+    measured: np.ndarray | None = None
     crop: MaskCrop | None = None  # its mask on this frame, when sighted
 
 
@@ -128,6 +143,7 @@ class ObjectTracker:
     object_id: str
     phrase: str | None
     params: TrackerParams = field(default_factory=TrackerParams)
+    follower: RegionFollower | None = None  # carries the segmenter's mask to every frame
 
     anchor: np.ndarray | None = None  # jev-confirmed appearance (unit 512-d)
     running: np.ndarray | None = None  # adapted between answers
@@ -161,6 +177,9 @@ class ObjectTracker:
         # Track ids that continued another's object (_continue_nearby): a late jev answer about
         # the old id means the new one.
         self._successor: dict[int, int] = {}
+        self._followed: Followed | None = None  # the follower's answer on the last frame
+        self._tracked: np.ndarray | None = None  # the target's tracked box on the last frame
+        self._follow_doubt = 0  # consecutive frames the follower could not stand for it
 
     # --- prompt ----------------------------------------------------------------------------
 
@@ -180,6 +199,21 @@ class ObjectTracker:
             self.anchor is None or self.target_id is None or self.doubt >= self.params.doubt_frames
         )
 
+    @property
+    def wants_refresh(self) -> bool:
+        """The segmenter should cut the object out again: while it is in sight, the follower has
+        no mask yet, or has been in doubt for `refresh_after_frames` frames."""
+        if self.follower is None or self._tracked is None:
+            return False
+        return not self.follower.active or self._follow_doubt >= self.params.refresh_after_frames
+
+    @property
+    def refresh_box(self) -> np.ndarray | None:
+        """The box to prompt the segmenter with: the follower's on the last frame, else the
+        tracked box."""
+        box = self._followed.box if self._followed is not None else self._tracked
+        return None if box is None else box.copy()
+
     # --- per frame -------------------------------------------------------------------------
 
     def step(
@@ -189,11 +223,16 @@ class ObjectTracker:
         t: float,
         vision: YoloeVision,
         camera: np.ndarray | None = None,
+        gray: np.ndarray | None = None,
     ) -> Sighting:
         """Follow the object on frame `seq`. `camera` is how the picture moved since the frame
-        before (a 2x3 transform, motion.py), when known."""
+        before (a 2x3 transform, motion.py), when known. `gray` is the frame in 8-bit gray for
+        the follower, which steps on every frame it is given."""
         self._tick_fps(t)
         self._moved(camera)
+        self._followed = self._tracked = None
+        if self.follower is not None and gray is not None:
+            self._followed = self.follower.step(seq, gray, camera, t)
         prompt = self.prompt
         if prompt is None:
             self._remember(seq, t)
@@ -283,8 +322,12 @@ class ObjectTracker:
             self.running = _unit((1 - p.learn_rate) * base + p.learn_rate * appearance)
         floor = 0.5 if self.target_by == "jev" else 0.35
         confidence = round(max(score, floor), 3)
-        crop = vision.mask(enc, int(anchor), box)
-        shown, shape = self._smooth.sighted(t, box, crop, size)
+        followed = self._follows(box)
+        if followed is None:
+            measured, crop = box, vision.mask(enc, int(anchor), box)
+        else:
+            measured, crop = followed.box, followed.crop
+        shown, shape = self._smooth.sighted(t, measured, crop, size)
         if shape is None:
             shape = vision.shape(enc, int(anchor), box)
         self._fresh = _Fresh(
@@ -297,7 +340,8 @@ class ObjectTracker:
             self._tracks.frame_id,
             self.target_by,
         )
-        return Sighting(True, shown, shape, confidence, "tracking", tid, box.copy(), crop)
+        self._tracked = box.copy()
+        return Sighting(True, shown, shape, confidence, "tracking", tid, measured.copy(), crop)
 
     def _coast(self, tid: int, t: float) -> Sighting:
         fresh = self._fresh
@@ -311,9 +355,27 @@ class ObjectTracker:
         box = np.asarray(lost.xyxy, dtype=np.float32) if lost is not None else fresh.box
         if _inside(box, fresh.size) < self.params.in_view:
             return Sighting(False, state="lost", track_id=tid)  # it left the view
-        shown, shape = self._smooth.coasting(t, box, fresh.size)
+        self._tracked = box.copy()
         confidence = round(fresh.confidence * (1 - 0.5 * age / window), 3)
+        followed = self._follows(None)
+        if followed is not None:  # YOLOE missed it, but its own pixels were followed
+            measured, crop = followed.box, followed.crop
+            shown, shape = self._smooth.sighted(t, measured, crop, fresh.size)
+            return Sighting(True, shown, shape, confidence, "tracking", tid, measured.copy(), crop)
+        shown, shape = self._smooth.coasting(t, box, fresh.size)
         return Sighting(True, shown, shape, confidence, "coasting", tid, box.copy())
+
+    def _follows(self, tracked: np.ndarray | None) -> Followed | None:
+        """The follower's answer on this frame when it may stand for the object: confident and,
+        when ByteTrack sighted the object at `tracked`, agreeing with that box. A frame on which
+        it answers but may not counts as one of doubt."""
+        f = self._followed
+        if f is None:
+            return None
+        agrees = tracked is None or float(iou(f.box, tracked)[0, 0]) >= self.params.follow_agree_iou
+        trusted = f.confident and agrees
+        self._follow_doubt = 0 if trusted else self._follow_doubt + 1
+        return f if trusted else None
 
     def _rescue(
         self,
@@ -441,9 +503,11 @@ class ObjectTracker:
         box: np.ndarray | None,
         appearance: np.ndarray | None,
         carry: np.ndarray | None = None,
+        mask: MaskCrop | None = None,
     ) -> str:
         """Apply jev's answer about frame `seq`: a box in frame pixels and its visual prompt.
         `carry` is how the camera moved from that frame to the newest one (motion.py), if known.
+        `mask` is the segmenter's cut of jev's box on that frame, for the follower.
 
         Returns what changed, for the log. Answers older than one already applied are ignored.
         """
@@ -455,6 +519,8 @@ class ObjectTracker:
             self.target_id = self.target_by = None
             self._pending = None
             return "absent"
+        if mask is not None and self.follower is not None:
+            self.follower.set_reference(seq, mask)
         self.absent = False
         self.confirmed_t = t
         self.doubt = 0
@@ -490,6 +556,17 @@ class ObjectTracker:
         self.target_id = self.target_by = None
         self._pending = (warp_box(box, carry), t)
         return "placed" if previous is None else f"placed away from track {previous}"
+
+    def refreshed(self, seq: int, crop: MaskCrop | None) -> None:
+        """The segmenter's answer to a refresh asked on frame `seq`: its mask of the object, or
+        None when it found nothing (a frame of doubt). The follower ignores a mask from before
+        the one it has."""
+        if self.follower is None:
+            return
+        if crop is None:
+            self._follow_doubt += 1
+        else:
+            self.follower.set_reference(seq, crop)
 
     def _match(self, tracks: dict[int, np.ndarray] | None, box: np.ndarray) -> int | None:
         """The track jev's box means: the one it overlaps most, if by `match_iou`, or one of the
