@@ -15,7 +15,7 @@ import { type AppBus, isRecordable } from '../events';
 import type { TrackedFrame } from '../hands/types';
 import {
   qTime,
-  quantizeDeep,
+  quantizeEvent,
   quantizeObject,
   quantizeObservation,
   toFrameRecord,
@@ -26,7 +26,8 @@ import { EpisodeUploader } from './uploader';
 // Records one episode at a time: every XR frame (frames channel), every recordable bus event
 // (events channel), every object-estimate change (objects channel) and every 2D object observation
 // (observations channel), all rebased onto the episode's start time. Batches are cut by size or
-// age and handed to an EpisodeUploader.
+// age and handed to an EpisodeUploader, and so are the media files attached to the episode (the
+// room scan's GLBs, the keyframes' JPEGs), in the order they come.
 
 export interface RecorderDeps {
   bus: AppBus;
@@ -103,6 +104,14 @@ export class EpisodeRecorder {
     if (this.frames.length >= maxFrames || frame.t - this.lastFlushT >= maxAge) this.flush(frame.t);
   }
 
+  /**
+   * Uploads a file to the episode's media/<name>, after what was handed over before it. Nothing
+   * happens while not recording. The event that names the file is recorded on the bus as usual.
+   */
+  attachMedia(name: string, body: Blob): void {
+    this.uploader?.media(name, body);
+  }
+
   async stop(outcome: EpisodeOutcome, totals: EpisodeTotals, t: number): Promise<void> {
     const uploader = this.uploader;
     if (!uploader) return;
@@ -122,8 +131,7 @@ export class EpisodeRecorder {
   }
 
   private recordEvent(type: EpisodeEvent['type'], payload: { t: number }): void {
-    const candidate = { ...quantizeDeep(payload), type, t: qTime(payload.t - this.startT) };
-    const parsed = EpisodeEventSchema.safeParse(candidate);
+    const parsed = EpisodeEventSchema.safeParse(quantizeEvent(type, payload, this.startT));
     if (parsed.success) this.events.push(parsed.data);
     else this.deps.onDrop?.(`event ${type}: ${parsed.error.issues[0]?.message ?? 'invalid'}`);
   }

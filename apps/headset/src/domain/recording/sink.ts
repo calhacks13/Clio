@@ -11,6 +11,8 @@ export interface EpisodeSink {
   /** Creates the episode and returns the id the server assigned. */
   create(meta: EpisodeCreate): Promise<string>;
   append(episodeId: string, batch: EpisodeBatchInput): Promise<void>;
+  /** Stores a file in the episode's media/ (a room scan GLB, a keyframe JPEG). */
+  putMedia(episodeId: string, name: string, body: Blob): Promise<void>;
   finish(episodeId: string, finish: EpisodeFinish): Promise<void>;
 }
 
@@ -29,8 +31,13 @@ export interface StoredEpisode {
   id: string;
   meta: EpisodeCreate;
   batches: EpisodeBatch[];
+  /** media/<name>, in the order they arrived. */
+  media: Map<string, Blob>;
   finish: EpisodeFinish | null;
 }
+
+/** The server's rule for media names (apps/server/src/ids.ts): no slashes, dots first or "..". */
+const SAFE_MEDIA_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 /** In-memory sink for tests, offline runs and synthetic episodes. Validates like the server. */
 export class MemoryEpisodeSink implements EpisodeSink {
@@ -39,12 +46,17 @@ export class MemoryEpisodeSink implements EpisodeSink {
 
   async create(meta: EpisodeCreate): Promise<string> {
     const id = `mem-${++this.counter}`;
-    this.episodes.set(id, { id, meta, batches: [], finish: null });
+    this.episodes.set(id, { id, meta, batches: [], media: new Map(), finish: null });
     return id;
   }
 
   async append(episodeId: string, batch: EpisodeBatchInput): Promise<void> {
     this.get(episodeId).batches.push(EpisodeBatchSchema.parse(batch));
+  }
+
+  async putMedia(episodeId: string, name: string, body: Blob): Promise<void> {
+    if (!SAFE_MEDIA_NAME.test(name)) throw new SinkError(`invalid media name ${name}`, false);
+    this.get(episodeId).media.set(name, body);
   }
 
   async finish(episodeId: string, finish: EpisodeFinish): Promise<void> {
