@@ -52,6 +52,13 @@ export interface AppConfig {
   lookBoxes: boolean;
   /** A test: frame each live object's box with corner brackets instead of glowing its outline. */
   boxes: boolean;
+  /**
+   * Record the Quest room scan and camera keyframes for the object models (docs/room-scene.md).
+   * Off unless ?scan=1.
+   */
+  scan: boolean;
+  /** The coach's widgets beside the step card (docs/widgets.md). 0: no board, no widget tools. */
+  widgets: boolean;
 }
 
 const DEFAULTS: AppConfig = {
@@ -76,6 +83,8 @@ const DEFAULTS: AppConfig = {
   anchors: true,
   lookBoxes: true,
   boxes: false,
+  scan: false,
+  widgets: true,
 };
 
 function oneOf<T extends string>(value: string | null, allowed: readonly T[], fallback: T): T {
@@ -125,5 +134,7 @@ export function readConfig(search: string): AppConfig {
     anchors: flag(q.get('anchors'), DEFAULTS.anchors),
     lookBoxes: flag(q.get('lookBoxes'), DEFAULTS.lookBoxes),
     boxes: flag(q.get('boxes'), DEFAULTS.boxes),
+    scan: flag(q.get('scan'), DEFAULTS.scan),
+    widgets: flag(q.get('widgets'), DEFAULTS.widgets),
   };
 }

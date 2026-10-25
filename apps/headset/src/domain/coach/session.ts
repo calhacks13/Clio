@@ -246,6 +246,7 @@ export class CoachSession {
   /** Call once per frame: sends held narrations, a fresh instruction and camera frames when due. */
   tick(t: number): void {
     this.updateVoice(t);
+    this.narrator.tick(t);
     this.nudgeToStart(t);
     const overdue = this.state === 'ready' && t - this.heldSince >= MAX_HOLD_MS;
     if (this.held.length > 0 && (this.mayFlush(t) || overdue)) this.flush();

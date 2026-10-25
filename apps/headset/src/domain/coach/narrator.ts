@@ -142,6 +142,8 @@ export class Narrator {
         const urgent = this.appDone;
         this.pendingDone = null;
         this.appDone = false;
+        // Entering a step, even the same one again, restarts the runner's stuck count.
+        this.heldStuck = null;
         // The coach moved the focus itself: the tool result carries the briefing.
         if (this.briefingCalls.size > 0) return;
         const plan = this.view.plan();
@@ -195,6 +197,7 @@ export class Narrator {
       b.on('procedure.completed', ({ t, durationMs }) => {
         const urgent = this.appDone;
         this.pendingDone = null;
+        this.heldStuck = null;
         this.appDone = false;
         this.say(
           t,
