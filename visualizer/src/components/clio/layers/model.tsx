@@ -22,7 +22,8 @@ import { useSceneFile } from "../use-scene-file";
 import { disposeTree, meshesOf, parseGlb, W_TO_ROS } from "./gltf";
 
 // An object's generated model (scene/model-<id>.glb: meters, +y up, origin at the bottom center),
-// drawn inside the object's group so it rides on the compiled position and hides with it. Its
+// drawn inside the object's group so it rides on the compiled position, stays still with the object
+// while no hand could reach it (object-rest.ts) and hides with it. Its
 // placement (an offset and a yaw, in W) reaches ROS once in scene-display.ts; the GLB's own axes
 // are W's, so it sits in a group turned from W to ROS.
 //
