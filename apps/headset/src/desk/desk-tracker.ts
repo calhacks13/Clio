@@ -11,6 +11,7 @@ import type { Clock } from '../core/clock';
 import { createLogger } from '../core/log';
 import type { AppBus, HighlightStyle } from '../domain/events';
 import type { Accent } from '../domain/overlay/accents';
+import type { FocusAnchor, FocusAnchors } from '../domain/session/action-focus';
 import { isShown, LiveTracking } from '../domain/session/live-tracking';
 import type { ObjectRegistry } from '../domain/world/object-registry';
 import { anchorPoint, DESK_WORKSPACE, standInPosition } from './stand-in';
@@ -18,21 +19,19 @@ import { anchorPoint, DESK_WORKSPACE, standInPosition } from './stand-in';
 // The lesson's live tracking on the desk: the headset's app/live-tracker.ts without the room. The
 // same LiveTracking (domain/session) says what the tracker follows and which objects are lit, the
 // same TrackerClient speaks /track in objects mode (tracker/TRACK.md), and the same FrameStream
-// sends the webcam's frames as fast as the tracker answers them. What comes back is kept per object
-// for the picture (the outline, box and tag drawn over the video) and told to the registry at its
-// stand-in position (stand-in.ts) about five times a second, so the lesson knows what is found; a
-// loss is a registry.lose(), as on the headset. Frames go out only while the page is shown and
-// something is followed. Nothing here reaches the coach, and nothing is recorded.
+// sends the webcam's frames as fast as the tracker answers them. Robotics-ER's boxes from the
+// action focus go to the tracker as anchors, which outrank jev's. What comes back is kept per
+// object for the picture (the outline, box and tag drawn over the video) and told to the registry
+// at its stand-in position (stand-in.ts) about five times a second, so the lesson knows what is
+// found; a loss is a registry.lose(), as on the headset. Frames go out only while the page is
+// shown and something is followed. Nothing here reaches the coach, and nothing is recorded.
 
 const log = createLogger('desk-tracker');
 /** The registry hears about each object at most this often (ms), like LiveObjects. */
 const OBSERVE_EVERY_MS = 200;
 
-/** One followed object's newest answer, with who last placed it. */
-export interface DeskDetection extends TrackerDetection {
-  /** "jev", "er", or null before either placed it (or from a tracker that doesn't say). */
-  source: string | null;
-}
+/** One followed object's newest answer, with who last placed it (`source`: jev, er or null). */
+export type DeskDetection = TrackerDetection;
 
 /** What the desk draws for one followed object. */
 export interface DeskObject {
@@ -94,13 +93,7 @@ export interface DeskTrackerDeps {
   size?: readonly [number, number];
 }
 
-/** Who placed a detection: the tracker's `source` field (TRACK.md), once its client keeps it. */
-export function sourceOf(detection: object): string | null {
-  const source = (detection as { source?: unknown }).source;
-  return typeof source === 'string' ? source : null;
-}
-
-export class DeskTracker {
+export class DeskTracker implements FocusAnchors {
   readonly tracking: LiveTracking;
   private readonly client: TrackerClient;
   private readonly stream: FrameStream;
@@ -234,6 +227,16 @@ export class DeskTracker {
     };
   }
 
+  /**
+   * Robotics-ER's box for an object (the action focus): the tracker places the object from it and
+   * ignores jev for a while when jev disagrees. The set goes first when it just changed (an action
+   * item the lesson declared a moment ago), so the tracker knows the id.
+   */
+  anchor({ id, box, t, query }: FocusAnchor): void {
+    this.follow();
+    this.client.send({ type: 'anchor', id, t, box, source: 'er', ...(query ? { query } : {}) });
+  }
+
   /** Tell the tracker what to follow whenever that changes, and again on a new connection. */
   private follow(): void {
     const objects: TrackedQuery[] = this.tracking.objects.map(({ id, phrase, query }) => ({
@@ -251,7 +254,7 @@ export class DeskTracker {
     this.last = { size: this.sizes.get(message.seq) ?? null, trackMs: message.ms?.total ?? null };
     for (const d of message.detections) {
       if (!this.tracking.get(d.id)) continue;
-      this.latest.set(d.id, { ...d, source: sourceOf(d) });
+      this.latest.set(d.id, d);
       if (d.found) {
         const point = anchorPoint(d);
         const last = this.observedT.get(d.id) ?? Number.NEGATIVE_INFINITY;

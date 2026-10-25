@@ -29,13 +29,16 @@ export interface ErBox {
 /**
  * The boxes one answer draws: every object it found with a box, and the action item, marked; an
  * action item on a requested object marks that object's box rather than drawing a second one.
+ * `actionId` is the lesson object lit for the action (focus.answered), which for an item the plan
+ * lacked is the one the lesson declared from ER's words.
  */
 export function erBoxes(
   detections: readonly FocusDetection[],
   action: FocusAction | null,
   label: (id: string) => string,
+  actionId: string | null = action?.id ?? null,
 ): ErBox[] {
-  const actionId = action?.found ? action.id : null;
+  const marked = action?.found ? actionId : null;
   const boxes: ErBox[] = [];
   for (const d of detections) {
     if (!d.found || !d.box) continue;
@@ -45,12 +48,12 @@ export function erBoxes(
       box: d.box,
       point: d.point,
       confidence: d.confidence,
-      action: actionId !== null && d.id === actionId,
+      action: marked !== null && d.id === marked,
     });
   }
   if (action?.found && action.box && !boxes.some((b) => b.action)) {
     boxes.push({
-      id: action.id,
+      id: actionId,
       label: action.label,
       box: action.box,
       point: action.point,

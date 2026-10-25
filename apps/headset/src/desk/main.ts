@@ -8,7 +8,7 @@ import { readDeskConfig } from './config';
 import { DeskCamera } from './desk-camera';
 import { type CoachChoice, DeskLab } from './desk-lab';
 import { DeskSpeaker } from './desk-speaker';
-import { ER_FADE_MS } from './er-boxes';
+import { ER_FADE_MS, erBoxes } from './er-boxes';
 import { ToolLog, Transcript } from './logs';
 import { DeskOverlay, type ErAnswerView } from './overlay';
 import {
@@ -35,6 +35,8 @@ const PREFS_KEY = 'clio.desk';
 const TICK_MS = 33;
 /** The tracker's numbers are redrawn this often (ms). */
 const STATS_MS = 250;
+/** Robotics-ER answers kept in the panel. */
+const ER_LOG_MAX = 50;
 
 interface Prefs {
   camera: string;
@@ -74,10 +76,10 @@ async function boot(el: HTMLElement): Promise<void> {
   // ---- what the panel shows -------------------------------------------------------------------
   const transcript = new Transcript();
   const tools = new ToolLog();
-  const er: { answers: ErAnswerView[]; log: ErLogEntry[]; wired: boolean } = {
+  const er: { answers: ErAnswerView[]; log: ErLogEntry[]; actionId: string | null } = {
     answers: [],
     log: [],
-    wired: false,
+    actionId: null,
   };
   let phase: LessonPhase = 'idle';
   let detail: string | null = null;
@@ -133,6 +135,43 @@ async function boot(el: HTMLElement): Promise<void> {
       locate = { t, source, found: [], missing: [], latencyMs };
     }
     (found ? locate.found : locate.missing).push(objectId);
+  });
+  bus.on(
+    'focus.answered',
+    ({ t, frameT, stepId, detections, action, actionId, model, latencyMs }) => {
+      const label = (id: string) => lab.registry.spec(id)?.label ?? id;
+      er.answers.push({
+        t: performance.now(),
+        boxes: erBoxes(detections, action, label, actionId),
+      });
+      er.actionId = actionId;
+      er.log.push({
+        t,
+        stepId,
+        model,
+        latencyMs,
+        frameAgeMs: Math.max(0, t - frameT),
+        action: action && {
+          label: action.label,
+          id: actionId,
+          declared: action.id === null && actionId !== null,
+          found: action.found,
+        },
+        objects: detections.map((d) => ({
+          id: d.id,
+          label: label(d.id),
+          found: d.found,
+          confidence: d.confidence,
+          description: d.description,
+        })),
+      });
+      if (er.log.length > ER_LOG_MAX) er.log.shift();
+      dirty.add('er');
+      dirty.add('lesson');
+    },
+  );
+  bus.on('step.entered', () => {
+    er.actionId = null;
   });
   bus.on('coach.status', ({ state, detail: d }) => {
     coachState = d ? `${state} (${d})` : state;
@@ -272,7 +311,7 @@ async function boot(el: HTMLElement): Promise<void> {
     if (dirty.has('lesson')) render('#lesson', lessonPanel());
     if (dirty.has('transcript')) render('#transcript', transcriptHtml(transcript.lines), true);
     if (dirty.has('tools')) render('#tools', toolsHtml(tools.entries, tools.counts()), true);
-    if (dirty.has('er')) render('#er', erHtml(er.log, er.wired), true);
+    if (dirty.has('er')) render('#er', erHtml(er.log, lab.focus !== null), true);
     if (now - statsT >= STATS_MS) {
       statsT = now;
       render('#tracker', statsHtml(lab.tracker.stats(), locate));
@@ -289,6 +328,7 @@ async function boot(el: HTMLElement): Promise<void> {
       detail,
       objects: lab.tracker.objects(),
       watch,
+      next: er.actionId,
     });
   }
 

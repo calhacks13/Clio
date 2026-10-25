@@ -45,11 +45,13 @@ export interface LessonPanel {
   detail: string | null;
   objects: readonly DeskObject[];
   watch: WatchLine | null;
+  /** The action focus's item for the step (Robotics-ER's next thing to touch), if any. */
+  next?: string | null;
 }
 
 const STATUS_MARK = { done: '✓', skipped: '–', todo: '○' } as const;
 
-export function lessonHtml({ plan, phase, detail, objects, watch }: LessonPanel): string {
+export function lessonHtml({ plan, phase, detail, objects, watch, next }: LessonPanel): string {
   const head = `<p class="phase phase-${esc(phase)}">${esc(phase)}${detail ? ` · ${esc(detail)}` : ''}</p>`;
   if (!plan) {
     return `${head}<p class="muted">No lesson. Say what you want to learn, type it below, or start one from a goal.</p>`;
@@ -71,7 +73,7 @@ export function lessonHtml({ plan, phase, detail, objects, watch }: LessonPanel)
     ? lit
         .map(
           (o) =>
-            `<span class="chip"><i style="background:${hex(o.accent.color)}"></i>${esc(o.label)}${o.style ? ` <span class="muted">(${esc(o.style)})</span>` : ''}</span>`,
+            `<span class="chip"><i style="background:${hex(o.accent.color)}"></i>${esc(o.label)}${o.style ? ` <span class="muted">(${esc(o.style)})</span>` : ''}${o.id === next ? ' <span class="muted">(ER: next)</span>' : ''}</span>`,
         )
         .join('')
     : '<span class="muted">nothing lit</span>';
@@ -133,8 +135,13 @@ export interface ErLogEntry {
   stepId: string | null;
   model: string;
   latencyMs: number;
-  /** The action item's label and whether it is a declared object. */
-  action: { label: string; id: string | null; found: boolean } | null;
+  /**
+   * The action item: its label, the lesson object lit for it (null when none), whether the lesson
+   * declared it just now from ER's words, and whether ER saw it.
+   */
+  action: { label: string; id: string | null; declared: boolean; found: boolean } | null;
+  /** How old the frame ER judged was when its answer arrived (ms). */
+  frameAgeMs: number;
   /** Each requested object: found, and ER's words for it. */
   objects: {
     id: string;
@@ -145,16 +152,14 @@ export interface ErLogEntry {
   }[];
 }
 
-export function erHtml(entries: readonly ErLogEntry[], wired: boolean): string {
-  if (!wired) {
-    return '<p class="muted">The action focus is not wired into this build yet.</p>';
-  }
+export function erHtml(entries: readonly ErLogEntry[], on: boolean): string {
+  if (!on) return '<p class="muted">The action focus is off (?focus=0).</p>';
   if (entries.length === 0)
     return '<p class="muted">No looks yet: they start when a step is focused.</p>';
   return entries
     .map((e) => {
       const action = e.action
-        ? `next: <b>${esc(e.action.label)}</b>${e.action.id ? '' : ' <span class="warn">(not in the plan)</span>'}${e.action.found ? '' : ' <span class="muted">(not seen)</span>'}`
+        ? `next: <b>${esc(e.action.label)}</b>${e.action.declared ? ' <span class="warn">(declared now)</span>' : e.action.id ? '' : ' <span class="warn">(not in the plan)</span>'}${e.action.found ? '' : ' <span class="muted">(not seen)</span>'}`
         : '<span class="muted">nothing to touch</span>';
       const objects = e.objects
         .map(
@@ -162,7 +167,7 @@ export function erHtml(entries: readonly ErLogEntry[], wired: boolean): string {
             `<li class="${o.found ? '' : 'muted'}"><b>${esc(o.label)}</b> ${o.found ? o.confidence.toFixed(2) : 'not found'}${o.description ? ` · ${esc(o.description)}` : ''}</li>`,
         )
         .join('');
-      return `<div class="er"><div><span class="when">${clockText(e.t)}</span> ${ms(e.latencyMs)} · ${esc(e.model)}${e.stepId ? ` · ${esc(e.stepId)}` : ''}</div><div>${action}</div><ul>${objects}</ul></div>`;
+      return `<div class="er"><div><span class="when">${clockText(e.t)}</span> ER ${ms(e.latencyMs)} · frame ${ms(e.frameAgeMs)} old · ${esc(e.model)}${e.stepId ? ` · ${esc(e.stepId)}` : ''}</div><div>${action}</div><ul>${objects}</ul></div>`;
     })
     .join('');
 }

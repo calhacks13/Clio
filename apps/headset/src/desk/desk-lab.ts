@@ -3,7 +3,12 @@ import { MicCapture } from '../adapters/audio/mic-capture';
 import type { FrameImage } from '../adapters/camera/frame-stream';
 import { GeminiLiveAgent } from '../adapters/gemini/gemini-live-agent';
 import type { ApiClient } from '../adapters/net/api-client';
-import { RemoteLocator, RemotePlanner, RemoteSceneAsker } from '../adapters/net/remote';
+import {
+  RemoteFocusFinder,
+  RemoteLocator,
+  RemotePlanner,
+  RemoteSceneAsker,
+} from '../adapters/net/remote';
 import { RemoteStepChecker, RemoteTemplates } from '../adapters/net/remote-plan';
 import type { TrackerSocket } from '../adapters/net/tracker-client';
 import { ScriptedAgent } from '../adapters/scripted/scripted-agent';
@@ -18,6 +23,7 @@ import { DemoLibrary } from '../domain/demo/demo-library';
 import type { Demonstration } from '../domain/demo/types';
 import type { AppEvents } from '../domain/events';
 import type { PlanView } from '../domain/plan/recital';
+import { ActionFocus, type FocusFrames } from '../domain/session/action-focus';
 import { CloserLook } from '../domain/session/closer-look';
 import {
   type EpisodeContext,
@@ -39,7 +45,8 @@ import { DESK_WORKSPACE } from './stand-in';
 // and CoachToolbox, the CloserLook, LiveTracking. So are the adapters: GeminiLiveAgent over the
 // relay with the server's live model (the scripted coach without a key), the mic capture and the
 // speaker, the server's planner, finder, step checker and scene asker, and the tracker's /track in
-// objects mode. What has no room to live in is stood in for or left out:
+// objects mode, and the action focus (Robotics-ER 2 every few seconds while a step is focused, its
+// boxes anchoring the tracker). What has no room to live in is stood in for or left out:
 //   - no head pose, depth or hands: objects the finder or the tracker sees land in the registry at
 //     a stand-in position (stand-in.ts), so the lesson knows they are found; hand checks never pass;
 //   - a fixed workspace in front of the camera, never calibrated;
@@ -54,7 +61,8 @@ const PLAN_FRAME_MS = 450;
 /** The laptop camera in every role the lesson gives a camera (desk-camera.ts). */
 export type DeskLabCamera = CameraFrameSource &
   CoachFrameSource &
-  PlanImageSource & { frame(): FrameImage | null };
+  PlanImageSource &
+  FocusFrames & { frame(): FrameImage | null };
 
 export type CoachChoice = 'gemini' | 'scripted';
 
@@ -96,6 +104,8 @@ export class DeskLab {
   readonly tracker: DeskTracker;
   readonly grounder: DeskGrounder;
   private readonly closerLook: CloserLook;
+  /** Robotics-ER's action focus; null with ?focus=0. */
+  readonly focus: ActionFocus | null;
   /** In front of the camera, never calibrated: the planner's default table. */
   private readonly workspace = new Workspace({ p: [0, 0.75, -0.5], q: [0, 0, 0, 1] }, 'none');
   private coach: CoachSession | null = null;
@@ -163,6 +173,21 @@ export class DeskLab {
       clock,
       placer: this.grounder,
     });
+    // Looks only while the lab runs: a stopped lab sends Gemini nothing.
+    this.focus = o.config.focus
+      ? new ActionFocus({
+          bus,
+          clock,
+          finder: new RemoteFocusFinder(o.api),
+          frames: o.camera,
+          anchors: this.tracker,
+          tracking: this.tracker.tracking,
+          view: this.lesson.view(),
+          lesson: this.lesson,
+          enabled: () => this.on,
+        })
+      : null;
+    this.focus?.attach();
   }
 
   /** Started: the coach is on and the tracker connected (or retrying). */
@@ -235,6 +260,7 @@ export class DeskLab {
       objects: { position: (id) => this.registry.position(id) },
     });
     this.coach?.tick(t);
+    this.focus?.tick(t)?.catch((err: unknown) => log.warn(`action focus: ${String(err)}`));
   }
 
   /**
