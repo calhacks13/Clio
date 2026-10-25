@@ -4,7 +4,8 @@ How to set up and try branch `feat/room-scene`. The design is in [room-scene.md]
 
 What it adds:
 - **Room**: each recording keeps the Quest's own room scan (Space Setup): the room's mesh and its
-  labelled furniture. The viewer draws it shaded by kind, near walls cut away.
+  labelled furniture. The viewer draws it solid (opaque, lit, with a fine grain), near walls cut
+  away so the learner stays in view.
 - **Object models**: after a lesson, each object the lesson declared gets a 3D model made by
   TripoSR from a camera still of it, sized to what was measured and riding on its track. The
   viewer draws them see-through, labelled "Generated".

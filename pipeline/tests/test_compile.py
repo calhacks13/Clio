@@ -104,7 +104,7 @@ def test_the_manifest_records_inputs_artifacts_and_the_compiler(featured_episode
         "ep-20261024-031502-feat",
         15,
     )
-    assert manifest["compiler"] == {"name": "clio_pipeline", "version": "0.8.0"}
+    assert manifest["compiler"] == {"name": "clio_pipeline", "version": "0.9.0"}
     assert manifest["compiledAt"].endswith("Z") and len(manifest["compiledAt"]) == 24
     assert [i["name"] for i in manifest["inputs"]] == [
         "meta.json",

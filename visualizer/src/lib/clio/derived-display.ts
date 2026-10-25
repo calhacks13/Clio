@@ -203,17 +203,53 @@ export interface BodyPose {
   rotation: [number, number, number, number];
   /** Joint values in `doc.joints` order, rad. */
   joints: readonly number[];
+  /** How big to draw the G1: the learner's size (1 / scale), or its own before profile 2. */
+  size: number;
 }
 
-/** The G1 of `doc` at `tUs`, or null where it has no pose or no grid frame. */
+/**
+ * The G1 of `doc` at `tUs`, or null where it has no pose or no grid frame. Between two grid frames
+ * that both have a pose it is blended (positions and joints linearly, the pelvis turn along the
+ * short arc), so a 30 fps pose plays back smoothly at any display rate.
+ */
 export function bodyAt(doc: BodyDoc, tUs: number): BodyPose | null {
   const i = gridFrameAt(doc.t, doc.fps, tUs);
   const root = i < 0 ? null : doc.root[i];
   const joints = i < 0 ? null : doc.q[i];
   if (!root || !joints) return null;
+  const size = doc.profile.version >= 2 ? 1 / doc.scale : 1;
+  const nextRoot = doc.root[i + 1];
+  const nextJoints = doc.q[i + 1];
+  const span = i + 1 < doc.t.length ? (doc.t[i + 1] - doc.t[i]) * 1000 : 0;
+  const k = span > 0 ? (tUs - doc.t[i] * 1000) / span : 0;
+  if (!nextRoot || !nextJoints || !(k > 0) || span > 2e6 / doc.fps) {
+    return {
+      position: rosFromW(root),
+      rotation: [root[3], root[4], root[5], root[6]],
+      joints,
+      size,
+    };
+  }
+  const t = Math.min(k, 1);
+  const mix = (a: number, b: number) => a + (b - a) * t;
+  const sign =
+    root[3] * nextRoot[3] +
+      root[4] * nextRoot[4] +
+      root[5] * nextRoot[5] +
+      root[6] * nextRoot[6] <
+    0
+      ? -1
+      : 1;
+  const q = [3, 4, 5, 6].map((c) => mix(root[c], sign * nextRoot[c]));
+  const norm = Math.hypot(...q) || 1;
   return {
-    position: rosFromW(root),
-    rotation: [root[3], root[4], root[5], root[6]],
-    joints,
+    position: rosFromW([
+      mix(root[0], nextRoot[0]),
+      mix(root[1], nextRoot[1]),
+      mix(root[2], nextRoot[2]),
+    ]),
+    rotation: [q[0] / norm, q[1] / norm, q[2] / norm, q[3] / norm],
+    joints: joints.map((value, j) => mix(value, nextJoints[j] ?? value)),
+    size,
   };
 }

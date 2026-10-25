@@ -110,9 +110,10 @@ export function windToward(geometry: BufferGeometry, center: Vector3): number {
 }
 
 /**
- * The layer the room is drawn on. ClioScene draws it first and then everything else over it with
- * a cleared depth buffer (BackdropPass in clio-scene.tsx), so context never hides the table, the
- * hands or the objects, whatever the room scan's surfaces are in front of.
+ * The layer context is drawn on: the room scan (and, without one, the solid detected tops), with
+ * the grid and the environment's context tested against it. ClioScene draws it first and then
+ * everything measured over it with a cleared depth buffer (BackdropPass in clio-scene.tsx), so
+ * context never hides the hands, the objects or the robots, whatever the room is in front of.
  */
 export const BACKDROP_LAYER = 1;
 
