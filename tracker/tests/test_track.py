@@ -4,12 +4,16 @@ WebSocket itself."""
 from __future__ import annotations
 
 import json
+import logging
 import socket
 import struct
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
+import cv2
+import numpy as np
 import pytest
 import uvicorn
 from fastapi.testclient import TestClient
@@ -17,6 +21,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from clio_tracker.finder import Finder
 from clio_tracker.identify import JevIdentifier, Query
+from clio_tracker.refresh import Refresher
 from clio_tracker.server import create_app
 from clio_tracker.session import Sessions, SessionSettings, TrackerSession
 from clio_tracker.track import (
@@ -31,7 +36,7 @@ from clio_tracker.track import (
     parse_command,
     parse_frame,
 )
-from clio_tracker.tracking import Sighting
+from clio_tracker.tracking import Sighting, TrackerParams
 from conftest import (
     Clock,
     FakeIdentifier,
@@ -428,6 +433,226 @@ def test_switching_modes_either_way_drops_what_the_other_followed(lesson):
     (jug,) = play(lesson, 20)["detections"]
     assert jug["id"] == "jug" and jug["state"] == "unknown"
     assert len(lesson.made) == 1 and len(lesson.jev.calls) == 2  # the connection's one session
+
+
+# --- the segmenter -----------------------------------------------------------------------------
+
+# Smooth noise, wider than a frame: what the follower's and the camera's flow need to find (the
+# flat gray of scene_jpeg has nothing to follow).
+NOISE = cv2.resize(
+    np.random.default_rng(7).integers(0, 256, (92, 147)).astype(np.uint8),
+    (1176, 736),
+    interpolation=cv2.INTER_CUBIC,
+)
+JEV_CUP = (90.0, 290.0, 230.0, 470.0)  # jev's box around the cup, a little loose: the fake mask
+JEV_OTHER = (590.0, 270.0, 730.0, 450.0)
+
+
+def textured(shift: int = 0) -> np.ndarray:
+    """A 960 x 720 RGB frame of the noise, its picture moved `shift` (0 to 200) pixels right."""
+    gray = NOISE[:720, 200 - shift : 1160 - shift]
+    return np.ascontiguousarray(np.repeat(gray[..., None], 3, axis=2))
+
+
+def textured_frame(seq: int, shift: int = 0) -> bytes:
+    header = json.dumps(
+        {"type": "frame", "seq": seq, "t": 1000.0 + 66 * seq, "width": 960, "height": 720}
+    ).encode()
+    ok, jpeg = cv2.imencode(".jpg", cv2.cvtColor(textured(shift), cv2.COLOR_RGB2BGR))
+    assert ok
+    return struct.pack(">I", len(header)) + header + jpeg.tobytes()
+
+
+def moved(box, dx: float) -> tuple[float, float, float, float]:
+    return (box[0] + dx, box[1], box[2] + dx, box[3])
+
+
+def bounds(outline: list[list[float]]) -> list[float]:
+    xs, ys = zip(*outline, strict=True)
+    return [min(xs), min(ys), max(xs), max(ys)]
+
+
+def without_ms(answer: dict) -> dict:
+    return {k: v for k, v in answer.items() if k != "ms"}
+
+
+@pytest.fixture
+def segmented(vision, segmenter):
+    """A stream with the fake segmenter behind a Refresher whose calls run only when told to.
+    FakeVision takes its scenes in order, one per encode: each test lays them out."""
+    executor, clock = ManualExecutor(), Clock()
+    refresher = Refresher(segmenter, executor, clock=clock)
+    tracker = StreamTracker(vision, segmenter=segmenter, refresher=refresher)
+    return SimpleNamespace(
+        tracker=tracker,
+        refresher=refresher,
+        segmenter=segmenter,
+        executor=executor,
+        clock=clock,
+        vision=vision,
+    )
+
+
+def seg_step(s, seq: int, shift: int = 0) -> dict:
+    s.clock.t += 1 / 15
+    return s.tracker.step(*parse_frame(textured_frame(seq, shift)))
+
+
+def test_stream_submits_keyframe_on_target_and_applies_refresh(segmented):
+    s = segmented
+    s.vision.scenes.extend([[Thing(CUP, A), Thing(OTHER, C)]] * 2)
+    seg_step(s, 0)
+    s.tracker.command(parse_command(target(0, JEV_CUP)))
+    assert s.refresher.in_flight == 1 and len(s.executor.pending) == 1  # jev's box, a keyframe
+    s.executor.run_all()
+    ((width, height, box),) = s.segmenter.calls
+    assert (width, height) == (960, 720) and box == pytest.approx(JEV_CUP)
+    answer = seg_step(s, 1)
+    assert s.tracker.follower.reference_seq == 0  # the mask of jev's frame
+    assert answer["found"] and answer["state"] == "tracking"
+    # The fake mask fills jev's box; FakeVision outlines the cup's own box, 10 pixels inside it.
+    assert bounds(answer["outline"]) == pytest.approx(list(norm_box(JEV_CUP)), abs=2 / 960)
+    assert answer["box"] == pytest.approx(list(norm_box(JEV_CUP)), abs=1e-3)
+
+
+def test_stream_answers_while_refresh_pending(segmented, vision):
+    s = segmented
+    plain = StreamTracker(vision)
+    vision.scenes.extend([[Thing(CUP, A), Thing(OTHER, C)]] * 20)
+    for tracker in (s.tracker, plain):
+        tracker.step(*parse_frame(textured_frame(0)))
+        tracker.command(parse_command(target(0, JEV_CUP)))
+    for seq in range(1, 9):  # the segmenter never answers
+        answer = seg_step(s, seq)
+        assert without_ms(answer) == without_ms(plain.step(*parse_frame(textured_frame(seq))))
+        assert answer["found"] and len(answer["outline"]) == 4
+    assert s.refresher.in_flight == 1 and len(s.executor.pending) == 1  # no second call
+    assert s.segmenter.calls == []
+
+
+class GrayCount:
+    """track.py's cv2, counting conversions to gray."""
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    def __getattr__(self, name: str):
+        return getattr(cv2, name)
+
+    def cvtColor(self, src, code):  # noqa: N802 - cv2's name
+        self.count += code == cv2.COLOR_RGB2GRAY
+        return cv2.cvtColor(src, code)
+
+
+def test_stream_without_segmenter_unchanged(world, monkeypatch):
+    import clio_tracker.track as track
+
+    grays = GrayCount()
+    monkeypatch.setattr(track, "cv2", grays)
+    old = StreamTracker(world)
+    new = StreamTracker(world, TrackerParams(), segmenter=None, refresher=None)
+    answers = []
+    for tracker in (old, new):
+        step(tracker, 0)
+        tracker.command(parse_command(target(0)))
+        run = [step(tracker, seq, scene=1 + seq % 2) for seq in range(1, 6)]
+        tracker.command(parse_command(target(5, OTHER)))
+        run += [step(tracker, seq) for seq in range(6, 9)]
+        answers.append([without_ms(a) for a in run])
+    assert answers[0] == answers[1]
+    assert grays.count == 0 and new.follower is None and new.refresher is None
+
+
+def test_the_streams_follower_carries_a_keyframe_from_20_frames_back(segmented):
+    s = segmented
+    for seq in range(21):  # no target yet; the picture pans 4 pixels right a frame
+        seg_step(s, seq, shift=4 * seq)
+    s.vision.scenes.extend(
+        [
+            [Thing(CUP, A), Thing(OTHER, C)],  # frame 0, which jev looked at
+            [Thing(moved(CUP, 84), A), Thing(moved(OTHER, 84), C)],  # frame 21
+        ]
+    )
+    s.tracker.command(parse_command(target(0, JEV_CUP)))
+    assert s.tracker.object.follower is s.tracker.follower
+    s.executor.run_all()
+    answer = seg_step(s, 21, shift=84)
+    assert s.tracker.follower.reference_seq == 0
+    assert answer["found"] and answer["state"] == "tracking"
+    # jev's mask from 1.4 s ago, carried by the motion the follower logged since.
+    expected = list(norm_box(moved(JEV_CUP, 84)))
+    assert bounds(answer["outline"]) == pytest.approx(expected, abs=3 / 960)
+
+
+def test_clear_drops_the_followers_mask(segmented):
+    s = segmented
+    s.vision.scenes.extend([[Thing(CUP, A), Thing(OTHER, C)]] * 2)
+    seg_step(s, 0)
+    s.tracker.command(parse_command(target(0, JEV_CUP)))
+    s.executor.run_all()
+    seg_step(s, 1)
+    assert s.tracker.follower.active
+    s.tracker.command(None)
+    assert not s.tracker.follower.active  # what it carried was the cleared target's
+    assert seg_step(s, 2)["state"] == "idle"
+
+
+def test_a_refresh_of_the_old_object_never_beats_jevs_keyframe(segmented):
+    s = segmented
+    s.vision.scenes.extend([[Thing(CUP, A), Thing(OTHER, C)]] * 20)
+    seg_step(s, 0)
+    s.tracker.command(parse_command(target(0, JEV_CUP)))
+    s.executor.run_all()
+    seg_step(s, 1)
+    seg_step(s, 2)
+    s.clock.t += 1
+    # A refresh of the cup on frame 2 is on the way when jev says, about frame 1, that the
+    # target is the other one: jev's keyframe waits for it.
+    assert s.refresher.submit("target", 2, textured(), np.array(JEV_CUP))
+    s.tracker.command(parse_command(target(1, JEV_OTHER)))
+    s.executor.run_all()
+    seg_step(s, 3)
+    assert not s.tracker.follower.active  # the cup's mask was dropped, though newer than jev's
+    s.executor.run_all()
+    answer = seg_step(s, 4)
+    assert s.tracker.follower.reference_seq == 1
+    for seq in range(5, 12):
+        answer = seg_step(s, seq)
+    assert bounds(answer["outline"]) == pytest.approx(list(norm_box(JEV_OTHER)), abs=2 / 960)
+
+
+def test_an_older_keyframe_never_lands_after_a_newer_one(segmented):
+    s = segmented
+    s.vision.scenes.extend([[Thing(CUP, A), Thing(OTHER, C)]] * 20)
+    seg_step(s, 0)
+    s.tracker.command(parse_command(target(0, JEV_CUP)))  # its keyframe is on the way...
+    seg_step(s, 1)
+    seg_step(s, 2)
+    s.tracker.command(parse_command(target(2, JEV_OTHER)))  # ...when jev moves the target
+    s.executor.run_all()
+    seg_step(s, 3)
+    assert not s.tracker.follower.active  # the cup's keyframe came back, and was dropped
+    s.executor.run_all()
+    seg_step(s, 4)
+    assert s.tracker.follower.reference_seq == 2
+
+
+def test_the_stream_carries_on_without_the_segmenter_once_its_executor_is_shut_down(
+    world, segmenter, caplog
+):
+    stopped = ThreadPoolExecutor(max_workers=1)
+    stopped.shutdown()
+    tracker = StreamTracker(world, segmenter=segmenter, refresher=Refresher(segmenter, stopped))
+    plain = StreamTracker(world)
+    answers = []
+    with caplog.at_level(logging.WARNING, logger="clio_tracker"):
+        for t in (tracker, plain):
+            step(t, 0)
+            t.command(parse_command(target(0)))
+            answers.append([without_ms(step(t, seq)) for seq in range(1, 6)])
+    assert answers[0] == answers[1] and answers[0][-1]["found"]
+    assert tracker.refresher is None
+    assert sum("fake-segmenter" in r.message for r in caplog.records) == 1
 
 
 # --- the WebSocket -----------------------------------------------------------------------------

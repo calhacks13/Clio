@@ -117,6 +117,7 @@ def _serve(settings: Settings, args: argparse.Namespace) -> int:
     import uvicorn
 
     from .finder import Finder
+    from .refresh import Refresher
     from .server import create_app
     from .session import Sessions, SessionSettings, TrackerSession
     from .track import StreamTracker
@@ -147,24 +148,49 @@ def _serve(settings: Settings, args: argparse.Namespace) -> int:
         loaded - started,
         time.perf_counter() - loaded,
     )
+    segmenter = _segmenter(settings)
     session_settings = SessionSettings(
         identify_interval_s=settings.identify_interval_ms / 1000,
         identify_max_in_flight=settings.identify_max_in_flight,
     )
     executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="identify")
-    sessions = Sessions(lambda: TrackerSession(vision, identifier, executor, session_settings))
-    finder = Finder(identifier, vision)
+    # One segmenter for the service, called one at a time (each stream's and session's
+    # Refresher keeps one call of its own in flight at most).
+    segmenting = ThreadPoolExecutor(max_workers=1, thread_name_prefix="segment")
 
-    def health() -> dict:
-        return {"model": finder.model, "backend": vision.backend}
+    def refresher() -> Refresher | None:
+        return None if segmenter is None else Refresher(segmenter, segmenting)
 
-    app = create_app(sessions, finder, lambda: StreamTracker(vision), settings.refresh_ms, health)
+    def session() -> TrackerSession:
+        return TrackerSession(
+            vision,
+            identifier,
+            executor,
+            session_settings,
+            segmenter=segmenter,
+            refresher=refresher(),
+        )
+
+    def stream() -> StreamTracker:
+        return StreamTracker(vision, segmenter=segmenter, refresher=refresher())
+
+    sessions = Sessions(session)
+    finder = Finder(identifier, vision, segmenter)
+    app = create_app(
+        sessions, finder, stream, settings.refresh_ms, lambda: _health(finder, vision, segmenter)
+    )
+    outline = (
+        "YOLOE's mask (no segmenter)"
+        if segmenter is None
+        else f"{segmenter.name}'s mask, carried to every frame by the object's own pixels"
+    )
     log.info(
         "\n".join(
             [
                 f"Clio tracker {__version__}: {finder.model}",
                 f"  http://{HOST}:{settings.port}/locate and ws://{HOST}:{settings.port}/track",
                 f"  Vision: {vision.model} on {vision.backend}",
+                f"  Outline: {outline}",
                 f"  Names the target: {identifier.name}; with a session or in objects mode, "
                 f"every {settings.identify_interval_ms} ms per object",
             ]
@@ -175,8 +201,41 @@ def _serve(settings: Settings, args: argparse.Namespace) -> int:
     finally:
         finder.close()
         executor.shutdown(wait=False, cancel_futures=True)
+        segmenting.shutdown(wait=False, cancel_futures=True)
         getattr(identifier, "close", lambda: None)()
     return 0
+
+
+def _health(finder, vision, segmenter) -> dict:
+    """What /health adds to its own fields: the models answering, and the segmenter (or null)."""
+    return {
+        "model": finder.model,
+        "backend": vision.backend,
+        "segmenter": segmenter.name if segmenter is not None else None,
+    }
+
+
+def _segmenter(settings: Settings):
+    """The configured segmenter, loaded and warmed up with one encode, or None."""
+    import numpy as np
+
+    from .segment import load_segmenter
+
+    log = logging.getLogger("clio_tracker")
+    started = time.perf_counter()
+    segmenter = load_segmenter(settings.segmenter, settings.device)
+    if segmenter is None:
+        return None
+    loaded = time.perf_counter()
+    segmenter.encode(np.full((480, 640, 3), 128, dtype=np.uint8))
+    log.info(
+        "%s on %s: loaded in %.1f s, warmed up in %.1f s",
+        segmenter.name,
+        getattr(segmenter, "device", "its device"),
+        loaded - started,
+        time.perf_counter() - loaded,
+    )
+    return segmenter
 
 
 def _warm_up(vision) -> None:
