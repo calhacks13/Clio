@@ -346,7 +346,8 @@ its own words. Coordinates and detections go only to the AR side.
 **The voice leads.** It infers the goal from what the learner says or shows and calls
 `start_lesson` without an interview, saying in one short sentence what it starts. On "no, that's
 not what I want" it stops, says so in a few words and acts on what they do want: `start_lesson`
-replaces the running lesson at once, and `update_step` or `revise_plan` fixes a wrong step. Every
+replaces the running lesson at once, `update_step` or `revise_plan` fixes a wrong step, and when
+they name nothing, `end_lesson` ends the lesson without another and it asks what they want. Every
 time it asks the learner to touch, move or operate something, it calls `highlight` (target) on
 that thing in the same turn, before saying it, with `look_for` when the plan lacks it
 ([coach-plan.md](coach-plan.md)).
@@ -375,7 +376,7 @@ about 1 s after it arrives, so 3 to 4 s after the question.
 
 `CoachSession` wires a `RealtimeAgent` to:
 - the mic (16 kHz PCM) and the speaker (24 kHz PCM, barge-in flush);
-- the `CoachToolbox`, which validates and records the nine tools;
+- the `CoachToolbox`, which validates and records the eleven tools;
 - the `Narrator`, which turns lesson events into `[app]` narrations. For a Gemini coach they wait
   while either side is talking (up to 6 s), then go out merged into one message. A briefing for a
   step that lost focus meanwhile is dropped;
@@ -388,6 +389,7 @@ Tools:
 | Tool                                                               | What it does                                             |
 | ------------------------------------------------------------------ | -------------------------------------------------------- |
 | `start_lesson(goal, context?, template_id?)`                       | starts a lesson; the draft arrives as an `[app]` message |
+| `end_lesson(reason)`                                               | ends the lesson at once without starting another         |
 | `revise_plan(reason)`                                              | re-plans the steps not done yet through the planner      |
 | `add_step(text, done_when, after_step_id?, objects?)`              | adds a step, at the end by default                       |
 | `update_step(step_id, text?, done_when?, note?, status?, reason?)` | rewrites, notes, skips, reopens or refocuses a step      |

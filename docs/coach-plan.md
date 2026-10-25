@@ -74,7 +74,13 @@ answers `already` and changes nothing.
 That is how the voice takes "no". On "no", "that's not what I want", "stop" or "wrong thing" it
 stops, acknowledges in a few words and acts on what they do want: a new goal is a new
 `start_lesson`; a wrong step is `update_step`, or `revise_plan` when much is wrong. If they don't
-say what they want, it asks in a few words. No tool ends a lesson without starting another.
+say what they want, it calls `end_lesson` and asks in a few words.
+
+`end_lesson(reason)` ends the lesson at once without starting another. A running lesson is
+aborted with the reason, so its episode ends `aborted`, its steps leave the HUD, every light goes
+out and the action focus stops; a lesson being planned or written is dropped. The HUD then asks
+what they want to do, and the result names what ended (`ended`). With no lesson it answers ok,
+with a note.
 
 ### Who writes the first draft
 
@@ -251,6 +257,7 @@ step twice.
 | Tool                                                               | What it does                                             |
 | ------------------------------------------------------------------ | -------------------------------------------------------- |
 | `start_lesson(goal, context?, template_id?)`                       | starts a lesson; the draft arrives as an `[app]` message |
+| `end_lesson(reason)`                                               | ends the lesson without starting another                 |
 | `revise_plan(reason)`                                              | re-plans the steps not done yet through the planner      |
 | `add_step(text, done_when, after_step_id?, objects?)`              | adds a step, at the end by default                       |
 | `update_step(step_id, text?, done_when?, note?, status?, reason?)` | rewrites, notes, skips, reopens or refocuses a step      |
@@ -272,14 +279,14 @@ To change what a step does, the coach skips it and adds a new one.
 
 `highlight` lights one object. The voice calls it every time it asks the learner to touch, move or
 operate something, in the same turn and before it says it. Its `target` stays lit until the step
-changes or another `target` replaces it; `attention` lasts 5 s and `warning` is a 600 ms pulse.
-With `look_for` during a lesson, an `object_id` the plan doesn't have is added as a material (under
-that id when it is a free, valid one) and lit, and the result gives its `material_id`; without
-`look_for`, an unknown id is an error that lists the lesson's objects. A coach's `look_for`, here
-and in `add_material`, describes one particular instance: color, material, shape, size, markings
-and where it is relative to its neighbors. When it leaves out what the thing is, the app puts the
-name in front ("funnel, white plastic, on the fender"), so the words jev and the outlines go by
-stand alone.
+changes or another `target` replaces it; `attention` lasts 5 s and `warning` is a 600 ms pulse. With
+`look_for` during a lesson, an `object_id` the plan doesn't have is added as a material (under that
+id when it is a free, valid one) and lit, and the result gives its `material_id` and `added: true`;
+without `look_for`, an unknown id is an error that lists the lesson's objects. A coach's `look_for`,
+here and in `add_material`, describes one particular instance: color, material, shape, size,
+markings and where it is relative to its neighbors. When it leaves out what the thing is, the app
+puts the name in front ("funnel, white plastic, on the fender"), so the words jev and the outlines
+go by stand alone.
 
 `revise_plan` keeps every done and skipped step and replaces the steps still to do, including ones
 the coach added. While it runs, `add_step` is refused, and so is `update_step` with text,
@@ -337,7 +344,8 @@ objects at all lights nothing until the action focus names one.
    a briefing that arrives together with "Plan revised", whose recital already has the new step.
 5. **Cancelled calls.** When the learner barges in and Gemini cancels a tool call that already
    changed the plan, the coach is told the call was applied, with the recital. A call that had
-   failed is not reported.
+   failed is not reported. A `highlight` counts only when its result says it added a material
+   (`added: true`).
 
 ## The smart model
 
