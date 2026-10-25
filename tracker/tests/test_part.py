@@ -10,12 +10,14 @@ import struct
 import numpy as np
 import pytest
 
+from clio_tracker.follow import RegionFollower
 from clio_tracker.geometry import iou
-from clio_tracker.part import is_part, rounded_crop
+from clio_tracker.part import PartTracker, is_part, rounded_crop
 from clio_tracker.track import BadMessage, StreamTracker, parse_command, parse_frame
-from clio_tracker.tracking import TrackerParams
+from clio_tracker.tracking import Sighting, TrackerParams
 from clio_tracker.vision import MaskCrop
 from conftest import H, Thing, W, appearance, blend, scene_jpeg
+from test_tracking import GRAY, FakeFollower, followed, pan, same
 
 A = appearance(1)
 B = blend(A, appearance(2), 0.85)  # a look-alike
@@ -303,3 +305,246 @@ def test_a_box_cut_by_the_frame_edge_is_not_taken_for_a_part(vision, monkeypatch
     s.show_panned(450, Thing(WHOLE, A))
     s.send(target(edge_seq, out, name))
     assert s.tracker.part is None
+
+
+# --- the follower's mask (follow.py): the part on its own pixels ------------------------------
+
+FPS = 15
+DOOR = (450.0, 250.0, 590.0, 470.0)  # a part on the whole's right side: a door, a sliding jaw
+
+
+class PartRun:
+    """Feeds scenes straight to one PartTracker at FPS, as the stream does. `old` calls it as
+    before there was a follower: no gray frame, no mask with jev's answer."""
+
+    def __init__(self, vision, follower=None, old: bool = False):
+        self.vision = vision
+        self.old = old
+        self.tracker = (
+            PartTracker("target", "door of fridge")
+            if old
+            else PartTracker("target", "door of fridge", follower=follower)
+        )
+        self.seq = 0
+        self.t = 0.0
+        self.encodings: dict[int, object] = {}
+
+    def frame(self, *things: Thing, camera=None) -> Sighting:
+        self.seq += 1
+        self.t += 1 / FPS
+        enc = self.vision.encode(scene=list(things))
+        self.encodings[self.seq] = enc
+        if self.old:
+            return self.tracker.step(enc, self.seq, self.t, self.vision, camera)
+        return self.tracker.step(enc, self.seq, self.t, self.vision, camera, gray=GRAY)
+
+    def jev(self, seq: int, box, present: bool = True, carry=None, mask=None) -> str:
+        enc = self.encodings[seq]
+        b = None if box is None else np.asarray(box, dtype=np.float32)
+        if self.old:
+            return self.tracker.identified(seq, self.t, present, b, enc, self.vision, carry)
+        return self.tracker.identified(seq, self.t, present, b, enc, self.vision, carry, mask=mask)
+
+
+SCENE = (Thing(WHOLE, A), Thing(OTHER, B))
+
+
+def test_part_uses_follower_mask_when_confident(vision):
+    """A confident follower's box is the part box and its mask the outline; the confidence,
+    state and track are the parent's, as they are without a follower."""
+    base = PartRun(vision, old=True)
+    follower = FakeFollower()
+    run = PartRun(vision, follower)
+    base.frame(*SCENE)
+    run.frame(*SCENE)
+    assert run.jev(1, DOOR, mask=followed(DOOR).crop) == base.jev(1, DOOR)
+    answer = followed((455, 262, 584, 461))  # the segmenter's tighter cut, inside jev's box
+    follower.answers.append(answer)
+    before, s = base.frame(*SCENE), run.frame(*SCENE)
+    assert s.found and s.state == "tracking"
+    assert (s.confidence, s.state, s.track_id) == (before.confidence, before.state, before.track_id)
+    assert s.track_id is not None and s.track_id == run.tracker.parent.target_id
+    assert s.crop is answer.crop
+    np.testing.assert_array_equal(s.measured, answer.box)
+    np.testing.assert_allclose(s.box, answer.box)  # the first sighting: nothing to smooth from
+    np.testing.assert_array_equal(run.tracker.box, answer.box)
+    assert s.shape is not None and s.shape.outline is not None
+    assert not run.tracker.wants_refresh
+
+
+def test_part_with_no_parent_shows_the_follower_mask_and_coasts(vision):
+    """Nothing holds the part (a strip of text on a plain surface): a confident follower still
+    gives its box and mask, with the part's own coasting confidence, as without one."""
+    base = PartRun(vision, old=True)
+    follower = FakeFollower()
+    run = PartRun(vision, follower)
+    base.frame(Thing(OTHER, B))
+    run.frame(Thing(OTHER, B))
+    base.jev(1, PART)
+    run.jev(1, PART, mask=followed(PART).crop)
+    assert run.tracker.parent is None
+    for k in range(3):
+        answer = followed(shifted(PART, 5 * k))
+        follower.answers.append(answer)
+        before, s = base.frame(Thing(OTHER, B)), run.frame(Thing(OTHER, B))
+        assert s.found and s.state == "coasting" and s.track_id is None
+        assert s.confidence == before.confidence
+        assert s.crop is answer.crop
+        np.testing.assert_array_equal(s.measured, answer.box)
+
+
+def locked_part(vision, follower) -> PartRun:
+    """The door of WHOLE followed, the follower holding the segmenter's cut of jev's box."""
+    run = PartRun(vision, follower)
+    run.frame(*SCENE)
+    run.jev(1, DOOR, mask=followed(DOOR).crop)
+    for _ in range(3):
+        s = run.frame(*SCENE)
+    assert s.found and s.state == "tracking" and run.tracker.parent is not None
+    return run
+
+
+def test_part_follows_its_own_motion_out_of_parent_box(vision):
+    """The door swings out of the fridge's box while the fridge stays put. A confident follower
+    keeps the part on its own pixels, 200 px past the parent's box, and the parent does not pull
+    it back; once the follower is unsure, the part rides on from where it last was."""
+    follower = FakeFollower()
+    run = locked_part(vision, follower)
+    for i in range(1, 21):
+        answer = followed(shifted(DOOR, 18 * i))
+        follower.answers.append(answer)
+        s = run.frame(*SCENE)
+        assert s.found and s.state == "tracking" and s.crop is answer.crop
+        np.testing.assert_array_equal(s.measured, answer.box)
+    out = shifted(DOOR, 360)  # its left side 210 px right of the parent's right side
+    assert out[0] - WHOLE[2] > 200
+    for _ in range(8):
+        follower.answers.append(followed(out))
+        s = run.frame(*SCENE)
+    assert s.found and s.state == "tracking"
+    np.testing.assert_array_equal(s.measured, out)
+    np.testing.assert_allclose(s.box, out, atol=1)
+    np.testing.assert_array_equal(run.tracker.box, out)
+    parent = run.tracker.parent
+    assert iou(parent.box_on(run.seq), WHOLE)[0, 0] > 0.95  # the parent still followed
+    follower.answers.append(followed(out, confident=False))
+    s = run.frame(*SCENE)
+    assert s.found and s.state == "tracking"
+    np.testing.assert_allclose(s.measured, out, atol=1e-3)  # not snapped back to the parent
+
+
+def test_part_falls_back_to_ride_when_follower_doubts(vision):
+    """An unsure follower changes nothing shown: the part rides on its parent and is outlined
+    as without one; after two frames of doubt it asks to be cut out again, around the
+    follower's box. A confident frame ends the doubt; a refresh that found nothing is a frame
+    of it."""
+    base = PartRun(vision, old=True)
+    follower = FakeFollower()
+    run = PartRun(vision, follower)
+
+    def scene(i: int) -> tuple[Thing, ...]:
+        return (Thing(shifted(WHOLE, 8 * i), A), Thing(OTHER, B))
+
+    base.frame(*scene(0))
+    run.frame(*scene(0))
+    base.jev(1, DOOR)
+    run.jev(1, DOOR, mask=followed(DOOR).crop)
+    for i in range(1, 6):
+        unsure = followed(shifted(DOOR, -30), confident=False)  # left behind on the background
+        follower.answers.append(unsure)
+        s = run.frame(*scene(i))
+        same(base.frame(*scene(i)), s)
+        assert run.tracker.wants_refresh == (i >= 2)
+    assert s.measured[0] > DOOR[0] + 20  # today's ride: it moved with the parent
+    np.testing.assert_array_equal(run.tracker.refresh_box, unsure.box)
+    refresh = followed(s.measured).crop
+    run.tracker.refreshed(run.seq, refresh)
+    seq, given = follower.references[-1]
+    assert seq == run.seq and given is refresh
+    sure = followed(shifted(s.measured, 8))
+    follower.answers.append(sure)
+    s = run.frame(*scene(6))
+    assert s.crop is sure.crop and not run.tracker.wants_refresh  # confident again: no doubt
+    np.testing.assert_array_equal(run.tracker.refresh_box, sure.box)
+    run.tracker.refreshed(run.seq, None)  # the segmenter found nothing: one frame of doubt...
+    assert not run.tracker.wants_refresh
+    follower.answers.append(followed(sure.box, confident=False))
+    run.frame(*scene(7))
+    assert run.tracker.wants_refresh  # ...and the next frame's makes two
+
+
+def test_part_identified_with_mask_sets_reference(vision):
+    follower = FakeFollower()
+    run = PartRun(vision, follower)
+    for _ in range(3):
+        run.frame(*SCENE)
+    assert not run.tracker.wants_refresh  # no part yet: nothing to cut out
+    crop = followed(DOOR).crop
+    run.jev(2, DOOR, mask=crop)
+    assert len(follower.references) == 1
+    seq, given = follower.references[0]
+    assert seq == 2 and given is crop
+    run.frame(*SCENE)
+    assert follower.steps == [1, 2, 3, 4]  # every frame, also before there was a part or a mask
+    run.jev(3, shifted(DOOR, 12, -6))  # jev's box again, a little off: the same part
+    assert len(follower.references) == 1 and follower.active
+
+
+def test_part_reseeded_on_another_part_drops_the_old_mask(vision):
+    """jev boxes another part of the same object, farther than its own size away: the old
+    part's mask is forgotten, so jev's keyframe, from an older frame than a refresh of the old
+    part, is taken. The same part boxed again keeps the mask; not in view drops it."""
+    follower = RegionFollower()
+    run = PartRun(vision, follower)
+    crop = MaskCrop(np.full((20, 30), 10.0, np.float32), (460.0, 260.0), 2.0)
+    run.frame(*SCENE)
+    run.jev(1, DOOR, mask=crop)
+    for _ in range(3):
+        run.frame(*SCENE)
+    run.tracker.refreshed(4, crop)  # a refresh of the door, on a newer frame than jev's next
+    run.frame(*SCENE)
+    assert follower.reference_seq == 4
+    run.jev(2, shifted(DOOR, 6, 4))  # the door again
+    run.tracker.refreshed(2, crop)  # its keyframe, older than the refresh: ignored
+    assert follower.reference_seq == 4
+    unsure = run.tracker.refresh_box  # the follower, unsure on a blank frame: the door's mask
+    assert DOOR[0] <= unsure[0] and unsure[2] <= DOOR[2] and DOOR[1] <= unsure[1] <= DOOR[3]
+    assert run.jev(3, PART).startswith("part")  # another part of the fridge
+    assert not follower.active
+    np.testing.assert_array_equal(run.tracker.refresh_box, PART)  # not the door's box
+    run.tracker.refreshed(3, crop)  # its keyframe, a moment later
+    assert follower.reference_seq == 3
+    run.frame(*SCENE)
+    assert run.jev(run.seq, None, present=False, mask=crop) == "part absent"
+    assert not follower.active
+    run.frame(*SCENE)
+    assert not run.tracker.wants_refresh  # not in view: nothing to cut out
+
+
+def test_part_without_follower_is_identical_to_before(vision):
+    """Without a follower the new arguments change nothing: the gray frames, jev's masks and
+    the refresh answers are ignored, and nothing asks for a refresh."""
+    before = PartRun(vision, old=True)
+    after = PartRun(vision, follower=None)
+    crop = followed(DOOR).crop
+
+    def both(*things: Thing, camera=None) -> None:
+        same(before.frame(*things, camera=camera), after.frame(*things, camera=camera))
+        assert not after.tracker.wants_refresh
+
+    both(*SCENE)
+    assert before.jev(1, DOOR) == after.jev(1, DOOR, mask=crop)
+    for i in range(6):
+        both(Thing(shifted(WHOLE, 8 * i), A), Thing(OTHER, B))  # the parent moves
+    after.tracker.refreshed(after.seq, crop)
+    after.tracker.refreshed(after.seq, None)
+    for _ in range(3):
+        both(Thing(OTHER, B))  # the parent is missed: it coasts, then the camera carries the part
+    both(Thing(shifted(WHOLE, 80), A), Thing(OTHER, B), camera=pan(40))
+    other = shifted(PART, 80)  # another part, now that the parent is back
+    assert before.jev(before.seq, other) == after.jev(after.seq, other, mask=crop)
+    for _ in range(3):
+        both(Thing(shifted(WHOLE, 80), A), Thing(OTHER, B))
+    gone = after.jev(after.seq, None, present=False, mask=crop)
+    assert before.jev(before.seq, None, present=False) == gone
+    both(Thing(shifted(WHOLE, 80), A), Thing(OTHER, B))
