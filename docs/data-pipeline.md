@@ -224,7 +224,7 @@ Four seams carry its answers into the data:
 
 Pipeline 0.4.0 added the observations summary, 0.5.0 each object's `partOf`, 0.6.0 the estimated
 `extent` and `shapes.json`, 0.7.0 the whole G1 (`body-g1.json`), 0.8.0 `room.glb`,
-`environment.json`'s `room` and the object models (`clio scene`). A version change makes every compile stale, so the server's startup sweep
+`environment.json`'s `room` and the object models (`clio scene`), 0.9.0 the G1 posed and walking like a person (body profile 2). A version change makes every compile stale, so the server's startup sweep
 recompiles the library once, one episode at a time.
 
 ## Robot retargeting
@@ -250,16 +250,51 @@ it; without that flag the export keeps the `human_hands` profile.
 ### The whole G1 (body-g1.json)
 
 Every compile also poses a whole Unitree G1 (`retarget/body.py`, the `g1_body29_hand14` URDF the
-visualizer draws) from the three things measured: the head and the two hands. The learner's standing
-head height maps to the G1's eye height and every point is scaled by that ratio. The head's
-flattened forward direction is the body's yaw. The pelvis sits below the head by the G1's
-pelvis-to-eye length, between a deep crouch and standing, and the waist leans the torso toward the
-head. The feet stay planted in the reference stance and step only after the body moved 18 cm or
-turned 35 degrees; each leg is solved for its planted ankle, sole flat. Each palm is solved
-(position only) onto the scaled palm point; an untracked hand keeps its last pose. The Dex3
-fingers close with the pinch. The pelvis, legs, waist and fingers are rules, not measurements, and
-the viewer draws the G1 solid in the dataset viewer's colors, labelled "Inferred". Each frame records how far each
-palm stayed from the hand (`handResidualM`).
+visualizer draws) from the three things measured: the head and the two hands, each with its
+orientation. Everything else is inferred, and the episode is known in full before it is posed, so
+every estimate looks ahead and is smoothed without lag.
+
+- **Size.** The learner's standing head height maps to the G1's eye height, and every measured
+  point is scaled by that ratio about the floor under the learner. So a taller or shorter
+  learner's reach and the places they held things shrink or grow with them, and the hands keep
+  their places relative to the table and the objects; the robot's own proportions (a few
+  centimetres less arm than a person of its height) are taken up by its posture. The pose is
+  solved at the G1's size and `root` is the pelvis of the G1 drawn back at the learner's size
+  (`1 / scale`), so the viewer's G1 has its head and palms on the measured ones.
+- **Hands.** Glitches (a hand faster than a hand moves, further than an arm reaches, behind the
+  eyes where the cameras cannot see, or a lone spike) and blips are dropped, dropouts up to
+  0.35 s are bridged on a smooth reach, and the palm frame (from the wrist and knuckles) is
+  smoothed more while the hand is still than while it turns.
+- **Trunk.** A neck model puts the neck's pivot under the eyes. The trunk faces between where
+  the head looks and where the hands are and turns less than the head; the pelvis turns slower
+  still. When the head drops, a learner looking down bends over at the hips and one looking ahead
+  crouches; short sways lean the trunk rather than move the pelvis, and the body stays behind the
+  hands (a palm is never inside the torso).
+- **Elbows.** The palm's position and orientation leave each arm one freedom, the elbow's swivel
+  around the shoulder-wrist line. It is chosen for the whole episode at once (`retarget/swivel.py`,
+  dynamic programming): the elbow a person would use for that hand, scored by joint comfort,
+  the human ranges of motion, the elbow's height and staying out of the torso, and changing
+  smoothly. A frame whose hand fits no human elbow (often a misread hand) counts for less.
+- **Upper body.** Pelvis, waist and both arms are solved together each frame
+  (`retarget/upper_body.py`, task priority): the palm points first, then the palm orientations,
+  the elbows, the head and staying near the trunk estimate. A hand the arm cannot reach from the
+  estimated trunk is reached by leaning, turning or shifting the body, and an arm near full
+  reach leans the body in rather than lock the elbow. Every joint stays inside an adult's range of
+  motion (`retarget/human.py`), not the G1's wider limits.
+- **Arms without a hand.** Across a longer dropout an arm lowers to hang at the side on a
+  minimum-jerk path and comes back up in time to meet the hand where it reappears; hanging, it
+  swings against its own side's leg while walking.
+- **Legs.** The feet are never seen, so the G1 walks the way a G1 would when its pelvis moves the
+  way the learner's did (`retarget/gait.py`): planted through a sway, alternating minimum-jerk
+  steps while walking or turning, the hips sinking a little where a step spreads the feet. Each
+  leg is solved for its foot, sole flat.
+- **Fingers.** The Dex3 fingers close with the pinch and relax half closed without a hand.
+
+The pelvis, legs, waist, elbows and fingers are rules, not measurements; the viewer draws the G1
+solid in the dataset viewer's colors, at the learner's size and blended between frames, labelled
+"Inferred". Each frame records how far each palm stayed from the measured hand (`handResidualM`,
+at the learner's size). Profile version 1 (pipeline 0.7.0 and 0.8.0) solved only the palm's
+position and wrote `root` at the G1's size.
 
 ## Running it
 
