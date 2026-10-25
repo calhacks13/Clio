@@ -235,6 +235,19 @@ figcaption {
   padding: 1rem 0;
 }
 
+.panel-motion-axes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.5rem;
+}
+
+@media (max-width: 640px) {
+  .panel-motion-axes {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+}
+
 .panel-motion-controls label {
   display: flex;
   align-items: baseline;

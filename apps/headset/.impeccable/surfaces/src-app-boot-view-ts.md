@@ -44,7 +44,8 @@ Lesson cards: content-sized white cards offset beside objects with clear space a
 projected mask. Both width and height follow measured text, with fixed readable type and padding.
 Choose initial placement using the complete card rectangle, visibility, task proximity and gaze
 travel. Keep position and orientation anchored in world space while the learner moves their head;
-use a delayed damped recovery only after sustained loss of reach. Avoid all tracked objects and
+keep cards upright and level with the world horizon, without inheriting head pitch or roll. Use
+a delayed damped recovery only after sustained loss of reach. Avoid all tracked objects and
 nearby detected furniture with a 6cm minimum gap and extra initial clearance. No listening label,
 dot or duplicate transcript. Useful
 instructions, corrections and actionable offline messages remain.

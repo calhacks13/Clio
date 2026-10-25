@@ -14,6 +14,7 @@ import {
   type Pose,
   quatFromAxisAngle,
   quatMultiply,
+  rotateVec,
   transformPoint,
   type Vec3,
 } from '../../src/core/math';
@@ -25,6 +26,15 @@ const TOP = 0.15;
 const turn = (degrees: number, axis: Vec3 = [0, 1, 0]) =>
   quatFromAxisAngle(axis, (degrees * Math.PI) / 180);
 const cardCenter = (pose: Pose) => transformPoint(pose, [0, TOP - HEIGHT / 2, 0]);
+
+function expectHorizonLevel(pose: Pose): void {
+  const right = rotateVec(pose.q, [1, 0, 0]);
+  const up = rotateVec(pose.q, [0, 1, 0]);
+  expect(right[1]).toBeCloseTo(0, 12);
+  expect(up[0]).toBeCloseTo(0, 12);
+  expect(up[1]).toBeCloseTo(1, 12);
+  expect(up[2]).toBeCloseTo(0, 12);
+}
 
 function mask(center: Vec3, width = 0.12, height = 0.14): Placement {
   return {
@@ -89,6 +99,66 @@ function startCatchUp(
 }
 
 describe('instruction panel room anchoring', () => {
+  it.each([
+    ['roll', quatMultiply(turn(35), turn(28, [0, 0, 1]))],
+    ['pitch', quatMultiply(turn(35), turn(-32, [1, 0, 0]))],
+    [
+      'pitch and roll',
+      quatMultiply(turn(35), quatMultiply(turn(-32, [1, 0, 0]), turn(28, [0, 0, 1]))),
+    ],
+  ] as const)('starts level with the world horizon while the head has %s', (_name, orientation) => {
+    const ctx = context();
+    ctx.head = { p: [2, 1.6, -3], q: [...orientation] };
+    const motion = new InstructionPanelMotion();
+    const anchor = motion.update(ctx, WIDTH, HEIGHT, TOP);
+    expectHorizonLevel(anchor);
+    expect(anchor.q).not.toEqual(ctx.head.q);
+  });
+
+  it('keeps its level world orientation while the learner rolls an already tilted head', () => {
+    const ctx = context();
+    ctx.head.q = quatMultiply(turn(35), quatMultiply(turn(-20, [1, 0, 0]), turn(25, [0, 0, 1])));
+    const motion = new InstructionPanelMotion();
+    const anchor = motion.update(ctx, WIDTH, HEIGHT, TOP);
+    expectHorizonLevel(anchor);
+    for (const roll of [-30, -15, 0, 15, 30]) {
+      ctx.head.q = quatMultiply(
+        turn(35),
+        quatMultiply(turn(-20, [1, 0, 0]), turn(roll, [0, 0, 1])),
+      );
+      for (let frame = 0; frame < 12; frame++) {
+        ctx.t += 100;
+        const pose = motion.update(ctx, WIDTH, HEIGHT, TOP);
+        expect(pose).toEqual(anchor);
+        expectHorizonLevel(pose);
+      }
+    }
+  });
+
+  it('stays horizon-level through every frame of a recovery toward a pitched, rolled gaze', () => {
+    const ctx = context();
+    ctx.head.q = quatMultiply(turn(25), quatMultiply(turn(-20, [1, 0, 0]), turn(20, [0, 0, 1])));
+    const motion = new InstructionPanelMotion();
+    const anchor = motion.update(ctx, WIDTH, HEIGHT, TOP);
+    expectHorizonLevel(anchor);
+    ctx.head.q = quatMultiply(turn(125), quatMultiply(turn(-40, [1, 0, 0]), turn(-30, [0, 0, 1])));
+    ctx.t = 100;
+    expect(motion.update(ctx, WIDTH, HEIGHT, TOP)).toEqual(anchor);
+    ctx.t = 900;
+    expect(motion.update(ctx, WIDTH, HEIGHT, TOP)).toEqual(anchor);
+    const target = placeInstructionPanel(ctx, WIDTH, HEIGHT, TOP, null);
+    expectHorizonLevel(target);
+    let settled = anchor;
+    for (let t = 925; t <= 2500; t += 25) {
+      ctx.t = t;
+      settled = motion.update(ctx, WIDTH, HEIGHT, TOP);
+      expectHorizonLevel(settled);
+      expect(isInstructionPanelClear(ctx, WIDTH, HEIGHT, TOP, settled)).toBe(true);
+    }
+    expect(distance(settled.p, anchor.p)).toBeGreaterThan(0.1);
+    expect(settled).toEqual(target);
+  });
+
   it.each([
     ['yaw', { p: [0, 0, 0], q: turn(35) }],
     ['pitch', { p: [0, 0, 0], q: turn(-20, [1, 0, 0]) }],

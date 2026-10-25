@@ -21,6 +21,8 @@ override that reference's dark palette and purple controls.
   Quiet listening has no label or dot. Report a disconnected voice with an actionable message.
 - Anchor cards in the room: both world position and orientation remain fixed during ordinary head
   turns, leaning, head bob and brief glances away. Do not billboard or rearrange them every frame.
+  Keep every card upright and level with the world horizon: placement uses heading only, never
+  the headset's pitch or roll. Relocation and catch-up preserve that level orientation.
   Only after the card stays well outside reading reach (50 degrees horizontally, 40 vertically,
   or outside 35cm–1.45m) for 800ms may it ease toward one captured recovery target. Use a damped
   spring with no continuous head chasing, and let it settle before another optional recovery.
@@ -104,10 +106,11 @@ light to a phantom surface; hands still hide it, through their occluders. The vi
 stays at 1 cm: three.js would move it to the depth map's 10 cm and clip what is that close
 (window.__nearPlane.set(m) tries another live).
 
-Everything else stays in view. Panels that trail the head (the instruction card, the HUDs) rise to
-stay within 20 degrees of the gaze when the learner looks down at the work, just above it, and
-they and the names over objects draw over the light and the hands' occluders (no depth test, after
-everything else), so a raised hand never takes the instructions away. A frame whose update or
+Everything else stays in view. The HUDs rise to stay within 20 degrees of the gaze when the
+learner looks down at the work. Instruction cards use the persistent, horizon-level anchoring
+and delayed recovery described above. Cards, HUDs and the names over objects draw over the light
+and the hands' occluders (no depth test, after everything else), so a raised hand never takes the
+instructions away. A frame whose update or
 render throws is skipped, counted and logged once, and the next one draws as usual: three.js asks
 for the next frame only after the last returns, so one exception used to leave only passthrough
 (window.__frames counts them).

@@ -1,11 +1,19 @@
-import { add, invertPose, type Pose, transformPoint, type Vec3 } from '../../core/math';
+import {
+  add,
+  invertPose,
+  type Pose,
+  rotateVec,
+  sub,
+  transformPoint,
+  type Vec3,
+  yawOnly,
+} from '../../core/math';
 import { billboard, type ObjectOutline, outlinePoint } from '../../domain/world/outline';
 import type { PresentContext } from './presenter';
 
-// Work in the gaze-relative plane of the card, including looking down at the table and tilting
-// the head. Comparing world distances would let a
-// nearer card cover an object farther away; perspective-project both masks and card into this
-// plane instead. Conservative silhouette bounds also reserve the space inside a concave mask.
+// Placement stays near the actual gaze, but cards keep the room's horizon: yaw only, no head
+// pitch or roll. Project all four level-card corners and object masks into the gaze frame so
+// perspective and depth differences cannot hide an overlap. Bounds stay conservative for concave masks.
 export const PANEL_DISTANCE = 0.65;
 export const PANEL_MASK_GAP = 0.06;
 /** New anchors leave slack for head motion and detector jitter before the hard gap is reached. */
@@ -175,8 +183,8 @@ function obstacles(
     const projection = project(points, viewFromWorld);
     if (!projection) return [];
     const { minDepth, maxDepth, rect } = projection;
-    // Candidate cards start at PANEL_DISTANCE. Their midpoint bounds include the full binocular
-    // disparity so a candidate selected here also satisfies the exact per-eye validator.
+    // Object disparity is measured against the reference plane. The caller adds the level
+    // card's own disparity and its clearance scaled by the actual nearest corner depth.
     const stereo =
       HALF_IPD *
       Math.max(Math.abs(PANEL_DISTANCE / minDepth - 1), Math.abs(PANEL_DISTANCE / maxDepth - 1));
@@ -196,7 +204,7 @@ const inside = (a: Rect, b: Rect) =>
   a.bottom >= b.bottom - 1e-8 &&
   a.top <= b.top + 1e-8;
 
-/** A content-sized instruction card beside, never over, any known object silhouette. */
+/** A content-sized, world-level instruction card beside every known object silhouette. */
 export function placeInstructionPanel(
   ctx: PresentContext,
   width: number,
@@ -204,38 +212,72 @@ export function placeInstructionPanel(
   top: number,
   previous: Pose | null,
 ): Pose {
-  const worldFromView = ctx.head;
-  const viewFromWorld = invertPose(worldFromView);
+  const viewFromWorld = invertPose(ctx.head);
   const geometry = obstacleGeometry(ctx);
   if (previous) {
-    const corners = cardCorners(width, height, top, previous);
+    const up = rotateVec(previous.q, [0, 1, 0]);
+    const upright = Math.abs(up[0]) < 1e-8 && Math.abs(up[2]) < 1e-8 && up[1] > 0;
+    const q = yawOnly(previous.q);
+    const center = transformPoint(previous, [0, top - height / 2, 0]);
+    // Level a legacy tilted card around its existing center once; a level anchor stays exact.
+    const candidate: Pose = upright
+      ? previous
+      : {
+          p: sub(center, rotateVec(q, [0, top - height / 2, 0])),
+          q,
+        };
+    const corners = cardCorners(width, height, top, candidate);
     const projected = project(corners, viewFromWorld);
-    const local = corners.map((p) => transformPoint(viewFromWorld, p));
     if (
       projected &&
-      local.every(([, , z]) => z < -NEAR) &&
+      corners.every((p) => transformPoint(viewFromWorld, p)[2] < -NEAR) &&
       inside(projected.rect, VIEW) &&
-      clearAtPose(ctx, width, height, top, previous, geometry)
+      clearAtPose(ctx, width, height, top, candidate, geometry)
     )
-      return previous;
+      return candidate;
   }
-  const required = obstacles(geometry, viewFromWorld, PANEL_MASK_GAP);
-  const masks = obstacles(geometry, viewFromWorld, PANEL_MASK_GAP + PLACEMENT_CUSHION);
+
+  const level = yawOnly(ctx.head.q);
   const halfW = width / 2;
   const halfH = height / 2;
-  const box = ([x, y]: Point): Rect => ({
-    left: x - halfW,
-    right: x + halfW,
-    bottom: y - halfH,
-    top: y + halfH,
+  const centered: Vec3[] = [
+    [-halfW, halfH, 0],
+    [halfW, halfH, 0],
+    [halfW, -halfH, 0],
+    [-halfW, -halfH, 0],
+  ];
+  const offsets = centered.map((p) => rotateVec(viewFromWorld.q, rotateVec(level, p)));
+  // Very large cards seen from a steep angle must remain wholly in front of the near plane.
+  const distance = Math.max(PANEL_DISTANCE, ...offsets.map((p) => p[2] + NEAR + 0.02));
+  const footprint = offsets.map(([dx, dy, dz]) => ({
+    dx,
+    dy,
+    scale: PANEL_DISTANCE / (distance - dz),
+  }));
+  const pose = ([x, y]: Point): Pose => ({
+    p: sub(transformPoint(ctx.head, [x, y, -distance]), rotateVec(level, [0, top - halfH, 0])),
+    q: [...level],
   });
+  const box = ([x, y]: Point): Rect => ({
+    left: Math.min(...footprint.map((p) => (x + p.dx) * p.scale)),
+    right: Math.max(...footprint.map((p) => (x + p.dx) * p.scale)),
+    bottom: Math.min(...footprint.map((p) => (y + p.dy) * p.scale)),
+    top: Math.max(...footprint.map((p) => (y + p.dy) * p.scale)),
+  });
+  const leftOf = (edge: number) => Math.min(...footprint.map((p) => edge / p.scale - p.dx));
+  const rightOf = (edge: number) => Math.max(...footprint.map((p) => edge / p.scale - p.dx));
+  const below = (edge: number) => Math.min(...footprint.map((p) => edge / p.scale - p.dy));
+  const above = (edge: number) => Math.max(...footprint.map((p) => edge / p.scale - p.dy));
+  const maxScale = Math.max(...footprint.map((p) => p.scale));
+  const cardStereo = HALF_IPD * Math.max(...footprint.map((p) => Math.abs(p.scale - 1)));
+  const required = obstacles(geometry, viewFromWorld, PANEL_MASK_GAP * maxScale + cardStereo);
+  const masks = obstacles(
+    geometry,
+    viewFromWorld,
+    (PANEL_MASK_GAP + PLACEMENT_CUSHION) * maxScale + cardStereo,
+  );
   const clear = (point: Point) => required.every((mask) => !overlaps(box(point), mask));
   const buffered = (point: Point) => masks.every((mask) => !overlaps(box(point), mask));
-  const pose = ([x, y]: Point): Pose => ({
-    p: transformPoint(worldFromView, [x, y - top + halfH, -PANEL_DISTANCE]),
-    q: [...worldFromView.q],
-  });
-
   const taskGap = (point: Point) => {
     const r = box(point);
     return masks.length
@@ -249,16 +291,17 @@ export function placeInstructionPanel(
         )
       : 0;
   };
-  const gazeTravel = ([x, y]: Point) => Math.hypot(x - REST[0], y - REST[1]);
   const score = (point: Point) => {
     const r = box(point);
-    // Include the reading reach of the whole card: a wide card needs useful horizontal room,
-    // while a tall one needs useful vertical room, rather than merely keeping its center in view.
+    const gazeTravel = Math.hypot(
+      (point[0] * PANEL_DISTANCE) / distance - REST[0],
+      (point[1] * PANEL_DISTANCE) / distance - REST[1],
+    );
     const readingReach = Math.hypot(
       Math.max(Math.abs(r.left), Math.abs(r.right)),
       Math.max(Math.abs(r.bottom - REST[1]), Math.abs(r.top - REST[1])),
     );
-    return 4 * taskGap(point) + gazeTravel(point) + 0.15 * readingReach;
+    return 4 * taskGap(point) + gazeTravel + 0.15 * readingReach;
   };
   const overflow = (point: Point) => {
     const r = box(point);
@@ -271,10 +314,15 @@ export function placeInstructionPanel(
   };
   const clamp = (value: number, low: number, high: number) =>
     low <= high ? Math.min(high, Math.max(low, value)) : (low + high) / 2;
-  const fitX = (x: number) => clamp(x, VIEW.left + halfW, VIEW.right - halfW);
-  const fitY = (y: number) => clamp(y, VIEW.bottom + halfH, VIEW.top - halfH);
-  const xs = new Set([fitX(REST[0]), VIEW.left + halfW, VIEW.right - halfW]);
-  const ys = new Set([fitY(REST[1]), VIEW.bottom + halfH, VIEW.top - halfH]);
+  const xMin = rightOf(VIEW.left);
+  const xMax = leftOf(VIEW.right);
+  const yMin = above(VIEW.bottom);
+  const yMax = below(VIEW.top);
+  const fitX = (x: number) => clamp(x, xMin, xMax);
+  const fitY = (y: number) => clamp(y, yMin, yMax);
+  const actual = (projected: number) => (projected * distance) / PANEL_DISTANCE;
+  const xs = new Set([fitX(actual(REST[0])), xMin, xMax]);
+  const ys = new Set([fitY(actual(REST[1])), yMin, yMax]);
   const union: Rect | null = masks.length
     ? {
         left: Math.min(...masks.map((r) => r.left)),
@@ -284,46 +332,39 @@ export function placeInstructionPanel(
       }
     : null;
   for (const mask of [...masks, ...required]) {
-    xs.add(fitX(mask.left - halfW));
-    xs.add(fitX(mask.right + halfW));
-    xs.add(fitX((mask.left + mask.right) / 2));
-    ys.add(fitY(mask.bottom - halfH));
-    ys.add(fitY(mask.top + halfH));
-    ys.add(fitY((mask.bottom + mask.top) / 2));
+    xs.add(fitX(leftOf(mask.left)));
+    xs.add(fitX(rightOf(mask.right)));
+    xs.add(fitX(actual((mask.left + mask.right) / 2)));
+    ys.add(fitY(below(mask.bottom)));
+    ys.add(fitY(above(mask.top)));
+    ys.add(fitY(actual((mask.bottom + mask.top) / 2)));
   }
-  // Mask edges and viewport edges describe the useful gaps. Trying their intersections lets a
-  // wide/tall card slide along a side to fit near a viewport edge or between several objects.
   const candidates: Point[] = [];
   for (const x of xs) for (const y of ys) candidates.push([x, y]);
   if (union) {
-    const x = fitX((union.left + union.right) / 2);
-    const y = fitY((union.bottom + union.top) / 2);
-    // If the task fills the preferred view, these guarantee a clear finite fallback beside it.
+    const x = fitX(actual((union.left + union.right) / 2));
+    const y = fitY(actual((union.bottom + union.top) / 2));
     candidates.push(
-      [union.left - halfW, y],
-      [union.right + halfW, y],
-      [x, union.bottom - halfH],
-      [x, union.top + halfH],
+      [leftOf(union.left), y],
+      [rightOf(union.right), y],
+      [x, below(union.bottom)],
+      [x, above(union.top)],
     );
   }
   const safe = candidates.filter(clear);
   const inView = safe.filter((point) => inside(box(point), VIEW));
   const withCushion = safe.filter(buffered);
   const cushionedInView = withCushion.filter((point) => inside(box(point), VIEW));
-  // Prefer a new anchor with breathing room. In a crowded scene, a fully visible card that
-  // respects the hard gap is more useful than an offscreen card that preserves extra slack.
-  const useful = cushionedInView.length
-    ? cushionedInView
-    : inView.length
-      ? inView
-      : withCushion.length
-        ? withCushion
-        : safe;
-  useful.sort((a, b) => overflow(a) - overflow(b) || score(a) - score(b));
-  // Validate the final world pose with the same exact binocular check used during motion.
-  const best: Point =
-    useful.find((point) => clearAtPose(ctx, width, height, top, pose(point), geometry)) ??
-    (union ? [REST[0], union.top + halfH + PANEL_MASK_GAP] : REST);
-
-  return pose(best);
+  const priority = [cushionedInView, inView, withCushion, safe];
+  // Every returned target passes the same exact binocular test used while anchored and moving.
+  for (const group of priority) {
+    group.sort((a, b) => overflow(a) - overflow(b) || score(a) - score(b));
+    const point = group.find((p) => clearAtPose(ctx, width, height, top, pose(p), geometry));
+    if (point) return pose(point);
+  }
+  // Finite bounds always leave this position above their union, even in a fully crowded view.
+  return pose([
+    fitX(actual(REST[0])),
+    union ? above(union.top + PANEL_MASK_GAP * maxScale) : fitY(actual(REST[1])),
+  ]);
 }

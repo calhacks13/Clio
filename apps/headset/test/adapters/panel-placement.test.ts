@@ -14,8 +14,11 @@ import {
   type Pose,
   quatFromAxisAngle,
   quatMultiply,
+  rotateVec,
+  sub,
   transformPoint,
   type Vec3,
+  yawOnly,
 } from '../../src/core/math';
 import type { ObjectEstimate } from '../../src/domain/world/object-registry';
 import { billboard, outlinePoint } from '../../src/domain/world/outline';
@@ -147,15 +150,105 @@ function expectFullyVisible(
   height: number,
   top = TOP,
 ) {
-  const [x, y, z] = transformPoint(invertPose(ctx.head), pose.p);
-  expect(z).toBeCloseTo(-PANEL_DISTANCE);
-  expect(x - width / 2).toBeGreaterThanOrEqual(-0.58 - 1e-8);
-  expect(x + width / 2).toBeLessThanOrEqual(0.58 + 1e-8);
-  expect(y + top - height).toBeGreaterThanOrEqual(-0.48 - 1e-8);
-  expect(y + top).toBeLessThanOrEqual(0.4 + 1e-8);
+  const view = invertPose(ctx.head);
+  const center = transformPoint(view, transformPoint(pose, [0, top - height / 2, 0]));
+  expect(center[2]).toBeCloseTo(-PANEL_DISTANCE);
+  for (const point of [
+    [-width / 2, top, 0],
+    [width / 2, top, 0],
+    [width / 2, top - height, 0],
+    [-width / 2, top - height, 0],
+  ]) {
+    const [x, y, z] = transformPoint(view, transformPoint(pose, point as Vec3));
+    expect(z).toBeLessThan(-0.03);
+    const projectedX = (x * PANEL_DISTANCE) / -z;
+    const projectedY = (y * PANEL_DISTANCE) / -z;
+    expect(projectedX).toBeGreaterThanOrEqual(-0.58 - 1e-8);
+    expect(projectedX).toBeLessThanOrEqual(0.58 + 1e-8);
+    expect(projectedY).toBeGreaterThanOrEqual(-0.48 - 1e-8);
+    expect(projectedY).toBeLessThanOrEqual(0.4 + 1e-8);
+  }
 }
 
 describe('instruction panel placement', () => {
+  it('keeps the card center in the actual gaze while its up and right axes follow the world horizon', () => {
+    const ctx = context();
+    ctx.head = {
+      p: [2, 1.6, 3],
+      q: quatMultiply(
+        quatFromAxisAngle([0, 1, 0], 0.7),
+        quatMultiply(quatFromAxisAngle([1, 0, 0], -1.05), quatFromAxisAngle([0, 0, 1], 0.4)),
+      ),
+    };
+    const pose = placeInstructionPanel(ctx, 0.28, 0.2, TOP, null);
+    const center = transformPoint(invertPose(ctx.head), transformPoint(pose, [0, TOP - 0.1, 0]));
+    expect(center[0]).toBeCloseTo(0);
+    expect(center[1]).toBeCloseTo(-0.08);
+    expect(center[2]).toBeCloseTo(-PANEL_DISTANCE);
+    expect(rotateVec(pose.q, [0, 1, 0])).toEqual([0, 1, 0]);
+    expect(rotateVec(pose.q, [1, 0, 0])[1]).toBeCloseTo(0);
+    expectFullyVisible(ctx, pose, 0.28, 0.2);
+  });
+
+  it.each([
+    [-0.35, 0.3],
+    [-0.9, -0.55],
+    [-1.25, 0.45],
+  ])(
+    'fits and clears all four level-card corners from both eyes at pitch %s and roll %s',
+    (pitch, roll) => {
+      const ctx = context();
+      ctx.head = {
+        p: [0, 1.6, 0],
+        q: quatMultiply(quatFromAxisAngle([1, 0, 0], pitch), quatFromAxisAngle([0, 0, 1], roll)),
+      };
+      const mask = rectMask(transformPoint(ctx.head, [0.03, -0.04, -0.9]), 0.22, 0.2);
+      ctx.objectMasks = [mask];
+      const width = 0.28;
+      const height = 0.2;
+      const pose = placeInstructionPanel(ctx, width, height, TOP, null);
+      expect(rotateVec(pose.q, [0, 1, 0])).toEqual([0, 1, 0]);
+      expectFullyVisible(ctx, pose, width, height);
+      expect(isInstructionPanelClear(ctx, width, height, TOP, pose)).toBe(true);
+      for (const eyeX of [-0.032, 0.032]) expectClear(ctx, pose, [mask], height, width, TOP, eyeX);
+    },
+  );
+
+  it('levels a legacy tilted anchor once around its center and then preserves the exact level pose', () => {
+    const ctx = context();
+    const q = quatMultiply(
+      quatFromAxisAngle([0, 1, 0], 0.12),
+      quatMultiply(quatFromAxisAngle([1, 0, 0], -0.2), quatFromAxisAngle([0, 0, 1], 0.25)),
+    );
+    const center: Vec3 = [0, -0.08, -0.65];
+    const old: Pose = { p: sub(center, rotateVec(q, [0, TOP - 0.1, 0])), q };
+    const leveled = placeInstructionPanel(ctx, 0.28, 0.2, TOP, old);
+    expect(leveled).not.toBe(old);
+    expect(rotateVec(leveled.q, [0, 1, 0])).toEqual([0, 1, 0]);
+    transformPoint(leveled, [0, TOP - 0.1, 0]).forEach((value, i) => {
+      expect(value).toBeCloseTo(center[i] ?? 0);
+    });
+    ctx.head.q = quatMultiply(ctx.head.q, quatFromAxisAngle([0, 0, 1], 0.1));
+    expect(placeInstructionPanel(ctx, 0.28, 0.2, TOP, leveled)).toBe(leveled);
+  });
+
+  it('keeps every corner in front of the near plane for an unusually tall level card at a steep gaze', () => {
+    const ctx = context();
+    ctx.head.q = quatFromAxisAngle([1, 0, 0], -1.4);
+    const pose = placeInstructionPanel(ctx, 0.3, 1.6, TOP, null);
+    expect(pose.p.every(Number.isFinite)).toBe(true);
+    for (const point of [
+      [-0.15, TOP, 0],
+      [0.15, TOP, 0],
+      [-0.15, TOP - 1.6, 0],
+      [0.15, TOP - 1.6, 0],
+    ]) {
+      expect(
+        transformPoint(invertPose(ctx.head), transformPoint(pose, point as Vec3))[2],
+      ).toBeLessThan(-0.03);
+    }
+  });
+
   it('gives a real initial target enough slack to preserve its world pose through modest head motion', () => {
     const ctx = context([rectMask([0, -0.2, -0.75], 0.16, 0.12)]);
     const anchored = placeInstructionPanel(ctx, 0.26, 0.18, TOP, null);
@@ -483,7 +576,7 @@ describe('instruction panel placement', () => {
     expectClear(ctx, placeInstructionPanel(ctx, WIDTH, WIDTH, TOP, null), [worldMask]);
   });
 
-  it('faces the actual downward, rolled gaze and stays clear of a table mask in an offset workspace', () => {
+  it('stays horizon-level near a downward, rolled gaze and clear of a table mask in an offset workspace', () => {
     const ctx = context();
     ctx.head = {
       p: [2, 1.6, 3],
@@ -517,13 +610,16 @@ describe('instruction panel placement', () => {
       outline,
     };
     const pose = placeInstructionPanel(ctx, WIDTH, WIDTH, TOP, null);
-    expect(pose.q).toEqual(ctx.head.q);
-    const inGaze = transformPoint(invertPose(ctx.head), pose.p);
-    expect(inGaze[2]).toBeCloseTo(-PANEL_DISTANCE);
-    expect(Math.abs(inGaze[0]) + WIDTH / 2).toBeLessThanOrEqual(0.58);
-    expect(inGaze[1] - WIDTH / 2).toBeGreaterThanOrEqual(-0.48);
-    expect(inGaze[1] + WIDTH / 2).toBeLessThanOrEqual(0.4);
-    expectClear(ctx, pose, [mask]);
+    expect(pose.q).toEqual(yawOnly(ctx.head.q));
+    const up = rotateVec(pose.q, [0, 1, 0]);
+    const right = rotateVec(pose.q, [1, 0, 0]);
+    expect(up[0]).toBeCloseTo(0);
+    expect(up[1]).toBeCloseTo(1);
+    expect(up[2]).toBeCloseTo(0);
+    expect(right[1]).toBeCloseTo(0);
+    expectFullyVisible(ctx, pose, WIDTH, WIDTH);
+    expect(isInstructionPanelClear(ctx, WIDTH, WIDTH, TOP, pose)).toBe(true);
+    for (const eyeX of [-0.032, 0.032]) expectClear(ctx, pose, [mask], WIDTH, WIDTH, TOP, eyeX);
   });
 
   it('protects the declared radius when no mask is available', () => {

@@ -425,8 +425,9 @@ mark or duplicate transcript; a disconnected voice shows an actionable Done-butt
 The card fits its measured text in both dimensions. `panel-placement.ts` checks its actual
 world-space corners for both eyes against all followed objects (not only lit targets) and detected
 nearby furniture, including before a lesson starts. `panel-motion.ts` holds both position and
-orientation in the room during ordinary head movement. Only a sustained loss of reading reach
-starts a damped movement toward a captured target; each sample and its swept path must remain
+orientation in the room during ordinary head movement. Card orientation uses world-up and the
+head's heading, without pitch or roll, including throughout recovery. Only a sustained loss of
+reading reach starts a damped movement toward a captured target; each sample and its swept path must remain
 clear. Async text resizing rechecks clearance immediately. The presentation-only reserve above
 worktops does not change recorded room geometry.
 

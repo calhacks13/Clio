@@ -14,7 +14,7 @@ import {
 import { ObjectHighlight } from '../adapters/render/object-highlight';
 import type { PresentContext } from '../adapters/render/presenter';
 import { InstructionPanelPresenter } from '../adapters/render/presenters/instruction-panel';
-import { type Pose, quatFromAxisAngle, type Vec3 } from '../core/math';
+import { type Pose, quatFromAxisAngle, quatMultiply, type Vec3 } from '../core/math';
 import { billboard, outlinePoint } from '../domain/world/outline';
 import type { Placement } from '../domain/world/placement';
 import { CALIPER_OUTLINE, CALIPER_PHOTO_HEIGHT, CALIPER_PHOTO_WIDTH } from './caliper-outline';
@@ -34,13 +34,25 @@ export function mountPanelMotionPreview(host: HTMLElement): void {
     <h3 id="panel-motion-title">Head movement</h3>
     <canvas aria-label="Fixed room view with a lesson card beside a highlighted caliper" role="img"></canvas>
     <div class="panel-motion-controls">
-      <label for="panel-motion-direction">View direction <output id="panel-motion-angle" for="panel-motion-direction">0°</output></label>
-      <input id="panel-motion-direction" type="range" min="-65" max="65" step="1" value="0">
+      <div class="panel-motion-axes">
+        <div>
+          <label for="panel-motion-direction">View direction <output id="panel-motion-angle" for="panel-motion-direction">0°</output></label>
+          <input id="panel-motion-direction" type="range" min="-65" max="65" step="1" value="0">
+        </div>
+        <div>
+          <label for="panel-motion-pitch">Look up or down <output id="panel-motion-pitch-angle" for="panel-motion-pitch">0°</output></label>
+          <input id="panel-motion-pitch" type="range" min="-40" max="40" step="1" value="0">
+        </div>
+        <div>
+          <label for="panel-motion-roll">Head tilt <output id="panel-motion-roll-angle" for="panel-motion-roll">0°</output></label>
+          <input id="panel-motion-roll" type="range" min="-30" max="30" step="1" value="0">
+        </div>
+      </div>
       <div class="panel-motion-actions">
         <button type="button" data-motion-action="replay">Replay head movement</button>
         <button type="button" data-motion-action="reset">Reset preview</button>
       </div>
-      <p class="panel-motion-note" hidden>Reduced motion is enabled. Use View direction to inspect a fixed view.</p>
+      <p class="panel-motion-note" hidden>Reduced motion is enabled. Use the sliders to inspect a fixed view.</p>
       <p class="panel-motion-status" role="status" aria-live="polite"></p>
     </div>`;
   const required = <T extends Element>(selector: string): T => {
@@ -51,6 +63,10 @@ export function mountPanelMotionPreview(host: HTMLElement): void {
   const canvas = required<HTMLCanvasElement>('canvas');
   const slider = required<HTMLInputElement>('#panel-motion-direction');
   const output = required<HTMLOutputElement>('#panel-motion-angle');
+  const pitchSlider = required<HTMLInputElement>('#panel-motion-pitch');
+  const pitchOutput = required<HTMLOutputElement>('#panel-motion-pitch-angle');
+  const rollSlider = required<HTMLInputElement>('#panel-motion-roll');
+  const rollOutput = required<HTMLOutputElement>('#panel-motion-roll-angle');
   const replayButton = required<HTMLButtonElement>('[data-motion-action="replay"]');
   const resetButton = required<HTMLButtonElement>('[data-motion-action="reset"]');
   const note = required<HTMLElement>('.panel-motion-note');
@@ -126,6 +142,10 @@ export function mountPanelMotionPreview(host: HTMLElement): void {
   };
   let yaw = 0;
   let targetYaw = 0;
+  let pitch = 0;
+  let targetPitch = 0;
+  let roll = 0;
+  let targetRoll = 0;
   let replayElapsed: number | null = null;
   let replaySide: number | null = null;
   let visible = false;
@@ -144,11 +164,27 @@ export function mountPanelMotionPreview(host: HTMLElement): void {
     output.value = `${Math.round(value)}°`;
   }
 
+  function setPitch(value: number): void {
+    targetPitch = value;
+    pitchSlider.value = String(Math.round(value));
+    pitchOutput.value = `${Math.round(value)}°`;
+  }
+
+  function setRoll(value: number): void {
+    targetRoll = value;
+    rollSlider.value = String(Math.round(value));
+    rollOutput.value = `${Math.round(value)}°`;
+  }
+
   function reset(): void {
     stopReplay('Preview reset.');
     yaw = 0;
+    pitch = 0;
+    roll = 0;
     head.q = [0, 0, 0, 1];
     setDirection(0);
+    setPitch(0);
+    setRoll(0);
     scene.remove(presenter.object);
     presenter.dispose();
     presenter = new InstructionPanelPresenter(() => {});
@@ -158,6 +194,14 @@ export function mountPanelMotionPreview(host: HTMLElement): void {
   slider.addEventListener('input', () => {
     stopReplay();
     setDirection(slider.valueAsNumber);
+  });
+  pitchSlider.addEventListener('input', () => {
+    stopReplay();
+    setPitch(pitchSlider.valueAsNumber);
+  });
+  rollSlider.addEventListener('input', () => {
+    stopReplay();
+    setRoll(rollSlider.valueAsNumber);
   });
   replayButton.addEventListener('click', () => {
     if (reducedMotion.matches) return;
@@ -178,6 +222,8 @@ export function mountPanelMotionPreview(host: HTMLElement): void {
     if (reducedMotion.matches) {
       stopReplay();
       yaw = targetYaw;
+      pitch = targetPitch;
+      roll = targetRoll;
     }
   }
   reducedMotion.addEventListener('change', motionPreference);
@@ -223,8 +269,19 @@ export function mountPanelMotionPreview(host: HTMLElement): void {
         setDirection(angle * side);
         if (replayElapsed >= REPLAY_DURATION_MS) stopReplay('Replay complete.');
       }
-      yaw = reducedMotion.matches ? targetYaw : yaw + (targetYaw - yaw) * (1 - Math.exp(-dt / 90));
-      head.q = quatFromAxisAngle([0, 1, 0], (yaw * Math.PI) / 180);
+      const blend = reducedMotion.matches ? 1 : 1 - Math.exp(-dt / 90);
+      yaw += (targetYaw - yaw) * blend;
+      pitch += (targetPitch - pitch) * blend;
+      roll += (targetRoll - roll) * blend;
+      // The simulated camera and presenter share the complete yaw * pitch * roll head pose.
+      // The task remains fixed in world space; the presenter owns its horizon alignment.
+      head.q = quatMultiply(
+        quatMultiply(
+          quatFromAxisAngle([0, 1, 0], (yaw * Math.PI) / 180),
+          quatFromAxisAngle([1, 0, 0], (pitch * Math.PI) / 180),
+        ),
+        quatFromAxisAngle([0, 0, 1], (roll * Math.PI) / 180),
+      );
       context.t = t;
       context.dt = dt;
       presenter.update(context);
