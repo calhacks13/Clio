@@ -1379,6 +1379,21 @@ describe('system prompt', () => {
     expect(prompt).not.toMatch(SYMBOLS);
   });
 
+  it('starts lessons from what it hears and sees, takes "no" at once and lights what to touch', () => {
+    const prompt = buildSystemInstruction({});
+    expect(prompt).toMatch(/infer the goal and call start_lesson\s+at once/);
+    expect(prompt).toMatch(
+      /Don't interview them: ask one short question only when there is no plausible goal/,
+    );
+    expect(prompt).toMatch(/"that's not what I want", "stop" or "wrong\s+thing", stop right there/);
+    expect(prompt).toMatch(/a new\s+goal is a new start_lesson, which replaces the running lesson/);
+    expect(prompt).toMatch(
+      /Every time you ask them to\s+touch, move or operate something, call highlight on it \(style "target"\) in that same turn,\s+before you say it/,
+    );
+    expect(prompt).toMatch(/If it is not in the plan, give look_for/);
+    expect(prompt).toContain('very brief: under 15 words per turn');
+  });
+
   it('adds the persona, lesson notes, curated lessons and the plan snapshot, plan last', () => {
     const plan = planView();
     const prompt = buildSystemInstruction({

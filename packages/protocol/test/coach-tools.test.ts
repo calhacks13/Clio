@@ -15,6 +15,20 @@ describe('coach tools', () => {
     });
   });
 
+  it('lets a highlight say what something the plan lacks looks like', () => {
+    expect(
+      parseToolArgs('highlight', { object_id: 'red_button', look_for: 'small red button' }),
+    ).toEqual({
+      ok: true,
+      name: 'highlight',
+      args: { object_id: 'red_button', style: 'target', look_for: 'small red button' },
+    });
+    expect(toolParametersJsonSchema('highlight').required).toEqual(['object_id']);
+    expect(parseToolArgs('highlight', { object_id: 'x', look_for: 'y'.repeat(201) }).ok).toBe(
+      false,
+    );
+  });
+
   it('returns a readable error for missing arguments instead of throwing', () => {
     const r = parseToolArgs('complete_step', { step_id: 'cap', evidence: 'seen' });
     expect(r.ok).toBe(false);

@@ -286,13 +286,15 @@ export class LiveTracking {
   }
 
   /**
-   * The words to follow `id` in: the action focus's, while the plan's are still the ones they
-   * stood in for (`plan`); once the plan words it again, the plan's.
+   * The words to follow `id` in: the action focus's, while the plan's words for it now are still
+   * the ones they stood in for; once the plan words it again, the plan's (`plan`). Decided by the
+   * object's own plan words, not the caller's: an object the step shows is also offered again
+   * later in the rebuild, in its finder's words, and that duplicate must not drop ER's words.
    */
   private words(id: string, plan: string): string {
     const refined = this.refined.get(id);
     if (!refined) return plan;
-    if (refined.over === plan) return refined.query;
+    if (refined.over === this.planWords(id)) return refined.query;
     this.refined.delete(id);
     return plan;
   }

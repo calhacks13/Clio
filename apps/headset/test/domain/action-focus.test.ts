@@ -369,6 +369,10 @@ describe('ActionFocus: where the answer goes', () => {
         model: 'er-2',
       }),
     ]);
+    // Still ER's words once the next answer lights an action item.
+    await tick(6000);
+    await looks[1]?.answer({ action: action({ id: 'jug', label: 'fluid jug' }) });
+    expect(tracking.get('cap')?.query).toBe('cap as ER sees it');
   });
 
   it('drops an answer for a step that is over, or a lesson that ended', async () => {
