@@ -60,6 +60,11 @@ describe('erBoxes', () => {
     expect(boxes[1]).toMatchObject({ id: null, label: 'red reset button', action: true });
   });
 
+  it('gives an action item the lesson declared from ER words its new id', () => {
+    const boxes = erBoxes([found('cup', [0.1, 0.1, 0.2, 0.2])], action({}), label, 'red-button');
+    expect(boxes[1]).toMatchObject({ id: 'red-button', label: 'red reset button', action: true });
+  });
+
   it('marks nothing when the step needs nothing touched or ER could not see it', () => {
     expect(erBoxes([found('cup', [0.1, 0.1, 0.2, 0.2])], null, label).some((b) => b.action)).toBe(
       false,

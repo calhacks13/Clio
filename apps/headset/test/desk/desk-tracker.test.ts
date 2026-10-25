@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { TrackerSocket } from '../../src/adapters/net/tracker-client';
 import { ManualClock } from '../../src/core/clock';
 import { Emitter } from '../../src/core/emitter';
-import { DeskTracker, sourceOf } from '../../src/desk/desk-tracker';
+import { DeskTracker } from '../../src/desk/desk-tracker';
 import type { AppEvents } from '../../src/domain/events';
 import { ACCENTS } from '../../src/domain/overlay/accents';
 import { ObjectRegistry } from '../../src/domain/world/object-registry';
@@ -266,9 +266,38 @@ describe('DeskTracker', () => {
     expect(tracker.live).toBe(false);
   });
 
-  it('reads who placed an object once the tracker says so', () => {
-    expect(sourceOf({ source: 'er' })).toBe('er');
-    expect(sourceOf({ source: null })).toBeNull();
-    expect(sourceOf({})).toBeNull();
+  it("sends Robotics-ER's boxes as anchors, after the set they belong to, and reads who placed each", () => {
+    const { sockets, tracker, begin, clock } = setup();
+    tracker.open();
+    sockets[0]?.accept();
+    tracker.perceive(clock.now());
+    begin();
+    // No tick since the lesson started: the anchor brings the new set along first.
+    tracker.anchor({
+      id: 'pot',
+      box: [0.4, 0.2, 0.7, 0.6],
+      t: 990,
+      query: 'terracotta pot, front',
+    });
+    const messages = (sockets[0]?.sent ?? [])
+      .filter((d): d is string => typeof d === 'string')
+      .map((d) => JSON.parse(d) as Record<string, unknown>);
+    expect(messages.map((m) => m.type)).toEqual(['objects', 'objects', 'anchor']);
+    expect(messages[2]).toEqual({
+      type: 'anchor',
+      id: 'pot',
+      t: 990,
+      box: [0.4, 0.2, 0.7, 0.6],
+      source: 'er',
+      query: 'terracotta pot, front',
+    });
+    sockets[0]?.receive({
+      type: 'detections',
+      seq: 1,
+      t: 1100,
+      detections: [detection({ id: 'can', source: 'jev' }), detection({ id: 'pot', source: 'er' })],
+    });
+    expect(tracker.objects().map((o) => o.detection?.source ?? null)).toEqual(['jev', 'er', null]);
+    expect(tracker.stats().sources).toEqual({ jev: 1, er: 1, none: 0 });
   });
 });

@@ -60,7 +60,9 @@ describe('lessonHtml', () => {
       detail: null,
       objects: [object('can', true), object('pot', false)],
       watch: { t: 0, stepId: 'pour', verdict: 'not_done', progress: 0.4, observation: 'dry' },
+      next: 'can',
     });
+    expect(html).toContain('(ER: next)');
     expect(html).toContain('class="step done"');
     expect(html).toContain('class="step todo focus"');
     expect(html).toContain('Done when: The soil is dark.');
@@ -101,8 +103,9 @@ describe('toolsHtml', () => {
 });
 
 describe('erHtml', () => {
-  it('says when the action focus is not wired, and lists looks when it is', () => {
-    expect(erHtml([], false)).toContain('not wired');
+  it('says when the action focus is off, and lists its looks', () => {
+    expect(erHtml([], false)).toContain('?focus=0');
+    expect(erHtml([], true)).toContain('No looks yet');
     const html = erHtml(
       [
         {
@@ -110,7 +113,8 @@ describe('erHtml', () => {
           stepId: 'pour',
           model: 'gemini-robotics-er-2-preview',
           latencyMs: 1234,
-          action: { label: 'red button', id: null, found: true },
+          frameAgeMs: 1500,
+          action: { label: 'red button', id: null, declared: false, found: true },
           objects: [
             { id: 'can', label: 'can', found: true, confidence: 0.9, description: 'green can' },
           ],
@@ -121,6 +125,22 @@ describe('erHtml', () => {
     expect(html).toContain('next: <b>red button</b>');
     expect(html).toContain('not in the plan');
     expect(html).toContain('1234 ms');
+    expect(html).toContain('frame 1500 ms old');
+    const declared = erHtml(
+      [
+        {
+          t: 0,
+          stepId: null,
+          model: 'er',
+          latencyMs: 1,
+          frameAgeMs: 1,
+          action: { label: 'red button', id: 'red-button', declared: true, found: true },
+          objects: [],
+        },
+      ],
+      true,
+    );
+    expect(declared).toContain('declared now');
     expect(html).toContain('green can');
   });
 });
