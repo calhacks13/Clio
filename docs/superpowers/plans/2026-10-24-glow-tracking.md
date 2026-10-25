@@ -12,6 +12,7 @@
 
 ## Global Constraints
 
+- The branch is based on `origin/main` (444ab64), which added **objects mode** to `/track` (tracker/TRACK.md#objects-mode): a lesson streams 480 px frames and names objects in words; `track.Modes` routes each connection to `StreamTracker` (target mode, primary.html) or `ObjectsTracker`, which steps a `TrackerSession` of its own through `TrackerSession.follow()`. `locate()` wraps `follow()`. The lesson's live glow comes through objects mode, so the segmenter and follower must be wired into `TrackerSession.follow()` as well as `StreamTracker.step()`.
 - Local and test only. Do not commit, do not touch `main`, do not change `apps/`, `packages/` or the `/track` and `/locate` message formats (TRACK.md, docs/object-finder.md).
 - `--segmenter none` (and `CLIO_TRACKER_SEGMENTER=none`) must leave every existing test green and every existing code path identical; new behaviour only when a segmenter is loaded.
 - The stream thread never calls the segmenter. Segmenter calls run in the `Refresher`'s executor; at most one in flight; at least 150 ms apart unless it is a keyframe.
@@ -356,15 +357,16 @@ Expected: PASS.
 
 **Files:**
 - Modify: `tracker/src/clio_tracker/track.py` (`StreamTracker.__init__(vision, params=None, segmenter: Segmenter | None = None, refresher: Refresher | None = None)`; `_identify`, `step`)
-- Modify: `tracker/src/clio_tracker/session.py` (`TrackerSession.__init__(..., segmenter=None, refresher=None)`; keep `image.rgb` for frames jev looks at; `_apply`, `locate`)
+- Modify: `tracker/src/clio_tracker/session.py` (`TrackerSession.__init__(..., segmenter=None, refresher=None)`; keep `image.rgb` next to the `Encoding` in `_frames` for frames jev looks at; `_apply`; the per-frame rule goes in `follow()`, which `locate()` and objects mode's `ObjectsTracker.step()` both call)
 - Modify: `tracker/src/clio_tracker/finder.py` (`Finder.__init__(identifier, vision, segmenter=None)`; `_detection` uses the segmenter's mask when there is one; `model` gains `+<segmenter name>`)
-- Modify: `tracker/src/clio_tracker/cli.py` (`_serve`: `load_segmenter(settings.segmenter, settings.device)`, one `Refresher` per `StreamTracker`/`TrackerSession` sharing a 1-worker `ThreadPoolExecutor(thread_name_prefix="segment")`; warm up the segmenter; health reports `"segmenter": name`; the start-up log names it)
+- Modify: `tracker/src/clio_tracker/cli.py` (`_serve`: `load_segmenter(settings.segmenter, settings.device)`, one `Refresher` per `StreamTracker` and per `TrackerSession` (the `Sessions` factory and `sessions.new()` both build one), all sharing one segmenter and a 1-worker `ThreadPoolExecutor(thread_name_prefix="segment")`; warm up the segmenter with one encode; health reports `"segmenter": name`; the start-up log names it)
+- Modify: `tracker/src/clio_tracker/track.py` only inside `StreamTracker` (`Modes` and `ObjectsTracker` need no change: `ObjectsTracker.step` already goes through `TrackerSession.follow`)
 - Modify: `tracker/src/clio_tracker/server.py` only if `health()` needs the field passed through (it takes a callable already; no change expected)
 - Test: `tracker/tests/test_track.py`, `tracker/tests/test_session.py`, `tracker/tests/test_server.py` (append), `tracker/tests/test_identify.py` untouched
 
 **Interfaces:**
 - Consumes: Tasks 1 to 5.
-- Rule for both `StreamTracker` and `TrackerSession`, per frame: `gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)`; `for r in refresher.drain(): tracker_for(r.key).refreshed(r.seq, r.crop)`; step with `gray`; after the step, if `tracker.wants_refresh and tracker.refresh_box is not None: refresher.submit(key, seq, rgb, tracker.refresh_box)`. On a jev answer with a box (`_identify` / `_apply`): `refresher.submit(key, jev_seq, rgb_of_that_frame, jev_box, keyframe=True)`; the `identified` call itself passes `mask=None` (the mask arrives through `drain` a moment later). `StreamTracker` already keeps JPEGs per seq; `TrackerSession` keeps `rgb` next to `enc` in `_frames` while jev is in flight. With `segmenter is None` nothing new runs.
+- Rule for both `StreamTracker.step` and `TrackerSession.follow`, per frame: `gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)`; `for r in refresher.drain(): tracker_for(r.key).refreshed(r.seq, r.crop)`; step with `gray`; after the step, if `tracker.wants_refresh and tracker.refresh_box is not None: refresher.submit(key, seq, rgb, tracker.refresh_box)`. On a jev answer with a box (`_identify` / `_apply`): `refresher.submit(key, jev_seq, rgb_of_that_frame, jev_box, keyframe=True)`; the `identified` call itself passes `mask=None` (the mask arrives through `drain` a moment later). `StreamTracker` already keeps JPEGs per seq; `TrackerSession` keeps `rgb` next to `enc` in `_frames` while jev is in flight. With `segmenter is None` nothing new runs. Objects mode has no part mode (TRACK.md): there every object is an `ObjectTracker`, so a lesson's part (`kind: "item"`) gets its organic outline from the follower's SAM mask, not from part.py.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -375,6 +377,7 @@ def test_stream_answers_while_refresh_pending()                     # executor n
 def test_stream_without_segmenter_unchanged()                       # answers equal to a StreamTracker built the old way
 # test_session.py
 def test_session_keyframe_after_jev_answer()                        # same shape as the stream test through locate()
+def test_objects_mode_outline_comes_from_the_segmenter()            # Modes + ObjectSet with FakeSegmenter: after jev's answer and run_all, the detections outline is the fake mask's box
 # test_server.py
 def test_health_reports_segmenter()                                 # {"segmenter": "fake-segmenter"} and model string ends with "+fake-segmenter"
 ```
