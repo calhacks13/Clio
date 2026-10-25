@@ -22,7 +22,7 @@ corner on its top, +x along its front edge, -z away from the learner, +y up):
 - the tracker answers on every sixth frame (200 ms of capture time apart, 60 ms late): per object
   it sees, a measured box, outline and up to 16 depth samples (observations.ndjson), and the 3D
   state lifted from them (objects.ndjson, flags 10, observedT the capture time)
-- 8 keyframes, one a second, on tracker frames (capturedT == observedT): 320 x 240 JPEGs of the
+- 8 keyframes, one a second, on tracker frames (capturedT == observedT): 640 x 480 JPEGs of the
   room and the objects ray cast from the camera pose recorded with them
 - environment.planes at t = 0 (floor, table, four walls), a two-step plan that points at the cup
   and then at the box (labels, detector queries, show phrases), finished as completed
@@ -72,7 +72,7 @@ CAMERA = {
     "headFromCamera": [0.032, 0.02, -0.025, -0.1305, 0.0, 0.0, 0.9914],
     "source": "default",
 }
-KEYFRAME_SIZE = (320, 240)
+KEYFRAME_SIZE = (640, 480)
 SUPERSAMPLE = 2
 
 # Surfaces the ray caster tells apart.

@@ -98,7 +98,7 @@ def test_each_keyframe_sees_both_objects_inside_their_observed_boxes():
 
     for keyframe in load_keyframes(episode):
         image = Image.open(keyframe.path)
-        assert image.size == (keyframe.width, keyframe.height) == (320, 240)
+        assert image.size == (keyframe.width, keyframe.height) == (640, 480)
         for object_id, center in centers.items():
             box = observed[(object_id, keyframe.captured_t)]["box"]
             uv, _ = keyframe.project(center[None])
