@@ -224,21 +224,21 @@ lowest edge), which the primary demo uses to measure the object's distance.
 
 **The outline is the segmenter's mask** (`segment.py`, `follow.py`, `refresh.py`). YOLOE's mask
 comes from 32 coarse prototypes and is ragged as an outline; judged by eye on the still-photo
-benchmark, SAM 2.1 cuts an object out of its box more cleanly, but a call took 180 ms with Small and
-620 ms with Large on the M5 Pro's GPU, so it never runs on every frame. It cuts jev's box out on
-jev's frame, and again whenever the tracker doubts the mask it has, in a background thread (one call
-at a time, at least 150 ms apart; a new jev answer goes first). Of SAM's three candidate masks for
-a box it keeps the one with the highest predicted IoU times the IoU between its bounding box and the
-box, so a box around a whole object gets the whole, not one clean piece of it, and a box around a
-part gets the part. The follower carries the latest mask to every frame: optical-flow points inside
-it, started from where the camera's motion and the object's own last motion put them and kept by the
-same forward-backward check and RANSAC as the camera's, so the mask moves with the object itself and
-not only with the camera (a caliper's jaw slides along its scale, a name plate swings on its hinge).
-YOLOE and ByteTrack still decide which object it is. The follower's mask is what is drawn while it
-is sure of itself and its box agrees with ByteTrack's (IoU 0.3, or inside it as a part inside its
-whole); otherwise YOLOE's is, and after two frames of doubt SAM is asked again. A part gets a mask
-of its own the same way and reads `tracking`: it is measured, not predicted
-([TRACK.md](TRACK.md#following-a-part)).
+benchmark, SAM 2.1 cuts an object out of its box more cleanly, but a call took 140 to 180 ms with
+Small and 470 to 620 ms with Large on the M5 Pro's GPU, so it never runs on every frame. It cuts
+jev's box out on jev's frame, and again whenever the tracker doubts the mask it has, in a background
+thread (one call at a time, at least 150 ms apart; a new jev answer goes first). Of SAM's three
+candidate masks for a box it keeps the one with the highest predicted IoU times the IoU between its
+bounding box and the box, so a box around a whole object gets the whole, not one clean piece of it,
+and a box around a part gets the part. The follower carries the latest mask to every frame:
+optical-flow points inside it, started from where the camera's motion and the object's own last
+motion put them and kept by the same forward-backward check and RANSAC as the camera's, so the mask
+moves with the object itself and not only with the camera (a caliper's jaw slides along its scale, a
+name plate swings on its hinge). YOLOE and ByteTrack still decide which object it is. The follower's
+mask is what is drawn while it is sure of itself and its box agrees with ByteTrack's (IoU 0.3, or
+inside it as a part inside its whole); otherwise YOLOE's is, and after two frames of doubt SAM is
+asked again. A part gets a mask of its own the same way and reads `tracking`: it is measured, not
+predicted ([TRACK.md](TRACK.md#following-a-part)).
 
 **Steady outlines** (`smooth.py`). What is returned is filtered; what is tracked is not. The box
 goes through a One Euro filter (cutoff 1.5 Hz at rest, rising 4 Hz per box size a second of
@@ -332,42 +332,56 @@ put) and `moving` (two parts that move on their own: a caliper's sliding jaw and
 swinging name plate, with the photo's own part erased where it leaves). The SAM runs were paced
 (`--pace`: each frame at least 1/25 s, the fast end of the headset's stream at 40 to 75 ms a frame,
 because the refresher spaces its calls by wall clock and the harness alone plays a frame in 20 ms)
-and took 3.6 and 4.4 minutes; the run without a segmenter, 1.4. These runs were on an Apple M5 Pro
+and took 3.6 and 4.3 minutes; the run without a segmenter, 1.4. These runs were on an Apple M5 Pro
 (48 GB), not the M5 (24 GB) of the sections above: YOLOE-26L on the Neural Engine, SAM 2.1 on the
-GPU (MPS, float32), load average 2.3 to 2.7 with nothing else busy. The look was outlined by SAM,
-and by YOLOE where SAM cut nothing.
+GPU (MPS, float32), load average 2.2 to 2.6 with nothing else busy. The look was outlined by SAM,
+and by YOLOE where SAM cut nothing. The two SAM runs are of the tree with the candidate rule (below
+the table).
 
 | Set (sequences)  | Segmenter | Lost | Wrong | IoU   | Mask f2f | Swaps | Refreshes | Step, ms |
 | ---------------- | --------- | ---: | ----: | ----: | -------: | ----: | --------: | -------: |
 | `all` (7)        | none      | 1.0% |    0% | 0.880 |    0.959 |     1 |         0 |     18.2 |
-|                  | Small     | 1.7% |    0% | 0.874 |    0.961 |    20 |        89 |     26.2 |
-|                  | Large     | 1.7% |    0% | 0.895 |    0.958 |    20 |        83 |     24.1 |
+|                  | Small     | 1.7% |    0% | 0.832 |    0.952 |    20 |       117 |     25.7 |
+|                  | Large     | 4.1% |    0% | 0.897 |    0.956 |    13 |        78 |     24.4 |
 | `parts` (5)      | none      |   0% |  2.8% | 0.746 |    0.933 |    16 |         0 |     18.2 |
-|                  | Small     |   0% |  4.0% | 0.692 |    0.919 |    27 |        90 |     25.8 |
-|                  | Large     |   0% |  4.4% | 0.684 |    0.922 |    27 |        67 |     23.7 |
+|                  | Small     |   0% |  4.6% | 0.710 |    0.923 |    23 |        87 |     25.9 |
+|                  | Large     |   0% |  4.4% | 0.699 |    0.925 |    24 |        68 |     23.5 |
 | `moving` (2)     | none      |   0% |  2.4% | 0.600 |    0.920 |    10 |         0 |     18.4 |
-|                  | Small     | 0.6% |    0% | 0.480 |    0.899 |    15 |        46 |     24.7 |
-|                  | Large     | 2.4% |    0% | 0.625 |    0.913 |     8 |        26 |     22.4 |
+|                  | Small     | 0.8% |    0% | 0.589 |    0.901 |    10 |        50 |     25.7 |
+|                  | Large     | 3.2% |  3.1% | 0.596 |    0.900 |    19 |        34 |     23.6 |
 
-By these measures SAM did not steady the answers: the whole objects' outlines changed as little from
-frame to frame as YOLOE's (mask f2f, the IoU of each outline with the last frame's, camera motion
-removed, 0.958 to 0.961 against 0.959) but were redrawn as a different shape more often (swaps, 20
-against 1), and a frame took 6 to 8 ms longer in `step`. It also lost more of the whole objects
-(1.7% against 1.0%: the condenser, for a run of 21 frames in both SAM runs against 9 with YOLOE's
-mask) and did worse on the terminals scene (wrong 14.0% with YOLOE's mask, 20.1% with Small and
-21.8% with Large). Each row is a single run, and `parts` varied by 0.04 IoU in the repeat of Small
-(0.692 and 0.736). The harness's truth is a box per frame, so what SAM is for, the outline's shape,
-is not measured here.
+By these measures SAM did not steady the answers: the whole objects' outlines changed about as
+little from frame to frame as YOLOE's (mask f2f, the IoU of each outline with the last frame's,
+camera motion removed, 0.952 and 0.956 against 0.959) but were redrawn as a different shape more
+often (swaps, 20 and 13 against 1), and a frame took 6 to 8 ms longer in `step`. It also lost more
+of the whole objects (1.7% with Small and 4.1% with Large against 1.0%: the condenser, for a run of
+21 frames in both, against 9 with YOLOE's mask, and with Large the test tube, for 43, which YOLOE's
+mask never lost) and did worse on the terminals scene (wrong 14.0% with YOLOE's mask, 23.1% with
+Small and 21.8% with Large). The caliper and its vernier did not improve over the sequence: the
+caliper's IoU was 0.790 with Small and 0.911 with Large against 0.894 with YOLOE's mask, the
+vernier's 0.771 and 0.786 against 0.772. Each row is a single run: in a repeat of Small made before
+the candidate rule, `parts` varied by 0.04 IoU and `moving` by 0.15. The harness's truth is a box
+per frame, so what SAM is for, the outline's shape, is not measured here.
 
-**The two moving scenes.** The jaw sliding along the caliper was taken for something else
-on 4.8% of its found frames with YOLOE's mask and on none with either SAM (3.0% in a repeat of
-Small); its IoU went from 0.616 to 0.523 (Small) and 0.586 (Large), and Large lost it for a run
-of 12 frames (4.4%). The name plate swinging on the micrometer was never taken for anything else
-in any run; its IoU was 0.583, 0.436 and 0.664, and its swaps 1, 7 and 2. These rows move most
-between runs: a repeat of Small gave `moving` IoU 0.625 (0.480 in the first) and 13 swaps (15),
-where `all` moved by 0.01 IoU and two swaps. Small made 225 calls over the fourteen sequences and
-Large 176 (a call of Small took 157 ms to encode the frame and 25 ms to cut a box, Large 597 and
-28 ms, on a 480x360 frame).
+**The two moving scenes.** The jaw sliding along the caliper was taken for something else on 4.8% of
+its found frames with YOLOE's mask, on none with Small and on 6.3% with Large, which also lost it
+for a run of 14 frames (5.9%); its IoU was 0.616, 0.493 and 0.560, and its swaps 9, 9 and 15. The
+name plate swinging on the micrometer was never taken for anything else in any run; its IoU was
+0.583, 0.686 and 0.632, and its swaps 1, 1 and 4. So on the moving scenes neither SAM was better
+than YOLOE's mask by these measures (`moving` IoU 0.589 and 0.596 against 0.600, swaps 10 and 19
+against 10); only Small's `wrong` fell, to 0. Small made 254 calls over the fourteen sequences (42
+of them on the condenser, against 9 to 19 on the other whole objects) and Large 180; measured apart,
+on a 480x360 frame, a call took 143 ms with Small (121 encoding the frame, 22 cutting the box) and
+467 ms with Large (445 and 22), where an earlier measurement read 182 and 624 ms.
+
+**The candidate rule.** SAM proposes three masks for a box, and the one the model rated best used to
+be the one drawn. On the harness's caliper scene that was one jaw instead of the whole caliper at
+one of Small's eight keyframes (IoU 0.22 with the caliper's true box; the eight averaged 0.88); with
+the rule that scales the rating by how well the mask's bounds fit the box, all eight hold the whole
+(0.92 or better, mean 0.97), and Large held it both ways (0.98). Across the fourteen scenes' 112
+keyframes the rule moved the mean IoU from 0.880 to 0.888 with Small and from 0.885 to 0.890 with
+Large, and by 0.05 or less on any scene but Small's caliper. The caliper's tracked IoU over the
+sequence, in the table's runs, did not follow (above).
 
 ## Tests
 
