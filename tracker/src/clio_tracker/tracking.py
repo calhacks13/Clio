@@ -33,11 +33,13 @@ frame) pick which track that is, and its box becomes the prompt's anchor. Betwee
 With a segmenter (segment.py) the outline is its mask instead of YOLOE's: cut out on jev's
 frame, and again whenever asked, then carried to every frame by a RegionFollower (follow.py) on
 the object's own pixels. While the follower is confident and its box agrees with ByteTrack's
-(IoU 0.3 or more), its box and mask are what is returned, also on a frame YOLOE missed while
-the target coasts; ByteTrack and the appearance still decide which object it is. Otherwise the
-outline is YOLOE's, as without a segmenter, and after two frames of doubt, or while there is no
-mask yet, the tracker asks for the object to be cut out again (`wants_refresh`, around
-`refresh_box`).
+(IoU 0.3 or more, or one box inside the other, as a part and its whole), its box and mask are
+what is returned, also on a frame YOLOE missed while the target coasts; ByteTrack and the
+appearance still decide which object it is, and a jev answer that changes the target drops the
+old one's mask. Otherwise the outline is YOLOE's, as without a segmenter, and after two frames
+of doubt, or while there is no mask yet, the tracker asks for the object to be cut out again
+(`wants_refresh`): around the follower's box, or ByteTrack's when the follower is sure of itself
+but elsewhere (`refresh_box`).
 """
 
 from __future__ import annotations
@@ -106,7 +108,9 @@ class TrackerParams:
     part_jump_iou: float = 0.7  # the parent's box against its last, carried by the camera
     smooth: SmoothParams = field(default_factory=SmoothParams)
     follow: FollowParams = field(default_factory=FollowParams)
-    follow_agree_iou: float = 0.3  # the follower's box vs ByteTrack's: below this it is doubted
+    # The follower's box against ByteTrack's: below this it is doubted, unless one of the two
+    # lies `part_inside` inside the other (a part and its whole).
+    follow_agree_iou: float = 0.3
     refresh_after_frames: int = 2  # frames of doubt before asking for a refresh
 
 
@@ -180,6 +184,7 @@ class ObjectTracker:
         self._followed: Followed | None = None  # the follower's answer on the last frame
         self._tracked: np.ndarray | None = None  # the target's tracked box on the last frame
         self._follow_doubt = 0  # consecutive frames the follower could not stand for it
+        self._disagrees = False  # on the last frame: sure of itself, but away from ByteTrack's box
 
     # --- prompt ----------------------------------------------------------------------------
 
@@ -210,8 +215,10 @@ class ObjectTracker:
     @property
     def refresh_box(self) -> np.ndarray | None:
         """The box to prompt the segmenter with: the follower's on the last frame, else the
-        tracked box."""
-        box = self._followed.box if self._followed is not None else self._tracked
+        tracked box. When the follower was sure of itself but disagreed with ByteTrack, it is
+        on another object: the tracked box, so the new mask is of the one ByteTrack holds."""
+        f = self._followed
+        box = f.box if f is not None and not self._disagrees else self._tracked
         return None if box is None else box.copy()
 
     # --- per frame -------------------------------------------------------------------------
@@ -231,6 +238,7 @@ class ObjectTracker:
         self._tick_fps(t)
         self._moved(camera)
         self._followed = self._tracked = None
+        self._disagrees = False
         if self.follower is not None and gray is not None:
             self._followed = self.follower.step(seq, gray, camera, t)
         prompt = self.prompt
@@ -367,12 +375,20 @@ class ObjectTracker:
 
     def _follows(self, tracked: np.ndarray | None) -> Followed | None:
         """The follower's answer on this frame when it may stand for the object: confident and,
-        when ByteTrack sighted the object at `tracked`, agreeing with that box. A frame on which
-        it answers but may not counts as one of doubt."""
+        when ByteTrack sighted the object at `tracked`, agreeing with that box: overlapping it by
+        `follow_agree_iou`, or one of the two inside the other, as a part and its whole (in
+        objects mode a part is followed as an object, and ByteTrack's track may be the whole).
+        A frame on which it answers but may not counts as one of doubt."""
         f = self._followed
         if f is None:
             return None
-        agrees = tracked is None or float(iou(f.box, tracked)[0, 0]) >= self.params.follow_agree_iou
+        p = self.params
+        agrees = (
+            tracked is None
+            or float(iou(f.box, tracked)[0, 0]) >= p.follow_agree_iou
+            or float(_overlap(f.box, tracked)[0]) >= p.part_inside
+        )
+        self._disagrees = f.confident and not agrees
         trusted = f.confident and agrees
         self._follow_doubt = 0 if trusted else self._follow_doubt + 1
         return f if trusted else None
@@ -511,6 +527,29 @@ class ObjectTracker:
 
         Returns what changed, for the log. Answers older than one already applied are ignored.
         """
+        previous = self.target_id
+        change = self._identify(seq, t, present, box, appearance, carry)
+        if self.follower is None or change == "stale":
+            return change
+        if self.target_id is None or self.target_id != previous:
+            # Another object, or none: forget the old one's mask. The cut of jev's box comes
+            # from jev's older frame, and must not lose to a refresh of the old object.
+            self.follower.clear()
+            self._follow_doubt = 0
+        if mask is not None and not self.absent:
+            self.follower.set_reference(seq, mask)
+        return change
+
+    def _identify(
+        self,
+        seq: int,
+        t: float,
+        present: bool,
+        box: np.ndarray | None,
+        appearance: np.ndarray | None,
+        carry: np.ndarray | None,
+    ) -> str:
+        """`identified`, apart from the follower."""
         if seq < self._applied_seq:
             return "stale"
         self._applied_seq = seq
@@ -519,8 +558,6 @@ class ObjectTracker:
             self.target_id = self.target_by = None
             self._pending = None
             return "absent"
-        if mask is not None and self.follower is not None:
-            self.follower.set_reference(seq, mask)
         self.absent = False
         self.confirmed_t = t
         self.doubt = 0
