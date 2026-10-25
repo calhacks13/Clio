@@ -38,8 +38,9 @@ the part box more than its own size away (another part), or says the part is not
 the old part's mask. Another part is told on jev's own frame, against the part box the tracker
 had then: the part may have moved on its own since. An answer about the same part while the
 follower is confident leaves the part box on the follower's: jev's box is loose and from an
-older frame, and the keyframe cut from it re-anchors the mask through the follower's log of
-motion.
+older frame. The keyframe cut from it then re-anchors the mask through the follower's log of
+motion, also over a refresh of a newer frame, and puts the part box where that mask is carried
+to, sure follower or not: jev's correction wins. A refresh's mask only re-anchors the follower.
 """
 
 from __future__ import annotations
@@ -122,6 +123,7 @@ class PartTracker:
         self._shown = False  # the part was shown on the last frame
         self._follow_doubt = 0  # consecutive frames the follower could not stand for the part
         self._history: deque[tuple[int, float, np.ndarray]] = deque()  # (seq, t, the part box)
+        self._rebox = False  # jev's keyframe was taken: the next step puts the part box on it
 
     @property
     def box(self) -> np.ndarray | None:
@@ -181,6 +183,7 @@ class PartTracker:
             # frame nothing is asked, around the old part's box least of all.
             self.follower.clear()
             self._followed, self._shown, self._follow_doubt = None, False, 0
+            self._rebox = False
         elif sure:
             # The same part, followed on its own pixels: the follower's box stands. jev's box is
             # loose and from an older frame; the keyframe cut from it re-anchors the mask.
@@ -189,17 +192,21 @@ class PartTracker:
             self.follower.set_reference(seq, mask)
         return change
 
-    def refreshed(self, seq: int, crop: MaskCrop | None) -> None:
-        """The segmenter's answer to a refresh asked on frame `seq`: its mask of the part, or
-        None when it found nothing (a frame of doubt). A mask ends the doubt; the follower
-        ignores one from before the mask it has."""
+    def refreshed(self, seq: int, crop: MaskCrop | None, keyframe: bool = False) -> None:
+        """The segmenter's answer about frame `seq`: its mask of the part, or None when it found
+        nothing (a frame of doubt). A mask ends the doubt. The follower ignores a refresh's mask
+        from before the mask it has, but not a `keyframe` (jev's box cut out of jev's frame),
+        and a keyframe also puts the part box where its mask is carried to on the next frame:
+        jev's correction wins over a follower sure of a box jev has just moved."""
         if self.follower is None:
             return
         if crop is None:
             self._follow_doubt += 1
         else:
-            self.follower.set_reference(seq, crop)
+            self.follower.set_reference(seq, crop, replace=keyframe)
             self._follow_doubt = 0
+            if self.follower.reference_seq == seq:  # taken: the newest mask taken decides
+                self._rebox = keyframe
 
     def _identify(
         self,
@@ -275,8 +282,10 @@ class PartTracker:
         size = (enc.letterbox.width, enc.letterbox.height)
         self._smooth.moved(camera)
         self._followed, self._shown = None, False
+        rebox = False
         if self.follower is not None and gray is not None:
             self._followed = self.follower.step(seq, gray, camera, t)
+            rebox, self._rebox = self._rebox, False
         parent = self.parent.step(enc, seq, t, vision, camera) if self.parent else None
         if self._box is None:
             return Sighting(False, state="absent" if self.absent else "unknown")
@@ -305,6 +314,8 @@ class PartTracker:
             # The part's own pixels say where it is, also where the parent's motion would never
             # take it (a door swinging out of the fridge's box).
             box = followed.box.astype(np.float32)
+        elif rebox and f is not None:
+            box = f.box.astype(np.float32)  # jev's keyframe, carried to this frame
         self._box = box
         self._remember(seq, t, box)
         age = t - self._seen_t

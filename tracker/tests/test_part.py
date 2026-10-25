@@ -585,6 +585,40 @@ def test_a_confirming_answer_keeps_a_confident_followers_box(vision):
     np.testing.assert_allclose(run.tracker.box, shifted(DOOR, 14, 6))  # jev's, carried to now
 
 
+def test_jevs_keyframe_moves_the_part_box_to_its_mask_and_a_refresh_does_not(vision):
+    """A confident follower 40 px off (a refresh cut the wrong place) holds the part box through
+    jev's confirming answer. jev's keyframe then puts the part box where its mask is carried to,
+    also while the follower is unsure on that frame; a refresh's mask only re-anchors the
+    follower, and the part box rides on."""
+    follower = FakeFollower()
+    run = locked_part(vision, follower)
+    off = followed(shifted(DOOR, 40))
+    follower.answers.append(off)
+    run.frame(*SCENE)
+    jev_seq = run.seq
+    follower.answers.append(off)
+    run.frame(*SCENE)
+    np.testing.assert_array_equal(run.tracker.box, off.box)
+    run.jev(jev_seq, DOOR)  # the door is here, says jev
+    np.testing.assert_array_equal(run.tracker.box, off.box)  # the sure follower's box stands
+    crop = followed(DOOR).crop
+    run.tracker.refreshed(run.seq, crop)  # a refresh's mask of the door
+    assert follower.replacing[-1] is False
+    follower.answers.append(followed(shifted(DOOR, 2), confident=False))
+    run.frame(*SCENE)
+    np.testing.assert_allclose(run.tracker.box, off.box)  # it rides on from where it was
+    run.tracker.refreshed(jev_seq, crop, keyframe=True)
+    assert follower.replacing[-1] is True
+    carried = followed(shifted(DOOR, 3), confident=False)  # jev's mask, carried to this frame
+    follower.answers.append(carried)
+    s = run.frame(*SCENE)
+    np.testing.assert_array_equal(run.tracker.box, carried.box)
+    np.testing.assert_array_equal(s.measured, carried.box)
+    follower.answers.append(followed(shifted(DOOR, 9), confident=False))
+    run.frame(*SCENE)
+    np.testing.assert_allclose(run.tracker.box, carried.box)  # once; then it rides as before
+
+
 def test_part_reseeded_about_a_forgotten_frame_is_told_on_the_newest(vision):
     """An answer about a frame older than the part box's history: whether it is another part is
     told on the newest frame, with jev's box carried to it, as before."""

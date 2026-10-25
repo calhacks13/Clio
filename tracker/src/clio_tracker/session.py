@@ -20,7 +20,9 @@ newest frame again, one object at a time and the objects in turn. Each object's 
 frame. The segmenter runs off the frame thread (refresh.py), and a mask is applied on the first
 frame after it is ready.
 A refresh asked before jev's newest box for the object arrived, and a keyframe older than that
-box, are dropped when they come back: they cut out what jev may since have replaced.
+box, are dropped when they come back: they cut out what jev may since have replaced. jev's
+keyframe itself replaces the follower's mask even when a refresh of a newer frame landed while
+jev answered.
 """
 
 from __future__ import annotations
@@ -168,7 +170,7 @@ class TrackerSession:
         for r in self._segmenter(Refresher.drain) or []:
             tr = self._objects.get(r.key)
             if tr is not None and not outdated(r, self._keyframes.get(r.key)):
-                tr.refreshed(r.seq, r.crop)
+                tr.refreshed(r.seq, r.crop, keyframe=r.keyframe)
         sightings = [tr.step(enc, seq, now, self.vision, camera, gray) for tr in trackers]
         pairs = list(zip(queries, trackers, strict=True))
         turn = next((i + 1 for i, (q, _) in enumerate(pairs) if q.id == self._refreshed_last), 0)

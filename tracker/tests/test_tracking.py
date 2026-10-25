@@ -382,6 +382,7 @@ class FakeFollower:
     def __init__(self) -> None:
         self.answers: deque[Followed | None] = deque()
         self.references: list[tuple[int, MaskCrop]] = []
+        self.replacing: list[bool] = []  # each reference's `replace`
         self.steps: list[int] = []
         self._seq: int | None = None
 
@@ -393,8 +394,9 @@ class FakeFollower:
     def reference_seq(self) -> int | None:
         return self._seq
 
-    def set_reference(self, seq: int, crop: MaskCrop) -> None:
+    def set_reference(self, seq: int, crop: MaskCrop, replace: bool = False) -> None:
         self.references.append((seq, crop))
+        self.replacing.append(replace)
         self._seq = seq
 
     def step(self, seq: int, gray: np.ndarray, camera, t: float) -> Followed | None:
@@ -641,6 +643,26 @@ def test_refreshed_older_than_reference_is_ignored(vision):
     assert follower.reference_seq == 7
     run.tracker.refreshed(run.seq, crop)  # a newer one does take over
     assert follower.reference_seq == run.seq
+
+
+def test_jevs_keyframe_replaces_a_refresh_of_a_newer_frame(vision):
+    """jev confirms the object about a frame from before a refresh that has landed since (the
+    refresh may have cut the wrong thing): its keyframe, cut on jev's older frame, still takes
+    over, carried to now by the motion logged since. A refresh that old does not."""
+    follower = RegionFollower()
+    run = locked_following(vision, follower)
+    crop = MaskCrop(np.full((20, 30), 10.0, np.float32), (100.0, 100.0), 2.0)
+    for _ in range(2):
+        run.frame(Thing(at(100), A), Thing(at(500), B))
+    jev_seq = run.seq - 1
+    run.tracker.refreshed(run.seq, crop)  # a refresh, on a newer frame than jev's
+    run.frame(Thing(at(100), A), Thing(at(500), B))
+    assert follower.reference_seq == run.seq - 1
+    assert run.jev(jev_seq, at(100)) == "confirmed"
+    run.tracker.refreshed(jev_seq, crop)  # a refresh about jev's frame: older, ignored
+    assert follower.reference_seq == run.seq - 1
+    run.tracker.refreshed(jev_seq, crop, keyframe=True)  # jev's keyframe, a moment later
+    assert follower.reference_seq == jev_seq
 
 
 def test_coasting_with_confident_follower_keeps_mask(vision):

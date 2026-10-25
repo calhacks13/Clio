@@ -160,6 +160,28 @@ def test_reference_older_than_current_is_ignored():
     assert iou(out.box, frames[11][1])[0, 0] > 0.95
 
 
+def test_a_replacing_reference_older_than_current_is_taken_while_in_the_log(monkeypatch):
+    # jev's keyframe arrives after a refresh of a newer frame: it replaces the refresh, carried
+    # by the motion logged since its own frame, as long as that frame is still in the log
+    monkeypatch.setattr(follow, "KEEP", 5)
+    frames = scene(12, move=(4, 2))
+    x1, y1, x2, y2 = frames[8][1]
+    f = RegionFollower()
+    f.set_reference(0, filled(frames[0][1]))
+    for seq in range(10):
+        f.step(seq, frames[seq][0], None, seq / 25)
+    f.set_reference(8, filled(np.array([x1, y1, (x1 + x2) / 2, y2])))  # a refresh: half of it
+    f.step(10, frames[10][0], None, 10 / 25)  # frames 6 to 10 logged
+    f.set_reference(5, filled(frames[5][1]), replace=True)  # before the log: ignored
+    assert f.reference_seq == 8
+    f.set_reference(7, filled(frames[7][1]))  # older than the current one, not replacing
+    assert f.reference_seq == 8
+    f.set_reference(7, filled(frames[7][1]), replace=True)
+    assert f.reference_seq == 7
+    out = f.step(11, frames[11][0], None, 11 / 25)
+    assert out.confident and iou(out.box, frames[11][1])[0, 0] > 0.9
+
+
 def test_reference_older_than_the_motion_log_is_ignored(monkeypatch, caplog):
     monkeypatch.setattr(follow, "KEEP", 5)  # frames 5 to 9 logged: a mask from 4 can't be carried
     frames = scene(11, move=(4, 2))

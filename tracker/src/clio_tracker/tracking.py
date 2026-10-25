@@ -36,7 +36,9 @@ the object's own pixels. While the follower is confident and its box agrees with
 (IoU 0.3 or more, or lying inside it as a part inside its whole), its box and mask are what is
 returned, also on a frame YOLOE missed, against the predicted box while the target coasts;
 ByteTrack and the appearance still decide which object it is, and a jev answer that changes the
-target drops the old one's mask. Otherwise the outline is YOLOE's, as without a segmenter, and
+target drops the old one's mask. jev's keyframe replaces the follower's mask even when a
+refresh of a newer frame landed meanwhile. Otherwise the outline is YOLOE's, as without a
+segmenter, and
 after two frames of doubt, or while there is no mask yet, the tracker asks for the object to be
 cut out again (`wants_refresh`): around the follower's box, or ByteTrack's when the follower is
 sure of itself but elsewhere (`refresh_box`).
@@ -596,16 +598,17 @@ class ObjectTracker:
         self._pending = (warp_box(box, carry), t)
         return "placed" if previous is None else f"placed away from track {previous}"
 
-    def refreshed(self, seq: int, crop: MaskCrop | None) -> None:
-        """The segmenter's answer to a refresh asked on frame `seq`: its mask of the object, or
-        None when it found nothing (a frame of doubt). A mask ends the doubt; the follower
-        ignores one from before the mask it has."""
+    def refreshed(self, seq: int, crop: MaskCrop | None, keyframe: bool = False) -> None:
+        """The segmenter's answer about frame `seq`: its mask of the object, or None when it
+        found nothing (a frame of doubt). A mask ends the doubt. The follower ignores a
+        refresh's mask from before the mask it has, but not a `keyframe` (jev's box cut out of
+        jev's frame): jev's word wins over a refresh that landed while jev answered."""
         if self.follower is None:
             return
         if crop is None:
             self._follow_doubt += 1
         else:
-            self.follower.set_reference(seq, crop)
+            self.follower.set_reference(seq, crop, replace=keyframe)
             self._follow_doubt = 0
 
     def _match(self, tracks: dict[int, np.ndarray] | None, box: np.ndarray) -> int | None:

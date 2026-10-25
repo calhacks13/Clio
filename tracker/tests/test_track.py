@@ -638,6 +638,38 @@ def test_a_part_target_gets_the_streams_follower_and_its_keyframe_outlines_the_p
     assert bounds(answer["outline"]) == pytest.approx(list(norm_box(DOOR)), abs=2 / 960)
 
 
+BIG_DOOR = (120.0, 320.0, 220.0, 420.0)  # a part of the fridge 100 px across
+
+
+def test_jevs_keyframe_wins_over_a_refresh_that_landed_after_jevs_frame(segmented):
+    """A part followed confidently; a refresh cut around a box 40 px off lands on frame 6 and
+    the follower follows that, sure of itself. jev's answer about frame 5 then confirms the part
+    where it really is: its keyframe, from the older frame, takes over, and the outline follows
+    jev's box from the next frame on."""
+    s = segmented
+    s.vision.scenes.extend([[Thing(FRIDGE, A)]] * 20)
+    seg_step(s, 0)
+    s.tracker.command(parse_command(part_target(0, BIG_DOOR)))
+    s.executor.run_all()
+    for seq in range(1, 7):
+        seg_step(s, seq)
+    s.clock.t += 1
+    assert s.refresher.submit("target", 6, textured(), np.array(moved(BIG_DOOR, 40)))
+    s.executor.run_all()
+    seg_step(s, 7)
+    assert s.tracker.follower.reference_seq == 6
+    np.testing.assert_allclose(s.tracker.part.box, moved(BIG_DOOR, 40), atol=1)
+    s.tracker.command(parse_command(part_target(5, BIG_DOOR)))
+    np.testing.assert_allclose(s.tracker.part.box, moved(BIG_DOOR, 40), atol=1)  # sure: it stands
+    s.executor.run_all()
+    for seq in range(8, 13):
+        answer = seg_step(s, seq)
+    assert s.tracker.follower.reference_seq == 5
+    assert answer["state"] == "tracking"
+    assert bounds(answer["outline"]) == pytest.approx(list(norm_box(BIG_DOOR)), abs=2 / 960)
+    np.testing.assert_allclose(s.tracker.part.box, BIG_DOOR, atol=1)
+
+
 def test_the_whole_object_again_takes_the_follower_cleared_and_its_keyframe_outlines_it(
     segmented,
 ):

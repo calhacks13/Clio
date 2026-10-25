@@ -21,8 +21,9 @@ every frame. The stream has one follower, stepped from the first frame, before t
 target, so the motion since the frame jev looked at is known when its box arrives; each tracker
 the stream makes (an object, a part, a part's object made the target again) gets it in turn,
 cleared. A refresh asked before jev's newest box arrived, and a keyframe older than that box,
-are dropped when they come back: they cut out what jev may since have replaced. Objects mode
-has the same, per object, in its TrackerSession.
+are dropped when they come back: they cut out what jev may since have replaced. jev's keyframe
+itself replaces the follower's mask even when a refresh of a newer frame landed while jev
+answered. Objects mode has the same, per object, in its TrackerSession.
 """
 
 from __future__ import annotations
@@ -283,7 +284,7 @@ class StreamTracker:
         the mask it has."""
         for r in self._segmenter(Refresher.drain) or []:
             if not outdated(r, self._keyframe):
-                tracker.refreshed(r.seq, r.crop)
+                tracker.refreshed(r.seq, r.crop, keyframe=r.keyframe)
         sighting = tracker.step(enc, seq, self.t, self.vision, camera, gray=gray)
         box = tracker.refresh_box if tracker.wants_refresh else None
         if box is not None:

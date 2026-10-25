@@ -19,7 +19,9 @@ as motion.py starts its own from a phase correlation; the flow only finds what i
 
 A mask is measured on an older frame (jev's, or the one a refresh was asked on), so the motion
 of every frame is logged, also before there is any mask, and a mask that arrives late is
-carried by the motions since its own frame (one from before the log is ignored). When the
+carried by the motions since its own frame (one from before the log is ignored). A mask from
+before the current one's frame is ignored too, unless it replaces it: jev's keyframe does, also
+when a refresh of a newer frame landed while jev answered. When the
 points can't be trusted (too few survive, too few agree, the region is leaving the view) the
 follower says so and carries the mask by the camera's motion alone. It seeds no new points
 until a new mask arrives, so it never settles on the background a mask has slid onto; the
@@ -104,12 +106,14 @@ class RegionFollower:
     def reference_seq(self) -> int | None:
         return self._seq
 
-    def set_reference(self, seq: int, crop: MaskCrop) -> None:
+    def set_reference(self, seq: int, crop: MaskCrop, replace: bool = False) -> None:
         """A mask measured on frame `seq`. It takes over on the next step, carried by the motion
-        logged since `seq`. A mask from before the current one's frame is ignored, as is one
-        with nothing inside and one from before the oldest frame logged, which can't be carried
-        to now."""
-        if (self._seq is not None and seq < self._seq) or not (crop.logits > 0).any():
+        logged since `seq`. A mask from before the current one's frame is ignored unless it is
+        to `replace` it (jev's keyframe, which wins over a refresh that landed after jev's
+        frame). Ignored always: a mask with nothing inside, and one from before the oldest frame
+        logged, which can't be carried to now."""
+        older = self._seq is not None and seq < self._seq
+        if (older and not replace) or not (crop.logits > 0).any():
             return
         oldest = self._log[0][0] if self._log else seq
         if seq < oldest:
