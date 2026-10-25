@@ -158,24 +158,25 @@ class PartTracker:
             return change
         if before is None or self._box is None or _moved_off(before, self._box):
             # Another part, or none: forget the old one's mask. The cut of jev's box comes from
-            # jev's older frame, and must not lose to a refresh of the old part, nor may a
-            # refresh be asked around the old part's box.
+            # jev's older frame, and must not lose to a refresh of the old part. Until the next
+            # frame nothing is asked, around the old part's box least of all.
             self.follower.clear()
-            self._followed, self._follow_doubt = None, 0
+            self._followed, self._shown, self._follow_doubt = None, False, 0
         if mask is not None and self._box is not None:
             self.follower.set_reference(seq, mask)
         return change
 
     def refreshed(self, seq: int, crop: MaskCrop | None) -> None:
         """The segmenter's answer to a refresh asked on frame `seq`: its mask of the part, or
-        None when it found nothing (a frame of doubt). The follower ignores a mask from before
-        the one it has."""
+        None when it found nothing (a frame of doubt). A mask ends the doubt; the follower
+        ignores one from before the mask it has."""
         if self.follower is None:
             return
         if crop is None:
             self._follow_doubt += 1
         else:
             self.follower.set_reference(seq, crop)
+            self._follow_doubt = 0
 
     def _identify(
         self,

@@ -436,8 +436,8 @@ def test_part_follows_its_own_motion_out_of_parent_box(vision):
 def test_part_falls_back_to_ride_when_follower_doubts(vision):
     """An unsure follower changes nothing shown: the part rides on its parent and is outlined
     as without one; after two frames of doubt it asks to be cut out again, around the
-    follower's box. A confident frame ends the doubt; a refresh that found nothing is a frame
-    of it."""
+    follower's box. A new mask or a confident frame ends the doubt; a refresh that found
+    nothing is a frame of it."""
     base = PartRun(vision, old=True)
     follower = FakeFollower()
     run = PartRun(vision, follower)
@@ -457,10 +457,6 @@ def test_part_falls_back_to_ride_when_follower_doubts(vision):
         assert run.tracker.wants_refresh == (i >= 2)
     assert s.measured[0] > DOOR[0] + 20  # today's ride: it moved with the parent
     np.testing.assert_array_equal(run.tracker.refresh_box, unsure.box)
-    refresh = followed(s.measured).crop
-    run.tracker.refreshed(run.seq, refresh)
-    seq, given = follower.references[-1]
-    assert seq == run.seq and given is refresh
     sure = followed(shifted(s.measured, 8))
     follower.answers.append(sure)
     s = run.frame(*scene(6))
@@ -471,6 +467,11 @@ def test_part_falls_back_to_ride_when_follower_doubts(vision):
     follower.answers.append(followed(sure.box, confident=False))
     run.frame(*scene(7))
     assert run.tracker.wants_refresh  # ...and the next frame's makes two
+    refresh = followed(sure.box).crop
+    run.tracker.refreshed(run.seq, refresh)
+    seq, given = follower.references[-1]
+    assert seq == run.seq and given is refresh
+    assert not run.tracker.wants_refresh  # a new mask: no doubt until it is doubted
 
 
 def test_part_identified_with_mask_sets_reference(vision):
@@ -511,7 +512,8 @@ def test_part_reseeded_on_another_part_drops_the_old_mask(vision):
     assert DOOR[0] <= unsure[0] and unsure[2] <= DOOR[2] and DOOR[1] <= unsure[1] <= DOOR[3]
     assert run.jev(3, PART).startswith("part")  # another part of the fridge
     assert not follower.active
-    np.testing.assert_array_equal(run.tracker.refresh_box, PART)  # not the door's box
+    assert not run.tracker.wants_refresh  # nothing asked before the next frame...
+    np.testing.assert_array_equal(run.tracker.refresh_box, PART)  # ...the door's box least of all
     run.tracker.refreshed(3, crop)  # its keyframe, a moment later
     assert follower.reference_seq == 3
     run.frame(*SCENE)
