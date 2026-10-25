@@ -9,6 +9,11 @@ mask rather than over the whole frame. A full affine when enough points agree (a
 away foreshortens), a similarity with fewer, on a frame scaled to 480 pixels wide: about 1 ms
 a frame, plus about 2 ms to scale a 1280x960 frame down.
 
+A glance moves the whole picture 60 to 100 pixels a frame, far beyond what the flow finds on
+its own (about 15 on fine texture). So each point's search starts where the camera's motion
+(motion.py's, handed to every step) and the part's own motion on the frame before would put it,
+as motion.py starts its own from a phase correlation; the flow only finds what is left.
+
 A mask is measured on an older frame (jev's, or the one a refresh was asked on), so the motion
 of every frame is logged, also before there is any mask, and a mask that arrives late is
 carried by the motions since its own frame. When the points can't be trusted (too few survive,
@@ -80,6 +85,7 @@ class RegionFollower:
         self._seq: int | None = None  # the newest accepted mask's frame
         self._pending: tuple[int, MaskCrop] | None = None
         self._region: _Region | None = None
+        self._own: np.ndarray | None = None  # the part's motion beyond the camera's, last step
 
     @property
     def active(self) -> bool:
@@ -100,7 +106,7 @@ class RegionFollower:
     def clear(self) -> None:
         """Forget the region and its mask. The motion log stays, so a new mask measured on an
         older frame is still carried to now."""
-        self._seq = self._pending = self._region = None
+        self._seq = self._pending = self._region = self._own = None
 
     def step(
         self, seq: int, gray: np.ndarray, camera: np.ndarray | None, t: float
@@ -124,7 +130,8 @@ class RegionFollower:
         measured = not fresh and prev is not None
         estimate, inliers, ratio, points = None, 0, 0.0, NO_POINTS
         if measured:
-            estimate, inliers, ratio, points = self._measure(region, prev, small)
+            guess = fallback if self._own is None else compose(self._own, fallback)
+            estimate, inliers, ratio, points = self._measure(region, prev, small, guess)
         confident = (
             estimate is not None
             and inliers >= p.min_inliers
@@ -138,8 +145,10 @@ class RegionFollower:
         if confident:
             region.age += 1
             region.points = None if region.age >= p.redetect_every else points
+            self._own = compose(estimate, cv2.invertAffineTransform(fallback))
         elif measured:
             region.points = NO_POINTS  # in doubt: no new points until a new mask
+            self._own = None
         return self._followed(region, inliers, ratio, confident)
 
     def _shrink(self, gray: np.ndarray) -> np.ndarray:
@@ -164,16 +173,22 @@ class RegionFollower:
         return ref_seq >= seq
 
     def _measure(
-        self, region: _Region, prev: np.ndarray, gray: np.ndarray
+        self, region: _Region, prev: np.ndarray, gray: np.ndarray, guess: np.ndarray
     ) -> tuple[np.ndarray | None, int, float, np.ndarray]:
         """The region's motion from `prev` to `gray` in frame pixels, the number of RANSAC
-        inliers, their share of the points tracked, and where the inliers are now."""
+        inliers, their share of the points tracked, and where the inliers are now. The flow
+        starts from `guess` (frame pixels) both ways, so the check back still has to find what
+        the guess missed on its own."""
         p = self.params
         points = region.points if region.points is not None else self._seed(region, prev)
         if len(points) < p.min_inliers:
             return None, 0, 0.0, NO_POINTS
-        moved, ok, _ = cv2.calcOpticalFlowPyrLK(prev, gray, points, None, **LK)
-        back, ok_back, _ = cv2.calcOpticalFlowPyrLK(gray, prev, moved, None, **LK)
+        ahead = guess.copy()
+        ahead[:, 2] *= self._scale  # to tracked pixels (the linear part is the same at any scale)
+        lk = {"flags": cv2.OPTFLOW_USE_INITIAL_FLOW, **LK}
+        moved, ok, _ = cv2.calcOpticalFlowPyrLK(prev, gray, points, _carry(points, ahead), **lk)
+        behind = _carry(moved, cv2.invertAffineTransform(ahead))
+        back, ok_back, _ = cv2.calcOpticalFlowPyrLK(gray, prev, moved, behind, **lk)
         good = (ok.ravel() == 1) & (ok_back.ravel() == 1)
         good &= np.linalg.norm((back - points).reshape(-1, 2), axis=1) < p.fb_max_px
         m, keep = self._fit(points[good], moved[good])
@@ -234,6 +249,11 @@ def _corners(logits: np.ndarray) -> np.ndarray:
     ys, xs = np.nonzero(logits > 0)
     x0, y0, x1, y1 = xs.min(), ys.min(), xs.max() + 1, ys.max() + 1
     return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.float64)
+
+
+def _carry(points: np.ndarray, m: np.ndarray) -> np.ndarray:
+    """(N, 1, 2) points moved by the 2x3 transform `m`, as float32 for the flow."""
+    return (points @ m[:, :2].T.astype(np.float32) + m[:, 2].astype(np.float32)).astype(np.float32)
 
 
 def _bounds(t: np.ndarray, corners: np.ndarray) -> np.ndarray:

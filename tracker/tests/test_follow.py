@@ -12,7 +12,8 @@ from clio_tracker.vision import MaskCrop
 
 W, H = 480, 360
 PATCH_W, PATCH_H = 120, 80
-MARGIN = 64  # the background is this much larger than the view on every side, for pans
+MARGIN = 256  # the background is this much larger than the view on every side, for pans
+Path = tuple[float, float] | list[tuple[float, float]]
 
 
 def texture(rows: int, cols: int, seed: int) -> np.ndarray:
@@ -24,28 +25,34 @@ BACKGROUND = texture(H + 2 * MARGIN, W + 2 * MARGIN, 0)
 PATCH = texture(PATCH_H, PATCH_W, 1)
 
 
+def offsets(path: Path, frames: int) -> list[tuple[float, float]]:
+    """Each frame's offset from the first: `path` itself when it is a list, else `path` a frame."""
+    return path if isinstance(path, list) else [(k * path[0], k * path[1]) for k in range(frames)]
+
+
 def scene(
     frames: int,
-    move: tuple[float, float] = (0, 0),
+    move: Path = (0, 0),
     grow: tuple[float, float] = (1, 1),
-    pan: tuple[float, float] = (0, 0),
+    pan: Path = (0, 0),
     start: tuple[float, float] = (100, 80),
     flat: bool = False,
 ) -> list[tuple[np.ndarray, np.ndarray]]:
-    """Gray frames and the patch's true box on each. The background pans by `pan` a frame (still
-    by default); the patch, its top left at `start` on the first frame, moves by `move` a frame on
-    top of the pan and grows by `grow` (width, height) a frame about its centre. A flat patch has
-    no texture."""
+    """Gray frames and the patch's true box on each. The whole picture pans by `pan` (still by
+    default); the patch, its top left at `start` on the first frame, moves by `move` on top of the
+    pan and grows by `grow` (width, height) a frame about its centre. `pan` and `move` are steps a
+    frame, or each frame's offset from the first. A flat patch has no texture."""
     patch = np.full_like(PATCH, 128) if flat else PATCH
+    pans, moves = offsets(pan, frames), offsets(move, frames)
     out = []
     for k in range(frames):
-        dx, dy = k * pan[0], k * pan[1]
+        dx, dy = pans[k]
         view = cv2.warpAffine(
             BACKGROUND, np.array([[1.0, 0, dx - MARGIN], [0, 1.0, dy - MARGIN]]), (W, H)
         )
         sx, sy = grow[0] ** k, grow[1] ** k
-        cx = start[0] + PATCH_W / 2 + k * (move[0] + pan[0])
-        cy = start[1] + PATCH_H / 2 + k * (move[1] + pan[1])
+        cx = start[0] + PATCH_W / 2 + moves[k][0] + dx
+        cy = start[1] + PATCH_H / 2 + moves[k][1] + dy
         x1, y1 = cx - sx * PATCH_W / 2, cy - sy * PATCH_H / 2
         # patch pixel centres to frame pixel centres
         a = np.array([[sx, 0, x1 + 0.5 * sx - 0.5], [0, sy, y1 + 0.5 * sy - 0.5]])
@@ -266,3 +273,67 @@ def test_warped_crop_is_where_the_mask_was_carried():
     area_ref = (ref.logits > 0).sum() * ref.scale**2
     assert (crop.logits > 0).sum() * crop.scale**2 == pytest.approx(area_ref, rel=0.03)
     np.testing.assert_allclose(out.box, [105, 37, 385, 317], atol=1.0)  # disc bounds, carried
+
+
+# A glance: the whole picture 60 px a frame, there and back, as motion.py measures it.
+GLANCE = [(x, 0.0) for x in (0, 60, 120, 180, 240, 180, 120, 60, 0, 60)]
+
+
+def glance_camera(seq: int) -> np.ndarray | None:
+    """What CameraMotion hands the tracker on frame `seq` of the glance (None on the first)."""
+    if seq == 0:
+        return None
+    (x0, y0), (x1, y1) = GLANCE[seq - 1], GLANCE[seq]
+    return np.array([[1.0, 0, x1 - x0], [0, 1.0, y1 - y0]])
+
+
+def follow_glance(move: Path) -> list:
+    frames = scene(len(GLANCE), move=move, pan=GLANCE, start=(80, 140))
+    f = RegionFollower()
+    f.set_reference(0, filled(frames[0][1]))
+    outs = [f.step(seq, gray, glance_camera(seq), seq / 25) for seq, (gray, _) in enumerate(frames)]
+    return list(zip(outs, [truth for _, truth in frames], strict=True))
+
+
+def test_glance_is_followed_by_seeding_the_flow_with_the_camera():
+    for out, truth in follow_glance((0, 0))[1:]:
+        assert out.confident
+        assert iou(out.box, truth)[0, 0] > 0.9
+
+
+def test_part_sliding_during_a_glance_is_followed():
+    for out, truth in follow_glance((6, 0))[1:]:
+        assert out.confident
+        assert iou(out.box, truth)[0, 0] > 0.85
+
+
+def test_accelerating_part_is_followed_by_its_own_last_motion():
+    # 8 px a frame faster every frame, up to 40: beyond the flow's reach unless each frame starts
+    # from the part's motion on the frame before
+    frames = scene(6, move=[(x, 0.0) for x in (0, 8, 24, 48, 80, 120)], start=(40, 140))
+    f = RegionFollower()
+    f.set_reference(0, filled(frames[0][1]))
+    for seq, (gray, truth) in enumerate(frames):
+        out = f.step(seq, gray, None, seq / 25)
+        if seq:
+            assert out.confident
+            assert iou(out.box, truth)[0, 0] > 0.9
+
+
+def test_mostly_out_of_view_is_doubted_while_its_points_still_agree():
+    # a frame-wide mask whose only texture is at its left end, all moving 25 px a frame: the
+    # points stay in view and agree while the box slides out, so only its in-view share tells
+    frames = []
+    for k in range(16):
+        gray = np.full((H, W), 128, np.uint8)
+        gray[140:220, 25 * k : 25 * k + 60] = PATCH[:, :60]
+        frames.append(gray)
+    camera = np.array([[1.0, 0, 25], [0, 1.0, 0]])
+    f = RegionFollower()
+    f.set_reference(0, filled(np.array([0, 140, W, 220])))
+    outs = [f.step(seq, gray, camera if seq else None, seq / 25) for seq, gray in enumerate(frames)]
+    assert in_view(outs[14].box) > 0.26 and outs[14].confident
+    first_out = outs[15]  # 22% in view
+    assert in_view(first_out.box) < 0.24
+    assert first_out.inliers >= FollowParams().min_inliers and first_out.ratio >= 0.9
+    assert not first_out.confident
