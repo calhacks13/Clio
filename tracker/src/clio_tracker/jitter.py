@@ -28,7 +28,9 @@ separate the tracker's own wobble from real movement:
 Part scenes (`PART_SCENES`) follow one part of an object, as the primary demo's `?focus=part`
 does: the camera frames the part, jev's box is the part's and the target says `"part": true`
 (`--no-part-flag` leaves it out, to try telling a part from the whole by itself). Their numbers
-are summed up apart from the whole objects'.
+are summed up apart from the whole objects'. Two of them move the part on its own (`Scene.motion`):
+`jaw-slide` slides it along the object and `plate-swing` swings it narrow and back, while the
+whole object stays put and the true box follows the part.
 
 `--baseline DIR` loads another copy of the package (a directory holding a `clio_tracker`
 package, e.g. `git archive HEAD tracker/src | tar -x -C /tmp/base`) and runs it on the same
@@ -66,6 +68,7 @@ class Scene:
     label: str
     part: tuple[float, float, float, float] | None = None  # the part followed, if one
     share: float = 0.4  # with a part: the share of the view's width it spans
+    motion: str | None = None  # with a part: "slide" or "swing", it moves on its own
 
 
 SCENES = [
@@ -93,6 +96,10 @@ PART_SCENES = [
           (720, 600, 862, 668), 0.35),
     Scene("terminals", JEV_FUN / "components.jpg", (244, 625, 357, 804),
           "terminals of 9 V battery", (262, 628, 340, 648), 0.3),
+    Scene("jaw-slide", DEMO / "caliper.jpg", (222, 185, 1280, 745), "sliding jaw of caliper",
+          (445, 410, 865, 463), 0.45, motion="slide"),
+    Scene("plate-swing", DEMO / "micrometer.jpg", (115, 60, 1230, 875),
+          "name plate of micrometer", (400, 712, 588, 842), 0.3, motion="swing"),
 ]  # fmt: skip
 ALL_SCENES = SCENES + PART_SCENES
 
@@ -128,11 +135,42 @@ def _ramp(t: float, start: float, rise: float, hold: float, fall: float) -> floa
     return x * x * (3 - 2 * x)
 
 
+def _move_part(
+    bgr: np.ndarray, part: tuple[float, float, float, float], t: float, motion: str
+) -> tuple[np.ndarray, np.ndarray]:
+    """The photo with its part moved on its own at `t` seconds, and the part's box now.
+
+    Both are in photo pixels, before the camera. The patch is pasted over the photo, so the hole
+    it leaves is the photo's own pixels. `slide` shifts it along x by up to a quarter of its
+    width, back and forth every 2 seconds; `swing` pivots it on its right edge, its width going
+    from full to half and back every 3 seconds.
+    """
+    x1, y1, x2, y2 = (int(round(v)) for v in part)
+    w = x2 - x1
+    patch = bgr[y1:y2, x1:x2]
+    out = bgr.copy()
+    if motion == "slide":
+        dx = int(round(0.25 * w * math.sin(2 * np.pi * 0.5 * t)))
+        out[y1:y2, x1 + dx : x2 + dx] = patch
+        return out, np.array([x1 + dx, y1, x2 + dx, y2], dtype=np.float64)
+    if motion == "swing":
+        narrow = max(1, int(round(w * (0.75 + 0.25 * math.cos(2 * np.pi * t / 3)))))
+        k = narrow / w  # scale x about the right edge (the hinge), as pixel centres see it
+        to_hinge = np.array([[k, 0, w - narrow + 0.5 * (k - 1)], [0, 1, 0], [0, 0, 1]])
+        warped = cv2.warpPerspective(patch, to_hinge, (w, y2 - y1), flags=cv2.INTER_LINEAR,
+                                     borderMode=cv2.BORDER_REPLICATE)  # fmt: skip
+        out[y1:y2, x2 - narrow : x2] = warped[:, w - narrow :]
+        return out, np.array([x2 - narrow, y1, x2, y2], dtype=np.float64)
+    raise ValueError(f"unknown motion {motion!r}")
+
+
 def render(scene: Scene, seconds: float, seed: int) -> list[Frame]:
     """The frames a hand-held, head-mounted camera sees of `scene`, with the true box."""
     bgr = cv2.imread(str(scene.path))
     if bgr is None:
         raise FileNotFoundError(scene.path)
+    if scene.motion is not None and scene.part is None:
+        raise ValueError(f"scene {scene.name!r} has a motion but no part to move")
     half = cv2.resize(bgr, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
     ph, pw = bgr.shape[:2]
     rng = np.random.default_rng(seed)
@@ -173,10 +211,15 @@ def render(scene: Scene, seconds: float, seed: int) -> list[Frame]:
         s = OUT_W / cw
         x0, y0 = cx - cw / 2, cy - ch / 2
         affine = np.array([[s, 0, -s * x0], [0, s, -s * y0]], dtype=np.float64)
+        photo, held_box = bgr, box
+        if scene.motion is not None:
+            photo, held_box = _move_part(bgr, scene.part, t, scene.motion)
         if s < 0.5:
             src, a = half, np.array([[2 * s, 0, -s * x0], [0, 2 * s, -s * y0]])
+            if scene.motion is not None:
+                src = cv2.resize(photo, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
         else:
-            src, a = bgr, affine
+            src, a = photo, affine
         frame = cv2.warpAffine(src, a, (OUT_W, OUT_H), flags=cv2.INTER_LINEAR,
                                borderMode=cv2.BORDER_REPLICATE)  # fmt: skip
         # Motion blur over half the frame interval, along the motion of the object's centre.
@@ -193,7 +236,7 @@ def render(scene: Scene, seconds: float, seed: int) -> list[Frame]:
                          (int(round(c + u[0] * c)), int(round(c + u[1] * c))), 1.0, 1)  # fmt: skip
                 frame = cv2.filter2D(frame, -1, kernel / kernel.sum())
         prev_affine = affine
-        truth = _project(box, affine)
+        truth = _project(held_box, affine)
         # A hand passes in front of the object.
         hand = _ramp(t, 8.6, 0.25, 0.35, 0.25)
         if hand > 0 and truth is not None:
