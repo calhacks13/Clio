@@ -30,6 +30,8 @@ import {
 import { isShown, LiveTracking } from '../../src/domain/session/live-tracking';
 import type { StepChecker } from '../../src/domain/session/step-watcher';
 import type { TemplateSource } from '../../src/domain/session/templates';
+import { WidgetBoard } from '../../src/domain/widgets/board';
+import type { WidgetAnnotation } from '../../src/domain/widgets/types';
 import type { Grounder, GroundingResult } from '../../src/domain/world/grounding';
 import { ObjectRegistry } from '../../src/domain/world/object-registry';
 import { Workspace } from '../../src/domain/world/workspace';
@@ -1728,6 +1730,52 @@ describe('ending a lesson without another', () => {
     expect(
       writing.result(await writing.tool('add_step', { text: 'Open it.', done_when: 'it is open' })),
     ).toEqual({ error: 'No lesson is running. Call start_lesson first.' });
+  });
+
+  it("closes the coach's widgets as an abort does, also for a lesson still being planned", async () => {
+    /** A board on the lesson's bus, its tools, and what it shows and has closed. */
+    const widgetsOn = ({ bus, clock, lesson, annotations }: ReturnType<typeof setup>) => {
+      const board = new WidgetBoard({ bus, clock, view: lesson.view() });
+      board.attach();
+      return {
+        tools: board.handlers(),
+        shown: () => board.snapshot().widgets.map((w) => w.id),
+        closed: () =>
+          annotations
+            .filter((a) => a.label === 'widget.updated')
+            .map((a) => a.data as WidgetAnnotation)
+            .filter((a) => a.op === 'close')
+            .map((a) => [a.id, a.reason]),
+      };
+    };
+
+    // Ended while it is planned, nothing is aborted: the lesson goes back to idle.
+    let answer: (r: PlanResponse) => void = () => {};
+    const held = setup({ planner: { plan: () => new Promise((r) => (answer = r)) } });
+    const planning = widgetsOn(held);
+    await held.tool('start_lesson', { goal: 'add wiper fluid' });
+    planning.tools.show_timer({ seconds: 120, label: 'Glue sets' }, { callId: 'w1' });
+    planning.tools.show_value({ label: 'Torque', value: '25 N m' }, { callId: 'w2' });
+    planning.tools.show_caution({ text: 'The pan stays hot' }, { callId: 'w3' });
+    expect(planning.shown()).toEqual(['timer', 'value', 'caution']);
+    await held.tool('end_lesson', { reason: 'stop' });
+    // A running timer stays: nothing silently stops the learner's clock.
+    expect(planning.shown()).toEqual(['timer']);
+    expect(planning.closed()).toEqual([
+      ['value', 'lesson'],
+      ['caution', 'lesson'],
+    ]);
+    answer({ planId: 'refill-fluid', procedure: plan, warnings: [] });
+    await held.lesson.settled();
+
+    // A running lesson is aborted, as before.
+    const live = setup();
+    const running = widgetsOn(live);
+    await live.begin();
+    running.tools.show_caution({ text: 'The pan stays hot' }, { callId: 'w4' });
+    await live.tool('end_lesson', { reason: 'stop' });
+    expect(running.shown()).toEqual([]);
+    expect(running.closed()).toEqual([['caution', 'lesson']]);
   });
 });
 

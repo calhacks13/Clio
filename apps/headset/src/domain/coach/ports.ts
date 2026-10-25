@@ -34,3 +34,11 @@ export interface LessonView {
   /** Who completes steps from sensor checks right now (see docs/coach-plan.md). */
   authority?(): 'coach' | 'local';
 }
+
+/** What the learner's widgets show (domain/widgets), for the coach: never where they are drawn. */
+export interface WidgetsView {
+  /** One line naming every widget on screen, or null when none is. */
+  summary(): string | null;
+  /** A widget timer is running (the stuck nudge waits). */
+  waiting(): boolean;
+}

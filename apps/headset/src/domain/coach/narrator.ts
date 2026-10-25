@@ -5,9 +5,13 @@ import type { Narration } from './agent';
 import type { LessonView } from './ports';
 
 // Turns lesson events into short "[app]" messages for the model: the plan when it arrives, a
-// briefing whenever a step takes focus, completions, the step watcher's suggestions and calls for
-// help. Briefings and questions ask it to speak (`reply: true`); context only updates it. The
-// session records what actually reaches the model.
+// briefing whenever a step takes focus, completions, the step watcher's suggestions, calls for
+// help, and what happened on the learner's widgets (a timer ran out, they touched an answer or
+// ticked an item). Briefings and questions ask it to speak (`reply: true`); context only updates
+// it. The session records what actually reaches the model.
+//
+// A wait on a widget timer is not being stuck: a stuck nudge that comes while one runs is held,
+// and tick() gives it a while after the last timer ends if the learner is still on that step.
 //
 // Perception decides what else it hears. A Gemini coach judges from the camera ('trusted'), so it
 // hears nothing the tracker or the object finder produced: no pinches, no missing or registered
@@ -18,6 +22,18 @@ export interface NarratorOptions {
   pinchThrottleMs?: number;
   /** 'trusted' leaves out tracker and object-finder facts. Default 'all'. */
   perception?: 'all' | 'trusted';
+  /** A widget timer is running: the learner is waiting on purpose, so a stuck nudge waits. */
+  waiting?: () => boolean;
+}
+
+/** A stuck nudge held for a widget timer goes out this long after the last timer ends. */
+const STUCK_AFTER_WAIT_MS = 20_000;
+
+/** A step.stuck that came while a widget timer ran. */
+interface HeldStuck {
+  t: number;
+  stepId: string;
+  elapsedMs: number;
 }
 
 type CompletedBy = AppEvents['step.completed']['by'];
@@ -42,6 +58,9 @@ export class Narrator {
   private lastPinchT = Number.NEGATIVE_INFINITY;
   /** Ids of the briefing tool calls running now. */
   private readonly briefingCalls = new Set<string>();
+  private heldStuck: HeldStuck | null = null;
+  /** When the held nudge's wait ended (no timer running), or null while a timer runs. */
+  private waitEndedT: number | null = null;
   private offs: (() => void)[] = [];
 
   constructor(
@@ -118,6 +137,8 @@ export class Narrator {
       b.on('step.entered', ({ t, stepId, instruction }) => {
         const done = this.pendingDone ? `${this.pendingDone} ` : '';
         this.pendingDone = null;
+        // Entering a step, even the same one again, restarts the runner's stuck count.
+        this.heldStuck = null;
         // The coach moved the focus itself: the tool result carries the briefing.
         if (this.briefingCalls.size > 0) return;
         const plan = this.view.plan();
@@ -158,19 +179,23 @@ export class Narrator {
         );
       }),
       b.on('step.stuck', ({ t, stepId, elapsedMs }) => {
-        const step = this.view.plan()?.steps.find((s) => s.id === stepId);
-        const help = step?.demo
-          ? 'Offer help: call show_demo, then give one tip.'
-          : 'Offer one tip, or ask what is unclear.';
-        this.say(
-          t,
-          'stuck',
-          `They have been on this step for ${Math.round(elapsedMs / 1000)} s. ${help}`,
-          true,
-        );
+        if (this.options.waiting?.()) {
+          this.heldStuck = { t, stepId, elapsedMs };
+          this.waitEndedT = null;
+          return;
+        }
+        this.heldStuck = null;
+        this.stuck(t, stepId, elapsedMs);
+      }),
+      b.on('procedure.aborted', () => {
+        this.heldStuck = null;
+      }),
+      b.on('plan.requested', ({ revision }) => {
+        if (!revision) this.heldStuck = null;
       }),
       b.on('procedure.completed', ({ t, durationMs }) => {
         this.pendingDone = null;
+        this.heldStuck = null;
         this.say(
           t,
           'complete',
@@ -190,6 +215,46 @@ export class Narrator {
           { message },
         );
       }),
+      // What the learner sees and does on the widgets, so a trusted coach hears it too.
+      b.on('widget.timer_done', ({ t, widgetId, label, duration }) => {
+        this.say(
+          t,
+          'timer_done',
+          `Timer "${label}" is up (${duration}). Tell them in a few words, then carry on.`,
+          true,
+          { widgetId, label },
+        );
+      }),
+      b.on('widget.chosen', ({ t, widgetId, question, option, via }) => {
+        // An answer said out loud: the coach heard it.
+        if (via !== 'touch') return;
+        this.say(
+          t,
+          'choice',
+          `They touched "${option}" for your question "${question}". Reply as if they had said it.`,
+          true,
+          { widgetId, option },
+        );
+      }),
+      b.on('widget.ticked', ({ t, widgetId, title, item, done, doneCount, total }) => {
+        if (done && doneCount === total) {
+          this.say(
+            t,
+            'checklist',
+            `They ticked everything on "${title}". Acknowledge it in a few words and go on.`,
+            true,
+            { widgetId, title },
+          );
+          return;
+        }
+        this.say(
+          t,
+          'checklist',
+          `They ${done ? 'ticked' : 'unticked'} "${item}" on "${title}" (${doneCount} of ${total}).`,
+          false,
+          { widgetId, item },
+        );
+      }),
       ...(this.options.perception === 'trusted' ? [] : this.perception()),
     ];
     return () => this.detach();
@@ -198,6 +263,27 @@ export class Narrator {
   detach(): void {
     for (const off of this.offs) off();
     this.offs = [];
+    this.heldStuck = null;
+  }
+
+  /**
+   * Once per frame (CoachSession.tick): a held stuck nudge goes out once no timer has run for
+   * STUCK_AFTER_WAIT_MS, if its step is still focused; a timer starting meanwhile restarts the
+   * wait. A step change, the lesson ending or another starting drops it.
+   */
+  tick(t: number): void {
+    const held = this.heldStuck;
+    if (!held) return;
+    if (this.options.waiting?.()) {
+      this.waitEndedT = null;
+      return;
+    }
+    this.waitEndedT ??= t;
+    if (t - this.waitEndedT < STUCK_AFTER_WAIT_MS) return;
+    this.heldStuck = null;
+    if (this.view.plan()?.focusId !== held.stepId) return;
+    // How long they have been on the step by now.
+    this.stuck(t, held.stepId, held.elapsedMs + (t - held.t));
   }
 
   /** Tracker and object-finder facts, for a coach that can't see for itself. */
@@ -237,6 +323,19 @@ export class Narrator {
         );
       }),
     ];
+  }
+
+  private stuck(t: number, stepId: string, elapsedMs: number): void {
+    const step = this.view.plan()?.steps.find((s) => s.id === stepId);
+    const help = step?.demo
+      ? 'Offer help: call show_demo, then give one tip.'
+      : 'Offer one tip, or ask what is unclear.';
+    this.say(
+      t,
+      'stuck',
+      `They have been on this step for ${Math.round(elapsedMs / 1000)} s. ${help}`,
+      true,
+    );
   }
 
   /** The plan in a few lines, or the procedure's steps when there is no plan view yet. */

@@ -18,8 +18,10 @@ changes). While a step is focused something is always lit (`domain/overlay/light
 items, else its targets and action objects, plus the action focus's next thing to touch and the
 coach's `highlight`. The action focus (`domain/session/action-focus.ts`) asks Robotics-ER 2 every
 5 s; its boxes anchor the tracker over jev and its words become what jev is told. Perception feeds
-only the learner's view and the recorded data, never a Gemini coach. The desk lab
-(`apps/headset/desk.html`, `docs/dev-setup.md`) runs a whole lesson on the laptop's camera.
+only the learner's view and the recorded data, never a Gemini coach. The voice can also show widgets
+(timer, progress, checklist, choices, value, caution) beside the step card; `docs/widgets.md` is the
+reference. The desk lab (`apps/headset/desk.html`, `docs/dev-setup.md`) runs a whole lesson on the
+laptop's camera.
 
 ## Visualizer handoff
 

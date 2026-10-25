@@ -4,8 +4,8 @@ import { describe, expect, it } from 'vitest';
 
 // Fitness test for the dependency rule in docs/ARCHITECTURE.md §5.1: core/ and domain/ are plain
 // TypeScript. They must not import rendering, XR, SDK or emulator packages, nor adapters/ or app/.
-// And the coach never sees perception (docs/coach-plan.md): domain/coach/ imports nothing from the
-// world model, the hand tracker or the success checks.
+// And the coach never sees perception (docs/coach-plan.md): domain/coach/ and the widgets it shows
+// (domain/widgets/) import nothing from the world model, the hand tracker or the success checks.
 
 const SRC = join(import.meta.dirname, '..', 'src');
 const FORBIDDEN_PACKAGES = [
@@ -16,7 +16,8 @@ const FORBIDDEN_PACKAGES = [
   /^@iwer\//,
 ];
 const FORBIDDEN_LAYERS = ['adapters', 'app'];
-const COACH = 'domain/coach/';
+/** What the coach hears comes from here: never perception. */
+const COACH_SIDE = ['domain/coach/', 'domain/widgets/'];
 const PERCEPTION = [/^domain\/world\//, /^domain\/hands\//, /^domain\/procedure\/checks(\.ts)?$/];
 
 /** A path relative to src/, with forward slashes. */
@@ -41,7 +42,8 @@ function violations(file: string, source: string): string[] {
       const target = fromSrc(resolve(dirname(file), spec));
       const layer = target.split('/')[0] ?? '';
       if (FORBIDDEN_LAYERS.includes(layer)) return [`${file} imports ${spec} (${layer}/)`];
-      if (fromSrc(file).startsWith(COACH) && PERCEPTION.some((re) => re.test(target)))
+      const coachSide = COACH_SIDE.some((p) => fromSrc(file).startsWith(p));
+      if (coachSide && PERCEPTION.some((re) => re.test(target)))
         return [`${file} imports ${spec} (perception, into the coach)`];
     }
     return [];
@@ -77,6 +79,13 @@ describe('dependency rule', () => {
     }
     expect(violations(coach, "import { recitePlan } from '../plan/recital';")).toHaveLength(0);
     expect(violations(coach, "import type { AppBus } from '../events';")).toHaveLength(0);
+    const widgets = join(SRC, 'domain', 'widgets', 'x.ts');
+    expect(
+      violations(widgets, "import type { ObjectOutline } from '../world/outline';"),
+    ).toHaveLength(1);
+    expect(violations(widgets, "import type { LessonView } from '../coach/ports';")).toHaveLength(
+      0,
+    );
     const session = join(SRC, 'domain', 'session', 'x.ts');
     expect(violations(session, "import type { Grounder } from '../world/grounding';")).toHaveLength(
       0,

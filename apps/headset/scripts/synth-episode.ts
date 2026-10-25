@@ -42,6 +42,7 @@ import {
 } from '@clio/protocol';
 import { defaultQuestCameraModel } from '../src/adapters/camera/calibration';
 import { ScriptedAgent } from '../src/adapters/scripted/scripted-agent';
+import { coachWidgets } from '../src/app/coach-widgets';
 import { ManualClock } from '../src/core/clock';
 import { Emitter } from '../src/core/emitter';
 import {
@@ -224,6 +225,7 @@ async function setUp(s: ScenarioSetup) {
     clock,
     view: lesson.view(),
     voice: { play: () => {}, say: () => {}, stop: () => {} },
+    ...coachWidgets(null),
   });
   await coach.start();
 

@@ -46,6 +46,8 @@ export interface AppConfig {
    * Off unless ?scan=1.
    */
   scan: boolean;
+  /** The coach's widgets beside the step card (docs/widgets.md). 0: no board, no widget tools. */
+  widgets: boolean;
 }
 
 const DEFAULTS: AppConfig = {
@@ -68,6 +70,7 @@ const DEFAULTS: AppConfig = {
   liveHeld: true,
   focus: true,
   scan: false,
+  widgets: true,
 };
 
 function oneOf<T extends string>(value: string | null, allowed: readonly T[], fallback: T): T {
@@ -115,5 +118,6 @@ export function readConfig(search: string): AppConfig {
     liveHeld: flag(q.get('liveHeld'), DEFAULTS.liveHeld),
     focus: flag(q.get('focus'), DEFAULTS.focus),
     scan: flag(q.get('scan'), DEFAULTS.scan),
+    widgets: flag(q.get('widgets'), DEFAULTS.widgets),
   };
 }

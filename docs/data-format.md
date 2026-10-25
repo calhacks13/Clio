@@ -277,9 +277,12 @@ answer 400 to one), so readers skip labels they don't know. Among them:
 | `primary.target`      | `primary.html`, when the tracked target changes | `{ objectId, name, previous }`: what the tracker follows now (null for nothing)    |
 | `lesson.first_step`   | a lesson, as its first step starts              | how `start_lesson` got there and how long it took ([coach-plan.md](coach-plan.md)) |
 | `lesson.first_locate` | a lesson, once its first look has answered      | `{ locateMs, sinceStartMs, located, missing }`                                     |
+| `widget.updated`      | the coach's widgets, on every change            | the whole widget after each change ([widgets.md](widgets.md#what-is-recorded))     |
 
-A change of what a tracker follows is an annotation for the same reason. The coach's own labels
-(`plan.*`, `step.watch`, `coach.*`) are described in [coach-plan.md](coach-plan.md).
+A change of what a tracker follows is an annotation for the same reason, and so is every change to
+the coach's widgets: folding the `widget.updated` annotations by `seq` gives what the learner saw at
+any frame. The coach's own labels (`plan.*`, `step.watch`, `coach.*`) are described in
+[coach-plan.md](coach-plan.md).
 
 ## `finish.json`: `EpisodeFinish`
 

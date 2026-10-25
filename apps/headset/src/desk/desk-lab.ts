@@ -12,6 +12,7 @@ import {
 import { RemoteStepChecker, RemoteTemplates } from '../adapters/net/remote-plan';
 import type { TrackerSocket } from '../adapters/net/tracker-client';
 import { ScriptedAgent } from '../adapters/scripted/scripted-agent';
+import { coachWidgets } from '../app/coach-widgets';
 import { type Clock, performanceClock } from '../core/clock';
 import { Emitter } from '../core/emitter';
 import { createLogger } from '../core/log';
@@ -347,6 +348,8 @@ export class DeskLab {
         ...(this.mic ? { mic: this.mic } : {}),
         ...(agent.kind === 'gemini' ? { camera } : {}),
         templates,
+        // No widgets on the desk: no widget tools, and nothing about them in the instruction.
+        ...coachWidgets(null),
       });
     };
     try {

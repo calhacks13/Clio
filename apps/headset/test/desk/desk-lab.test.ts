@@ -1,8 +1,10 @@
 import {
   ApiPaths,
+  COACH_TOOL_NAMES,
   type FocusRequest,
   type FocusResponse,
   type HealthResponse,
+  isWidgetTool,
   type PlanResponse,
   parseProcedure,
 } from '@clio/protocol';
@@ -294,6 +296,15 @@ describe('DeskLab', () => {
     // Done confirms the focused step.
     expect(lab.done()).toMatchObject({ ok: true });
     expect(lab.plan()?.focusId).toBe('wipe');
+  });
+
+  it('gives the coach no widget tools, and nothing about widgets in its instruction', async () => {
+    const { lab, agents } = setup();
+    await lab.start();
+    const tools = agents[0]?.setup?.tools ?? [];
+    expect(tools).toEqual(COACH_TOOL_NAMES.filter((n) => !isWidgetTool(n)));
+    expect(tools).toEqual(expect.arrayContaining(['end_lesson', 'highlight', 'look_closer']));
+    expect(agents[0]?.setup?.systemInstruction).not.toMatch(/widget|show_timer|clear_widget/);
   });
 
   it('sends a typed turn to the voice as the learner, and mutes the mic with silence', async () => {

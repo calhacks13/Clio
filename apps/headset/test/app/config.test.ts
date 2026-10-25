@@ -23,12 +23,13 @@ describe('readConfig', () => {
       liveHeld: true,
       focus: true,
       scan: false,
+      widgets: true,
     });
   });
 
   it('reads options from the URL', () => {
     const c = readConfig(
-      '?coach=scripted&mode=record_demo&procedure=shirt-fold&goal=fold%20a%20shirt&debug=1&emulate=1&calibrate=1&camera=0&autoDemo=0&voice=Kore&transport=direct&showRefresh=5000&table=off&live=0&tracker=8791&frame=640&liveHeld=0&focus=0&scan=1',
+      '?coach=scripted&mode=record_demo&procedure=shirt-fold&goal=fold%20a%20shirt&debug=1&emulate=1&calibrate=1&camera=0&autoDemo=0&voice=Kore&transport=direct&showRefresh=5000&table=off&live=0&tracker=8791&frame=640&liveHeld=0&focus=0&scan=1&widgets=0',
     );
     expect(c).toEqual({
       coach: 'scripted',
@@ -50,6 +51,7 @@ describe('readConfig', () => {
       liveHeld: false,
       focus: false,
       scan: true,
+      widgets: false,
     });
   });
 
@@ -67,5 +69,11 @@ describe('readConfig', () => {
     const tracker = readConfig('?tracker=localhost&frame=-1&live=maybe');
     expect([tracker.trackerPort, tracker.frameWidth, tracker.live]).toEqual([null, null, true]);
     expect(readConfig('?scan=maybe').scan).toBe(false);
+  });
+
+  it('shows the widgets unless ?widgets=0', () => {
+    expect(readConfig('?widgets=1').widgets).toBe(true);
+    expect(readConfig('?widgets=maybe').widgets).toBe(true);
+    expect(readConfig('?widgets=false').widgets).toBe(false);
   });
 });

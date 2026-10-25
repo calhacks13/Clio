@@ -28,6 +28,9 @@ import {
   WorkspacePresenter,
 } from '../adapters/render/presenters/workspace-view';
 import { SceneRuntime } from '../adapters/render/scene-runtime';
+import { WidgetChipsPresenter } from '../adapters/render/widgets/chips';
+import { WidgetDockPresenter } from '../adapters/render/widgets/dock';
+import { preloadWidgetFonts } from '../adapters/render/widgets/fonts';
 import { ScriptedAgent } from '../adapters/scripted/scripted-agent';
 import { WorkspaceAnchor } from '../adapters/xr/anchors';
 import { XrPlaneReader } from '../adapters/xr/environment';
@@ -51,6 +54,7 @@ import { EpisodeRecorder } from '../domain/recording/recorder';
 import { ActionFocus } from '../domain/session/action-focus';
 import { CloserLook } from '../domain/session/closer-look';
 import { LessonController } from '../domain/session/lesson-controller';
+import { WidgetBoard } from '../domain/widgets/board';
 import { CalibrationFlow } from '../domain/world/calibration';
 import { EnvironmentRecorder } from '../domain/world/environment';
 import { ObjectGrounder } from '../domain/world/grounding';
@@ -60,6 +64,7 @@ import { PoseHistory } from '../domain/world/pose-history';
 import { RoomScanRecorder } from '../domain/world/room-scan';
 import { chooseTablePlane, fitTable, type TablePlane } from '../domain/world/table-snap';
 import { Workspace, workspaceInFrontOf } from '../domain/world/workspace';
+import { coachHandlers, coachWidgets } from './coach-widgets';
 import type { AppConfig } from './config';
 import { KeyframeCapture } from './keyframe-capture';
 import { LiveTracker } from './live-tracker';
@@ -71,6 +76,7 @@ import { LiveTracker } from './live-tracker';
 // with a Gemini key Robotics-ER 2's action focus boxes the step's objects for it every few seconds
 // and names the next thing to touch (?focus=0 turns it off). With ?scan=1 the recording keeps the
 // Quest room scan and a few camera keyframes of the work beside the lesson (docs/room-scene.md).
+// The coach's widgets (docs/widgets.md) sit beside the step card unless ?widgets=0.
 
 const log = createLogger('app');
 const PINCH_NEAREST_M = 0.15;
@@ -111,6 +117,8 @@ export class ClioApp {
   private readonly lesson: LessonController;
   /** The voice coach's line to the smart model (look_closer). */
   private readonly closerLook: CloserLook;
+  /** The coach's widgets (show_timer and the rest); null with ?widgets=0. */
+  private readonly widgets: WidgetBoard | null;
   private readonly overlay: OverlayModel;
   private readonly sampler = new FrameSampler();
   private readonly surfaces = new XrPlaneSurfaces();
@@ -235,6 +243,13 @@ export class ClioApp {
       clock,
       placer: grounder,
     });
+    const widgets = o.config.widgets
+      ? new WidgetBoard({ bus, clock, view: this.lesson.view() })
+      : null;
+    widgets?.attach();
+    // The widgets' faces and glyphs, parsed once now, so the first card shows its text at once.
+    if (widgets) void preloadWidgetFonts();
+    this.widgets = widgets;
     this.overlay = new OverlayModel(bus, this.lesson.view());
     this.overlay.attach();
     this.focus = createActionFocus({
@@ -256,9 +271,21 @@ export class ClioApp {
       new GhostHandsPresenter(),
       new GlyphsPresenter(),
       new WorkspacePresenter(),
+      ...(widgets ? [new WidgetChipsPresenter({ source: () => widgets.snapshot() })] : []),
     ];
+    const card = new InstructionPanelPresenter(() => this.lesson.confirmByUser('Done button'));
     this.worldPresenters = [
-      new InstructionPanelPresenter(() => this.lesson.confirmByUser('Done button')),
+      card,
+      // Right after the card: the dock hangs off the card's pose and width, set this frame.
+      ...(widgets
+        ? [
+            new WidgetDockPresenter({
+              source: () => widgets.snapshot(),
+              onIntent: (intent) => widgets.touch(intent),
+              anchor: card,
+            }),
+          ]
+        : []),
       new HudPresenter(),
       new CalibrationMarkerPresenter(),
       ...(this.live ? [this.live.presenter] : []),
@@ -345,6 +372,8 @@ export class ClioApp {
       objects: { position: (id) => this.registry.position(id) },
     });
     this.overlay.setProgress(this.lesson.runnerState?.progress ?? 0);
+    // Before the coach's tick, so a timer that ran out is told this frame.
+    this.widgets?.tick(t);
     this.coach?.tick(t);
     this.focus?.tick(t)?.catch((err: unknown) => log.warn(`action focus failed: ${String(err)}`));
     if (!this.kickedOff && !this.calibration && this.tableDeadline === null) {
@@ -509,7 +538,7 @@ export class ClioApp {
       new CoachSession({
         agent,
         toolbox: new CoachToolbox(
-          { ...this.lesson.handlers(), ...this.closerLook.handlers() },
+          coachHandlers(this.lesson.handlers(), this.closerLook.handlers(), this.widgets),
           this.bus,
           this.clock,
         ),
@@ -521,6 +550,7 @@ export class ClioApp {
         ...(camera && agent.kind === 'gemini' ? { camera } : {}),
         ...(this.o.procedure?.coach.persona ? { persona: this.o.procedure.coach.persona } : {}),
         templates,
+        ...coachWidgets(this.widgets),
       });
     try {
       this.agent = make(!!useGemini);
