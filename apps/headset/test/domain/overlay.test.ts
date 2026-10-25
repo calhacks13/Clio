@@ -2,6 +2,7 @@ import { parseProcedure } from '@clio/protocol';
 import { describe, expect, it } from 'vitest';
 import { Emitter } from '../../src/core/emitter';
 import type { AppEvents } from '../../src/domain/events';
+import { ACCENTS, HINT_OPACITY } from '../../src/domain/overlay/accents';
 import { OverlayModel } from '../../src/domain/overlay/overlay-model';
 import type { ObjectOutline } from '../../src/domain/world/outline';
 
@@ -118,13 +119,39 @@ describe('OverlayModel', () => {
     const brackets: ObjectOutline = { ...outline, shape: 'box' };
     const offset: [number, number, number] = [0, 0, 0];
     const show = (t: number, objectId: string, o: ObjectOutline, rank: number, phrase: string) =>
-      bus.emit('overlay.outline', { t, objectId, outline: o, offset, rank, phrase });
+      bus.emit('overlay.outline', {
+        t,
+        objectId,
+        outline: o,
+        offset,
+        rank,
+        role: rank === 0 ? 'act' : 'destination',
+        phrase,
+      });
     show(5, 'jug', outline, 1, 'jug');
     show(6, 'cap', outline, 0, 'blue cap');
     show(7, 'cap', brackets, 0, 'blue cap');
+    const act = { color: ACCENTS.act, opacity: 1 };
+    const destination = { color: ACCENTS.destination, opacity: 1 };
     expect(model.snapshot(10).outlines).toEqual([
-      { objectId: 'cap', outline: brackets, offset, rank: 0, phrase: 'blue cap' },
-      { objectId: 'jug', outline, offset, rank: 1, phrase: 'jug' },
+      {
+        objectId: 'cap',
+        outline: brackets,
+        offset,
+        rank: 0,
+        role: 'act',
+        phrase: 'blue cap',
+        accent: act,
+      },
+      {
+        objectId: 'jug',
+        outline,
+        offset,
+        rank: 1,
+        role: 'destination',
+        phrase: 'jug',
+        accent: destination,
+      },
     ]);
     enter(1, 'pour');
     expect(model.snapshot(20).outlines).toEqual([]);
@@ -147,5 +174,74 @@ describe('OverlayModel', () => {
     expect(s.instruction).toBeNull();
     expect(s.highlights).toEqual([]);
     expect(s.toast?.kind).toBe('success');
+  });
+  it('colors each outline by its role, a part taking the color of the item before it', () => {
+    const { bus, model } = setup();
+    bus.emit('step.entered', { t: 0, stepId: 'pour', index: 1, instruction: 'x', targets: [] });
+    const o: ObjectOutline = {
+      points: [
+        [0, 0],
+        [0.01, 0],
+        [0, 0.01],
+      ],
+      shape: 'contour',
+    };
+    const offset: [number, number, number] = [0, 0, 0];
+    const show = (objectId: string, rank: number, role: 'act' | 'destination' | 'part' | 'level') =>
+      bus.emit('overlay.outline', {
+        t: 1,
+        objectId,
+        outline: o,
+        offset,
+        rank,
+        role,
+        phrase: objectId,
+      });
+    show('jug', 0, 'destination');
+    show('spout', 1, 'part');
+    show('cap', 2, 'act');
+    show('line', 3, 'level');
+    expect(model.snapshot(2).outlines.map((x) => [x.objectId, x.accent.color])).toEqual([
+      ['jug', ACCENTS.destination],
+      ['spout', ACCENTS.destination],
+      ['cap', ACCENTS.act],
+      ['line', ACCENTS.level],
+    ]);
+  });
+
+  it('restyles an outline while a highlight lasts: a white hint, a red pulse that ends', () => {
+    const { bus, model } = setup();
+    bus.emit('step.entered', {
+      t: 0,
+      stepId: 'open',
+      index: 0,
+      instruction: 'x',
+      targets: ['cap'],
+    });
+    const o: ObjectOutline = {
+      points: [
+        [0, 0],
+        [0.01, 0],
+        [0, 0.01],
+      ],
+      shape: 'contour',
+    };
+    bus.emit('overlay.outline', {
+      t: 1,
+      objectId: 'cap',
+      outline: o,
+      offset: [0, 0, 0],
+      rank: 0,
+      role: 'act',
+      phrase: 'cap',
+    });
+    const accent = (t: number) => model.snapshot(t).outlines[0]?.accent;
+    expect(accent(2)).toEqual({ color: ACCENTS.act, opacity: 1 });
+    bus.emit('overlay.highlight', { t: 10, objectId: 'cap', style: 'attention', source: 'coach' });
+    expect(accent(11)).toEqual({ color: ACCENTS.hint, opacity: HINT_OPACITY });
+    expect(accent(6000)).toEqual({ color: ACCENTS.act, opacity: 1 });
+    bus.emit('overlay.highlight', { t: 7000, objectId: 'cap', style: 'warning', source: 'coach' });
+    expect(accent(7100)).toEqual({ color: ACCENTS.stop, opacity: 1 });
+    expect(accent(7700)).toEqual({ color: ACCENTS.act, opacity: 1 });
   });
 });

@@ -542,6 +542,16 @@
                       "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
                       "description": "The declared object this item outlines"
                     },
+                    "role": {
+                      "description": "Its highlight color by meaning (apps/headset/DESIGN.md). Left out: containers and regions are destinations, the first other item is what to act on",
+                      "type": "string",
+                      "enum": [
+                        "act",
+                        "destination",
+                        "part",
+                        "level"
+                      ]
+                    },
                     "phrase": {
                       "type": "string",
                       "minLength": 1,

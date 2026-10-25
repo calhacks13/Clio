@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import type { PresentContext } from '../../src/adapters/render/presenter';
 import { OutlinesPresenter } from '../../src/adapters/render/presenters/outlines';
 import type { Vec3 } from '../../src/core/math';
+import { ACCENTS, roleAccent } from '../../src/domain/overlay/accents';
 import type { OverlayOutline, OverlaySnapshot } from '../../src/domain/overlay/overlay-model';
 import type { ObjectEstimate } from '../../src/domain/world/object-registry';
 import type { ObjectOutline } from '../../src/domain/world/outline';
@@ -92,13 +93,18 @@ type Drawn = Group & {
 };
 const drawn = (presenter: OutlinesPresenter) => presenter.object.children as Drawn[];
 const facing = (group: Group) => new Vector3(0, 0, 1).applyQuaternion(group.quaternion);
-const cap = (outline: ObjectOutline, rank = 0, offset: Vec3 = [0, 0, 0]): OverlayOutline => ({
-  objectId: 'cap',
-  outline,
-  offset,
-  rank,
-  phrase: 'blue cap',
-});
+const cap = (outline: ObjectOutline, rank = 0, offset: Vec3 = [0, 0, 0]): OverlayOutline => {
+  const role = rank === 0 ? 'act' : 'destination';
+  return {
+    objectId: 'cap',
+    outline,
+    offset,
+    rank,
+    role,
+    phrase: 'blue cap',
+    accent: { color: roleAccent(role, null), opacity: 1 },
+  };
+};
 
 describe('OutlinesPresenter', () => {
   it("hangs each outline on its object's current estimate, turned toward the learner", () => {
@@ -154,13 +160,18 @@ describe('OutlinesPresenter', () => {
     presenter.dispose();
   });
 
-  it('colors what to act on and where it goes apart', () => {
+  it("draws each outline in the overlay model's accent: what to act on, then where it goes", () => {
     const presenter = new OutlinesPresenter();
     const outlines = [cap(CONTOUR), { ...cap(CONTOUR, 1), objectId: 'jug' }];
     const objects = [estimate('cap', [0, 0, -1]), estimate('jug', [0.3, 0, -1])];
     presenter.update(context(outlines, objects, [0, 0, 0]));
-    const [first, second] = drawn(presenter).map((g) => g.children[0]?.material.color.getHex());
-    expect(first).not.toBe(second);
+    const colors = drawn(presenter).map((g) => g.children[0]?.material.color.getHex());
+    expect(colors).toEqual([ACCENTS.act, ACCENTS.destination]);
+    const hint = { ...cap(CONTOUR), accent: { color: ACCENTS.hint, opacity: 0.6 } };
+    presenter.update(context([hint, outlines[1] as OverlayOutline], objects, [0, 0, 0]));
+    const [first] = drawn(presenter);
+    expect(first?.children[0]?.material.color.getHex()).toBe(ACCENTS.hint);
+    expect(first?.children[0]?.material.opacity).toBeCloseTo(0.6 * 0.95);
   });
 
   it('hides an outline while its object is in hand, and drops it when the step moves on', () => {

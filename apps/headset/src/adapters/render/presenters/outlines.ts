@@ -2,16 +2,14 @@ import { Group, Matrix4, Vector3 } from 'three';
 import { add, invertPose, transformPoint } from '../../../core/math';
 import type { OverlayOutline } from '../../../domain/overlay/overlay-model';
 import { billboard, type ObjectOutline } from '../../../domain/world/outline';
-import { OBJECT_HIGHLIGHT_COLOR, type ObjectGlowMode, ObjectHighlight } from '../object-highlight';
+import { type ObjectGlowMode, ObjectHighlight } from '../object-highlight';
 import type { PresentContext, Presenter } from '../presenter';
 
 // Glows over the real objects the current step shows: the finder's silhouette, or corner
 // brackets around its box. Each one hangs on a plane through the object's current estimate, so it
 // rides along when the object is carried and put down, and the plane turns toward the learner
-// every frame, so the outline stays around the object as they move.
-
-/** What to act on, then where it goes. */
-const RANK_COLORS = [OBJECT_HIGHLIGHT_COLOR, 0xffd23f] as const;
+// every frame, so the outline stays around the object as they move. Its color is the overlay
+// model's accent: the object's role in the step, restyled by any highlight on it (accents.ts).
 
 interface Drawn {
   group: ObjectHighlight;
@@ -47,7 +45,8 @@ export class OutlinesPresenter implements Presenter {
       group.position.set(...center);
       basis.makeBasis(right.set(...plane.right), up.set(...plane.up), toEye.set(...plane.normal));
       group.quaternion.setFromRotationMatrix(basis);
-      group.setColor(RANK_COLORS[Math.min(item.rank, RANK_COLORS.length - 1)] ?? 0);
+      group.setColor(item.accent.color);
+      group.setOpacity(item.accent.opacity);
     }
     const listed = new Set(ctx.snapshot.outlines.map((o) => o.objectId));
     for (const [id, drawn] of this.drawn) {

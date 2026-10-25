@@ -1,8 +1,10 @@
+import type { HighlightRole } from '@clio/protocol';
 import type { Vec3 } from '../../core/math';
 import type { AgentState } from '../coach/agent';
 import type { LessonView } from '../coach/ports';
 import type { AppBus, HighlightStyle, LessonPhase } from '../events';
 import type { ObjectOutline } from '../world/outline';
+import { type Accent, roleAccent, styledAccent, WARNING_MS } from './accents';
 
 // The presentation model: what the AR layer should show, reduced from bus events. Presenters read
 // a snapshot each frame and never reach into domain objects themselves.
@@ -23,8 +25,15 @@ export interface OverlayOutline {
   offset: Vec3;
   /** 0 is what to act on, then where it goes. */
   rank: number;
+  /** What the glow means; with any highlight on the object, it picks the accent. */
+  role: HighlightRole;
   phrase: string;
+  /** The color and energy to draw it with (accents.ts). */
+  accent: Accent;
 }
+
+/** An outline as the bus reports it, before its accent is worked out. */
+type StoredOutline = Omit<OverlayOutline, 'accent'>;
 
 export interface OverlaySnapshot {
   phase: LessonPhase;
@@ -58,7 +67,7 @@ export class OverlayModel {
   private instruction: Omit<NonNullable<OverlaySnapshot['instruction']>, 'progress'> | null = null;
   private progress = 0;
   private highlights: OverlayHighlight[] = [];
-  private readonly outlines = new Map<string, OverlayOutline>();
+  private readonly outlines = new Map<string, StoredOutline>();
   private toast: (NonNullable<OverlaySnapshot['toast']> & { until: number }) | null = null;
   private demoStepId: string | null = null;
   private caption: (NonNullable<OverlaySnapshot['caption']> & { until: number }) | null = null;
@@ -114,15 +123,14 @@ export class OverlayModel {
         this.highlights = this.highlights.filter(
           (h) => !(h.objectId === objectId && h.source === source),
         );
-        this.highlights.push({
-          objectId,
-          style,
-          source,
-          until: source === 'coach' ? t + COACH_HIGHLIGHT_MS : null,
-        });
+        // A warning is a pulse, never a steady red; a coach hint lasts a moment; a step target
+        // lasts the step.
+        const until =
+          style === 'warning' ? t + WARNING_MS : source === 'coach' ? t + COACH_HIGHLIGHT_MS : null;
+        this.highlights.push({ objectId, style, source, until });
       }),
-      b.on('overlay.outline', ({ objectId, outline, offset, rank, phrase }) => {
-        this.outlines.set(objectId, { objectId, outline, offset, rank, phrase });
+      b.on('overlay.outline', ({ objectId, outline, offset, rank, role, phrase }) => {
+        this.outlines.set(objectId, { objectId, outline, offset, rank, role, phrase });
       }),
       b.on('overlay.demo', ({ stepId, playing }) => {
         this.demoStepId = playing ? stepId : null;
@@ -161,7 +169,7 @@ export class OverlayModel {
       title: this.title ?? this.view.procedure()?.title ?? null,
       instruction: this.instruction && { ...this.instruction, progress: this.progress },
       highlights: [...this.highlights],
-      outlines: [...this.outlines.values()].sort((a, b) => a.rank - b.rank),
+      outlines: this.accented(),
       toast: this.toast && { kind: this.toast.kind, text: this.toast.text },
       demoStepId: this.demoStepId,
       caption: this.caption && { role: this.caption.role, text: this.caption.text },
@@ -169,6 +177,25 @@ export class OverlayModel {
       recording: this.recording,
       missing: [...this.missing],
     };
+  }
+
+  /**
+   * The outlines most important first, each with its accent: its role's color, a part taking the
+   * color of the item listed before it, and any highlight on the object restyling it while it
+   * lasts (the coach's over the step's own).
+   */
+  private accented(): OverlayOutline[] {
+    const out: OverlayOutline[] = [];
+    let previous: number | null = null;
+    for (const o of [...this.outlines.values()].sort((a, b) => a.rank - b.rank)) {
+      const base = roleAccent(o.role, previous);
+      previous = base;
+      const styled =
+        this.highlights.find((h) => h.objectId === o.objectId && h.source === 'coach') ??
+        this.highlights.find((h) => h.objectId === o.objectId);
+      out.push({ ...o, accent: styledAccent(base, styled?.style ?? null) });
+    }
+    return out;
   }
 
   private endLesson(): void {

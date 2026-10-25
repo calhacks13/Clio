@@ -56,3 +56,35 @@ Cost: the CPU builds only that field per new mask (about 0.9 ms on a Mac for a 6
 with no allocations; all softness is shaped in the fragment shader. Quad, material and texture are
 reused; XR frames only move, fade and animate the group. `glow-preview.html` renders the effect
 on the demo photo with saved masks, a live local tracker mask, jitter and an orbiting eye.
+
+# Highlight colors
+
+One accent per object, chosen by the object's role in the current step, never by its position
+in the show list (today's rank table in `presenters/outlines.ts` is the thing to replace). The
+coach never names a color: it names a style, and the style maps here. These are the only accents
+allowed; solid, saturated emitters, no tints, no gradients, no outline stroke.
+
+| Role | What the learner reads | Accent | Where it comes from |
+| ---- | ---------------------- | ------ | ------------------- |
+| Act | the thing to pick up or operate now | cyan `#24d4ed` | the step's acting show item (`tool`, `item`) |
+| Destination | where it goes, what it fits into | yellow `#ffd23f` | the step's `container` or `region` |
+| Part | the exact spot on an object (door, scale, button) | the parent's accent, surface mode | an `item` or `region` that belongs to a parent |
+| Goal level | how far: the fill band on a beaker, the mark to reach | green `#3ddc84` | a step with a target amount; the band is the part of the object's mask below the target line |
+| Stop or wrong | too far, the wrong object, keep clear | red `#ff5a5a`, a 0.6 s pulse that fades | the watcher's mistakes; coach style `warning` |
+| Coach hint | what the coach is pointing at, for 5 s | white `#f2f6fa`, at 60% energy | coach style `attention` |
+
+Coach styles: `target` recolors nothing and flares the object's own accent; `attention` adds the
+white hint around it; `warning` pulses red. A hint never replaces a step color: it is a second,
+softer glow on the same silhouette.
+
+Rules: at most one cyan and one yellow at a time, so the eye always knows what moves and where.
+Green appears only once the acting object is in hand. Red is never steady. Colors follow the
+step, not the object: the beaker that was a destination is cyan the moment a step acts on it.
+(This is the design's call, made 2026-10-24; change it here if lessons read better with
+object-stable colors.)
+
+Implementation map: the plan gives each show item a `role` (act, destination, part, level) and
+an optional target amount; the overlay model turns role, coach style and source into one accent
+from this table; the outlines presenter reads that accent; the level band is cut from the
+tracker's mask in the renderer. The tracker (`tracker/`) sends geometry only and knows nothing
+about color.

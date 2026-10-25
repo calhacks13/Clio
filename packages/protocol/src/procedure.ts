@@ -73,9 +73,21 @@ export const MistakeRuleSchema = z.object({
   cooldownMs: z.number().int().nonnegative().default(4000),
 });
 
+export const HighlightRoleSchema = z
+  .enum(['act', 'destination', 'part', 'level'])
+  .describe(
+    'What the glow means: act (the thing to pick up or operate), destination (where it goes), ' +
+      'part (a spot on the object listed before it), level (how far, e.g. a fill target)',
+  );
+export type HighlightRole = z.infer<typeof HighlightRoleSchema>;
+
 export const ShowItemSchema = z
   .object({
     object: SlugSchema.describe('The declared object this item outlines'),
+    role: HighlightRoleSchema.optional().describe(
+      'Its highlight color by meaning (apps/headset/DESIGN.md). Left out: containers and ' +
+        'regions are destinations, the first other item is what to act on',
+    ),
     phrase: z
       .string()
       .min(1)
