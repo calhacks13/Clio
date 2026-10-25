@@ -68,6 +68,7 @@ function context(
     demoStepId: null,
     caption: null,
     coach: 'off',
+    voice: 'quiet',
     recording: null,
     missing: [],
   };

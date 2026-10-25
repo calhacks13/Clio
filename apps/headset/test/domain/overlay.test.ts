@@ -107,6 +107,17 @@ describe('OverlayModel', () => {
     expect(model.snapshot(10).missing).toEqual(['cap']);
   });
 
+  it("carries the coach's connection and the conversation, off until a coach hears", () => {
+    const { bus, model } = setup();
+    expect(model.snapshot(0)).toMatchObject({ coach: 'off', voice: 'off' });
+    bus.emit('coach.voice', { t: 0, voice: 'quiet' });
+    bus.emit('coach.status', { t: 1, state: 'ready' });
+    bus.emit('coach.voice', { t: 2, voice: 'hearing' });
+    expect(model.snapshot(3)).toMatchObject({ coach: 'ready', voice: 'hearing' });
+    bus.emit('coach.voice', { t: 4, voice: 'off' });
+    expect(model.snapshot(5).voice).toBe('off');
+  });
+
   it("keeps the outlines of what the step shows, most important first, for the step's length", () => {
     const { bus, model } = setup();
     const enter = (index: number, stepId: string) =>

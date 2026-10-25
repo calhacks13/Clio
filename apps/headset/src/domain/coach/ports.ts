@@ -13,6 +13,11 @@ export interface VoiceOutput {
   say(text: string): void;
   /** Stop and discard anything queued (barge-in). */
   stop(): void;
+  /**
+   * Whether anything played or said is still coming out. Without it, speech counts as over when
+   * the model's turn ends.
+   */
+  playing?(): boolean;
 }
 
 /** Port: camera snapshots for the coach (base64 JPEG), or null when unavailable. */

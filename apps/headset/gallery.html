@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>UI gallery</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='5' y='5' width='22' height='22' rx='4' fill='%230F1117'/%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <!-- Every UI Clio has, in its states, from the real code (src/gallery/main.ts). -->
+    <header class="bar">
+      <div class="bar-inner">
+        <span class="wordmark">UI gallery</span>
+        <nav aria-label="Sections">
+          <a href="#launch">Launch page</a>
+          <a href="#panel">Lesson panel</a>
+          <a href="#pages">Other pages</a>
+        </nav>
+      </div>
+    </header>
+    <main>
+      <section id="launch" aria-labelledby="launch-title">
+        <div class="section-head">
+          <h2 id="launch-title">Launch page</h2>
+          <code>src/app/boot-view.ts</code>
+        </div>
+        <div id="launch-frames" class="frames"></div>
+        <h3 id="phone-width">Phone width</h3>
+        <div id="launch-phone" class="frames phone"></div>
+      </section>
+
+      <section id="panel" aria-labelledby="panel-title">
+        <div class="section-head">
+          <h2 id="panel-title">Lesson panel</h2>
+          <code>src/adapters/render/presenters/instruction-panel.ts</code>
+        </div>
+        <div id="panel-cards" class="cards"></div>
+      </section>
+
+      <section id="pages" aria-labelledby="pages-title">
+        <div class="section-head">
+          <h2 id="pages-title">Other pages</h2>
+        </div>
+        <dl class="pages">
+          <div>
+            <dt><a href="index.html?emulate=1&amp;debug=1" target="_blank" rel="noopener">index.html?emulate=1&amp;debug=1</a></dt>
+            <dd>The lesson app in the desktop emulator (IWER's Quest 3 and synthetic room), with debug on.</dd>
+          </div>
+          <div>
+            <dt><a href="bench.html" target="_blank" rel="noopener">bench.html</a></dt>
+            <dd>Planner bench: plan from the laptop camera, compare models, save scenarios and re-run them.</dd>
+          </div>
+          <div>
+            <dt><a href="primary.html" target="_blank" rel="noopener">primary.html</a></dt>
+            <dd>Primary-object demo: the server names the main object in view and the tracker outlines it live.</dd>
+          </div>
+          <div>
+            <dt><a href="calibrate.html" target="_blank" rel="noopener">calibrate.html</a></dt>
+            <dd>Measures where the passthrough camera sits and its focal length, from fingertip and far-mark samples.</dd>
+          </div>
+          <div>
+            <dt><a href="depth.html" target="_blank" rel="noopener">depth.html</a></dt>
+            <dd>WebXR depth sensing on the headset, checked against hit-test and the tracked fingertip.</dd>
+          </div>
+          <div>
+            <dt><a href="tracking.html" target="_blank" rel="noopener">tracking.html</a></dt>
+            <dd>What the headset tracks: hand skeletons, planes, room mesh and a gaze reticle.</dd>
+          </div>
+          <div>
+            <dt><a href="viewer.html" target="_blank" rel="noopener">viewer.html</a></dt>
+            <dd>Replays a recorded episode, or follows one live while the headset uploads it.</dd>
+          </div>
+          <div>
+            <dt><a href="glow-preview.html" target="_blank" rel="noopener">glow-preview.html</a></dt>
+            <dd>The object glow on the demo photo: saved masks, a live tracker mask, jitter and an orbiting eye.</dd>
+          </div>
+          <div>
+            <dt><a href="hello.html" target="_blank" rel="noopener">hello.html</a></dt>
+            <dd>Bare WebXR smoke test: a spinning cube and dots on the hand joints in passthrough.</dd>
+          </div>
+          <div>
+            <dt><a href="http://127.0.0.1:3001/clio" target="_blank" rel="noopener">127.0.0.1:3001/clio</a></dt>
+            <dd>Episode visualizer: recordings newest first, replayed or followed live (pnpm visualizer:dev).</dd>
+          </div>
+        </dl>
+      </section>
+    </main>
+    <script type="module" src="/src/gallery/main.ts"></script>
+  </body>
+</html>

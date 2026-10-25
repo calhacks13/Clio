@@ -1,8 +1,21 @@
 // Minimal typings for troika-three-text (the package ships none).
 declare module 'troika-three-text' {
-  import type { Color, Material, Mesh } from 'three';
+  import type { BufferGeometry, Color, Material, Mesh, Object3DEventMap } from 'three';
 
-  export class Text extends Mesh {
+  export interface TextEventMap extends Object3DEventMap {
+    syncstart: object;
+    /** The new text is laid out; textRenderInfo and the drawn glyphs now match it. */
+    synccomplete: object;
+  }
+
+  export interface TextRenderInfo {
+    /** Parameters captured when this asynchronous result was requested. */
+    parameters: { text: string; maxWidth: number; fontSize: number };
+    /** [minX, minY, maxX, maxY] of the whole block, each line's full height included. */
+    blockBounds: [number, number, number, number];
+  }
+
+  export class Text extends Mesh<BufferGeometry, Material, TextEventMap> {
     text: string;
     font: string | null;
     fontSize: number;
@@ -14,9 +27,12 @@ declare module 'troika-three-text' {
     textAlign: 'left' | 'right' | 'center' | 'justify';
     fillOpacity: number;
     outlineWidth: number | string;
+    overflowWrap: 'normal' | 'break-word';
     outlineColor: Color | string | number;
     depthOffset: number;
     material: Material;
+    /** The last completed layout (sync is asynchronous), or null before the first. */
+    readonly textRenderInfo: TextRenderInfo | null;
     sync(callback?: () => void): void;
     dispose(): void;
   }

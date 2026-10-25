@@ -1,6 +1,6 @@
 import { COACH_TOOL_NAMES, type CoachToolName, isNonBlockingTool } from '@clio/protocol';
 import type { Clock } from '../../core/clock';
-import type { AppBus } from '../events';
+import type { AppBus, CoachVoice } from '../events';
 import { recitePlan } from '../plan/recital';
 import type { TemplateSummary } from '../session/templates';
 import type { AgentState, Narration, RealtimeAgent, ToolCall, ToolResult } from './agent';
@@ -23,6 +23,11 @@ import type { CoachToolbox } from './toolbox';
 // A non-blocking call (look_closer, which asks the smart model) answers a second or two later, as
 // the call's result; the model says it once nobody is talking. If its connection closed meanwhile,
 // the new connection never made that call, so the answer goes out as a narration instead.
+//
+// It publishes conversation state (coach.voice) when it changes: speaking
+// from the model's first audio until the speaker has played the turn out (or a barge-in or a
+// dropped connection cuts it), hearing while the learner's words keep arriving. A coach without a
+// microphone can't hear, so its voice stays off.
 
 export interface CoachSessionDeps {
   agent: RealtimeAgent;
@@ -78,6 +83,14 @@ export class CoachSession {
   private snapshotInFlight = false;
   private state: AgentState | null = null;
   private speaking = false;
+  /**
+   * Clio's speech: none, the model's turn still streaming it, or the turn over while the speaker
+   * plays the rest (tail).
+   */
+  private speech: 'none' | 'turn' | 'tail' = 'none';
+  /** Between start and stop, with a microphone. */
+  private hears = false;
+  private voice: CoachVoice = 'off';
   private lastLearnerT = Number.NEGATIVE_INFINITY;
   private held: Narration[] = [];
   private heldSince = 0;
@@ -97,6 +110,8 @@ export class CoachSession {
   async start(): Promise<void> {
     const { agent, bus, clock, toolbox, voice, mic } = this.deps;
     const events = agent.events;
+    this.hears = mic !== undefined;
+    this.updateVoice();
     this.offs = [
       events.on('toolCalls', ({ calls }) => {
         // The model's turn goes on after the calls: what they set off waits for it to end.
@@ -109,20 +124,34 @@ export class CoachSession {
       events.on('cancelledTools', ({ ids }) => this.onCancelled(ids)),
       events.on('audio', ({ pcm, sampleRate }) => {
         this.speaking = true;
+        this.speech = 'turn';
         voice.play(pcm, sampleRate);
+        this.updateVoice();
       }),
-      events.on('say', ({ text }) => voice.say(text)),
+      events.on('say', ({ text }) => {
+        voice.say(text);
+        // A whole utterance at once: it lasts as long as the speaker takes to say it.
+        if (this.speech === 'none') this.speech = 'tail';
+        this.updateVoice();
+      }),
       events.on('interrupted', () => {
         this.speaking = false;
+        this.speech = 'none';
         voice.stop();
+        this.updateVoice();
       }),
       events.on('turnComplete', () => {
         this.speaking = false;
+        if (this.speech === 'turn') this.speech = 'tail';
+        this.updateVoice();
       }),
       events.on('transcript', ({ role, text, final }) => {
         const t = clock.now();
         // Partial transcripts stream while the learner talks; final ones come at the end of a turn.
-        if (role === 'user' && !final) this.lastLearnerT = t;
+        if (role === 'user' && !final) {
+          this.lastLearnerT = t;
+          this.updateVoice(t);
+        }
         bus.emit('coach.caption', { t, role, text, final });
         if (final && text.trim())
           bus.emit('transcript', { t, role, text: text.trim(), final: true });
@@ -151,6 +180,7 @@ export class CoachSession {
 
   /** Call once per frame: sends held narrations, a fresh instruction and camera frames when due. */
   tick(t: number): void {
+    this.updateVoice(t);
     const overdue = this.state === 'ready' && t - this.heldSince >= MAX_HOLD_MS;
     if (this.held.length > 0 && (!this.gateClosed(t) || overdue)) this.flush();
     if (this.planChangedT !== null && t - this.planChangedT >= INSTRUCTION_SETTLE_MS)
@@ -176,6 +206,9 @@ export class CoachSession {
     this.held = [];
     this.deps.mic?.stop();
     this.deps.voice.stop();
+    this.hears = false;
+    this.speech = 'none';
+    this.updateVoice();
     await this.deps.agent.close();
   }
 
@@ -207,8 +240,10 @@ export class CoachSession {
     });
     const previous = this.state;
     this.state = state;
+    // A dropped connection ends the model's turn without a turnComplete.
+    if (state !== 'ready') this.speech = 'none';
+    this.updateVoice();
     if (state !== 'ready') {
-      // A dropped connection ends the model's turn without a turnComplete.
       this.speaking = false;
       // The next connection never made the calls still running.
       for (const call of this.calls.values()) {
@@ -298,6 +333,22 @@ export class CoachSession {
   /** A narration of the session's own. Context only. */
   private note(kind: string, body: string): void {
     this.send({ kind, text: `[app] ${body}`, reply: false });
+  }
+
+  /** Publishes the conversation when it changed. */
+  private updateVoice(t = this.deps.clock.now()): void {
+    if (this.speech === 'tail' && !this.deps.voice.playing?.()) this.speech = 'none';
+    const voice = this.voiceAt(t);
+    if (voice === this.voice) return;
+    this.voice = voice;
+    this.deps.bus.emit('coach.voice', { t, voice });
+  }
+
+  private voiceAt(t: number): CoachVoice {
+    if (!this.hears) return 'off';
+    if (this.state !== 'ready') return 'quiet';
+    if (this.speech !== 'none') return 'speaking';
+    return t - this.lastLearnerT < LEARNER_QUIET_MS ? 'hearing' : 'quiet';
   }
 
   private gateClosed(t: number): boolean {

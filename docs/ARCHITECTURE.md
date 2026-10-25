@@ -409,6 +409,19 @@ mistakes. The scripted coach can't see, so it still hears about missing objects 
 **Scripted coach:** the same port with no network. It speaks briefings and corrections through
 text-to-speech, and learners confirm steps with the panel's touchable **Done** button.
 
+**Coach voice state:** `CoachSession` publishes `coach.voice` (a bus
+event that is never recorded) when the conversation changes: `speaking` from the model's first
+audio until the speaker has played the turn out (`VoiceOutput.playing()`; generation runs seconds
+ahead of playback), or at once on a barge-in or a dropped connection; `hearing` while the
+learner's partial transcripts arrive (until 1.2 s after the last); `quiet` otherwise; `off`
+without a microphone (the scripted coach) and once the session stops. `OverlayModel` keeps it in
+`OverlaySnapshot.voice`. The lesson card keeps quiet listening visually silent, with no status
+mark or duplicate transcript; a disconnected voice shows an actionable Done-button message.
+The card fits its measured text in both dimensions. `panel-placement.ts` uses that complete
+rectangle, projected lesson/live masks, viewport space and gaze travel to choose a clear position
+beside the task. Async text resizing rechecks clearance immediately, and a comfortable settled
+position stays stable while the learner reads.
+
 ### 5.8 Recording (`domain/recording`)
 
 Three channels on one rebased clock:

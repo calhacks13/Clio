@@ -65,6 +65,7 @@ const snapshot = (highlights: OverlaySnapshot['highlights'] = []): OverlaySnapsh
   demoStepId: null,
   caption: null,
   coach: 'off',
+  voice: 'quiet',
   recording: null,
   missing: [],
 });

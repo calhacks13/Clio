@@ -1,13 +1,31 @@
+/* Quiet slate UI over a painted sky. Shared by launch and gallery frames. */
+@import "./ui-fonts.css";
+
 :root {
-  color-scheme: dark;
-  --bg: #070b14;
-  --panel: #0f1728;
-  --text: #e8eefc;
-  --muted: #8ea0c2;
-  --accent: #4fe3ff;
-  --ok: #7dffa4;
-  --bad: #ff8a95;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: light;
+  --ground: #edf2f6;
+  --raised: #ffffff;
+  --raised-hover: #f5f7fa;
+  --raised-strong: #8190a3;
+  --sunken: #e3e9f0;
+  --text: #0f1117;
+  --muted: #5b6472;
+  --placeholder: #646d7c;
+  --faint: #5b6472;
+  --accent: #0f1117;
+  --accent-hover: #24303d;
+  --accent-press: #3a414d;
+  --on-accent: #ffffff;
+  --focus: #1768d9;
+  --bad: #fbe6e7;
+  --bad-hover: #f5d4d7;
+  --bad-text: #a52d3d;
+  --on-bad: #7f2532;
+  --warn: #fff0e4;
+  --on-warn: #914100;
+  --radius: 9999px;
+  font-family: "Inter", sans-serif;
+  scrollbar-color: var(--raised-strong) var(--ground);
 }
 
 * {
@@ -18,94 +36,368 @@ html,
 body {
   margin: 0;
   min-height: 100%;
-  background: var(--bg);
+  background: var(--ground);
   color: var(--text);
 }
 
+body {
+  min-height: 100svh;
+  background-image: url("/assets/sky-day.webp");
+  background-size: cover;
+  background-position: center 20%;
+  background-attachment: fixed;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
 .boot {
-  max-width: 34rem;
+  max-width: 42rem;
   margin: 0 auto;
-  padding: 2.5rem 1rem 3rem;
+  padding: clamp(3rem, 15vh, 7rem) 1.5rem 4rem;
+  font-size: 1.15rem;
+  line-height: 1.45;
+}
+
+:where(.boot) :where(h1, p, ul) {
+  margin: 0;
+}
+
+.boot :focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.boot code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  white-space: nowrap;
+}
+
+/* Only when something is wrong: the problem, then the fix. */
+.problems {
+  list-style: none;
+  padding: 0;
+  margin-bottom: 2.5rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.problem {
+  padding: 1rem 1.25rem;
+  border-radius: 18px;
+}
+
+.problem.bad {
+  background: var(--bad);
+  color: var(--on-bad);
+}
+
+.problem.warn {
+  background: var(--warn);
+  color: var(--on-warn);
+}
+
+.problem-title {
+  font-weight: 650;
+}
+
+.start {
+  margin-top: 0;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
 }
 
-.boot h1 {
-  margin: 0;
-  font-size: 2.6rem;
+.problems + .start {
+  margin-top: 0;
+}
+
+.start h1 {
+  align-self: center;
+  max-width: 18ch;
+  margin-bottom: 2rem;
+  font-family: "Inter Tight", "Inter", sans-serif;
+  font-size: clamp(2.5rem, 2rem + 2vw, 3.5rem);
+  text-align: center;
+  font-weight: 700;
+  line-height: 1.05;
   letter-spacing: -0.02em;
+  text-wrap: balance;
 }
 
-.tag {
-  margin: -0.6rem 0 0.4rem;
+#goal,
+.field select {
+  width: 100%;
+  height: 4rem;
+  padding: 0 1.25rem;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--raised);
+  color: var(--text);
+  font: inherit;
+  caret-color: var(--text);
+  box-shadow: inset 0 0 0 1px #d7dfe8;
+}
+
+#goal {
+  font-size: 1.125rem;
+}
+
+#goal::placeholder {
+  color: var(--placeholder);
+  opacity: 1;
+}
+
+#goal:hover:not(:disabled),
+.field select:hover {
+  background-color: var(--raised-hover);
+}
+
+#goal:disabled {
+  background: var(--sunken);
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+#goal:disabled::placeholder {
+  color: var(--faint);
+}
+
+/* The one button. It names what it starts, then narrates starting in place. */
+.go {
+  height: 4rem;
+  margin-top: 0.75rem;
+  padding: 0 1.25rem;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--on-accent);
+  font: inherit;
+  font-size: 1.125rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.go .label {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.go:hover {
+  background: var(--accent-hover);
+}
+
+.go:active {
+  background: var(--accent-press);
+}
+
+.go:disabled {
+  background: var(--raised);
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+.boot:is([data-progress="permissions"], [data-progress="entering"]) .go {
+  cursor: progress;
+  animation: boot-breathe 1.8s ease-in-out infinite alternate;
+}
+
+.boot[data-progress="inside"] .go {
+  background: var(--raised);
   color: var(--muted);
+  cursor: default;
 }
 
-.checks {
+.boot[data-progress="error"] .go {
+  background: var(--bad);
+  color: var(--on-bad);
+}
+
+.boot[data-progress="error"] .go:hover {
+  background: var(--bad-hover);
+}
+
+/* Starting breathes like a found object's light, faster. */
+@keyframes boot-breathe {
+  from {
+    background-color: var(--accent);
+  }
+  to {
+    background-color: var(--accent-hover);
+  }
+}
+
+/* Keep retry errors in a stable slot without adding helper copy. */
+.note {
+  min-height: 1.5em;
+  margin-top: 0.75rem;
+}
+
+.error {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--bad-text);
+  font-size: 0.95rem;
+  text-wrap: pretty;
+}
+
+.more {
+  margin-top: 0.5rem;
+}
+
+.more summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 3.5rem;
+  padding: 0 1.5rem;
+  border-radius: var(--radius);
+  background: var(--raised);
+  font-weight: 600;
   list-style: none;
-  margin: 0;
-  padding: 0.8rem 1rem;
-  background: var(--panel);
-  border-radius: 0.6rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.more summary::-webkit-details-marker {
+  display: none;
+}
+
+.more summary:hover {
+  background: var(--raised-hover);
+}
+
+.more .opened,
+.more[open] .closed {
+  display: none;
+}
+
+.more[open] .opened {
+  display: inline;
+}
+
+.options {
   display: grid;
-  gap: 0.3rem;
-}
-
-.checks .ok {
-  color: var(--ok);
-}
-
-.checks .bad {
-  color: var(--bad);
+  gap: 0.5rem;
+  margin-top: 0.75rem;
 }
 
 .field {
   display: grid;
-  gap: 0.35rem;
-  color: var(--muted);
-}
-
-.field small {
-  color: var(--muted);
-}
-
-input[type="text"],
-select {
-  font: inherit;
-  color: var(--text);
-  background: var(--panel);
-  border: 1px solid #22304c;
-  border-radius: 0.5rem;
-  padding: 0.7rem 0.8rem;
-}
-
-.check {
-  display: flex;
   gap: 0.5rem;
-  align-items: center;
+  margin-bottom: 0.5rem;
   color: var(--muted);
 }
 
-button {
-  font: inherit;
-  font-weight: 600;
-  padding: 0.9rem;
+/* A native select with an inset icon, without distorting the pill's surface. */
+.field select {
+  appearance: none;
+  padding-right: 3rem;
   border: 0;
-  border-radius: 0.6rem;
-  background: var(--accent);
-  color: #04222b;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' viewBox='0 0 16 16'%3E%3Cpath d='m4 6 4 4 4-4' stroke='%235B6472' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 1.25rem center;
+  background-size: 16px;
+  font-size: 1.125rem;
   cursor: pointer;
 }
 
-button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+.field :is(option, optgroup) {
+  background: var(--raised);
+  color: var(--text);
 }
 
-.status {
-  min-height: 1.4em;
-  color: var(--muted);
+.switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 4rem;
+  padding: 0.75rem 1.25rem;
+  border-radius: var(--radius);
+  background: var(--raised);
+  cursor: pointer;
+}
+
+.switch:hover {
+  background: var(--raised-hover);
+}
+
+.switch:has(input:focus-visible) {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.switch input {
+  appearance: none;
+  position: relative;
+  flex: none;
+  width: 3.5rem;
+  height: 2rem;
+  margin: 0;
+  border-radius: 1rem;
+  background: var(--raised-strong);
+  cursor: pointer;
+  transition: background-color 160ms ease-out;
+}
+
+.switch input:focus-visible {
+  outline: none;
+}
+
+.switch input::before {
+  content: "";
+  position: absolute;
+  top: 0.25rem;
+  left: 0.25rem;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  background: #ffffff;
+  transition:
+    transform 220ms cubic-bezier(0.16, 1, 0.3, 1),
+    background-color 160ms ease-out;
+}
+
+.switch input:checked {
+  background: var(--accent);
+}
+
+.switch input:checked::before {
+  transform: translateX(1.5rem);
+  background: #ffffff;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot[data-progress] .go {
+    animation: none;
+  }
+
+  .boot:is([data-progress="permissions"], [data-progress="entering"]) .go {
+    background: var(--accent-hover);
+  }
+
+  .switch input,
+  .switch input::before {
+    transition: none;
+  }
 }
 
 #xr canvas {
@@ -113,4 +405,15 @@ button:disabled {
   position: fixed;
   inset: 0;
   z-index: -1;
+}
+
+@media (max-width: 480px) {
+  .boot {
+    padding-top: 4rem;
+    font-size: 1rem;
+  }
+
+  .switch {
+    border-radius: 18px;
+  }
 }

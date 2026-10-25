@@ -1,64 +1,114 @@
-import { Group, Mesh, MeshBasicMaterial, PlaneGeometry, Quaternion, Vector3 } from 'three';
-import { rotateVec, yawOnly } from '../../../core/math';
+import {
+  Group,
+  Mesh,
+  MeshBasicMaterial,
+  PlaneGeometry,
+  Shape,
+  ShapeGeometry,
+  Vector3,
+} from 'three';
+import type { Text } from 'troika-three-text';
+import { type Pose, rotateVec } from '../../../core/math';
 import { jointPosition } from '../../../domain/hands/features';
+import { placeInstructionPanel } from '../panel-placement';
 import type { PresentContext, Presenter } from '../presenter';
 import { makeText, setText } from '../text';
 
-// The floating instruction card. It lazily follows the learner's gaze (re-centering only when it
-// drifts out of view), shows the current step, progress, coach captions and corrections, and has a
-// touchable "Done" button so a learner can confirm a step even when voice fails.
+// A content-fitted instruction card, placed beside the objects by panel-placement.ts. The step and
+// instruction lead; corrections appear only when the learner needs them. Conversation stays in
+// the voice channel, without a duplicate transcript or a listening indicator.
 
-const W = 0.44;
-const H = 0.17;
-const FOLLOW_DISTANCE = 0.65;
-const FOLLOW_DROP = 0.17;
-const RECENTER_BEYOND = 0.3;
+const TOP = 0.15;
+/** The card's fixed top edge; width and height come from its rendered content. */
+export const PANEL_TOP = TOP;
+const MIN_WIDTH = 0.2;
+const MIN_PHASE_WIDTH = 0.16;
+const MAX_WIDTH = 0.38;
 const BUTTON_TOUCH = 0.03;
 const BUTTON_COOLDOWN_MS = 1500;
-
-const TOAST_COLOR = { mistake: 0xff6b78, success: 0x7dffa4, info: 0xd6e4ff } as const;
+const PANEL_COLOR = 0xffffff;
+const BUTTON_COLOR = 0x0f1117;
+const INK = 0x0f1117;
+const MUTED = 0x5b6472;
+const ERROR = 0xa52d3d;
+const HEADER_SIZE = 0.012;
+const LINE = 1.21;
+const PAD = 0.022;
+const HEADER_Y = TOP - PAD;
+const MAX_TEXT_W = MAX_WIDTH - PAD * 2;
+const GAP_HEADER = 0.014;
+const GAP_DETAIL = 0.01;
+const GAP_STATUS = 0.016;
+const GAP_BUTTON = 0.018;
+const PAD_BOTTOM = 0.022;
+const BUTTON_W = 0.076;
+const BUTTON_H = 0.037;
 
 export class InstructionPanelPresenter implements Presenter {
   readonly object = new Group();
-  private readonly header = makeText({ size: 0.014, color: 0x9fb4d8, bold: true });
-  private readonly instruction = makeText({ size: 0.026, maxWidth: W - 0.08, bold: true });
-  private readonly detail = makeText({ size: 0.016, color: 0xb9c4d6, maxWidth: W - 0.08 });
-  private readonly status = makeText({ size: 0.016, maxWidth: W - 0.04, anchorY: 'bottom' });
+  private readonly header = makeText({ size: HEADER_SIZE, color: MUTED, maxWidth: MAX_TEXT_W });
+  private readonly instruction = makeText({
+    size: 0.023,
+    color: INK,
+    maxWidth: MAX_TEXT_W,
+    bold: true,
+  });
+  private readonly detail = makeText({ size: 0.015, color: MUTED, maxWidth: MAX_TEXT_W });
+  private readonly status = makeText({ size: 0.015, color: ERROR, maxWidth: MAX_TEXT_W });
+  private readonly background = new Mesh(
+    roundedRect(MIN_WIDTH, 0.1, 0.014),
+    new MeshBasicMaterial({ color: PANEL_COLOR }),
+  );
   private readonly bar = new Mesh(
-    new PlaneGeometry(1, 0.006),
-    new MeshBasicMaterial({ color: 0x4fe3ff }),
+    new PlaneGeometry(1, 0.0025),
+    new MeshBasicMaterial({ color: 0x1768d9 }),
   );
   private readonly button = new Group();
-  private readonly buttonMaterial = new MeshBasicMaterial({
-    color: 0x2a7d5a,
-    transparent: true,
-    opacity: 0.85,
-  });
-  private readonly target = new Vector3();
-  private initialized = false;
+  private readonly buttonMaterial = new MeshBasicMaterial({ color: BUTTON_COLOR });
   private lastPress = Number.NEGATIVE_INFINITY;
+  private panelW = MIN_WIDTH;
+  private panelH = 0.1;
+  private progress = 0;
+  private latestContext: PresentContext | null = null;
+  // Detached texts measure actual font metrics without wrapping. They are never added to the scene.
+  private readonly measures = [
+    makeText({ size: HEADER_SIZE, color: MUTED }),
+    makeText({ size: 0.023, color: INK, bold: true }),
+    makeText({ size: 0.015, color: MUTED }),
+    makeText({ size: 0.015, color: ERROR }),
+  ];
+  private readonly measureDone = () => this.applyMeasuredWidth();
+  private previousPose: Pose | null = null;
+  /** Text lays itself out asynchronously; each finished layout re-stacks the panel. */
+  private readonly relayout = () => this.layout();
 
   /** @param onDone called when the learner touches the Done button. */
   constructor(private readonly onDone: () => void) {
-    const bg = new Mesh(
-      new PlaneGeometry(W, H),
-      new MeshBasicMaterial({ color: 0x0b1220, transparent: true, opacity: 0.72 }),
-    );
-    this.header.position.set(-W / 2 + 0.02, H / 2 - 0.015, 0.001);
-    this.instruction.position.set(-W / 2 + 0.02, H / 2 - 0.038, 0.001);
-    this.detail.position.set(-W / 2 + 0.02, -0.005, 0.001);
-    this.status.position.set(-W / 2 + 0.02, -H / 2 + 0.02, 0.001);
-    this.bar.position.set(-W / 2, -H / 2 + 0.004, 0.002);
-
-    const buttonBg = new Mesh(new PlaneGeometry(0.06, 0.035), this.buttonMaterial);
-    const buttonLabel = makeText({ size: 0.014, anchorX: 'center', anchorY: 'middle', bold: true });
+    const buttonBg = new Mesh(roundedRect(BUTTON_W, BUTTON_H, BUTTON_H / 2), this.buttonMaterial);
+    const buttonLabel = makeText({
+      size: 0.014,
+      color: 0xffffff,
+      anchorX: 'center',
+      anchorY: 'middle',
+      bold: true,
+    });
     setText(buttonLabel, 'Done');
     buttonLabel.position.z = 0.001;
+    buttonLabel.outlineWidth = 0;
     this.button.add(buttonBg, buttonLabel);
-    this.button.position.set(W / 2 - 0.04, -H / 2 + 0.03, 0.003);
-
+    this.button.position.z = 0.003;
+    this.button.visible = false;
+    for (const text of [this.header, this.instruction, this.detail, this.status]) {
+      text.position.set(0, HEADER_Y, 0.001);
+      text.overflowWrap = 'break-word';
+      text.outlineWidth = 0;
+      text.addEventListener('synccomplete', this.relayout);
+    }
+    for (const measure of this.measures) measure.addEventListener('synccomplete', this.measureDone);
+    this.object.visible = false;
+    this.bar.position.z = 0.002;
     this.object.add(
-      bg,
+      this.background,
       this.header,
       this.instruction,
       this.detail,
@@ -66,66 +116,150 @@ export class InstructionPanelPresenter implements Presenter {
       this.bar,
       this.button,
     );
+    this.layout();
+  }
+
+  /** Actual dimensions of the visible content and its padding, in metres. */
+  get panelWidth(): number {
+    return this.panelW;
+  }
+
+  get panelHeight(): number {
+    return this.panelH;
   }
 
   update(ctx: PresentContext): void {
-    this.follow(ctx);
+    this.latestContext = ctx;
     const s = ctx.snapshot;
-
+    let header = '';
+    let instruction = '';
+    let detail = '';
     if (ctx.calibration) {
-      setText(this.header, 'SET UP YOUR WORK AREA');
-      setText(this.instruction, ctx.calibration.text);
-      setText(
-        this.detail,
-        ctx.calibration.error ?? 'Touch the table with your index finger and thumb together.',
-      );
+      header = 'Work area';
+      instruction = ctx.calibration.text;
+      detail =
+        ctx.calibration.error ?? 'Touch the table with your index finger and thumb together.';
     } else if (s.instruction) {
       const i = s.instruction;
-      setText(this.header, stepHeader(s.title, i.index, i.total));
-      setText(this.instruction, i.text);
-      setText(this.detail, i.detail ?? '');
+      header = stepHeader(i.index, i.total);
+      instruction = i.text;
+      detail = i.detail ?? '';
     } else {
-      setText(this.header, s.title ? s.title.toUpperCase() : 'CLIO');
-      setText(this.instruction, PHASE_TEXT[s.phase] ?? '');
-      setText(this.detail, s.phase === 'idle' ? 'Say what you want to learn.' : '');
+      instruction = PHASE_TEXT[s.phase] ?? '';
     }
 
+    const withButton = !!s.instruction && !ctx.calibration;
+    if (this.button.visible !== withButton) {
+      this.button.visible = withButton;
+      this.layout();
+    }
     const missing = s.missing.length
       ? `Can't see: ${s.missing.join(', ')}. Pinch it to show me.`
       : '';
-    const line = s.toast?.text ?? missing ?? '';
-    setText(
-      this.status,
-      line ||
-        (s.caption ? `${s.caption.role === 'coach' ? 'Clio' : 'You'}: ${s.caption.text}` : ''),
+    const offline =
+      withButton && (s.coach === 'error' || s.coach === 'closed')
+        ? 'Voice offline. Use Done to continue.'
+        : '';
+    const line = s.toast?.kind === 'mistake' ? s.toast.text : missing || offline;
+    const content = [header, instruction, detail, line];
+    this.measures.forEach((measure, index) => {
+      setText(measure, content[index] ?? '');
+    });
+    this.applyMeasuredWidth();
+    this.status.color = s.toast?.kind === 'mistake' || offline ? ERROR : MUTED;
+
+    this.progress = Math.max(0, Math.min(1, s.instruction?.progress ?? 0));
+    this.layout();
+    this.follow(ctx);
+    if (withButton && this.object.visible) this.pressCheck(ctx);
+  }
+
+  /** Choose a wrap measure from real unwrapped glyph area, never a character-count estimate. */
+  private applyMeasuredWidth(): void {
+    if (!this.measures.every(currentLayout)) return;
+    const widths = this.measures.map(measuredWidth);
+    const area = this.measures.reduce(
+      (sum, measure) => sum + measuredWidth(measure) * measuredHeight(measure),
+      0,
     );
-    this.status.color = s.toast ? TOAST_COLOR[s.toast.kind] : 0xd6e4ff;
+    const minWidth = this.button.visible ? MIN_WIDTH : MIN_PHASE_WIDTH;
+    const simple =
+      !this.button.visible &&
+      this.measures.every((measure, index) => index === 1 || measure.text === '');
+    const preferred = simple
+      ? Math.max(...widths)
+      : Math.min(Math.max(...widths), Math.sqrt(area * 2.4));
+    const wrap = Math.min(MAX_TEXT_W, Math.max(minWidth - PAD * 2, preferred));
+    const lines = [this.header, this.instruction, this.detail, this.status];
+    lines.forEach((line, index) => {
+      const value = this.measures[index]?.text ?? '';
+      if (line.text !== value || Math.abs(line.maxWidth - wrap) > 1e-6) {
+        line.text = value;
+        line.maxWidth = wrap;
+        line.sync();
+      }
+    });
+  }
 
-    const progress = s.instruction?.progress ?? 0;
-    this.bar.visible = progress > 0;
-    this.bar.scale.x = Math.max(0.0001, progress * W);
-    this.bar.position.x = -W / 2 + (progress * W) / 2;
-
-    this.button.visible = !!s.instruction;
-    if (this.button.visible) this.pressCheck(ctx);
+  private layout(): void {
+    const headerHeight = measuredHeight(this.header);
+    let y = HEADER_Y - (headerHeight > 0 ? Math.max(headerHeight, HEADER_SIZE * LINE) : 0);
+    const instruction = measuredHeight(this.instruction);
+    if (instruction > 0) {
+      const gap = headerHeight > 0 ? GAP_HEADER : 0;
+      this.instruction.position.y = y - gap;
+      y -= gap + instruction;
+    }
+    const detail = measuredHeight(this.detail);
+    if (detail > 0) {
+      this.detail.position.y = y - GAP_DETAIL;
+      y -= GAP_DETAIL + detail;
+    }
+    const status = measuredHeight(this.status);
+    if (status > 0) {
+      this.status.position.y = y - GAP_STATUS;
+      y -= GAP_STATUS + status;
+    }
+    const contentBottom = this.button.visible ? y - GAP_BUTTON - BUTTON_H : y;
+    const bottom = contentBottom - PAD_BOTTOM;
+    const height = TOP - bottom;
+    const minWidth = this.button.visible ? MIN_WIDTH : MIN_PHASE_WIDTH;
+    const lines = [this.header, this.instruction, this.detail, this.status];
+    const width = Math.max(minWidth, ...lines.map(measuredWidth).map((w) => w + PAD * 2));
+    const resized = Math.abs(width - this.panelW) > 1e-6 || Math.abs(height - this.panelH) > 1e-6;
+    if (resized) {
+      this.background.geometry.dispose();
+      this.background.geometry = roundedRect(width, height, 0.014);
+      this.panelW = width;
+      this.panelH = height;
+    }
+    const left = -this.panelW / 2 + PAD;
+    for (const line of lines) line.position.x = left;
+    this.background.position.y = TOP - this.panelH / 2;
+    this.button.position.set(
+      this.panelW / 2 - PAD - BUTTON_W / 2,
+      bottom + PAD_BOTTOM + BUTTON_H / 2,
+      0.003,
+    );
+    this.bar.visible = this.progress > 0;
+    this.bar.scale.x = Math.max(0.0001, this.progress * (this.panelW - PAD * 2));
+    this.bar.position.x = left + (this.progress * (this.panelW - PAD * 2)) / 2;
+    this.bar.position.y = bottom + 0.008;
+    if (
+      this.latestContext &&
+      lines.every((line, index) => currentLayout(line) && line.text === this.measures[index]?.text)
+    ) {
+      this.object.visible = lines.some((line) => line.text.trim().length > 0);
+    }
+    // Troika finishes between frames. Resize and mask clearance must change together.
+    if (resized && this.latestContext) this.follow(this.latestContext);
   }
 
   private follow(ctx: PresentContext): void {
-    const yaw = yawOnly(ctx.head.q);
-    const ahead = rotateVec(yaw, [0, 0, -FOLLOW_DISTANCE]);
-    this.target.set(
-      ctx.head.p[0] + ahead[0],
-      ctx.head.p[1] - FOLLOW_DROP,
-      ctx.head.p[2] + ahead[2],
-    );
-    if (!this.initialized || this.object.position.distanceTo(this.target) > RECENTER_BEYOND) {
-      this.initialized = true;
-      this.object.position.copy(this.target);
-    } else {
-      this.object.position.lerp(this.target, Math.min(1, ctx.dt / 600));
-    }
-    // A plane faces +z; the head's yaw turns +z back toward the learner.
-    this.object.quaternion.slerp(new Quaternion(...yaw), Math.min(1, ctx.dt / 300));
+    const pose = placeInstructionPanel(ctx, this.panelW, this.panelH, TOP, this.previousPose);
+    this.object.position.set(...pose.p);
+    this.object.quaternion.set(...pose.q);
+    this.previousPose = pose;
   }
 
   /** Index fingertip (either hand) touching the button, in world space. */
@@ -134,29 +268,80 @@ export class InstructionPanelPresenter implements Presenter {
     const center = this.button.getWorldPosition(new Vector3());
     for (const hand of [ctx.hands.left, ctx.hands.right]) {
       if (!hand) continue;
-      // Hands are in workspace space; convert the fingertip to world space.
       const tip = jointPosition(hand, 'index-finger-tip');
       const w = ctx.worldFromWorkspace;
       const r = rotateVec(w.q, tip);
       const world = new Vector3(w.p[0] + r[0], w.p[1] + r[1], w.p[2] + r[2]);
       if (world.distanceTo(center) < BUTTON_TOUCH) {
         this.lastPress = ctx.t;
-        this.buttonMaterial.color.setHex(0x7dffa4);
-        setTimeout(() => this.buttonMaterial.color.setHex(0x2a7d5a), 300);
+        this.buttonMaterial.color.setHex(0x24303d);
+        setTimeout(() => this.buttonMaterial.color.setHex(BUTTON_COLOR), 300);
         this.onDone();
         return;
       }
     }
   }
+
+  dispose(): void {
+    for (const text of [this.header, this.instruction, this.detail, this.status]) {
+      text.removeEventListener('synccomplete', this.relayout);
+      text.dispose();
+    }
+    for (const measure of this.measures) {
+      measure.removeEventListener('synccomplete', this.measureDone);
+      measure.dispose();
+    }
+    (this.button.children[1] as Text).dispose();
+    (this.button.children[0] as Mesh).geometry.dispose();
+    this.background.geometry.dispose();
+    this.background.material.dispose();
+    this.bar.geometry.dispose();
+    this.bar.material.dispose();
+    this.buttonMaterial.dispose();
+  }
 }
 
-/** "TITLE   STEP n OF m", where `index` counts the steps done so far. */
-export function stepHeader(title: string | null, index: number, total: number): string {
-  return `${(title ?? 'LESSON').toUpperCase()}   STEP ${Math.min(index + 1, total)} OF ${total}`;
+export function stepHeader(index: number, total: number): string {
+  return `Step ${Math.min(index + 1, total)} of ${total}`;
+}
+
+/** Centered planar surface with a measured radius, including pill buttons. */
+function roundedRect(width: number, height: number, radius: number): ShapeGeometry {
+  const x = -width / 2;
+  const y = -height / 2;
+  const r = Math.min(radius, width / 2, height / 2);
+  const shape = new Shape();
+  shape.moveTo(x + r, y);
+  shape.lineTo(x + width - r, y);
+  shape.quadraticCurveTo(x + width, y, x + width, y + r);
+  shape.lineTo(x + width, y + height - r);
+  shape.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  shape.lineTo(x + r, y + height);
+  shape.quadraticCurveTo(x, y + height, x, y + height - r);
+  shape.lineTo(x, y + r);
+  shape.quadraticCurveTo(x, y, x + r, y);
+  return new ShapeGeometry(shape, 10);
+}
+
+/** A completed result belongs to a specific text and wrap width, not the latest request. */
+function currentLayout(text: Text): boolean {
+  const info = text.textRenderInfo;
+  if (!info) return text.text === '';
+  return info.parameters.text === text.text && info.parameters.maxWidth === text.maxWidth;
+}
+
+function measuredWidth(text: Text): number {
+  const bounds = text.textRenderInfo?.blockBounds;
+  return bounds ? bounds[2] - bounds[0] : 0;
+}
+
+function measuredHeight(text: Text): number {
+  const bounds = text.textRenderInfo?.blockBounds;
+  return bounds ? bounds[3] - bounds[1] : 0;
 }
 
 const PHASE_TEXT: Partial<Record<string, string>> = {
-  idle: 'What do you want to learn?',
+  idle: 'What do you want to do?',
   planning: 'Planning your lesson…',
   locating: 'Looking for the objects…',
   calibrating: 'Setting up…',

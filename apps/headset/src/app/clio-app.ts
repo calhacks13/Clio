@@ -313,6 +313,7 @@ export class ClioApp {
       snapshot: this.overlay.snapshot(t),
       procedure: this.lesson.procedure,
       objects: this.registry.all(),
+      objectMasks: this.live?.panelMasks ?? [],
       demo: this.lesson.activeDemo,
       demoHands: this.lesson.activeDemo ? this.lesson.player.sample(t) : null,
       hands: local,
