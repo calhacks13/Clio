@@ -74,3 +74,5 @@ export const visionNotConfigured = () =>
 
 export const upstreamFailed = (message: string, details?: unknown) =>
   new ApiError(502, 'upstream_failed', message, details);
+
+export const upstreamTimedOut = (message: string) => new ApiError(504, 'upstream_timeout', message);
