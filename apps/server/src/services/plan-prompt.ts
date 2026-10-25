@@ -407,7 +407,8 @@ function objectsPartText(r: Revising): string {
     ...goalLines(r),
     'The lesson, in order (the later steps are an outline for now):',
     ...r.revision.base.steps.map((s, i) => stepLine(s, i + 1)),
-    'Objects to write in full (keep each id and label):',
+    'Objects to write in full (keep each id and label, and keep saying in each tracking.query ' +
+      'which one it is and where):',
     ...objectLines(r),
     viewsLine(r.images.length, true),
     'Return `objects`: each object above again in full, with its id and label. Write ' +
