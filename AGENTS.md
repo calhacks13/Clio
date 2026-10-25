@@ -9,13 +9,17 @@ JSON Schemas are not edited by hand.
 
 ## Lessons
 
-The coach (Gemini Live for the voice, Gemini Robotics-ER 2 for planning, step checks and closer
-looks) owns the step list through tools; `docs/coach-plan.md` is the design and
-`docs/robotics-er.md` the measurements. A planned lesson starts on a short stage-1 "card" and is
-refined in the background (`docs/handoff-stage1-speed.md` records the timing work and what is
-left; `pnpm bench` and `docs/planner-bench.md` measure planner changes). Each step's `show` items
-and the coach's `highlight` tell the tracker what to follow and glow; perception feeds only the
-learner's view and the recorded data, never a Gemini coach.
+The coach (Gemini Live for the voice, `gemini-3.8-live-extended-thinking`; Gemini Robotics-ER 2
+for planning, step checks, closer looks and the action focus) owns the step list through tools;
+`docs/coach-plan.md` is the design and `docs/robotics-er.md` the measurements. A planned lesson
+starts on a short stage-1 "card" and is refined in the background (`docs/handoff-stage1-speed.md`
+records the timing work and what is left; `pnpm bench` and `docs/planner-bench.md` measure planner
+changes). While a step is focused something is always lit (`domain/overlay/lights.ts`): its `show`
+items, else its targets and action objects, plus the action focus's next thing to touch and the
+coach's `highlight`. The action focus (`domain/session/action-focus.ts`) asks Robotics-ER 2 every
+5 s; its boxes anchor the tracker over jev and its words become what jev is told. Perception feeds
+only the learner's view and the recorded data, never a Gemini coach. The desk lab
+(`apps/headset/desk.html`, `docs/dev-setup.md`) runs a whole lesson on the laptop's camera.
 
 ## Visualizer handoff
 
