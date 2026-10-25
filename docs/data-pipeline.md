@@ -220,7 +220,9 @@ Four seams carry its answers into the data:
    draws the compiled planes, table and floor, the retargeted arms (inferred look) and the compile
    state. Once an episode is compiled, its objects play back from `tracks.json` (position, held,
    tracked), with the estimated `extent` as a box and the fused `shapes.json` as points and a yaw
-   box riding on the position; live and uncompiled episodes show the raw estimates.
+   box riding on the position; live and uncompiled episodes show the raw estimates. Either way an
+   object no hand could be touching is drawn still at one recorded estimate, in the viewer only
+   (`visualizer/INTEGRATION.md`, "Objects out of reach"); the series is not changed.
 
 Pipeline 0.4.0 added the observations summary, 0.5.0 each object's `partOf`, 0.6.0 the estimated
 `extent` and `shapes.json`, 0.7.0 the whole G1 (`body-g1.json`), 0.8.0 `room.glb`,
