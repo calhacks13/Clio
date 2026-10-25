@@ -255,7 +255,6 @@ Every compile also poses a whole Unitree G1 (`retarget/body.py`, the `g1_body29_
 visualizer draws) from the three things measured: the head and the two hands, each with its
 orientation. Everything else is inferred, and the episode is known in full before it is posed, so
 every estimate looks ahead and is smoothed without lag.
-
 - **Size.** The learner's standing head height maps to the G1's eye height, and every measured
   point is scaled by that ratio about the floor under the learner. So a taller or shorter
   learner's reach and the places they held things shrink or grow with them, and the hands keep
