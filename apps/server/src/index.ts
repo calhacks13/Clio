@@ -6,7 +6,7 @@ import { GEMINI_RELAY_PATH } from '@clio/protocol';
 import { createAdaptorServer } from '@hono/node-server';
 import pkg from '../package.json' with { type: 'json' };
 import { createApp } from './app';
-import { type Config, loadConfig } from './config';
+import { type Config, describeSceneBuilds, loadConfig } from './config';
 import { consoleLogger, describeError, type Logger } from './log';
 import { attachGeminiRelay, type GeminiRelay } from './relay/gemini-relay';
 import { createBenchModels } from './services/bench';
@@ -18,6 +18,7 @@ import { createGeminiStepChecker } from './services/gemini-step-check';
 import { createGeminiLocator } from './services/gemini-vision';
 import { createHttpLocator } from './services/http-vision';
 import { createGeminiPrimaryPicker, createPrimaryObjectFinder } from './services/primary-object';
+import { ProcessSceneBuilder } from './services/scene-builder';
 import { createGeminiTokenMinter } from './services/token-minter';
 import { BenchCheckStore } from './storage/bench-check-store';
 import { BenchStore } from './storage/bench-store';
@@ -25,10 +26,12 @@ import { ClipStore } from './storage/clip-store';
 import { DerivedStore } from './storage/derived-store';
 import { EpisodeStore } from './storage/episode-store';
 import { ProcedureStore } from './storage/procedure-store';
+import { SceneStore } from './storage/scene-store';
 
 // Boot: config → stores and services → HTTP app → server, with the Gemini Live relay on the
 // server's `upgrade` event (the Vite dev server proxies /api and /gemini here). Once listening, the
-// compiler catches up on episodes that finished while the server was down.
+// compiler catches up on episodes that finished while the server was down, then the scene builder
+// on compiled episodes.
 
 function main(): void {
   const logger = consoleLogger;
@@ -44,12 +47,13 @@ function main(): void {
     ? createGeminiClient(config.geminiApiKey)
     : null;
   const benchDir = join(config.dataDir, 'bench');
-  const compiler = createCompiler(config, logger);
+  const { compiler, sceneBuilder } = createPipelineRunners(config, logger);
   const app = createApp({
     version: pkg.version,
     liveModel: config.liveModel,
     episodes: new EpisodeStore(join(config.dataDir, 'episodes'), { logger }),
     derived: new DerivedStore(join(config.dataDir, 'derived'), { logger }),
+    scenes: new SceneStore(join(config.dataDir, 'scenes'), { logger }),
     procedures: new ProcedureStore({
       curatedDir: config.proceduresDir,
       plansDir: join(config.dataDir, 'plans'),
@@ -82,6 +86,7 @@ function main(): void {
         logger,
       }),
     compiler,
+    sceneBuilder,
     logger,
   });
 
@@ -101,23 +106,56 @@ function main(): void {
     process.exit(1);
   });
   server.listen(config.port, config.host, () => {
-    logStartup(config, logger, gemini !== null, compiler !== null);
-    // Never awaited: startup does not wait for compiles, and lessons finished from now on go first.
-    void compiler?.sweep();
+    logStartup(config, logger, {
+      gemini: gemini !== null,
+      compile: compiler !== null,
+      scene: sceneBuilder !== null,
+    });
+    // Never awaited: startup does not wait for compiles or builds, and lessons finished from now on
+    // go first. The scene sweep comes once the compiles are queued, so it leaves those episodes to
+    // the builds their compiles ask for.
+    void compiler?.sweep().then(() => sceneBuilder?.sweep());
   });
-  stopOnSignals(server, relay, compiler, logger);
+  stopOnSignals(server, relay, [compiler, sceneBuilder], logger);
 }
 
-/** `clio compile` through uv, or null when compiling is off or uv is not installed. */
-function createCompiler(config: Config, logger: Logger): ProcessEpisodeCompiler | null {
-  if (config.compile === 'off' || !canRun('uv', ['--version'])) return null;
-  return new ProcessEpisodeCompiler({
-    command: ['uv', 'run', '--frozen', '--project', config.pipelineDir, 'clio'],
-    episodesDir: join(config.dataDir, 'episodes'),
-    derivedDir: join(config.dataDir, 'derived'),
+/**
+ * `clio compile` and `clio scene` through uv: null when compiling is off or uv is not installed,
+ * and no scene builder then either, since each build follows a compile.
+ */
+function createPipelineRunners(
+  config: Config,
+  logger: Logger,
+): { compiler: ProcessEpisodeCompiler | null; sceneBuilder: ProcessSceneBuilder | null } {
+  if (config.compile === 'off' || !canRun('uv', ['--version'])) {
+    return { compiler: null, sceneBuilder: null };
+  }
+  const command = ['uv', 'run', '--frozen', '--project', config.pipelineDir, 'clio'];
+  const episodesDir = join(config.dataDir, 'episodes');
+  const derivedDir = join(config.dataDir, 'derived');
+  let sceneBuilder: ProcessSceneBuilder | null = null;
+  const compiler = new ProcessEpisodeCompiler({
+    command,
+    episodesDir,
+    derivedDir,
     retargetProfiles: config.retargetProfiles,
+    onCompiled: (id, run) => sceneBuilder?.afterCompile(id, run),
     logger,
   });
+  if (config.scene === 'auto') {
+    // The children inherit this environment: GEMINI_API_KEY, CLIO_CAD_MODEL, CLIO_MODEL_COMMAND.
+    sceneBuilder = new ProcessSceneBuilder({
+      command,
+      episodesDir,
+      derivedDir,
+      scenesDir: join(config.dataDir, 'scenes'),
+      models: config.sceneModels,
+      ...(config.sceneTimeoutMs === null ? {} : { timeoutMs: config.sceneTimeoutMs }),
+      compiler,
+      logger,
+    });
+  }
+  return { compiler, sceneBuilder };
 }
 
 function canRun(command: string, args: string[]): boolean {
@@ -127,9 +165,9 @@ function canRun(command: string, args: string[]): boolean {
 function logStartup(
   config: Config,
   logger: Logger,
-  geminiReady: boolean,
-  compileReady: boolean,
+  ready: { gemini: boolean; compile: boolean; scene: boolean },
 ): void {
+  const { gemini: geminiReady, compile: compileReady } = ready;
   const hosts =
     config.host === '0.0.0.0' || config.host === '::'
       ? ['localhost', ...lanAddresses()]
@@ -154,6 +192,7 @@ function logStartup(
           ? 'off (CLIO_COMPILE=off)'
           : 'off. Install uv to compile finished episodes.'
     }`,
+    `  Scene builds: ${describeSceneBuilds(config, ready)}`,
     `  Data: ${config.dataDir}`,
     `  Procedures: ${config.proceduresDir}`,
   ];
@@ -171,7 +210,7 @@ function lanAddresses(): string[] {
 function stopOnSignals(
   server: Server,
   relay: GeminiRelay,
-  compiler: ProcessEpisodeCompiler | null,
+  runners: ({ close(): void } | null)[],
   logger: Logger,
 ): void {
   let stopping = false;
@@ -180,7 +219,7 @@ function stopOnSignals(
     stopping = true;
     logger.info(`${signal}: shutting down`);
     relay.close();
-    compiler?.close();
+    for (const runner of runners) runner?.close();
     server.close(() => process.exit(0));
     server.closeIdleConnections();
     // Keep-alive requests or slow peers must not hold up a restart.
