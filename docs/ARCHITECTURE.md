@@ -260,37 +260,63 @@ the tracker answers on `/track` (on by default; `?live=0` turns it off):
 
 ```
  LiveTracking (domain/session): every declared object for the whole lesson (not hidden zones or
-   points, 8 at most): the focused step's show items first in rank order, then what the coach
-   highlights (5 s; the closer look's too), then the rest of the plan; one phrase per object for
-   the whole lesson. Only show items and highlights are lit (isShown); the rest is recorded.
+   points, 8 at most), what is lit first: the step's show items in rank order (else its targets
+   and its action's objects), ER's next thing to touch, the coach's highlights; then the rest of
+   the plan, unlit, for the recording. One phrase per object for the whole lesson; its words are
+   the plan's, or Robotics-ER's sharper ones (refine) until the plan words it again.
     ─► {type: objects} on /track (tracker/TRACK.md) ─► YOLOE-26 + ByteTrack on every frame,
        jev about once a second for all of them together
  camera frames (480 px, FrameStream, only while the session is shown and the set is not empty)
-    ─► one detection per object per frame
+    ─► one detection per object per frame (box, outline, state, score, source: jev | er)
     ─► LiveObjects (domain/world), per object: head pose at the frame's time, the depth it last
        measured (DepthMemory) or a new measurement (depth sensing, then hit-test, then planes),
-       placeOutline, OutlineMotion (One Euro, latency predicted away)
-    ─► LiveHighlightsPresenter: the primary page's glow per object, depth-occluded, named
+       placeOutline (the outline and the box on one camera-facing plane), OutlineMotion (One
+       Euro, latency predicted away; the box rides on the outline's anchor)
+    ─► LiveHighlightsPresenter: the primary page's glow per lit object, depth-occluded
+    ─► LiveBoxesPresenter: each lit object's box with its name on a tag (?debug=1: every followed
+       object's, and what the tracker last said of it), occluded like the glow
     ─► registry.observe (detector, ~5 Hz, never while held; measured only when seen and measured
        on that frame) · registry.lose · TrackedObjectSample ─► observations.ndjson
+ ActionFocus (domain/session/action-focus.ts; needs a Gemini key, ?focus=0 turns it off): as a
+   step is entered, every 5 s while it stays focused, and soon after a coach highlight, one look
+   at a time: one 1024 px frame (CameraFocusFrames) + the step + the followed objects, lit first
+    ─► POST /api/vision/focus (Robotics-ER 2, minimal thinking) ─► per object: box, words; and
+       the next thing to touch
+    ─► boxes at 0.5 or more ─► LiveTracker.anchor ─► {type: anchor, source: er} on /track: the
+       tracker places the object from ER's box and ignores jev's disagreeing answers for 6 s
+    ─► words ─► LiveTracking.refine (what jev is told) · next thing ─► lit for the step
+       (declared by the lesson when the plan lacks it) · focus.answered (?debug=1: ER's boxes
+       dashed for 1.5 s) and a recorded annotation
 ```
 
 The session asks for depth sensing when the tracker answered before entering AR. While the
 tracker follows the show items, Spotlight stops looking at them again (its one-shot looks stay),
 and `OutlinesPresenter` leaves an object whose live light is on to it. When the tracker is down
 or drops, everything falls back to Spotlight and the connection keeps retrying. The dependency is
-one way: the plan and the coach say what to follow, and nothing the tracker sees reaches the
-coach.
+one way: the plan, the coach and the action focus say what to follow, and nothing the tracker or
+the action focus sees reaches the coach.
+
+A box is the tracker's `box` lifted like the outline: each corner on its camera ray (the head
+pose of its frame) at the object's measured distance, on the plane through the object that faces
+that frame's camera. It is drawn (`adapters/render/box-view.ts`) as a thin rectangle just outside
+the box with an L over each corner, in the object's role accent (`domain/overlay/accents.ts`),
+its widths kept as angles so it reads the same at arm's length and across the table, reshaped
+only when the box changes. Its lines depth-test against the hands' occluders and fade where the
+depth map has a real surface in front of the object, with the glow's own test
+(`glow/shader.ts`, `occlusionChunk`); the tag at its top left corner is drawn over everything,
+like the glow's name, which it replaces. An anchor for an object the set does not have yet (an
+action item the lesson has just declared) waits up to 2 s for the set that has it; without a
+tracker, or before the set is sent on a new connection, anchors are dropped.
 
 Tracking is layered. Each layer covers the others' blind spots:
 
-| Layer                  | When                                                                                                                           | How                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Accuracy                                                 |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| **Live tracking**      | every camera frame for every declared object while the tracker runs; lit only for what the step shows and the coach highlights | `/track` objects mode (above): YOLOE-26 + ByteTrack, jev about once a second. Each outline is placed at the object's distance measured along its camera rays (depth sensing, then hit-test) with the head pose of its frame, then smoothed. Registry estimates are `detector`, flagged not measured when coasting or at a reused distance                                                                                                                         | depth-sensing accuracy                                   |
-| **Camera grounding**   | plan start, step start, after a release, on `highlight`; every few seconds without the tracker                                 | A passthrough camera frame and each object's words (the step's show description, else its tracking query) go to `/api/vision/locate` (Gemini spatial understanding → 2D point + box, or an HTTP finder such as jev → outline). `liftDetection` casts camera rays using the head pose at capture time: depth comes from where the box's bottom meets a real surface (WebXR plane detection, falling back to the workspace plane), height from the detection point. | ±1–2 cm for static props when calibrated (see dev-setup) |
-| **Held objects**       | while pinched or fist-gripped                                                                                                  | `GraspTracker` attaches the object to the wrist with the grip offset, so it rides the 90 Hz hand tracking with no camera latency                                                                                                                                                                                                                                                                                                                                  | hand-tracking accuracy                                   |
-| **Pinch registration** | the camera can't find something                                                                                                | The next free-space pinch registers the next missing object (current step's targets first). It counts as trusted only when exactly one object was missing; otherwise it draws outlines, but a Gemini coach's checks don't use it                                                                                                                                                                                                                                  | fingertip accuracy                                       |
-| **Layout**             | curated demos on a taped mat                                                                                                   | Fixed workspace positions; camera detections don't overwrite them until the object has been carried                                                                                                                                                                                                                                                                                                                                                               | as good as the tape                                      |
+| Layer                  | When                                                                                                                                                   | How                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Accuracy                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| **Live tracking**      | every camera frame for every declared object while the tracker runs; lit for what the step lights, ER's next thing to touch and the coach's highlights | `/track` objects mode (above): YOLOE-26 + ByteTrack, jev about once a second, Robotics-ER 2's boxes as anchors every 5 s. Each outline and box is placed at the object's distance measured along its camera rays (depth sensing, then hit-test) with the head pose of its frame, then smoothed. Registry estimates are `detector`, flagged not measured when coasting or at a reused distance                                                                     | depth-sensing accuracy                                   |
+| **Camera grounding**   | plan start, step start, after a release, on `highlight`; every few seconds without the tracker                                                         | A passthrough camera frame and each object's words (the step's show description, else its tracking query) go to `/api/vision/locate` (Gemini spatial understanding → 2D point + box, or an HTTP finder such as jev → outline). `liftDetection` casts camera rays using the head pose at capture time: depth comes from where the box's bottom meets a real surface (WebXR plane detection, falling back to the workspace plane), height from the detection point. | ±1–2 cm for static props when calibrated (see dev-setup) |
+| **Held objects**       | while pinched or fist-gripped                                                                                                                          | `GraspTracker` attaches the object to the wrist with the grip offset, so it rides the 90 Hz hand tracking with no camera latency                                                                                                                                                                                                                                                                                                                                  | hand-tracking accuracy                                   |
+| **Pinch registration** | the camera can't find something                                                                                                                        | The next free-space pinch registers the next missing object (current step's targets first). It counts as trusted only when exactly one object was missing; otherwise it draws outlines, but a Gemini coach's checks don't use it                                                                                                                                                                                                                                  | fingertip accuracy                                       |
+| **Layout**             | curated demos on a taped mat                                                                                                                           | Fixed workspace positions; camera detections don't overwrite them until the object has been carried                                                                                                                                                                                                                                                                                                                                                               | as good as the tape                                      |
 
 Camera facts that shaped this (October 2026):
 - Quest Browser exposes the passthrough cameras via `getUserMedia` at 1280×960, 30 fps. Ask for
