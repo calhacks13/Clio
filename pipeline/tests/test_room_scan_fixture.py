@@ -120,6 +120,7 @@ def test_the_fixture_compiles_with_its_room_scan(tmp_path):
         "room": "ok",
         "environment": "ok",
         "retarget": "skipped",
+        "body-g1": "ok",
         "quality": "ok",
     }
     room = json.loads((result.out_dir / "environment.json").read_text())["room"]

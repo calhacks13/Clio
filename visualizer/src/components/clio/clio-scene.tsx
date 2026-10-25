@@ -4,6 +4,7 @@ import { Grid, OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import type {
   EnvironmentDoc,
+  BodyDoc,
   RetargetDoc,
   ShapesDoc,
   TracksDoc,
@@ -22,6 +23,7 @@ import { BACKDROP_LAYER } from "./layers/gltf";
 import { HandsLayer } from "./layers/hands";
 import { HeadLayer } from "./layers/head";
 import { ObjectsLayer } from "./layers/objects";
+import { BodyLayer } from "./layers/body";
 import { RobotLayer } from "./layers/robot";
 import { RoomLayer } from "./layers/room";
 import { SceneFetchContext } from "./use-scene-file";
@@ -86,6 +88,8 @@ export interface ClioSceneProps {
   retarget?: readonly RetargetDoc[];
   /** Draws the retargeted robots (default true). */
   showRobot?: boolean;
+  /** The G1 posed from the head and hands. */
+  body?: BodyDoc | null;
   /** The room scan to draw (scene-files.ts, roomFile); null draws none. */
   room?: FileRef | null;
   /** Generated models by object id (scene-files.ts, modelFiles). */
@@ -166,6 +170,7 @@ export default function ClioScene({
   shapes = null,
   retarget = NO_RETARGET,
   showRobot = true,
+  body = null,
   room = null,
   models = NO_MODELS,
   sceneFetch,
@@ -219,6 +224,7 @@ export default function ClioScene({
             shapes,
             retarget,
             showRobot,
+            body,
             room,
             models,
           ]}
@@ -249,6 +255,7 @@ export default function ClioScene({
             shapes={shapes}
             retarget={retarget}
             showRobot={showRobot}
+            body={body}
             room={room}
             models={models}
           />
@@ -269,6 +276,7 @@ export interface SceneLayersProps extends LayerProps {
   shapes?: ShapesDoc | null;
   retarget?: readonly RetargetDoc[];
   showRobot?: boolean;
+  body?: BodyDoc | null;
   room?: FileRef | null;
   models?: ReadonlyMap<string, ModelFile>;
 }
@@ -284,6 +292,7 @@ export function SceneLayers({
   shapes = null,
   retarget = NO_RETARGET,
   showRobot = true,
+  body = null,
   room = null,
   models = NO_MODELS,
   ...layer
@@ -313,6 +322,7 @@ export function SceneLayers({
       {showRobot && retarget.length > 0 && (
         <RobotLayer {...layer} retarget={retarget} />
       )}
+      {showRobot && body && <BodyLayer {...layer} body={body} />}
     </group>
   );
 }

@@ -115,7 +115,7 @@ def test_a_scene_records_its_compile_inputs_and_models(data, fake_models):
         EPISODE_ID,
         "workspace",
     )
-    assert scene["builder"] == {"name": "clio_pipeline", "version": "0.7.0"}
+    assert scene["builder"] == {"name": "clio_pipeline", "version": "0.8.0"}
     assert scene["options"] == {"models": "primitive"}
     assert [i["name"] for i in scene["inputs"]] == [
         "meta.json",

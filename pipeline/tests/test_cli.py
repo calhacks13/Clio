@@ -201,6 +201,7 @@ def test_compile_prints_one_json_line_per_episode(make_default_episode, tmp_path
         "room",
         "environment",
         "retarget",
+        "body-g1",
         "quality",
     ]
     assert Path(first["outDir"]) == tmp_path / "derived" / "ep-a"

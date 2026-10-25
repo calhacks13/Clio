@@ -251,7 +251,7 @@
       "description": "Each detected plane as last reported; lastSeenT is when a snapshot first left it out, or the end of the episode"
     },
     "room": {
-      "description": "The Quest room scan the compile wrote to room.glb; null without one, absent from compilers before 0.7.0",
+      "description": "The Quest room scan the compile wrote to room.glb; null without one, absent from compilers before 0.8.0",
       "anyOf": [
         {
           "type": "object",

@@ -26,6 +26,7 @@ SCHEMA_OF = {
     "environment": "derived-environment.schema.json",
     "shapes": "derived-shapes.schema.json",
     "retarget": "derived-retarget.schema.json",
+    "body": "derived-body.schema.json",
 }
 
 
@@ -58,7 +59,11 @@ def test_every_compiled_file_matches_its_schema(featured_episode_dir, tmp_path):
 
     assert _schema_errors(_read(result.out_dir / "manifest.json"), SCHEMA_OF["manifest.json"]) == []
     kinds = {a["name"]: a["kind"] for a in result.manifest["artifacts"]}
-    assert kinds == {"tracks.json": "tracks", "environment.json": "environment"}
+    assert kinds == {
+        "tracks.json": "tracks",
+        "environment.json": "environment",
+        "body-g1.json": "body",
+    }
     for name, kind in kinds.items():
         assert _schema_errors(_read(result.out_dir / name), SCHEMA_OF[kind]) == [], name
     assert validate_derived(result.out_dir) == []
@@ -80,6 +85,7 @@ def test_the_compile_lands_in_its_own_directory_with_nothing_left_over(episode_d
     assert result.out_dir == out_root / "ep-20261024-031502-test"
     assert _listing(out_root) == [".ep-20261024-031502-test.lock", "ep-20261024-031502-test"]
     assert sorted(p.name for p in result.out_dir.iterdir()) == [
+        "body-g1.json",
         "environment.json",
         "manifest.json",
         "tracks.json",
@@ -98,7 +104,7 @@ def test_the_manifest_records_inputs_artifacts_and_the_compiler(featured_episode
         "ep-20261024-031502-feat",
         15,
     )
-    assert manifest["compiler"] == {"name": "clio_pipeline", "version": "0.7.0"}
+    assert manifest["compiler"] == {"name": "clio_pipeline", "version": "0.8.0"}
     assert manifest["compiledAt"].endswith("Z") and len(manifest["compiledAt"]) == 24
     assert [i["name"] for i in manifest["inputs"]] == [
         "meta.json",
@@ -298,7 +304,7 @@ def test_a_failing_stage_is_recorded_and_the_others_still_run(episode_dir, tmp_p
         "detail": "RuntimeError: no planes today",
     }
     assert stages["tracks"]["status"] == "ok" and stages["quality"]["status"] == "ok"
-    assert [a["name"] for a in result.manifest["artifacts"]] == ["tracks.json"]
+    assert [a["name"] for a in result.manifest["artifacts"]] == ["tracks.json", "body-g1.json"]
     assert not (result.out_dir / "environment.json").exists()
     assert validate_derived(result.out_dir) == []
 
@@ -339,6 +345,7 @@ def test_a_profile_that_cannot_be_loaded_fails_only_its_stage(episode_dir, tmp_p
         "skipped",  # shapes: no depth samples
         "skipped",  # room: no room scan
         "ok",
+        "ok",  # body-g1
         "ok",
     ]
     assert not any(a["kind"] == "retarget" for a in result.manifest["artifacts"])
@@ -696,6 +703,7 @@ def test_a_malformed_observation_does_not_stop_the_compile(featured_episode_dir,
         "skipped",
         "ok",
         "skipped",
+        "ok",  # body-g1
         "ok",
     ]
     assert result.manifest["quality"]["validationIssues"] == 3

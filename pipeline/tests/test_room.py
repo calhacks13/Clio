@@ -70,7 +70,12 @@ def test_the_room_scan_compiles_into_room_glb_and_the_environment(room_scan_epis
 
     assert _stage(result) == {"name": "room", "status": "ok"}
     kinds = {a["name"]: a["kind"] for a in result.manifest["artifacts"]}
-    assert kinds == {"tracks.json": "tracks", "room.glb": "room", "environment.json": "environment"}
+    assert kinds == {
+        "tracks.json": "tracks",
+        "room.glb": "room",
+        "environment.json": "environment",
+        "body-g1.json": "body",
+    }
     room = next(a for a in result.manifest["artifacts"] if a["kind"] == "room")
     assert room["bytes"] == (result.out_dir / "room.glb").stat().st_size
     environment = _environment(result)
@@ -207,13 +212,15 @@ def test_an_unreadable_room_scan_fails_only_its_stage(tmp_path):
     assert _environment(result)["room"] is None
     assert not (result.out_dir / "room.glb").exists()
     assert "room" not in {a["kind"] for a in result.manifest["artifacts"]}
-    assert [s["status"] for s in result.manifest["stages"] if s["name"] != "room"] == [
-        "ok",
-        "skipped",
-        "ok",
-        "skipped",
-        "ok",
-    ]
+    others = {s["name"]: s["status"] for s in result.manifest["stages"] if s["name"] != "room"}
+    assert others == {
+        "tracks": "ok",
+        "shapes": "skipped",
+        "environment": "ok",
+        "retarget": "skipped",
+        "body-g1": "ok",
+        "quality": "ok",
+    }
     assert validate_derived(result.out_dir) == []
 
 
@@ -251,7 +258,11 @@ def test_a_failing_environment_stage_keeps_room_glb(room_scan_episode_dir, tmp_p
 
     assert _stage(result)["status"] == "ok"
     assert _stage(result, "environment")["status"] == "failed"
-    assert [a["name"] for a in result.manifest["artifacts"]] == ["tracks.json", "room.glb"]
+    assert [a["name"] for a in result.manifest["artifacts"]] == [
+        "tracks.json",
+        "room.glb",
+        "body-g1.json",
+    ]
     assert validate_derived(result.out_dir) == []
 
 

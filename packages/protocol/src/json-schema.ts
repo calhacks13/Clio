@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { DemoClipSchema } from './clip';
 import {
+  BodyDocSchema,
   CompileManifestSchema,
   EnvironmentDocSchema,
   RetargetDocSchema,
@@ -97,6 +98,7 @@ export function buildJsonSchemas(): Record<string, object> {
       RetargetDocSchema,
       'output',
     ),
+    exportSchema('derived-body.schema.json', 'Clio compiled body-g1.json', BodyDocSchema, 'output'),
     exportSchema('scene.schema.json', 'Clio rebuilt scene.json', SceneDocSchema, 'output'),
   ]);
 }

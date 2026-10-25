@@ -43,6 +43,7 @@ DERIVED_SCHEMAS: dict[str, str] = {
     "environment": "derived-environment.schema.json",
     "shapes": "derived-shapes.schema.json",
     "retarget": "derived-retarget.schema.json",
+    "body": "derived-body.schema.json",
 }
 # Rebuilt scene (clio.scene/1, packages/protocol/src/scene.ts), data/scenes/<id>/scene.json
 SCENE_SCHEMA = "scene.schema.json"
@@ -234,8 +235,8 @@ def derived_problems(
     doc: Any, kind: str, *, schemas: SchemaSet | None = None
 ) -> list[tuple[str, str]]:
     """(JSON path, message) for each way a compiled document breaks its schema. `kind` is
-    `manifest`, `tracks`, `environment`, `shapes` or `retarget` (a `room` artifact is a GLB, not
-    a document: validate_derived checks it can be read)."""
+    `manifest`, `tracks`, `environment`, `shapes`, `retarget` or `body` (a `room` artifact is a
+    GLB, not a document: validate_derived checks it can be read)."""
     if kind not in DERIVED_SCHEMAS:
         raise KeyError(f"unknown compiled document kind {kind!r}")
     schemas = schemas if schemas is not None else default_schemas()

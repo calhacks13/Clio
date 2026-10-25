@@ -140,6 +140,7 @@
               "environment",
               "shapes",
               "retarget",
+              "body",
               "room"
             ]
           },
