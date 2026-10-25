@@ -21,12 +21,14 @@ import { bodyAt } from "@/lib/clio/derived-display";
 import { themed } from "@/lib/clio/object-display";
 import type { LayerProps } from "../clio-scene";
 
-// The whole Unitree G1 of body-g1.json at the grid frame in force at the viewed time: the real URDF
-// and its meshes (the bucket the dataset viewer uses), its pelvis placed and its joints set from the
-// document, so the robot does the task where the learner did it. It is drawn solid and lit in the
-// dataset viewer's G1 colors, because a wireframe of 87 meshes hides the motion it is there to show.
-// Only the head and hands were measured; the pelvis, legs, waist and fingers are posed by rule, so
-// the label says "Inferred" and names the robot (DESIGN.md). A frame with no pose hides it.
+// The whole Unitree G1 of body-g1.json at the viewed time (blended between grid frames): the real
+// URDF and its meshes (the bucket the dataset viewer uses), its pelvis placed and its joints set
+// from the document, so the robot does the task where the learner did it. It is drawn at the
+// learner's size (1 / the document's scale), so its head and palms sit on the measured head and
+// hands; it is solid and lit in the dataset viewer's G1 colors, because a wireframe of 87 meshes
+// hides the motion it is there to show. Only the head and hands were measured; the pelvis, legs,
+// waist, elbows and fingers are posed by rule, so the label says "Inferred" and names the robot
+// (DESIGN.md). A frame with no pose hides it.
 
 const URDF_BASE_URL =
   process.env.NEXT_PUBLIC_URDF_BASE_URL ??
@@ -164,6 +166,7 @@ export function BodyLayer({
     if (label) label.style.display = pose ? "" : "none";
     if (!pose) return;
     robot.position.set(...pose.position);
+    robot.scale.setScalar(pose.size);
     robot.quaternion
       .copy(ROS_FROM_W)
       .multiply(new Quaternion(...pose.rotation));
@@ -173,7 +176,7 @@ export function BodyLayer({
     anchor.position.set(
       pose.position[0],
       pose.position[1],
-      pose.position[2] + 0.75,
+      pose.position[2] + 0.75 * pose.size,
     );
   });
 
@@ -184,7 +187,7 @@ export function BodyLayer({
         <Html pointerEvents="none" zIndexRange={[20, 0]}>
           <span
             ref={labelRef}
-            title="Only the head and hands were measured; the legs, waist and fingers are inferred"
+            title="Only the head and hands were measured; the legs, waist, elbows and fingers are inferred"
             className="pointer-events-auto flex -translate-x-1/2 -translate-y-full items-center gap-2 whitespace-nowrap rounded-full bg-surface-0 px-2 py-0.5 text-xs font-medium leading-4 text-fg-muted"
             style={{ display: "none" }}
           >

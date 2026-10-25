@@ -417,14 +417,29 @@ describe("the inferred G1 body", () => {
     summary: { frames: 2, meanHandResidualM: 0.015 },
   };
 
-  test("is placed at the grid frame in force, its pelvis converted to ROS once", () => {
-    const pose = bodyAt(body, 150_000);
+  test("is placed at a grid frame, its pelvis converted to ROS once", () => {
+    const pose = bodyAt(body, 100_000);
     expect(pose?.position).toEqual(rosFromW([0.1, 0.05, 0.4]));
     expect(pose?.rotation).toEqual(IDENTITY);
     expect(pose?.joints).toEqual([0.3, 0.4]);
   });
 
-  test("is hidden where it has no pose", () => {
+  test("is blended between two grid frames with a pose", () => {
+    const pose = bodyAt(body, 150_000);
+    const position = rosFromW([0.15, 0.05, 0.4]);
+    pose?.position.forEach((v, i) => expect(v).toBeCloseTo(position[i], 9));
+    expect(pose?.joints[0]).toBeCloseTo(0.4, 9);
+    expect(pose?.joints[1]).toBeCloseTo(0.5, 9);
+  });
+
+  test("holds the last frame after it, and is hidden where it has no pose", () => {
+    expect(bodyAt(body, 250_000)?.joints).toEqual([0.5, 0.6]);
     expect(bodyAt(body, 50_000)).toBeNull();
+  });
+
+  test("is drawn at the learner's size from profile version 2", () => {
+    expect(bodyAt(body, 100_000)?.size).toBe(1);
+    const v2 = { ...body, profile: { ...body.profile, version: 2 } };
+    expect(bodyAt(v2, 100_000)?.size).toBeCloseTo(1 / 0.8, 9);
   });
 });
