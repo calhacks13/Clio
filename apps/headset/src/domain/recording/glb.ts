@@ -34,7 +34,10 @@ interface View {
 }
 
 /** The GLB bytes for these nodes, all roots of one scene. A node without vertices has no mesh. */
-export function writeGlb(nodes: readonly GlbMeshNode[], generator = 'clio-headset'): Uint8Array {
+export function writeGlb(
+  nodes: readonly GlbMeshNode[],
+  generator = 'clio-headset',
+): Uint8Array<ArrayBuffer> {
   const views: View[] = [];
   const bufferViews: Record<string, number>[] = [];
   const accessors: Record<string, unknown>[] = [];
@@ -123,7 +126,11 @@ function bounds(positions: Float32Array): { min: Vec3; max: Vec3 } {
 
 const pad4 = (n: number) => (4 - (n % 4)) % 4;
 
-function pack(json: Uint8Array, views: readonly View[], binLength: number): Uint8Array {
+function pack(
+  json: Uint8Array,
+  views: readonly View[],
+  binLength: number,
+): Uint8Array<ArrayBuffer> {
   const jsonLength = json.byteLength + pad4(json.byteLength);
   const binPadded = binLength + pad4(binLength);
   const total = 12 + 8 + jsonLength + (binLength > 0 ? 8 + binPadded : 0);
