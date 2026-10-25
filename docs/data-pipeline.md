@@ -3,7 +3,7 @@
 How a lesson becomes data: what is recorded while it runs, when it is compiled, where it is kept,
 how the visualizer gets it, and where the object tracker and robot retargeting plug in. Field
 meanings are in [data-format.md](data-format.md); the contracts are in `packages/protocol/src/`
-(`episode.ts` for raw episodes, `derived.ts` for compiled ones).
+(`episode.ts` for raw episodes, `derived.ts` for compiled ones, `scene.ts` for object models).
 
 ## The short version
 
@@ -16,8 +16,12 @@ meanings are in [data-format.md](data-format.md); the contracts are in `packages
  detected planes (on change)  ────┤ POST /batches      frames.ndjson        finish   manifest.json
  lesson events                ────┘                    events.ndjson        (auto)   tracks.json
                                     POST /finish ────► objects.ndjson                environment.json
-                                                       observations.ndjson           retarget-<profile>.json
-                                                       finish.json
+ room scan, camera keyframes ─────► PUT /media ──────► observations.ndjson           room.glb
+                                                       finish.json                   retarget-<profile>.json
+                                                       media/                              │
+                                                            │                        clio scene (auto)
+                                                            │                        data/scenes/<id>/
+                                                            │                        scene.json, model-<id>.glb
                                                             │                              │
                                                             └───── GET /api/episodes ──────┘
                                                                           │
@@ -58,6 +62,7 @@ runs on the headset:
 | Grasp and release detection                    | The lesson reacts to it (checks, held objects riding the wrist)                                |
 | Recording 2D observations and the camera model | Without them nothing can be lifted again offline (see below)                                   |
 | Snapshotting detected planes                   | `XRFrame.detectedPlanes` exists only inside an XR frame                                        |
+| Snapshotting the room scan, keeping keyframes  | `XRFrame.detectedMeshes` and the camera frame with its pose exist only live                    |
 
 | After the episode, in `pipeline/`                              | Why later is better                                                                                                     |
 | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
@@ -65,6 +70,8 @@ runs on the headset:
 | Held spans, validity masks, interpolation between measurements | Needs the whole object history; never fills gaps silently                                                               |
 | Environment (table, floor, walls)                              | Merges every plane snapshot of the episode                                                                              |
 | Inverse kinematics retargeting                                 | Warm-starts across the whole trajectory, reruns when a robot profile changes, and costs the Quest no heat or frame time |
+| Keeping the room scan (`room.glb`)                             | Picks the last snapshot whose upload arrived and can be read                                                            |
+| Object models (`clio scene`)                                   | Needs the compiled tracks and sizes, and may call a model service                                                       |
 | Quality verdict                                                | Needs `finish.json` and batch bookkeeping                                                                               |
 | LeRobot export                                                 | A deliberate choice of episodes, never automatic                                                                        |
 
@@ -73,15 +80,20 @@ runs on the headset:
 Older episodes stay valid, and readers check `meta.features` before trusting a new field. What a
 lesson records today: head, hands, object estimates and lesson events as before, plus detected
 planes when the session has plane detection, `meta.camera` whenever the passthrough camera is open,
-and 2D observations while the live tracker follows the lesson's objects (see below). The
-primary-object page (`primary.html`) records detected planes and `meta.camera` too. The synthetic
-`tracked-objects` fixture has all of them.
+and 2D observations while the live tracker follows the lesson's objects (see below), the Quest
+room scan when the session has mesh detection, and a few camera keyframes for the object models
+(`?scan=0` turns them off). The primary-object page (`primary.html`) records detected planes,
+`meta.camera` and the room scan too. The synthetic `tracked-objects` fixture has the planes and
+observations, `room-scan` (made by `pipeline/scripts/synth_room_scan.py`) the room scan and
+keyframes as well.
 
 | Feature               | What it adds                                                                                                                                          |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `object.observations` | Batches carry `observations`, stored as `observations.ndjson`: one `ObjectObservation` per line, what an object finder saw in one camera frame (2D)   |
 | `object.surface`      | Observations carry `surface`: depth samples measured inside the outline on that frame, in W, so a shape can be fused after the episode                |
 | `environment.planes`  | `environment.planes` events: a full snapshot of every detected plane (kind, raw label, pose in W, polygon), at the start and whenever a plane changes |
+| `environment.meshes`  | `environment.meshes` events: a full snapshot of the Quest room scan (global mesh and furniture volumes), its geometry in `media/room-scan-<n>.glb`    |
+| `scene.keyframes`     | `scene.keyframe` events: a camera still in `media/keyframe-<nnnn>.jpg` with the camera's pose in W, for the object models                             |
 | (none)                | `meta.camera`: the passthrough camera model (intrinsics, `headFromCamera`, where it came from) that observations were lifted with                     |
 
 `ObjectObservation` keeps the 2D answer separate from the 3D estimate. The 3D estimate still goes
@@ -111,13 +123,31 @@ and wrists are `null` and the robot arms get no target.
 | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `manifest.json`           | Compiler version, the raw inputs with byte counts and SHA-256, each stage's status, the artifacts written and the quality verdict                                                                                                                                                       |
 | `tracks.json`             | The head, both wrists (pose and pinch) and every object on one grid (default 30 fps): position, orientation, tracked, interpolated, held by, confidence, source, held spans, the plan's kind and `partOf`, an estimated `extent` (below), and a summary of the object's 2D observations |
-| `environment.json`        | The table (from calibration, the plan, or placed on a detected table plane), the floor of the WebXR space with the table height when it is known, and every detected plane                                                                                                              |
+| `environment.json`        | The table (from calibration, the plan, or placed on a detected table plane), the floor of the WebXR space with the table height when it is known, every detected plane, and `room`: the room scan in `room.glb` (below), or null                                                        |
+| `room.glb`                | The Quest room scan in W: one node per mesh (the global mesh and each furniture volume), named by its id, with its pose, positions, triangles, normals and `extras: {kind, label, global}`; only when the episode recorded one                                                          |
 | `shapes.json`             | Each object's depth samples fused into a point set and a yaw-aligned box, as offsets from its tracked position (below); skipped when no observation carries `surface`                                                                                                                   |
 | `retarget-<profile>.json` | Per robot arm: joint values, gripper, tool target and achieved pose, residuals, reachability, and joint positions for drawing                                                                                                                                                           |
 
 The quality verdict marks an episode **usable** only when it finished as `completed`, every batch
 arrived, no frames are missing for more than a second, the hands were tracked for most of it, and
 every line passed validation. `reasons` says why not otherwise.
+
+### Room scan
+
+The `room` stage keeps the last `environment.meshes` snapshot whose GLB arrived in `media/` and
+can be read, and rewrites it to `room.glb` in the same node layout (each mesh's pose in W, its
+positions in its own frame), adding vertex normals and the kind, label and global flag that
+`environment.json` reports. A later snapshot whose file is unreadable or holds nothing to draw is
+passed over for the one before it, and a single mesh no viewer could draw (positions that are not
+finite, triangles past its vertices, no triangles) is left out with its node kept; the stage's
+detail says what. `environment.json`'s `room` names the file, the snapshot and its time, how many
+snapshots there were, and every mesh with its vertex and triangle counts and its bounds in W.
+Without a snapshot the stage is skipped and `room` is null; when no GLB that arrived can be read
+it fails, and `environment.json` is still written with `room` null. Every
+`media/room-scan-<n>.glb` in the episode is a compile input (`manifest.json` lists it as
+`media/room-scan-<n>.glb`), kept or not, so one that arrives late makes the compile stale;
+keyframes are not compile inputs. The room scan was measured when the room was set up, not during
+the episode: furniture may have moved since.
 
 ### Measured 3D for objects
 
@@ -136,6 +166,20 @@ that without inventing anything, and the visualizer labels them as what they are
   points, and summed up as a yaw-aligned box: the principal horizontal axis from the points, the
   2nd to 98th percentile along each axis, standing on the table. The points show the side the
   camera saw; the box is the honest envelope of that.
+
+## Object models
+
+`clio scene` builds a generated model of each object from a compiled episode into
+`data/scenes/<id>/` (`scene.json`, `model-<id>.glb`, `cad-<id>.json`, `crop-<id>-<n>.jpg`); the
+design, the backends and the viewer are in [room-scene.md](room-scene.md). It reads the episode's
+keyframes and the compile (`manifest.json` is required, then `tracks.json` and `shapes.json`), and
+runs one stage, `models`. Like a compile it is built aside and swapped in, under a lock on
+`data/scenes/.<id>.lock`, and a failing stage is recorded in `scene.json` while the file is still
+written. A scene is stale when `meta.json`, `events.ndjson`, `observations.ndjson`, a keyframe,
+the compile's `manifest.json`, `tracks.json` or `shapes.json`, the `--models` backend or the
+pipeline version changed: every compile writes a new `manifest.json`, so it makes the scene stale.
+`scene.json`'s `compiledAt` is the manifest's. The server runs `clio scene --if-stale` after each
+compile; an up-to-date scene is left untouched.
 
 ## Where the object tracker plugs in
 
@@ -178,8 +222,10 @@ Four seams carry its answers into the data:
    tracked), with the estimated `extent` as a box and the fused `shapes.json` as points and a yaw
    box riding on the position; live and uncompiled episodes show the raw estimates.
 
-Pipeline 0.4.0 added the observations summary, 0.5.0 each object's `partOf`, 0.6.0 the estimated `extent` and `shapes.json`. A version change makes every compile stale, so the
-server's startup sweep recompiles the library once, one episode at a time.
+Pipeline 0.4.0 added the observations summary, 0.5.0 each object's `partOf`, 0.6.0 the estimated
+`extent` and `shapes.json`, 0.7.0 `room.glb`, `environment.json`'s `room` and the object models
+(`clio scene`). A version change makes every compile stale, so the server's startup sweep
+recompiles the library once, one episode at a time.
 
 ## Robot retargeting
 
@@ -207,6 +253,9 @@ it; without that flag the export keeps the `human_hands` profile.
 pnpm dev                                   # server compiles each finished episode automatically
 cd pipeline && uv run clio compile ../data/episodes/<id>    # by hand, into ../data/derived/<id>/
 cd pipeline && uv run clio compile ../data/episodes --if-stale
+cd pipeline && uv run clio scene ../data/episodes/<id>      # object models, into ../data/scenes/<id>/
+cd pipeline && uv run clio scene ../data/episodes/<id> --derived ../data/derived \
+    --out ../data/scenes --models gemini-cad --if-stale     # what the server runs, by hand
 ```
 
 Server settings: `CLIO_COMPILE=off` disables automatic compiles. `CLIO_RETARGET_PROFILES` is a
