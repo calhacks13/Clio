@@ -16,6 +16,7 @@ import copy
 import functools
 import json
 import math
+import struct
 from pathlib import Path
 
 import pytest
@@ -291,6 +292,26 @@ def plane(
     }
 
 
+def room_mesh(
+    id_: str,
+    kind: str = "other",
+    *,
+    label: str | None = None,
+    global_: bool = False,
+    vertices: int = 8,
+    triangles: int = 12,
+) -> dict:
+    """An EnvironmentMesh for `environment.meshes` events."""
+    return {
+        "id": id_,
+        "kind": kind,
+        "label": label,
+        "global": global_,
+        "vertices": vertices,
+        "triangles": triangles,
+    }
+
+
 IDENTITY_POSE = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
 
 
@@ -341,6 +362,7 @@ class EpisodeBuilder:
     hand = staticmethod(hand)
     object_state = staticmethod(object_state)
     plane = staticmethod(plane)
+    room_mesh = staticmethod(room_mesh)
 
     def features(self, *names: str) -> EpisodeBuilder:
         """List optional recording features in meta.features ("object.flags", ...)."""
@@ -450,6 +472,17 @@ class EpisodeBuilder:
     def planes(self, t: float, *planes: dict) -> EpisodeBuilder:
         """An `environment.planes` snapshot: every plane detected at `t`."""
         return self.event(t, "environment.planes", planes=list(planes))
+
+    def room_scan(
+        self, t: float, n: int, glb: bytes | None, meshes: list[dict] | None = None
+    ) -> EpisodeBuilder:
+        """An `environment.meshes` snapshot at `t` and its geometry, media/room-scan-<n>.glb
+        (`glb` None: the upload never arrived). `meshes` are the event's EnvironmentMesh
+        entries (see `room_mesh`)."""
+        name = f"room-scan-{n}.glb"
+        if glb is not None:
+            self.media[name] = glb
+        return self.event(t, "environment.meshes", media=name, meshes=list(meshes or []))
 
     def write(self) -> Path:
         self.dir.mkdir(parents=True, exist_ok=False)
@@ -705,6 +738,131 @@ def build_frame_gap(root: Path, episode_id: str = "ep-20261024-031502-gap") -> E
     }
     b.batches = {"received": [0, 1, 2, 3], "gaps": []}
     return b
+
+
+# --- an episode with the Quest room scan ---------------------------------------------------------
+#
+# The featured episode recorded on a headset with mesh detection ("environment.meshes"): one
+# snapshot at t = 0, media/room-scan-1.glb, written here by hand (not by clio_pipeline.glb, so the
+# reader is tested against an independent writer) the way the headset writes it: one root node per
+# mesh named by its id, the mesh pose as translation and rotation, local positions, uint32 indices.
+# - mesh-1, the global mesh: a 4 x 4 m floor and a 2.5 m wall at local z = -2, posed at the floor
+#   plane's origin (0.4, -0.75, 0.5): in W from (-1.6, -0.75, -1.5) to (2.4, 1.75, 2.5)
+# - mesh-2, the table volume: a 0.6 x 0.74 x 0.8 m box (local x, y, z) hanging below its top,
+#   posed at (0.4, 0, -0.3) and turned a quarter about +y: in W from (0, -0.74, -0.6) to (0.8, 0, 0)
+
+QUARTER_TURN_Y = [0.0, math.sqrt(0.5), 0.0, math.sqrt(0.5)]
+GLOBAL_MESH_POSE = ([0.4, -0.75, 0.5], [0.0, 0.0, 0.0, 1.0])
+TABLE_MESH_POSE = ([0.4, 0.0, -0.3], QUARTER_TURN_Y)
+
+
+def box_mesh(lo, hi) -> tuple[list[list[float]], list[list[int]]]:
+    """The 8 corners and 12 triangles of an axis-aligned box from `lo` to `hi`."""
+    corners = [[(lo, hi)[(k >> a) & 1][a] for a in range(3)] for k in range(8)]
+    faces = [(0, 2, 3, 1), (4, 5, 7, 6), (0, 1, 5, 4), (2, 6, 7, 3), (0, 4, 6, 2), (1, 3, 7, 5)]
+    return corners, [list(t) for a, b, c, d in faces for t in ((a, b, c), (a, c, d))]
+
+
+def global_mesh() -> tuple[list[list[float]], list[list[int]]]:
+    floor = [[-2.0, 0.0, -2.0], [2.0, 0.0, -2.0], [2.0, 0.0, 2.0], [-2.0, 0.0, 2.0]]
+    wall = [[-2.0, 0.0, -2.0], [2.0, 0.0, -2.0], [2.0, 2.5, -2.0], [-2.0, 2.5, -2.0]]
+    return floor + wall, [[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7]]
+
+
+def room_glb(nodes: list[dict]) -> bytes:
+    """A GLB with one root node per entry {name, translation, rotation, positions, indices,
+    extras}: float32 POSITION, uint32 indices, no normals, no materials."""
+    binary, views, accessors, gl_nodes, meshes = bytearray(), [], [], [], []
+    for node in nodes:
+        positions = struct.pack(f"<{3 * len(node['positions'])}f", *sum(node["positions"], []))
+        indices = struct.pack(f"<{3 * len(node['indices'])}I", *sum(node["indices"], []))
+        for data, kind, count in (
+            (positions, "VEC3", len(node["positions"])),
+            (indices, "SCALAR", 3 * len(node["indices"])),
+        ):
+            views.append({"buffer": 0, "byteOffset": len(binary), "byteLength": len(data)})
+            component = 5126 if kind == "VEC3" else 5125
+            accessors.append(
+                {
+                    "bufferView": len(views) - 1,
+                    "componentType": component,
+                    "count": count,
+                    "type": kind,
+                }
+            )
+            binary += data
+        attributes = {"POSITION": len(accessors) - 2}
+        meshes.append({"primitives": [{"attributes": attributes, "indices": len(accessors) - 1}]})
+        gl_nodes.append(
+            {
+                "name": node["name"],
+                "mesh": len(meshes) - 1,
+                "translation": node["translation"],
+                "rotation": node["rotation"],
+                "extras": node["extras"],
+            }
+        )
+    doc = {
+        "asset": {"version": "2.0", "generator": "clio-test"},
+        "scene": 0,
+        "scenes": [{"nodes": list(range(len(gl_nodes)))}],
+        "nodes": gl_nodes,
+        "meshes": meshes,
+        "accessors": accessors,
+        "bufferViews": views,
+        "buffers": [{"byteLength": len(binary)}],
+    }
+    text = json.dumps(doc).encode()
+    text += b" " * (-len(text) % 4)
+    body = struct.pack("<II", len(text), 0x4E4F534A) + text
+    body += struct.pack("<II", len(binary), 0x004E4942) + bytes(binary)
+    return struct.pack("<III", 0x46546C67, 2, 12 + len(body)) + body
+
+
+def room_scan_glb() -> bytes:
+    """media/room-scan-1.glb of the room scan episode (see above)."""
+    floor_and_wall, walls = global_mesh()
+    table, sides = box_mesh([-0.3, -0.74, -0.4], [0.3, 0.0, 0.4])
+    return room_glb(
+        [
+            {
+                "name": "mesh-1",
+                "translation": GLOBAL_MESH_POSE[0],
+                "rotation": GLOBAL_MESH_POSE[1],
+                "positions": floor_and_wall,
+                "indices": walls,
+                "extras": {"kind": "other", "label": "global mesh", "global": True},
+            },
+            {
+                "name": "mesh-2",
+                "translation": TABLE_MESH_POSE[0],
+                "rotation": TABLE_MESH_POSE[1],
+                "positions": table,
+                "indices": sides,
+                "extras": {"kind": "table", "label": "table", "global": False},
+            },
+        ]
+    )
+
+
+ROOM_MESHES = [
+    room_mesh("mesh-1", "other", label="global mesh", global_=True, vertices=8, triangles=4),
+    room_mesh("mesh-2", "table", label="table", vertices=8, triangles=12),
+]
+
+
+def build_room_scan(root: Path, episode_id: str = "ep-20261024-031502-room") -> EpisodeBuilder:
+    b = build_featured(root, episode_id)
+    b.features(*b.meta["features"], "environment.meshes")
+    b.room_scan(0.0, 1, room_scan_glb(), copy.deepcopy(ROOM_MESHES))
+    b.events.sort(key=lambda e: e["t"])
+    return b
+
+
+@pytest.fixture
+def room_scan_episode_dir(tmp_path) -> Path:
+    """The featured episode with a room scan (see `build_room_scan`)."""
+    return build_room_scan(tmp_path).write()
 
 
 @pytest.fixture
