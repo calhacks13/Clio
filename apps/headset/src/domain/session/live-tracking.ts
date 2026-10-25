@@ -1,6 +1,6 @@
-import type { HighlightRole, ObjectSpec, Procedure, Step } from '@clio/protocol';
+import type { ObjectSpec, Procedure, Step } from '@clio/protocol';
 import type { AppBus, HighlightStyle } from '../events';
-import { type Accent, inferRole, roleAccent, styledAccent } from '../overlay/accents';
+import { type Accent, inferRole, roleAccent, stepRole, styledAccent } from '../overlay/accents';
 import { coachHighlightUntil, stepLights } from '../overlay/lights';
 import { findWords } from '../world/find-words';
 import type { ObjectRegistry } from '../world/object-registry';
@@ -213,7 +213,7 @@ export class LiveTracking {
     const step = this.focusedStep();
     let previous: number | null = null;
     for (const [rank, item] of (step?.show ?? []).entries()) {
-      const role = item.role ?? inferRole(rank, registry.spec(item.object)?.kind);
+      const role = stepRole(step, item.object, rank, registry.spec(item.object)?.kind, item.role);
       const base = roleAccent(role, previous);
       previous = base;
       const style = styleOf(item.object);
@@ -233,13 +233,7 @@ export class LiveTracking {
         const spec = registry.spec(id);
         if (!spec || !findable(spec)) continue;
         const rank = list.length;
-        const role: HighlightRole =
-          id === step.action?.object
-            ? 'act'
-            : id === step.action?.target
-              ? 'destination'
-              : inferRole(rank, spec.kind);
-        const base = roleAccent(role, previous);
+        const base = roleAccent(stepRole(step, id, rank, spec.kind), previous);
         previous = base;
         this.addLit(add, spec, rank, base, styleOf(id));
       }

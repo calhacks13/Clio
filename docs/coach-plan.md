@@ -309,6 +309,12 @@ holds the rules, and the live tracker (`LiveTracking`) and the fallback while it
   ([The smart model](#the-smart-model));
 - the coach's highlights: a `target` for the step, `attention` for 5 s, `warning` as a pulse.
 
+Each lit object's color comes from its role (`stepRole` in `overlay/accents.ts`, for every
+renderer): the plan's own role for a show item, else what the step's hands do with it (what the
+action moves is what to act on, where it goes is the destination, whatever its kind: a mug picked
+up by its handle is cyan, not yellow), else its place and kind (a container or region is a
+destination, the first other item is what to act on).
+
 The tracker follows the plan's other objects too, unlit, for the recording. A step with no
 objects at all lights nothing until the action focus names one.
 

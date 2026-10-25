@@ -2,7 +2,7 @@ import { parseProcedure } from '@clio/protocol';
 import { describe, expect, it } from 'vitest';
 import { Emitter } from '../../src/core/emitter';
 import type { AppEvents, HighlightStyle } from '../../src/domain/events';
-import { ACCENTS, HINT_OPACITY } from '../../src/domain/overlay/accents';
+import { ACCENTS, HINT_OPACITY, stepRole } from '../../src/domain/overlay/accents';
 import { OverlayModel } from '../../src/domain/overlay/overlay-model';
 import type { PlanView, StepStatus } from '../../src/domain/plan/recital';
 import type { ObjectOutline } from '../../src/domain/world/outline';
@@ -635,5 +635,23 @@ describe('OverlayModel lights what the live tracker would, for when it is down',
     ]);
     enter('pour');
     expect(lights(61_700).filter(([, , source]) => source === 'coach')).toEqual([]);
+  });
+});
+
+describe('stepRole', () => {
+  const pickUp = { action: { verb: 'pick_up' as const, object: 'mug', hand: 'either' as const } };
+  const pour = {
+    action: { verb: 'pour' as const, object: 'jug', target: 'mug', hand: 'either' as const },
+  };
+
+  it("takes what the step's hands do before an object's kind, and an explicit role first", () => {
+    expect(stepRole(pickUp, 'mug', 0, 'container')).toBe('act');
+    expect(stepRole(pour, 'mug', 0, 'container')).toBe('destination');
+    expect(stepRole(pour, 'jug', 1, 'container')).toBe('act');
+    expect(stepRole(pickUp, 'mug', 0, 'container', 'level')).toBe('level');
+    // Anything else by its place and kind.
+    expect(stepRole(pickUp, 'tray', 0, 'container')).toBe('destination');
+    expect(stepRole({}, 'cap', 0, 'item')).toBe('act');
+    expect(stepRole(null, 'cap', 1, 'item')).toBe('destination');
   });
 });

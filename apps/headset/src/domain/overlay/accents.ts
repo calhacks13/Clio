@@ -1,4 +1,4 @@
-import type { HighlightRole, ObjectSpec } from '@clio/protocol';
+import type { HighlightRole, ObjectSpec, Step } from '@clio/protocol';
 import type { HighlightStyle } from '../events';
 
 // The highlight color scheme (apps/headset/DESIGN.md, "Highlight colors"): one accent per object,
@@ -32,6 +32,26 @@ export interface Accent {
 export function inferRole(rank: number, kind: ObjectSpec['kind'] | undefined): HighlightRole {
   if (kind === 'container' || kind === 'region') return 'destination';
   return rank === 0 ? 'act' : 'destination';
+}
+
+/**
+ * The role of an object a step lights. An explicit role wins. Else the step's hands decide: what
+ * its action moves is what to act on and where it goes is the destination, whatever their kind
+ * (a mug picked up by its handle is not where something goes). Else its place and kind
+ * (inferRole). Every renderer resolves roles through here, so the tracker's lights and the
+ * fallback's outlines agree.
+ */
+export function stepRole(
+  step: Pick<Step, 'action'> | null | undefined,
+  object: string,
+  rank: number,
+  kind: ObjectSpec['kind'] | undefined,
+  role?: HighlightRole,
+): HighlightRole {
+  if (role) return role;
+  if (step?.action?.object === object) return 'act';
+  if (step?.action?.target === object) return 'destination';
+  return inferRole(rank, kind);
 }
 
 /**

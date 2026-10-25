@@ -414,6 +414,55 @@ describe('LiveTracking', () => {
     expect(shown(tracking)).toEqual([]);
   });
 
+  it("colors a show item by what the step's hands do with it before its kind", () => {
+    const show = (object: string, extra = {}) => ({
+      object,
+      phrase: object,
+      description: object,
+      ...extra,
+    });
+    const plan = lesson(
+      'mugs',
+      [
+        {
+          id: 'grab',
+          instruction: 'Pick up the blue mug by its handle.',
+          action: { verb: 'pick_up', object: 'mug' },
+          show: [show('mug')],
+          success: { type: 'confirm' },
+        },
+        {
+          id: 'fill',
+          instruction: 'Pour the jug into the mug.',
+          action: { verb: 'pour', object: 'jug', target: 'mug' },
+          show: [show('mug'), show('jug')],
+          success: { type: 'confirm' },
+        },
+        {
+          id: 'level',
+          instruction: 'Fill the mug to the line.',
+          action: { verb: 'pour', object: 'jug', target: 'mug' },
+          show: [show('mug', { role: 'level' })],
+          success: { type: 'confirm' },
+        },
+      ],
+      [{ id: 'mug', label: 'blue mug', kind: 'container', placement: { method: 'detect' } }],
+    );
+    const { tracking, start, enter } = setup(plan);
+    const colors = () =>
+      tracking.objects.filter(isShown).map(({ id, accent }) => [id, accent.color]);
+    start();
+    enter(plan.steps[0] as Step);
+    expect(colors()).toEqual([['mug', ACCENTS.act]]);
+    enter(plan.steps[1] as Step);
+    expect(colors()).toEqual([
+      ['mug', ACCENTS.destination],
+      ['jug', ACCENTS.act],
+    ]);
+    enter(plan.steps[2] as Step);
+    expect(colors()).toEqual([['mug', ACCENTS.level]]);
+  });
+
   it("lights the action focus's item for the rest of the step, until it names another", () => {
     const { bus, tracking, start, enter } = setup();
     const answer = (stepId: string, actionId: string | null) =>
