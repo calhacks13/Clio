@@ -19,17 +19,27 @@ override that reference's dark palette and purple controls.
   width. Keep readable text size and padding rather than shrinking the type or forcing a square.
   Use subtly rounded corners, dark text, a dark filled Done pill and sentence-case metadata.
   Quiet listening has no label or dot. Report a disconnected voice with an actionable message.
-- Position cards beside the projected object silhouette with a 3.5cm gap at the card plane.
-  Consider left, right, top and bottom, avoiding every known mask, including live tracker masks.
-  Follow the full gaze orientation, including looking down at a table; start adjacent to the task.
+- Anchor cards in the room: both world position and orientation remain fixed during ordinary head
+  turns, leaning, head bob and brief glances away. Do not billboard or rearrange them every frame.
+  Only after the card stays well outside reading reach (50 degrees horizontally, 40 vertically,
+  or outside 35cm–1.45m) for 800ms may it ease toward one captured recovery target. Use a damped
+  spring with no continuous head chasing, and let it settle before another optional recovery.
+  Keep a card still while a fingertip is near it. Reduced motion disables optional catch-up.
+- Keep a 6cm minimum gap at the card's actual depth from every known object, with extra initial
+  clearance so modest head movement and tracker jitter do not trigger constant rearrangement.
+  Consider left, right, top and bottom. Include all followed masks, including objects not lit by
+  this step, and detected nearby furniture before any lesson is running. Reserve 18cm above a
+  detected worktop as presentation clearance for the working area; never record that buffer as
+  measured geometry. Structural room planes do not block the entire UI view.
   Use conservative mask bounds; estimates without masks use their declared object radius.
-  Evaluate the full measured card rectangle, preferred view bounds, task proximity and gaze travel
-  when choosing a side. Recheck when its size changes, and prefer a fully visible comfortable fit.
-  Keep a clear placement stable. If a moving mask blocks it, choose a new clear position without
-  animating across the object. In a crowded view, preserving object visibility takes precedence
-  over keeping the whole card inside the preferred view area.
+  Check all four corners of the actual world-oriented card for both eyes, including depth and
+  parallax. Resizing and each catch-up sample must preserve clearance, including the swept path.
+  A newly blocking object may require immediate relocation; optional head recovery must never
+  slide through an object. In a crowded view, object visibility takes precedence over keeping the
+  whole card inside the preferred view area.
 - Keep keyboard focus, readable disabled states, reduced-motion support and local-only assets.
-  The gallery previews the actual launch UI and presenter, including explicit mask-clearance cases.
+  The gallery previews the actual launch UI and presenter, including a manual head-movement
+  preview with a fixed world task and mask-clearance cases.
 
 The supplied Inter families are an intentional exception to generic font-diversity lint warnings.
 Gallery headings are styled through its dynamically imported CSS (H2 25.6px, H3 17.6px, body 16px),

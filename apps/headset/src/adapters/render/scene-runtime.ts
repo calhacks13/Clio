@@ -13,7 +13,7 @@ import type { Pose } from '../../core/math';
 /**
  * The three.js side of the app. Two roots: `workspaceRoot` follows the calibrated workspace pose,
  * so presenters that place things on the table work directly in workspace coordinates (the same
- * frame as the data); `worldRoot` holds head-relative UI.
+ * frame as the data); `worldRoot` holds UI anchored in the room.
  */
 export class SceneRuntime {
   readonly renderer: WebGLRenderer;

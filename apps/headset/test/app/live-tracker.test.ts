@@ -267,10 +267,18 @@ describe('LiveTracker', () => {
     live.prepare(xrFrame, {} as XRReferenceSpace);
     expect(live.lit('cap')).toBe(true);
     expect(live.lit('jug')).toBe(false);
+    // A card must also avoid the real jug even though this step does not light it.
+    expect(live.panelMasks).toHaveLength(2);
+    expect(live.panelMasks.every((mask) => mask.outline.points.length > 0)).toBe(true);
     // Unlit, the jug is still placed and recorded like the cap.
     expect(registry.get('jug')).toMatchObject({ source: 'detector', confidence: 0.9 });
     expect(observed.sort()).toEqual(['cap', 'jug']);
+    enter(DONE);
+    live.prepare(xrFrame, {} as XRReferenceSpace);
+    expect(live.lit('cap')).toBe(false);
+    expect(live.panelMasks).toHaveLength(2);
     live.stop();
+    expect(live.panelMasks).toEqual([]);
   });
 
   it("puts the tracker's answers in the registry as the camera's untrusted detector", async () => {

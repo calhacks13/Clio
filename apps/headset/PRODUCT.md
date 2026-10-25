@@ -39,7 +39,8 @@ catalog, and the real objects are found and lit in place rather than drawn as ge
 - Input on the launch page is the controller or hand ray and the Quest's virtual keyboard or
   dictation; typing is slow, so the page asks for as little as possible.
 - In AR the learner talks to the coach (Gemini Live, voice); hands are on the task. A floating
-  instruction panel follows their gaze and has a touchable Done button.
+  instruction card stays anchored in the room and has a touchable Done button. Only a sustained
+  loss of reading reach allows a slow catch-up; ordinary head movement does not move or turn it.
 - The laptop runs the server (8787), the headset app (5173), the object tracker (8790) and the
   episode visualizer (3001).
 

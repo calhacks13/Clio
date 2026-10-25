@@ -94,11 +94,12 @@ export class LiveTracker {
   private sent: string | null = null;
   private followed: string | null = null;
   private highlights: LiveHighlight[] = [];
+  private masks: Placement[] = [];
   private readonly onVisibility = () => this.updateStreaming();
 
-  /** The same current silhouettes drawn by the live presenter, for instruction-card clearance. */
+  /** Every followed object's current silhouette, including objects not lit by this step. */
   get panelMasks(): readonly Placement[] {
-    return this.highlights.map((highlight) => highlight.placement);
+    return this.masks;
   }
 
   constructor(private readonly deps: LiveTrackerDeps) {
@@ -132,6 +133,7 @@ export class LiveTracker {
         this.sent = null;
         this.pending.length = 0;
         this.objects.reset();
+        this.masks = [];
       },
     });
     this.stream = new FrameStream({
@@ -226,7 +228,12 @@ export class LiveTracker {
   prepare(frame: XRFrame, space: XRReferenceSpace): void {
     const { registry, clock } = this.deps;
     this.occluders.update(frame, space);
-    this.highlights = this.objects.views(clock.now()).flatMap((view) => {
+    const views = this.objects.views(clock.now());
+    this.masks = views.flatMap((view) => {
+      const spec = registry.spec(view.id);
+      return spec && !spec.hidden ? [view.placement] : [];
+    });
+    this.highlights = views.flatMap((view) => {
       const object = this.tracking.get(view.id);
       const spec = registry.spec(view.id);
       if (!object || !spec || !isShown(object)) return [];
@@ -259,6 +266,7 @@ export class LiveTracker {
     this.depth = null;
     this.occluders.hide();
     this.highlights = [];
+    this.masks = [];
   }
 
   /** Tell the tracker what to follow whenever that changes, and again on a new connection. */

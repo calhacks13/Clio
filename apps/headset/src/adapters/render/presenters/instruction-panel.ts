@@ -8,9 +8,9 @@ import {
   Vector3,
 } from 'three';
 import type { Text } from 'troika-three-text';
-import { type Pose, rotateVec } from '../../../core/math';
+import { rotateVec } from '../../../core/math';
 import { jointPosition } from '../../../domain/hands/features';
-import { placeInstructionPanel } from '../panel-placement';
+import { InstructionPanelMotion } from '../panel-motion';
 import type { PresentContext, Presenter } from '../presenter';
 import { makeText, setText } from '../text';
 
@@ -43,6 +43,8 @@ const GAP_BUTTON = 0.018;
 const PAD_BOTTOM = 0.022;
 const BUTTON_W = 0.076;
 const BUTTON_H = 0.037;
+const MOTION_PREFERENCE =
+  typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
 
 export class InstructionPanelPresenter implements Presenter {
   readonly object = new Group();
@@ -78,7 +80,9 @@ export class InstructionPanelPresenter implements Presenter {
     makeText({ size: 0.015, color: ERROR }),
   ];
   private readonly measureDone = () => this.applyMeasuredWidth();
-  private previousPose: Pose | null = null;
+  private readonly motion = new InstructionPanelMotion({
+    reducedMotion: () => MOTION_PREFERENCE?.matches ?? false,
+  });
   /** Text lays itself out asynchronously; each finished layout re-stacks the panel. */
   private readonly relayout = () => this.layout();
 
@@ -256,10 +260,9 @@ export class InstructionPanelPresenter implements Presenter {
   }
 
   private follow(ctx: PresentContext): void {
-    const pose = placeInstructionPanel(ctx, this.panelW, this.panelH, TOP, this.previousPose);
+    const pose = this.motion.update(ctx, this.panelW, this.panelH, TOP);
     this.object.position.set(...pose.p);
     this.object.quaternion.set(...pose.q);
-    this.previousPose = pose;
   }
 
   /** Index fingertip (either hand) touching the button, in world space. */

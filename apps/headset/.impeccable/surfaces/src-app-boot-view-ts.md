@@ -42,8 +42,11 @@ the dealt structures were not used. seed:480395b52405a8f3
 
 Lesson cards: content-sized white cards offset beside objects with clear space around every
 projected mask. Both width and height follow measured text, with fixed readable type and padding.
-Choose placement using the complete card rectangle, visibility, task proximity and gaze travel;
-keep clear settled cards stable. No listening label, dot or duplicate transcript. Useful
+Choose initial placement using the complete card rectangle, visibility, task proximity and gaze
+travel. Keep position and orientation anchored in world space while the learner moves their head;
+use a delayed damped recovery only after sustained loss of reach. Avoid all tracked objects and
+nearby detected furniture with a 6cm minimum gap and extra initial clearance. No listening label,
+dot or duplicate transcript. Useful
 instructions, corrections and actionable offline messages remain.
 
 FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance

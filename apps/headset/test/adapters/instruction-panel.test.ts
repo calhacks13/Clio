@@ -410,7 +410,7 @@ describe('InstructionPanelPresenter layout', () => {
   });
 
   it('rechecks mask clearance using actual dimensions as soon as async resizing finishes', () => {
-    const place = vi.spyOn(panelPlacement, 'placeInstructionPanel');
+    const place = vi.spyOn(panelPlacement, 'isInstructionPanelClear');
     try {
       const panel = new InstructionPanelPresenter(() => {});
       update(panel, context(snapshot()));

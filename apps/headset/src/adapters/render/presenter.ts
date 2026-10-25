@@ -18,6 +18,8 @@ export interface PresentContext {
   objects: readonly ObjectEstimate[];
   /** Current live tracker silhouettes in world space, used to keep UI clear of real objects. */
   objectMasks?: readonly Placement[];
+  /** Nearby detected furniture geometry in world space, including before a lesson starts. */
+  sceneObstacles?: readonly (readonly Vec3[])[];
   demo: Demonstration | null;
   /** Ghost hands for this frame (workspace frame), when a demo is playing. */
   demoHands: HandsSample | null;

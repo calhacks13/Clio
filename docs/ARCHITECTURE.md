@@ -417,10 +417,13 @@ learner's partial transcripts arrive (until 1.2 s after the last); `quiet` other
 without a microphone (the scripted coach) and once the session stops. `OverlayModel` keeps it in
 `OverlaySnapshot.voice`. The lesson card keeps quiet listening visually silent, with no status
 mark or duplicate transcript; a disconnected voice shows an actionable Done-button message.
-The card fits its measured text in both dimensions. `panel-placement.ts` uses that complete
-rectangle, projected lesson/live masks, viewport space and gaze travel to choose a clear position
-beside the task. Async text resizing rechecks clearance immediately, and a comfortable settled
-position stays stable while the learner reads.
+The card fits its measured text in both dimensions. `panel-placement.ts` checks its actual
+world-space corners for both eyes against all followed objects (not only lit targets) and detected
+nearby furniture, including before a lesson starts. `panel-motion.ts` holds both position and
+orientation in the room during ordinary head movement. Only a sustained loss of reading reach
+starts a damped movement toward a captured target; each sample and its swept path must remain
+clear. Async text resizing rechecks clearance immediately. The presentation-only reserve above
+worktops does not change recorded room geometry.
 
 ### 5.8 Recording (`domain/recording`)
 

@@ -212,6 +212,110 @@ figcaption {
 
 /* Other pages. */
 
+/* Developer-only motion preview: the camera follows the simulated head, never the card. */
+.panel-motion {
+  margin-bottom: 3rem;
+}
+
+.panel-motion h3 {
+  margin: 0 0 1rem;
+}
+
+.panel-motion canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 24px;
+  background: #15181d;
+}
+
+.panel-motion-controls {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem 0;
+}
+
+.panel-motion-controls label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.panel-motion-controls output {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.panel-motion-controls input {
+  width: 100%;
+  min-height: 2.75rem;
+  margin: 0;
+  accent-color: var(--text);
+  cursor: pointer;
+}
+
+.panel-motion-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.panel-motion-actions button {
+  min-height: 2.75rem;
+  padding: 0.75rem 1.25rem;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--text);
+  color: var(--raised);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.panel-motion-actions button:last-child {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.panel-motion-actions button:hover {
+  background: #24303d;
+}
+
+.panel-motion-actions button:last-child:hover {
+  background: #e3e9f0;
+}
+
+.panel-motion-actions button:disabled {
+  background: #d7dfe8;
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.panel-motion :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.panel-motion-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.panel-motion-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .pages {
   margin: 0;
   display: grid;

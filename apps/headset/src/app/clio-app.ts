@@ -13,6 +13,7 @@ import {
   RemoteSceneAsker,
 } from '../adapters/net/remote';
 import { RemoteStepChecker, RemoteTemplates } from '../adapters/net/remote-plan';
+import { panelRoomObstacles } from '../adapters/render/panel-room-obstacles';
 import type { PresentContext, Presenter } from '../adapters/render/presenter';
 import { GhostHandsPresenter } from '../adapters/render/presenters/ghost-hands';
 import { GlyphsPresenter } from '../adapters/render/presenters/glyphs';
@@ -103,7 +104,7 @@ export class ClioApp {
   private readonly sampler = new FrameSampler();
   private readonly surfaces = new XrPlaneSurfaces();
   private readonly planes = new XrPlaneReader((err) =>
-    log.warn(`plane detection failed (${String(err)}); planes are not recorded`),
+    log.warn(`room planes unavailable (${String(err)})`),
   );
   private readonly environment: EnvironmentRecorder;
   /** Null without a camera, or with ?live=0. */
@@ -301,8 +302,9 @@ export class ClioApp {
 
     // 5. Record.
     this.recorder.recordFrame(local);
+    const detectedPlanes = this.planeDetection ? this.planes.read(frame, runtime.space) : [];
     if (this.recorder.recording && this.planeDetection) {
-      this.environment.update(t, this.planes.read(frame, runtime.space), workspace);
+      this.environment.update(t, detectedPlanes, workspace);
     }
 
     // 6. Present.
@@ -314,6 +316,7 @@ export class ClioApp {
       procedure: this.lesson.procedure,
       objects: this.registry.all(),
       objectMasks: this.live?.panelMasks ?? [],
+      sceneObstacles: panelRoomObstacles(detectedPlanes, world.head),
       demo: this.lesson.activeDemo,
       demoHands: this.lesson.activeDemo ? this.lesson.player.sample(t) : null,
       hands: local,
