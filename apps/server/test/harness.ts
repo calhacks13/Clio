@@ -10,6 +10,7 @@ import { ClipStore } from '../src/storage/clip-store';
 import { DerivedStore } from '../src/storage/derived-store';
 import { EpisodeStore } from '../src/storage/episode-store';
 import { ProcedureStore } from '../src/storage/procedure-store';
+import { SceneStore } from '../src/storage/scene-store';
 
 // Builds the real app on real stores rooted in a fresh temp dir. Only Gemini-backed services are
 // fakes, and tests pass those in explicitly. A compiler can be built on the harness's own dirs, so a
@@ -57,7 +58,9 @@ export interface CompilerDirs {
 }
 
 export interface HarnessOptions
-  extends Partial<Omit<AppDeps, 'episodes' | 'derived' | 'procedures' | 'clips' | 'compiler'>> {
+  extends Partial<
+    Omit<AppDeps, 'episodes' | 'derived' | 'scenes' | 'procedures' | 'clips' | 'compiler'>
+  > {
   rand?: () => number;
   compiler?: EpisodeCompiler | null | ((dirs: CompilerDirs) => EpisodeCompiler);
 }
@@ -66,10 +69,12 @@ export interface Harness {
   dataDir: string;
   episodesDir: string;
   derivedDir: string;
+  scenesDir: string;
   proceduresDir: string;
   logger: CapturedLogger;
   episodes: EpisodeStore;
   derived: DerivedStore;
+  scenes: SceneStore;
   procedures: ProcedureStore;
   clips: ClipStore;
   compiler: EpisodeCompiler | null;
@@ -89,11 +94,13 @@ export async function harness(options: HarnessOptions = {}): Promise<Harness> {
   await mkdir(proceduresDir, { recursive: true });
   const episodesDir = join(dataDir, 'episodes');
   const derivedDir = join(dataDir, 'derived');
+  const scenesDir = join(dataDir, 'scenes');
   const logger = captureLogger();
   const { rand, compiler: compilerOption, ...deps } = options;
   const now = deps.now ?? (() => new Date());
   const episodes = new EpisodeStore(episodesDir, { now, rand, logger });
   const derived = new DerivedStore(derivedDir, { logger });
+  const scenes = new SceneStore(scenesDir, { logger });
   const compiler =
     typeof compilerOption === 'function'
       ? compilerOption({ episodesDir, derivedDir, logger })
@@ -112,6 +119,7 @@ export async function harness(options: HarnessOptions = {}): Promise<Harness> {
     now,
     episodes,
     derived,
+    scenes,
     procedures,
     clips,
     compiler,
@@ -120,10 +128,12 @@ export async function harness(options: HarnessOptions = {}): Promise<Harness> {
     dataDir,
     episodesDir,
     derivedDir,
+    scenesDir,
     proceduresDir,
     logger,
     episodes,
     derived,
+    scenes,
     procedures,
     clips,
     compiler,

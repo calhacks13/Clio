@@ -14,6 +14,7 @@ import type { ClipStore } from './storage/clip-store';
 import type { DerivedStore } from './storage/derived-store';
 import type { EpisodeStore } from './storage/episode-store';
 import type { ProcedureStore } from './storage/procedure-store';
+import type { SceneStore } from './storage/scene-store';
 
 // Everything the HTTP app needs, injected so tests can build it on temp dirs with fakes for the
 // network-bound services.
@@ -55,6 +56,8 @@ export interface AppDeps {
   episodes: EpisodeStore;
   /** Compiled episodes (data/derived/): written by the pipeline, only read here. */
   derived: DerivedStore;
+  /** Rebuilt scenes (data/scenes/): object models from `clio scene`, only read here. */
+  scenes: SceneStore;
   procedures: ProcedureStore;
   clips: ClipStore;
   /** Gemini-backed services: null (or absent) when GEMINI_API_KEY is unset, so routes answer 503. */

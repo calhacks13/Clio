@@ -25,6 +25,7 @@ import { ClipStore } from './storage/clip-store';
 import { DerivedStore } from './storage/derived-store';
 import { EpisodeStore } from './storage/episode-store';
 import { ProcedureStore } from './storage/procedure-store';
+import { SceneStore } from './storage/scene-store';
 
 // Boot: config → stores and services → HTTP app → server, with the Gemini Live relay on the
 // server's `upgrade` event (the Vite dev server proxies /api and /gemini here). Once listening, the
@@ -50,6 +51,7 @@ function main(): void {
     liveModel: config.liveModel,
     episodes: new EpisodeStore(join(config.dataDir, 'episodes'), { logger }),
     derived: new DerivedStore(join(config.dataDir, 'derived'), { logger }),
+    scenes: new SceneStore(join(config.dataDir, 'scenes'), { logger }),
     procedures: new ProcedureStore({
       curatedDir: config.proceduresDir,
       plansDir: join(config.dataDir, 'plans'),

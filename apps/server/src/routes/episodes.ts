@@ -1,4 +1,5 @@
 import {
+  type CompileManifest,
   DERIVED_FILE_NAME,
   type EpisodeBatchResponse,
   EpisodeBatchSchema,
@@ -10,6 +11,8 @@ import {
   type EpisodeFinishResponseSchema,
   EpisodeFinishSchema,
   type EpisodeListResponse,
+  type EpisodeSceneStatus,
+  SCENE_FILE_NAME,
 } from '@clio/protocol';
 import { Hono } from 'hono';
 import type { z } from 'zod';
@@ -20,13 +23,14 @@ import { inputsToCheck, isStale } from '../storage/derived-store';
 import { NDJSON_FILES, type NdjsonFile } from '../storage/episode-store';
 import { limitBody, parseBody, safeId } from './request';
 
-// Episode ingest (create → batches → finish, plus media), browsing, and the compiled files the
-// pipeline writes after an episode finishes. See docs/data-format.md and docs/data-pipeline.md.
+// Episode ingest (create → batches → finish, plus media), browsing, and what the pipeline writes
+// after an episode finishes: the compiled files and the rebuilt scene (its object models). See
+// docs/data-format.md, docs/data-pipeline.md and docs/room-scene.md.
 
 // @clio/protocol exports the schema but not this type.
 type EpisodeFinishResponse = z.infer<typeof EpisodeFinishResponseSchema>;
 
-export function episodeRoutes({ episodes, derived, compiler, limits }: ServerDeps): Hono {
+export function episodeRoutes({ episodes, derived, scenes, compiler, limits }: ServerDeps): Hono {
   const app = new Hono();
   const missing = (id: string) => notFound(`No episode "${id}"`);
   const existing = async (param: string | undefined) => {
@@ -50,6 +54,23 @@ export function episodeRoutes({ episodes, derived, compiler, limits }: ServerDep
       return { state: stale ? 'stale' : 'ok', manifest, error };
     }
     return { state: error === null ? 'none' : 'failed', manifest, error };
+  };
+
+  /**
+   * scene.json on disk, checked against the compile it was built from. `manifest` is the compile
+   * on disk, null when there is none this server can read.
+   */
+  const sceneStatus = async (
+    id: string,
+    manifest: CompileManifest | null,
+  ): Promise<EpisodeSceneStatus> => {
+    const read = await scenes.readScene(id);
+    // Built by a pipeline whose scene.json this server cannot read, or damaged: build it again.
+    if (read.status === 'invalid') return { state: 'stale', scene: null, error: null };
+    if (read.status === 'missing') return { state: 'none', scene: null, error: null };
+    const { scene } = read;
+    const current = manifest !== null && sameInstant(scene.compiledAt, manifest.compiledAt);
+    return { state: current ? 'ok' : 'stale', scene, error: null };
   };
 
   app.post('/api/episodes', limitBody(limits.jsonBytes), async (c) => {
@@ -121,6 +142,21 @@ export function episodeRoutes({ episodes, derived, compiler, limits }: ServerDep
     return c.body(file.stream, 200, fileHeaders(name, file.bytes));
   });
 
+  app.get('/api/episodes/:id/scene/:name', async (c) => {
+    const id = safeId(c.req.param('id'), 'episode id');
+    const name = c.req.param('name');
+    if (!SCENE_FILE_NAME.test(name)) {
+      throw new ApiError(
+        400,
+        'invalid_name',
+        'Invalid scene file name: use lowercase letters, digits, ".", "_" or "-", ending in .json, .glb or .jpg',
+      );
+    }
+    const file = await scenes.open(id, name);
+    if (!file) throw notFound(`No scene file "${name}" for episode "${id}"`);
+    return c.body(file.stream, 200, fileHeaders(name, file.bytes));
+  });
+
   app.get('/api/episodes', async (c) =>
     c.json({ episodes: await episodes.list() } satisfies EpisodeListResponse),
   );
@@ -130,6 +166,7 @@ export function episodeRoutes({ episodes, derived, compiler, limits }: ServerDep
     const detail = await episodes.get(id);
     if (!detail) throw missing(id);
     detail.derived = await derivedStatus(id);
+    detail.scene = await sceneStatus(id, detail.derived.manifest);
     return c.json(detail satisfies EpisodeDetailResponse);
   });
 
@@ -154,7 +191,6 @@ export function episodeRoutes({ episodes, derived, compiler, limits }: ServerDep
 const CONTENT_TYPES: Readonly<Record<string, string>> = {
   json: 'application/json',
   glb: 'model/gltf-binary',
-  ply: 'application/octet-stream',
   jpg: 'image/jpeg',
 };
 
@@ -162,11 +198,16 @@ function fileHeaders(name: string, bytes: number): Record<string, string> {
   return {
     'content-type':
       CONTENT_TYPES[name.slice(name.lastIndexOf('.') + 1)] ?? 'application/octet-stream',
-    // A splat or a room mesh runs to tens of MB: the length lets a viewer show progress.
+    // A room mesh or a model runs to MBs: the length lets a viewer show progress.
     'content-length': String(bytes),
     // A compile or a scene build replaces these files in place.
     'cache-control': 'no-store',
   };
+}
+
+/** Two ISO times of the same instant, however precisely each was written. */
+function sameInstant(a: string, b: string): boolean {
+  return a === b || Date.parse(a) === Date.parse(b);
 }
 
 function isNdjsonFile(value: string): value is NdjsonFile {

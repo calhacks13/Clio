@@ -3,7 +3,6 @@ import { join, relative } from 'node:path';
 import {
   ApiErrorSchema,
   ApiPaths,
-  type CompileManifest,
   EpisodeCompileResponseSchema,
   EpisodeDetailResponseSchema,
 } from '@clio/protocol';
@@ -13,7 +12,7 @@ import {
   ProcessEpisodeCompiler,
 } from '../src/services/episode-compiler';
 import { COMPILE_INPUTS, inputsToCheck, isStale } from '../src/storage/derived-store';
-import { fakeClio, fakeRuns, openGate, steer } from './compile-fixtures';
+import { fakeClio, fakeRuns, manifestWith, openGate, steer } from './compile-fixtures';
 import { entered, episodeCreate, finishBody, frame, objectTrack, observation } from './fixtures';
 import { type Harness, harness, tempDir } from './harness';
 
@@ -101,34 +100,6 @@ async function snapshot(dir: string): Promise<Map<string, Buffer>> {
     files.set(relative(dir, path), await readFile(path));
   }
   return files;
-}
-
-function manifestWith(inputs: [string, number][]): CompileManifest {
-  return {
-    schema: 'clio.derived/1',
-    episodeId: 'ep-a',
-    compiledAt: '2026-10-24T03:20:00.000Z',
-    compiler: { name: 'clio-pipeline', version: '0.2.0' },
-    fps: 30,
-    inputs: inputs.map(([name, bytes]) => ({ name, bytes, sha256: 'a'.repeat(64) })),
-    retarget: [],
-    stages: [],
-    artifacts: [],
-    quality: {
-      usable: false,
-      reasons: ['not finished'],
-      finished: false,
-      outcome: null,
-      batches: null,
-      durationMs: 0,
-      frames: 0,
-      frameRateHz: null,
-      maxFrameGapMs: null,
-      hands: { left: 0, right: 0 },
-      objects: [],
-      validationIssues: 0,
-    },
-  };
 }
 
 describe('compiling after finish', () => {
