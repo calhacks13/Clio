@@ -55,6 +55,10 @@ class GeminiError(RuntimeError):
 
 # --- the request ----------------------------------------------------------------------------------
 
+# The schema carries no minItems / maxItems. Gemini answers 400 "Request contains an invalid
+# argument" once a schema has several bounded arrays (checked live on gemini-pro-latest and
+# gemini-3.8-flash, October 2026), so lengths are said in the descriptions and enforced when the
+# program is checked (cad.py): a vector of the wrong length or a part past MAX_PARTS is dropped.
 _NUMBER = {"type": "NUMBER"}
 
 
@@ -63,18 +67,12 @@ def _num(description: str) -> dict[str, Any]:
 
 
 def _vec3(description: str) -> dict[str, Any]:
-    return {
-        "type": "ARRAY",
-        "items": _NUMBER,
-        "minItems": 3,
-        "maxItems": 3,
-        "description": description,
-    }
+    return {"type": "ARRAY", "items": _NUMBER, "description": f"{description} (3 numbers)"}
 
 
 def _pairs(description: str) -> dict[str, Any]:
-    pair = {"type": "ARRAY", "items": _NUMBER, "minItems": 2, "maxItems": 2}
-    return {"type": "ARRAY", "items": pair, "maxItems": 128, "description": description}
+    pair = {"type": "ARRAY", "items": _NUMBER}
+    return {"type": "ARRAY", "items": pair, "description": f"{description} (at most 128 pairs)"}
 
 
 _PART_FIELDS = ["name", "shape", "dims", "position", "rotation", "color", "metalness", "roughness"]
@@ -90,8 +88,7 @@ RESPONSE_SCHEMA: dict[str, Any] = {
         },
         "parts": {
             "type": "ARRAY",
-            "minItems": 1,
-            "maxItems": MAX_PARTS,
+            "description": f"1 to {MAX_PARTS} parts",
             "items": {
                 "type": "OBJECT",
                 "properties": {

@@ -291,17 +291,8 @@ def test_answers_are_read_past_thoughts_and_code_fences():
 
 
 def test_the_response_schema_stays_in_geminis_openapi_subset():
-    allowed = {
-        "type",
-        "properties",
-        "required",
-        "items",
-        "enum",
-        "description",
-        "minItems",
-        "maxItems",
-        "propertyOrdering",
-    }
+    # No minItems / maxItems: with several bounded arrays Gemini refuses the whole request (400).
+    allowed = {"type", "properties", "required", "items", "enum", "description", "propertyOrdering"}
 
     def walk(node, path):
         assert set(node) <= allowed, path
