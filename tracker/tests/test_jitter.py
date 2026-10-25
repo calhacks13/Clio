@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import replace
+from time import perf_counter
 
 import cv2
 import numpy as np
@@ -422,3 +423,47 @@ def test_the_jitter_command_hands_its_segmenter_to_the_harness(monkeypatch, name
     monkeypatch.setattr(jitter, "run", lambda *args, **kwargs: seen.append(kwargs) or 0)
     assert cli.main(["jitter", "--segmenter", name, "--scene", "jaw-slide"]) == 0
     assert seen[0]["segmenter"] == name
+
+
+def test_pace_holds_each_frame_to_the_streams_frame_time(monkeypatch):
+    # The headset's stream runs at 40 to 75 ms a frame, the harness at 20: the refresher paces by
+    # wall clock, so a real segmenter would refresh half as often per frame. `pace` sleeps.
+    monkeypatch.setattr(jitter, "_finder_cache", {})
+    frames = render(CALIPER, 1.0, seed=7)
+    seq = Sequence(CALIPER, frames, jitter.looks(frames, 7))
+    assert len(frames) == 25
+
+    def wall(pace: bool) -> tuple[float, Played]:
+        vision = FakeVision()
+        vision.scenes.extend([[]] * len(frames))
+        t0 = perf_counter()
+        played = jitter.play(seq, track, vision, vision, pace=pace)
+        return perf_counter() - t0, played
+
+    free, _ = wall(False)
+    paced, played = wall(True)
+    assert free < 0.5
+    assert paced >= 0.9  # 25 frames at 25 a second
+    assert len(played.answers) == 25
+    assert np.median(played.step_ms) < 30  # the wait is not counted as the tracker's time
+
+
+def test_a_frame_slower_than_the_stream_is_not_slowed_further(monkeypatch):
+    sleeps: list[float] = []
+    monkeypatch.setattr(jitter, "sleep", sleeps.append)
+    clock = iter(x * 0.1 for x in range(1000))  # every perf_counter call is 100 ms later
+    monkeypatch.setattr(jitter, "perf_counter", lambda: next(clock))
+    frames = render(CALIPER, 0.2, seed=7)
+    seq = Sequence(CALIPER, frames, jitter.looks(frames, 7))
+    vision = FakeVision()
+    vision.scenes.extend([[]] * len(frames))
+    jitter.play(seq, track, vision, vision, pace=True)
+    assert sleeps == []  # 100 ms in `step` already outlasts a 40 ms frame
+
+
+def test_the_jitter_command_paces_only_when_asked(monkeypatch):
+    seen = []
+    monkeypatch.setattr(jitter, "run", lambda *args, **kwargs: seen.append(kwargs) or 0)
+    assert cli.main(["jitter", "--segmenter", "sam2.1-small", "--pace"]) == 0
+    assert cli.main(["jitter", "--segmenter", "sam2.1-small"]) == 0
+    assert [k["pace"] for k in seen] == [True, False]

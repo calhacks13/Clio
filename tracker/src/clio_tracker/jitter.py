@@ -38,7 +38,9 @@ own and are left out of `parts`, which stays comparable with earlier runs.
 `--segmenter` (`auto`, `none` or a SAM 2.1 size; `run` also takes `fake`, a segmenter that fills
 each box, for tests) gives the tracker a segmenter and a refresher as `/track` has them, and has
 the look outlined by the segmenter, and by YOLOE where it cuts nothing. A `--baseline` copy
-gets neither.
+gets neither. `--pace` holds each frame to at least 1 / FPS of wall time, as the headset's stream
+is (40 to 75 ms a frame; the harness alone takes about 20): the refresher spaces its calls by wall
+clock, so an unpaced run gives a real segmenter about half the refreshes per frame it has live.
 
 `--baseline DIR` loads another copy of the package (a directory holding a `clio_tracker`
 package, e.g. `git archive HEAD tracker/src | tar -x -C /tmp/base`) and runs it on the same
@@ -55,7 +57,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, sleep
 
 import cv2
 import numpy as np
@@ -409,13 +411,16 @@ def play(
     flag_parts: bool = True,
     segmenter=None,
     make_tracker=None,
+    pace: bool = False,
 ) -> Played:
     """Stream the sequence through a fresh StreamTracker of `track_module` (track.py).
 
     With a `segmenter` the tracker gets it and a Refresher over a one-thread executor, as `/track`
     does, and the look is outlined by it; `Played.refreshes` counts its calls. `make_tracker(vision,
     params, **kwargs)` builds the tracker, `StreamTracker` by default; `kwargs` is `segmenter=` and
-    `refresher=` with a segmenter, else empty.
+    `refresher=` with a segmenter, else empty. With `pace` each frame takes at least 1 / FPS of
+    wall time (the headset's stream runs at 40 to 75 ms a frame, the harness alone at about 20,
+    and the refresher spaces its calls by wall clock): the wait is not counted in `step_ms`.
     """
     timed = _TimedVision(vision)
     kwargs: dict = {}
@@ -445,9 +450,12 @@ def play(
             timed.last_ms = 0.0
             t0 = perf_counter()
             answer = tracker.step(header, frame.jpeg)
-            out.step_ms.append((perf_counter() - t0) * 1000)
+            elapsed = perf_counter() - t0
+            out.step_ms.append(elapsed * 1000)
             out.encode_ms.append(timed.last_ms)
             out.answers.append(answer)
+            if pace and elapsed < 1 / FPS:
+                sleep(1 / FPS - elapsed)
     finally:
         if executor is not None:
             executor.shutdown(wait=True)  # the call in flight finishes, so it is counted
@@ -762,6 +770,7 @@ def run(
     settings: list[str] | None = None,
     flag_parts: bool = True,
     segmenter: str = "none",
+    pace: bool = False,
 ) -> int:
     from . import track
     from .vision import default_models_dir, load_vision
@@ -798,7 +807,7 @@ def run(
         for label, module, v in impls:
             current = module is track  # a baseline copy has no segmenter and no params
             played = play(seq, module, v, vision, params if current else None, flag_parts,
-                          segmenter=cutter if current else None)  # fmt: skip
+                          segmenter=cutter if current else None, pace=pace)  # fmt: skip
             results[label].append(measure(seq, played))
     rows = []
     for k in range(len(sequences)):

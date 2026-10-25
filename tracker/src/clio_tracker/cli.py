@@ -47,6 +47,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="NAME=VALUE",
         help="try a TrackerParams setting (smooth.NAME for SmoothParams)",
     )
+    p.add_argument(
+        "--pace",
+        action="store_true",
+        help="play each frame for at least 1/25 s, as the headset's stream does (use with "
+        "--segmenter: the refresher spaces its calls by wall clock)",
+    )
     p.set_defaults(run=_jitter)
     for p in (parser, *sub.choices.values()):
         p.add_argument(
@@ -312,4 +318,5 @@ def _jitter(settings: Settings, args: argparse.Namespace) -> int:
         args.set,
         args.flag_parts,
         segmenter=settings.segmenter,
+        pace=args.pace,
     )

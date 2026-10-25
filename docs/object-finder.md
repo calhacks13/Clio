@@ -159,7 +159,8 @@ those. A request with a `session` (the lesson's) is answered from tracking state
 YOLOE-26 and ByteTrack follow each object on every frame (about 35 ms a round trip on an M5),
 jev is asked which object the words mean only about once a second, in the background, and the
 answer carries `refreshMs: 50`, so outlines follow moving objects at 10 to 15 frames a second.
-The primary demo page also streams frames to its WebSocket `/track`
+With `--segmenter`, the tracker's outlines are SAM 2.1 masks for whole objects and parts alike
+(the contract is unchanged). The primary demo page also streams frames to its WebSocket `/track`
 ([tracker/TRACK.md](../tracker/TRACK.md)).
 
 ## Minimal adapter
