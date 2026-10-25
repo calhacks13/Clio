@@ -302,7 +302,8 @@ export interface InspectorRow {
   /** Null for a full-width note, such as "Orientation unknown". */
   label: string | null;
   value: string;
-  basis: Basis;
+  /** Generated: made by a generator, such as an object's model (DESIGN.md). */
+  basis: Basis | "generated";
   /** Extra detail for a tooltip, such as the detector's name. */
   title?: string;
 }
