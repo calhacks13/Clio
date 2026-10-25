@@ -188,7 +188,7 @@ def instructions(target: Target) -> tuple[str, str]:
     with a description, Noul asks about the one it describes, as it does without a phrase: on
     two real frames (2026-10-24) an absent cup D among cups A to C scored 0.97 asked about the
     kind and 0.02 asked about the one described, an absent ORANGE JUICE bottle among other
-    bottles 0.95 and 0.01, absent kinds 0.02 to 0.05 either way, and present objects 0.93 to
+    bottles 0.95 and 0.01, an absent kind (a pear) 0.04 and 0.05, and present objects 0.93 to
     0.99 either way, so the 0.5 gate holds. Box gets the description as context, to pick the
     right one among look-alikes (wording it as "that one, not another" made no difference
     there). Without a phrase, the description is quoted as is: it is often a whole sentence,
