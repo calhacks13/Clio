@@ -461,6 +461,7 @@ A stale briefing dropped at that point is a `coach.narration_dropped` annotation
 | `POST /api/plans/check`                                               | the step watcher: frames + step → `done`, `not_done` or `unsure`, progress, what was wrong   |
 | `POST /api/plans/criteria`                                            | the step watcher, once per step: start frame + step → 2 to 4 criteria a camera can confirm   |
 | `POST /api/vision/locate`                                             | the object finder: Gemini, or any HTTP finder at `CLIO_VISION_URL` (docs/object-finder.md)   |
+| `POST /api/vision/focus`                                              | the action focus (Robotics-ER 2): frame + step → boxes, words for jev, the thing to touch    |
 | `GET /api/episodes[/:id[/frames\|events\|objects]]`                   | browse / replay                                                                              |
 | `POST /api/scene/ask`                                                 | the voice's closer look: frames + question → hazard, answer in words, points (smart model)   |
 | `GET /api/procedures[/:id]`                                           | curated (`procedures/`) + generated (`data/plans/`)                                          |
