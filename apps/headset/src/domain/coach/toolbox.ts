@@ -1,4 +1,9 @@
-import { type CoachToolArgs, type CoachToolName, parseToolArgs } from '@clio/protocol';
+import {
+  type CoachToolArgs,
+  type CoachToolName,
+  parseToolArgs,
+  type WidgetToolName,
+} from '@clio/protocol';
 import type { Clock } from '../../core/clock';
 import type { AppBus } from '../events';
 import type { ToolCall, ToolResult } from './agent';
@@ -16,7 +21,7 @@ type HandlersFor<Names extends CoachToolName> = {
 
 /** Tools the coach layer answers itself: look_closer asks the smart model, not the lesson. */
 export type CoachOwnToolName = 'look_closer';
-export type LessonToolName = Exclude<CoachToolName, CoachOwnToolName>;
+export type LessonToolName = Exclude<CoachToolName, CoachOwnToolName | WidgetToolName>;
 
 /** The lesson's tools (LessonController.handlers()). */
 export type ToolHandlers = HandlersFor<LessonToolName>;
@@ -24,8 +29,13 @@ export type ToolHandlers = HandlersFor<LessonToolName>;
 /** The coach's own tools (CloserLook.handlers()). */
 export type CoachOwnToolHandlers = HandlersFor<CoachOwnToolName>;
 
-/** What a coach can do: every lesson tool, and its own where it has them. */
-export type AvailableToolHandlers = ToolHandlers & Partial<CoachOwnToolHandlers>;
+/** The widget tools (WidgetBoard.handlers(); docs/widgets.md). */
+export type WidgetToolHandlers = HandlersFor<WidgetToolName>;
+
+/** What a coach can do: every lesson tool, and its own and the widgets' where it has them. */
+export type AvailableToolHandlers = ToolHandlers &
+  Partial<CoachOwnToolHandlers> &
+  Partial<WidgetToolHandlers>;
 
 /**
  * Validates the model's tool calls and dispatches them. Never throws at the model: bad arguments

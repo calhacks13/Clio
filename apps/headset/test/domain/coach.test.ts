@@ -759,6 +759,13 @@ describe('CoachSession', () => {
       'show_demo',
       'flag_mistake',
       'look_closer',
+      'show_timer',
+      'show_progress',
+      'show_checklist',
+      'show_choices',
+      'show_value',
+      'show_caution',
+      'clear_widget',
     ]);
     expect(agent.setup?.systemInstruction).toBe(
       buildSystemInstruction({

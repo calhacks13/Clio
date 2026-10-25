@@ -1,11 +1,17 @@
-import { COACH_TOOL_NAMES, type CoachToolName, isNonBlockingTool } from '@clio/protocol';
+import {
+  COACH_TOOL_NAMES,
+  type CoachToolName,
+  isNonBlockingTool,
+  isWidgetTool,
+  WIDGET_TOOL_NAMES,
+} from '@clio/protocol';
 import type { Clock } from '../../core/clock';
 import type { AppBus, CoachVoice } from '../events';
 import { recitePlan } from '../plan/recital';
 import type { TemplateSummary } from '../session/templates';
 import type { AgentState, Narration, RealtimeAgent, ToolCall, ToolResult } from './agent';
 import { Narrator } from './narrator';
-import type { CoachFrameSource, LessonView, MicSource, VoiceOutput } from './ports';
+import type { CoachFrameSource, LessonView, MicSource, VoiceOutput, WidgetsView } from './ports';
 import { buildSystemInstruction } from './prompt';
 import type { CoachToolbox } from './toolbox';
 
@@ -15,10 +21,10 @@ import type { CoachToolbox } from './toolbox';
 //
 // It also keeps a Gemini coach in sync with the plan the app owns: a fresh system instruction once
 // the plan settles and on every reconnect (the next connection starts from it), a recap after a
-// reconnect, and a notice when the model cancels a call that had already changed the plan. Every
-// message to Gemini interrupts what it is saying, so narrations wait while either side is talking
-// or the connection is down, and go out merged. Each narration is recorded when it reaches the
-// model.
+// reconnect, and a notice when the model cancels a call that had already changed the plan or the
+// learner's widgets; both also say what the widgets show. Every message to Gemini interrupts what
+// it is saying, so narrations wait while either side is talking or the connection is down, and go
+// out merged. Each narration is recorded when it reaches the model.
 //
 // A non-blocking call (look_closer, which asks the smart model) answers a second or two later, as
 // the call's result; the model says it once nobody is talking. If its connection closed meanwhile,
@@ -41,6 +47,10 @@ export interface CoachSessionDeps {
   persona?: string;
   /** Curated lessons the coach may start from, listed in its instructions. */
   templates?: readonly TemplateSummary[];
+  /** What the learner's widgets show (domain/widgets), or none with ?widgets=0. */
+  widgets?: WidgetsView;
+  /** The tools the model is given. Default every coach tool. */
+  tools?: readonly CoachToolName[];
 }
 
 /** One camera frame per interval. */
@@ -63,6 +73,9 @@ const PLAN_TOOLS: ReadonlySet<string> = new Set<CoachToolName>([
   'complete_step',
   'add_material',
 ]);
+
+/** Tools whose changes stick when the model cancels the call: the plan's and the widgets'. */
+const STICKY_TOOLS: ReadonlySet<string> = new Set<string>([...PLAN_TOOLS, ...WIDGET_TOOL_NAMES]);
 
 interface CallRecord {
   name: string;
@@ -104,6 +117,7 @@ export class CoachSession {
     this.gemini = deps.agent.kind === 'gemini';
     this.narrator = new Narrator(deps.bus, deps.view, (n) => this.send(n), {
       perception: this.gemini ? 'trusted' : 'all',
+      waiting: () => this.deps.widgets?.waiting() ?? false,
     });
   }
 
@@ -174,13 +188,14 @@ export class CoachSession {
     ];
     this.offs.push(this.narrator.attach());
 
-    await agent.connect({ systemInstruction: this.instruction(), tools: COACH_TOOL_NAMES });
+    await agent.connect({ systemInstruction: this.instruction(), tools: this.tools() });
     await mic?.start((pcm) => agent.pushAudio(pcm));
   }
 
   /** Call once per frame: sends held narrations, a fresh instruction and camera frames when due. */
   tick(t: number): void {
     this.updateVoice(t);
+    this.narrator.tick(t);
     const overdue = this.state === 'ready' && t - this.heldSince >= MAX_HOLD_MS;
     if (this.held.length > 0 && (!this.gateClosed(t) || overdue)) this.flush();
     if (this.planChangedT !== null && t - this.planChangedT >= INSTRUCTION_SETTLE_MS)
@@ -220,7 +235,12 @@ export class CoachSession {
       lessonNotes: coach?.notes,
       templates,
       plan: view.plan(),
+      widgets: this.tools().some(isWidgetTool),
     });
+  }
+
+  private tools(): readonly CoachToolName[] {
+    return this.deps.tools ?? COACH_TOOL_NAMES;
   }
 
   private planChanged(): void {
@@ -259,7 +279,8 @@ export class CoachSession {
     this.heldSince = this.deps.clock.now();
     if (previous === 'reconnecting') {
       const plan = this.deps.view.plan();
-      this.note('reconnected', `Reconnected. ${plan ? recitePlan(plan) : 'No lesson is running.'}`);
+      const recap = plan ? recitePlan(plan) : 'No lesson is running.';
+      this.note('reconnected', `Reconnected. ${recap}${this.onScreen()}`);
     }
   }
 
@@ -296,7 +317,7 @@ export class CoachSession {
     });
   }
 
-  /** The model dropped calls it had made (the learner barged in), but plan changes stick. */
+  /** The model dropped calls it had made (the learner barged in); plan and widget changes stick. */
   private onCancelled(ids: readonly string[]): void {
     const { bus, clock } = this.deps;
     const names: string[] = [];
@@ -307,7 +328,7 @@ export class CoachSession {
         call.cancelled = true;
         continue;
       }
-      if (!call || !PLAN_TOOLS.has(call.name)) continue;
+      if (!call || !STICKY_TOOLS.has(call.name)) continue;
       bus.emit('annotation', {
         t: clock.now(),
         label: 'coach.tool_cancelled',
@@ -326,8 +347,18 @@ export class CoachSession {
   private applied(names: readonly string[]): void {
     if (names.length === 0) return;
     const calls = names.length === 1 ? `${names[0]} call was` : `${names.join(', ')} calls were`;
-    const plan = this.deps.view.plan();
-    this.note('cancelled', `Your ${calls} already applied.${plan ? ` ${recitePlan(plan)}` : ''}`);
+    const plan = names.some((n) => PLAN_TOOLS.has(n)) ? this.deps.view.plan() : null;
+    const screen = names.some(isWidgetTool) ? this.onScreen() : '';
+    this.note(
+      'cancelled',
+      `Your ${calls} already applied.${plan ? ` ${recitePlan(plan)}` : ''}${screen}`,
+    );
+  }
+
+  /** What the widgets show, as a sentence to append, or nothing when none is up. */
+  private onScreen(): string {
+    const summary = this.deps.widgets?.summary();
+    return summary ? ` On screen: ${summary}.` : '';
   }
 
   /** A narration of the session's own. Context only. */

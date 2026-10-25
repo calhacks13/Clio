@@ -8,6 +8,39 @@ import { prettifyError, z } from 'zod';
 
 export const STEP_STATUS_CHANGES = ['current', 'skipped', 'todo'] as const;
 
+/** The coach's widgets (docs/widgets.md): a fixed catalogue; each kind has its own show tool. */
+export const WIDGET_KINDS = [
+  'timer',
+  'progress',
+  'checklist',
+  'choices',
+  'value',
+  'caution',
+] as const;
+export type WidgetKind = (typeof WIDGET_KINDS)[number];
+
+/**
+ * The longest text each widget field takes, in characters: as much realistic English as its card
+ * draws whole (widget-layout.test.ts holds the measured examples). Longer text fails the call and
+ * the coach retries shorter, which beats a silent ellipsis on a question or a hazard. Gemini never
+ * sees a maxLength, so each description states its limit too.
+ */
+export const WIDGET_TEXT_MAX = {
+  timerLabel: 16,
+  progressLabel: 18,
+  unit: 8,
+  checklistTitle: 11,
+  checklistItem: 24,
+  question: 52,
+  option: 14,
+  valueLabel: 18,
+  value: 16,
+  caution: 60,
+} as const;
+const MAX = WIDGET_TEXT_MAX;
+/** clear_widget can name any widget by its whole text, so it takes the longest (a caution's). */
+const WIDGET_NAME_MAX = Math.max(...Object.values(WIDGET_TEXT_MAX));
+
 export const COACH_TOOLS = {
   start_lesson: {
     description:
@@ -162,11 +195,188 @@ export const COACH_TOOLS = {
         .describe('One question about what the camera sees, e.g. "Which bottle is the vinegar?"'),
     }),
   },
+  show_timer: {
+    description:
+      'Put a countdown beside the step when they must wait or keep at something for a set time, ' +
+      'e.g. "let it sit for 2 minutes" or "hold it for 30 seconds", and say the time out loud ' +
+      'too. It runs by itself and stays up across steps until it ends; then you get an [app] ' +
+      'message. Calling it again with the same label restarts that timer. At most two run at ' +
+      'once. Never guess the time left: every widget result says it in on_screen.',
+    args: z.object({
+      seconds: z
+        .number()
+        .int()
+        .min(5)
+        .max(3600)
+        .describe('How long, in whole seconds from 5 to 3600, e.g. 120'),
+      label: z
+        .string()
+        .min(1)
+        .max(MAX.timerLabel)
+        .describe(
+          `What it times, 1 to 3 words, up to ${MAX.timerLabel} characters, e.g. "Glue sets"`,
+        ),
+      object_id: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          'The object it is about, an id from the plan, e.g. "cup_a"; the time also shows beside it',
+        ),
+    }),
+  },
+  show_progress: {
+    description:
+      'Show a bar for something they count or measure toward a target within the current step: ' +
+      'screws out, stitches, millilitres poured. Call it again with the new value whenever it ' +
+      'changes. It closes by itself at the target or when the step changes. Never use it for ' +
+      "the lesson's steps: the step card counts those.",
+    args: z.object({
+      label: z
+        .string()
+        .min(1)
+        .max(MAX.progressLabel)
+        .describe(
+          `What is counted, 1 to 3 words, up to ${MAX.progressLabel} characters, e.g. "Screws out"`,
+        ),
+      value: z.number().min(0).max(9999).describe('How many so far, e.g. 2'),
+      total: z.number().positive().max(9999).describe('The target, e.g. 4'),
+      unit: z
+        .string()
+        .min(1)
+        .max(MAX.unit)
+        .optional()
+        .describe(`For amounts only, up to ${MAX.unit} characters, e.g. "mL"; omit it for counts`),
+    }),
+  },
+  show_checklist: {
+    description:
+      'Show a short list of things to gather or check within the current step, e.g. tools to ' +
+      "fetch or the points of a safety check. Never list the lesson's steps or your " +
+      'instructions. Call it again with done naming what is finished, as you see or hear it. ' +
+      'They can tick items by touching them, which you hear as an [app] message. It closes when ' +
+      'all are ticked or the step changes.',
+    args: z.object({
+      title: z
+        .string()
+        .min(1)
+        .max(MAX.checklistTitle)
+        .describe(`A word or two, up to ${MAX.checklistTitle} characters, e.g. "Gather"`),
+      items: z
+        .array(z.string().min(1).max(MAX.checklistItem))
+        .min(2)
+        .max(5)
+        .describe(
+          `2 to 5 items, 1 to 4 words and up to ${MAX.checklistItem} characters each, ` +
+            'e.g. ["funnel", "rag"]',
+        ),
+      done: z
+        .array(z.string().min(1).max(MAX.checklistItem))
+        .max(5)
+        .optional()
+        .describe('Items already done, as written in items'),
+    }),
+  },
+  show_choices: {
+    description:
+      'When you ask a question that decides what to do next and has two or three short answers, ' +
+      'also put the answers on screen as buttons, e.g. which screwdriver they have, or whether ' +
+      'the power is off yet. Ask it out loud as usual. If they touch one you get an [app] ' +
+      'message; if they say it, just carry on. It closes once answered, after a minute and a ' +
+      'half, or when the step changes.',
+    args: z.object({
+      question: z
+        .string()
+        .min(3)
+        .max(MAX.question)
+        .describe(
+          `The question as you asked it, up to 8 words and ${MAX.question} characters, ` +
+            'e.g. "Which screwdriver do you have?"',
+        ),
+      options: z
+        .array(z.string().min(1).max(MAX.option))
+        .min(2)
+        .max(3)
+        .describe(
+          `2 or 3 answers, 1 to 3 words and up to ${MAX.option} characters each, ` +
+            'e.g. ["Phillips", "Flat"]',
+        ),
+    }),
+  },
+  show_value: {
+    description:
+      'Keep one number or setting in view that they need for a while and could forget: a ' +
+      'torque, a temperature, a mixing ratio, a reading to compare later, e.g. one a closer ' +
+      'look read off a label. Not for instructions. A new value replaces the old one. It closes ' +
+      'when the step changes unless whole_lesson is true.',
+    args: z.object({
+      label: z
+        .string()
+        .min(1)
+        .max(MAX.valueLabel)
+        .describe(`What it is, 1 to 3 words, up to ${MAX.valueLabel} characters, e.g. "Torque"`),
+      value: z
+        .string()
+        .min(1)
+        .max(MAX.value)
+        .describe(`The number with its unit, up to ${MAX.value} characters, e.g. "25 N m"`),
+      whole_lesson: z
+        .boolean()
+        .optional()
+        .describe('true to keep it for the rest of the lesson, e.g. a reading to compare later'),
+    }),
+  },
+  show_caution: {
+    description:
+      'After warning them out loud about a hazard that lasts (something hot, sharp, live or ' +
+      'fragile), keep it in view in one short sentence. It stays until you clear it or the ' +
+      'lesson ends; a new one replaces it. For a mistake use flag_mistake; to mark an object ' +
+      'not to touch use highlight with style "warning".',
+    args: z.object({
+      text: z
+        .string()
+        .min(3)
+        .max(MAX.caution)
+        .describe(
+          `One short sentence, up to 10 words and ${MAX.caution} characters, ` +
+            'e.g. "The pan stays hot for 10 minutes"',
+        ),
+    }),
+  },
+  clear_widget: {
+    description:
+      'Take something off their screen when it no longer helps or they ask: the widget_id from ' +
+      'a show result, a kind (timer, progress, checklist, choices, value, caution), a label, or ' +
+      '"all". Everything also closes by itself, so you rarely need this.',
+    args: z.object({
+      widget_id: z
+        .string()
+        .min(1)
+        .max(WIDGET_NAME_MAX)
+        .describe('e.g. "timer", "Glue sets" or "all"'),
+    }),
+  },
 } as const;
 
 export type CoachToolName = keyof typeof COACH_TOOLS;
 export type CoachToolArgs<N extends CoachToolName> = z.output<(typeof COACH_TOOLS)[N]['args']>;
 export const COACH_TOOL_NAMES = Object.keys(COACH_TOOLS) as CoachToolName[];
+
+/** The widget tools (WidgetBoard.handlers() answers them; docs/widgets.md). */
+export const WIDGET_TOOL_NAMES = [
+  'show_timer',
+  'show_progress',
+  'show_checklist',
+  'show_choices',
+  'show_value',
+  'show_caution',
+  'clear_widget',
+] as const satisfies readonly CoachToolName[];
+export type WidgetToolName = (typeof WIDGET_TOOL_NAMES)[number];
+
+export function isWidgetTool(name: string): name is WidgetToolName {
+  return (WIDGET_TOOL_NAMES as readonly string[]).includes(name);
+}
 
 /**
  * A tool the model keeps talking through (Gemini: NON_BLOCKING). It answers when its work is done,

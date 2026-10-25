@@ -113,6 +113,24 @@ export interface InternalEvents {
   'coach.voice': Timed<{ voice: CoachVoice }>;
   'workspace.calibrated': Timed<{ method: CalibrationMethod; worldFromWorkspace: Pose }>;
   'recorder.status': Timed<{ recording: boolean; episodeId: string | null; queued: number }>;
+  /** A widget timer ran out (domain/widgets). `duration` as the learner saw it, e.g. "2:00". */
+  'widget.timer_done': Timed<{ widgetId: string; label: string; duration: string }>;
+  /** The learner answered a choices widget: by touch (narrated) or out loud (not narrated). */
+  'widget.chosen': Timed<{
+    widgetId: string;
+    question: string;
+    option: string;
+    via: 'touch' | 'voice';
+  }>;
+  /** The learner ticked or unticked a checklist item by touch. */
+  'widget.ticked': Timed<{
+    widgetId: string;
+    title: string;
+    item: string;
+    done: boolean;
+    doneCount: number;
+    total: number;
+  }>;
 }
 
 export type AppEvents = RecordableEvents & InternalEvents;

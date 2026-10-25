@@ -14,6 +14,8 @@ export interface PromptOptions {
   templates?: readonly TemplateSummary[];
   /** The plan as it stands, or null when no lesson is running. */
   plan?: PlanView | null;
+  /** Describe the widget tools (item 7). Default true; false with ?widgets=0. */
+  widgets?: boolean;
 }
 
 const STANDING = [
@@ -54,6 +56,26 @@ const STANDING = [
   'looks unsafe. Never read step ids aloud.',
 ];
 
+/** Standing item 7, inserted before the style paragraph while widgets are on. */
+const WIDGETS = [
+  '7. Beside the step card you can show small widgets: show_timer when they must wait or hold',
+  '   for a set time, show_progress for a count toward a target, show_checklist for things to',
+  '   gather or check, show_choices for the answers to a question you ask, show_value for a',
+  '   number to keep in mind, show_caution for a hazard that lasts. Use one only when it saves',
+  '   them remembering something while their hands are busy, keep at most two up, and say it',
+  '   out loud too. They close by themselves, most when the step changes; clear_widget removes',
+  "   one sooner. Never put the lesson's steps or your instructions in them, and never read",
+  '   widget ids aloud.',
+];
+
+/** The standing text, with the widget item before the style paragraph when widgets are on. */
+function standing(widgets: boolean): string[] {
+  if (!widgets) return STANDING;
+  // The blank line before "Style:" closes the numbered list.
+  const at = STANDING.findIndex((line) => line.startsWith('Style:')) - 1;
+  return [...STANDING.slice(0, at), ...WIDGETS, ...STANDING.slice(at)];
+}
+
 const title = (text: string) => text.trim().replace(/[.!?]$/, '');
 
 export function buildSystemInstruction({
@@ -61,8 +83,9 @@ export function buildSystemInstruction({
   lessonNotes,
   templates,
   plan,
+  widgets = true,
 }: PromptOptions = {}): string {
-  const sections = [STANDING.join('\n')];
+  const sections = [standing(widgets).join('\n')];
   if (persona) sections.push(`Persona for this lesson: ${persona}`);
   if (lessonNotes) sections.push(`Lesson notes: ${lessonNotes}`);
   if (templates?.length) {
