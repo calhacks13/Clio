@@ -78,7 +78,7 @@ fails to load is one warning and the tracker starts without it; a size named on 
 `+sam2.1-small`. In the log, `Outline: sam2.1-small's mask, carried to every frame by the
 object's own pixels` and `sam2.1-small on mps: loaded in ... s, warmed up in ... s` appear at
 start-up. The `Stream: ... frames/s, ... ms each (...)` line every 3 s shows what a frame costs
-with SAM running (24 to 26 ms in the harness against 18 without), and with SAM it ends in
+with SAM running (24 to 27 ms in the harness against 18 without), and with SAM it ends in
 `follower N%, segmenter: K calls, M ms, E empty`: the share of found frames whose outline was
 SAM's mask carried by the follower, then the boxes SAM cut since the last line, their mean time
 and how many held nothing (objects mode's `Objects:` line counts every object's answers). A
@@ -343,62 +343,62 @@ The thimble, which has no YOLOE candidate of its own, was on the micrometer's ba
 frames before (IoU 0.45), 3% after (0.78). The seven whole-object sequences give the same
 numbers as before to the last digit.
 
-**With a segmenter** (`clio-tracker jitter --segmenter sam2.1-small --pace`, and `sam2.1-large`):
-the same fourteen sequences, summed up as `all` (seven whole objects), `parts` (five parts that stay
-put) and `moving` (two parts that move on their own: a caliper's sliding jaw and a micrometer's
-swinging name plate, with the photo's own part erased where it leaves). The SAM runs were paced
-(`--pace`: each frame at least 1/25 s, the fast end of the headset's stream at 40 to 75 ms a frame,
-because the refresher spaces its calls by wall clock and the harness alone plays a frame in 20 ms)
-and took 3.6 and 4.3 minutes; the run without a segmenter, 1.4. These runs were on an Apple M5 Pro
-(48 GB), not the M5 (24 GB) of the sections above: YOLOE-26L on the Neural Engine, SAM 2.1 on the
-GPU (MPS, float32), load average 2.2 to 2.6 with nothing else busy. The look was outlined by SAM,
-and by YOLOE where SAM cut nothing. The two SAM runs are of the tree with the candidate rule (below
-the table).
+**With a segmenter** (`clio-tracker jitter --segmenter sam2.1-small`, and `sam2.1-large`): the same
+fourteen sequences, summed up as `all` (seven whole objects), `parts` (five parts that stay put) and
+`moving` (two parts that move on their own: a caliper's sliding jaw and a micrometer's swinging name
+plate, with the photo's own part erased where it leaves). The SAM runs were paced (the harness does
+so by itself with a segmenter, and `--no-pace` turns it off: each frame at least 1/25 s, the fast
+end of the headset's stream at 40 to 75 ms a frame, because the refresher spaces its calls by wall
+clock and the harness alone plays a frame in 20 ms) and took 3.7 and 4.4 minutes; the run without a
+segmenter, 1.4. These runs were on an Apple M5 Pro (48 GB), not the M5 (24 GB) of the sections
+above: YOLOE-26L on the Neural Engine, SAM 2.1 on the GPU (MPS, float32), load average 0.7 to 1.3
+with nothing else busy. The look was outlined by SAM, and by YOLOE where SAM cut nothing.
 
-| Set (sequences)  | Segmenter | Lost | Wrong | IoU   | Mask f2f | Swaps | Refreshes | Followed          | Step, ms |
-| ---------------- | --------- | ---: | ----: | ----: | -------: | ----: | --------: | ----------------: | -------: |
-| `all` (7)        | none      | 1.0% |    0% | 0.880 |    0.959 |     1 |         0 |               n/a |     18.2 |
-|                  | Small     | 1.7% |    0% | 0.832 |    0.952 |    20 |       117 |   93.8% (caliper) |     25.7 |
-|                  | Large     | 4.1% |    0% | 0.897 |    0.956 |    13 |        78 |           not run |     24.4 |
-| `parts` (5)      | none      |   0% |  2.8% | 0.746 |    0.933 |    16 |         0 |               n/a |     18.2 |
-|                  | Small     |   0% |  4.6% | 0.710 |    0.923 |    23 |        87 |   84.9% (vernier) |     25.9 |
-|                  | Large     |   0% |  4.4% | 0.699 |    0.925 |    24 |        68 |           not run |     23.5 |
-| `moving` (2)     | none      |   0% |  2.4% | 0.600 |    0.920 |    10 |         0 |               n/a |     18.4 |
-|                  | Small     | 0.8% |    0% | 0.589 |    0.901 |    10 |        50 | 51.7% (jaw-slide) |     25.7 |
-|                  | Large     | 3.2% |  3.1% | 0.596 |    0.900 |    19 |        34 |           not run |     23.6 |
+| Set (sequences)  | Segmenter | Lost | Wrong | IoU   | Mask f2f | Swaps | Followed | Refreshes | Step, ms |
+| ---------------- | --------- | ---: | ----: | ----: | -------: | ----: | -------: | --------: | -------: |
+| `all` (7)        | none      | 1.0% |    0% | 0.880 |    0.959 |     1 |      n/a |         0 |     18.2 |
+|                  | Small     | 1.7% |    0% | 0.874 |    0.958 |    18 |    85.6% |        93 |     27.0 |
+|                  | Large     | 4.1% |    0% | 0.888 |    0.959 |    16 |    76.0% |        74 |     25.5 |
+| `parts` (5)      | none      |   0% |  2.8% | 0.746 |    0.933 |    16 |      n/a |         0 |     18.2 |
+|                  | Small     |   0% |  2.8% | 0.768 |    0.918 |    30 |    80.6% |        83 |     27.0 |
+|                  | Large     |   0% |  3.1% | 0.731 |    0.912 |    34 |    71.0% |        67 |     24.4 |
+| `moving` (2)     | none      |   0% |  2.4% | 0.600 |    0.920 |    10 |      n/a |         0 |     18.4 |
+|                  | Small     | 1.8% |    0% | 0.642 |    0.884 |    11 |    74.7% |        40 |     27.0 |
+|                  | Large     |   0% |    0% | 0.633 |    0.892 |    22 |    55.7% |        32 |     24.1 |
 
-`Followed` is the share of found frames whose outline was the follower's (SAM's mask carried from
-frame to frame); without a segmenter nothing follows, so there is no figure. It came after these
-runs, so it is from a short re-run of one scene per set, `caliper`, `vernier` and `jaw-slide` (12 s
-each, Small, paced), on the code with the keyframe, refresh-box and textureless-object rules
-described above, which the table's rows predate: the follower drew 93.8% of the caliper's found
-frames, 84.9% of the vernier's and 51.7% of the sliding jaw's. In that re-run their IoU was 0.936,
-0.872 and 0.639, against 0.894, 0.772 and 0.616 without a segmenter (the re-run without one gave
-those same numbers to the last digit); one run each, and Large was not re-run.
+`Followed` is the share of found frames whose outline was the follower's, SAM's mask carried from
+frame to frame (the mean of the sequences' shares); the rest were YOLOE's mask, or for a part the
+part box. Without a segmenter nothing follows, so there is no figure.
 
-By these measures SAM did not steady the answers: the whole objects' outlines changed about as
-little from frame to frame as YOLOE's (mask f2f, the IoU of each outline with the last frame's,
-camera motion removed, 0.952 and 0.956 against 0.959) but were redrawn as a different shape more
-often (swaps, 20 and 13 against 1), and a frame took 6 to 8 ms longer in `step`. It also lost more
-of the whole objects (1.7% with Small and 4.1% with Large against 1.0%: the condenser, for a run of
-21 frames in both, against 9 with YOLOE's mask, and with Large the test tube, for 43, which YOLOE's
-mask never lost) and did worse on the terminals scene (wrong 14.0% with YOLOE's mask, 23.1% with
-Small and 21.8% with Large). The caliper and its vernier did not improve over the sequence: the
-caliper's IoU was 0.790 with Small and 0.911 with Large against 0.894 with YOLOE's mask, the
-vernier's 0.771 and 0.786 against 0.772. Each row is a single run: in a repeat of Small made before
-the candidate rule, `parts` varied by 0.04 IoU and `moving` by 0.15. The harness's truth is a box
-per frame, so what SAM is for, the outline's shape, is not measured here.
+By these measures SAM raised the IoU of some scenes and steadied none. The caliper's IoU over the
+sequence was 0.950 with Small and 0.926 with Large against 0.894 with YOLOE's mask, its vernier's
+0.873 and 0.807 against 0.772, and `moving` 0.642 and 0.633 against 0.600; the sliding jaw was never
+taken for something else (4.8% with YOLOE's mask). But the whole objects' IoU was 0.874 and 0.888
+against 0.880; the outlines were redrawn as a different shape more often (swaps, 18 and 16 against 1
+on the whole objects, 30 and 34 against 16 on `parts`) and changed more from frame to frame on
+`parts` and `moving` (mask f2f, the IoU of each outline with the last frame's, camera motion
+removed: 0.918 and 0.912 against 0.933, and 0.884 and 0.892 against 0.920; on the whole objects
+0.958 and 0.959 against 0.959); and a frame took 6 to 9 ms longer in `step`. It also lost more of
+the whole objects (1.7% with Small and 4.1% with Large against 1.0%: the condenser, for a run of 21
+frames in both, against 9 with YOLOE's mask, and with Large the test tube, for 43, which YOLOE's
+mask never lost) and did worse on the terminals scene (IoU 0.581 and 0.546 against 0.753; its box
+nearer the whole battery than the terminals on 15.5% of found frames with Small against 1.0%, and on
+something else on 15.7% with Large against 14.0%). The follower drew 85.6% and 76.0% of the whole
+objects' found frames, 80.6% and 71.0% of the parts' and 74.7% and 55.7% of the moving parts'. Each
+row is a single run: in a repeat of Small made on earlier code, `parts` varied by 0.04 IoU and
+`moving` by 0.15, so a difference of that size between rows is not a finding. The harness's truth is
+a box per frame, so what SAM is for, the outline's shape, is not measured here.
 
 **The two moving scenes.** The jaw sliding along the caliper was taken for something else on 4.8% of
-its found frames with YOLOE's mask, on none with Small and on 6.3% with Large, which also lost it
-for a run of 14 frames (5.9%); its IoU was 0.616, 0.493 and 0.560, and its swaps 9, 9 and 15. The
-name plate swinging on the micrometer was never taken for anything else in any run; its IoU was
-0.583, 0.686 and 0.632, and its swaps 1, 1 and 4. So on the moving scenes neither SAM was better
-than YOLOE's mask by these measures (`moving` IoU 0.589 and 0.596 against 0.600, swaps 10 and 19
-against 10); only Small's `wrong` fell, to 0. Small made 254 calls over the fourteen sequences (42
-of them on the condenser, against 9 to 19 on the other whole objects) and Large 180; measured apart,
-on a 480x360 frame, a call took 143 ms with Small (121 encoding the frame, 22 cutting the box) and
-467 ms with Large (445 and 22), where an earlier measurement read 182 and 624 ms.
+its found frames with YOLOE's mask and on none with either SAM; Small lost it for a run of 9 frames
+(3.3%), Large never. Its IoU was 0.616, 0.609 and 0.653, its swaps 9, 10 and 18, and the follower
+drew 64.8% and 56.3% of its found frames. The name plate swinging on the micrometer was never taken
+for anything else; its IoU was 0.583, 0.676 and 0.613, its swaps 1, 1 and 4, and the follower drew
+84.6% and 55.1%. So on the moving scenes SAM's IoU was 0.03 to 0.04 above YOLOE's mask (0.642 and
+0.633 against 0.600), inside the spread of a repeat, with a lower mask f2f and, with Large, twice
+the swaps (22 against 10). Small made 216 calls over the fourteen sequences and Large 173; measured
+apart, on a 480x360 frame, a call took 143 ms with Small (121 encoding the frame, 22 cutting the
+box) and 467 ms with Large (445 and 22), where an earlier measurement read 182 and 624 ms.
 
 **The candidate rule.** SAM proposes three masks for a box, and the one the model rated best used to
 be the one drawn. On the harness's caliper scene that was one jaw instead of the whole caliper at
@@ -406,8 +406,9 @@ one of Small's eight keyframes (IoU 0.22 with the caliper's true box; the eight 
 the rule that scales the rating by how well the mask's bounds fit the box, all eight hold the whole
 (0.92 or better, mean 0.97), and Large held it both ways (0.98). Across the fourteen scenes' 112
 keyframes the rule moved the mean IoU from 0.880 to 0.888 with Small and from 0.885 to 0.890 with
-Large, and by 0.05 or less on any scene but Small's caliper. The caliper's tracked IoU over the
-sequence, in the table's runs, did not follow (above).
+Large, and by 0.05 or less on any scene but Small's caliper. In the table's runs the caliper's
+tracked IoU over the sequence was 0.950 with Small and 0.926 with Large, against 0.894 with YOLOE's
+mask.
 
 ## Tests
 
