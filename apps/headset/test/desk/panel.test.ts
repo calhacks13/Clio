@@ -180,6 +180,7 @@ describe('statsHtml', () => {
     expect(statsHtml({ ...stats, connected: false, streaming: false }, null)).toContain(
       'pnpm tracker',
     );
+    expect(statsHtml({ ...stats, connected: false }, null, false)).toContain('connects on Start');
   });
 });
 

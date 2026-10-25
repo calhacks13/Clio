@@ -1,4 +1,4 @@
-import { rgba as accentRgba, erColor, objectStyle } from './colors';
+import { erStroke, objectStyle, rgba } from './colors';
 import type { DeskObject } from './desk-tracker';
 import { type ErBox, erOpacity } from './er-boxes';
 import {
@@ -64,12 +64,13 @@ export class DeskOverlay {
     const ordered = [...objects.filter((o) => !o.lit), ...objects.filter((o) => o.lit)];
     for (const o of ordered) this.drawObject(g, o, rect);
     for (const o of [...ordered].reverse()) this.drawTag(g, o, rect, size, taken);
-    const accents = new Map(objects.map((o) => [o.id, o.accent]));
+    const followed = new Map(objects.map((o) => [o.id, o]));
     for (const answer of er) {
       const opacity = erOpacity(answer.t, now);
       if (opacity <= 0) continue;
       for (const box of answer.boxes) {
-        this.drawEr(g, box, erColor(box.id ? (accents.get(box.id) ?? null) : null), opacity, rect);
+        const object = box.id ? (followed.get(box.id) ?? null) : null;
+        this.drawEr(g, box, erStroke(object, opacity), opacity, rect);
       }
     }
     g.restore();
@@ -136,30 +137,30 @@ export class DeskOverlay {
   private drawEr(
     g: CanvasRenderingContext2D,
     box: ErBox,
-    color: number,
+    stroke: string,
     opacity: number,
     rect: Rect,
   ): void {
     const b = boxToPixels(box.box, rect);
     g.setLineDash(box.action ? [9, 5] : [5, 5]);
-    g.strokeStyle = accentRgba(color, opacity);
+    g.strokeStyle = stroke;
     g.lineWidth = box.action ? 2.5 : 1.5;
     g.strokeRect(b.x, b.y, b.width, b.height);
     g.setLineDash([]);
     // The ER tag sits under the box, clear of the tracker's tag above it.
     const text = `${box.action ? 'next: ' : 'ER '}${box.label}`;
     g.font = TAG_FONT;
-    g.fillStyle = accentRgba(color, opacity);
+    g.fillStyle = stroke;
     g.textBaseline = 'top';
     g.fillText(text, b.x + 2, b.y + b.height + 3);
     if (!box.action) return;
     const [x, y] = toPixels(box.point ?? boxCenter(box.box), rect);
     g.beginPath();
     g.arc(x, y, 6, 0, Math.PI * 2);
-    g.fillStyle = accentRgba(color, 0.9 * opacity);
+    g.fillStyle = stroke;
     g.fill();
     g.lineWidth = 2;
-    g.strokeStyle = `rgba(4, 18, 26, ${opacity})`;
+    g.strokeStyle = rgba(0x04121a, opacity);
     g.stroke();
   }
 }

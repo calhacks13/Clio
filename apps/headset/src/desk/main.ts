@@ -314,7 +314,7 @@ async function boot(el: HTMLElement): Promise<void> {
     if (dirty.has('er')) render('#er', erHtml(er.log, lab.focus !== null), true);
     if (now - statsT >= STATS_MS) {
       statsT = now;
-      render('#tracker', statsHtml(lab.tracker.stats(), locate));
+      render('#tracker', statsHtml(lab.tracker.stats(), locate, lab.running));
     }
     dirty.clear();
     requestAnimationFrame(frame);

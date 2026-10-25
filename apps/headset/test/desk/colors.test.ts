@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DARK_TEXT, erColor, hex, NEUTRAL, objectStyle, rgba } from '../../src/desk/colors';
+import { DARK_TEXT, erStroke, hex, NEUTRAL, objectStyle, rgba } from '../../src/desk/colors';
 import { ACCENTS, HINT_OPACITY, styledAccent } from '../../src/domain/overlay/accents';
 
 // The desk draws each object in the headset's role colors (domain/overlay/accents.ts).
@@ -47,9 +47,17 @@ describe('objectStyle', () => {
   });
 });
 
-describe('erColor', () => {
-  it("draws ER's box in the followed object's own color, else the act color", () => {
-    expect(erColor({ color: ACCENTS.level, opacity: 1 })).toBe(ACCENTS.level);
-    expect(erColor(null)).toBe(ACCENTS.act);
+describe('erStroke', () => {
+  const accent = { color: ACCENTS.level, opacity: 1 };
+
+  it("draws ER's box in a lit object's color, neutral on one only followed, act on an unknown one", () => {
+    expect(erStroke({ accent, lit: true }, 1)).toBe('rgba(61, 220, 132, 1)');
+    expect(erStroke({ accent, lit: false }, 1)).toBe('rgba(232, 238, 252, 0.62)');
+    expect(erStroke(null, 1)).toBe('rgba(36, 212, 237, 1)');
+  });
+
+  it('fades with the answer', () => {
+    expect(erStroke({ accent, lit: true }, 0.5)).toBe('rgba(61, 220, 132, 0.5)');
+    expect(erStroke({ accent, lit: false }, 0.5)).toBe('rgba(232, 238, 252, 0.31)');
   });
 });

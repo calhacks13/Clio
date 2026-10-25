@@ -80,10 +80,17 @@ export function objectStyle(lit: boolean, accent: Accent, state: string | null):
   };
 }
 
+/** The neutral line's color and strength, for ER's box on an object that is only followed. */
+const NEUTRAL_RGB = 0xe8eefc;
+const NEUTRAL_ALPHA = 0.62;
+
 /**
- * The color of a box Robotics-ER drew: a followed object's own accent, so it sits on the same
- * object's outline, else (an action item the plan never declared) the act color.
+ * The color of a box Robotics-ER drew, at `opacity` (it fades): a lit object's own accent, so it
+ * sits on that object's glow; the neutral line on an object followed only for the data; the act
+ * color on an action item the lesson does not follow (yet).
  */
-export function erColor(accent: Accent | null): number {
-  return accent?.color ?? ACCENTS.act;
+export function erStroke(object: { accent: Accent; lit: boolean } | null, opacity: number): string {
+  if (!object) return rgba(ACCENTS.act, opacity);
+  if (!object.lit) return rgba(NEUTRAL_RGB, NEUTRAL_ALPHA * opacity);
+  return rgba(object.accent.color, opacity);
 }

@@ -181,10 +181,12 @@ export interface LocateLine {
   latencyMs: number;
 }
 
-export function statsHtml(s: DeskTrackerStats, locate: LocateLine | null): string {
+export function statsHtml(s: DeskTrackerStats, locate: LocateLine | null, running = true): string {
   const connection = s.connected
     ? `<span class="ok">connected</span> · ${esc(s.model ?? '')}`
-    : '<span class="bad">not connected</span> <span class="muted">(run pnpm tracker; retrying)</span>';
+    : running
+      ? '<span class="bad">not connected</span> <span class="muted">(run pnpm tracker; retrying)</span>'
+      : '<span class="muted">connects on Start</span>';
   const frame = s.frame ? `${s.frame.width}×${s.frame.height}` : '–';
   return `<dl class="stats">
     <dt>Tracker</dt><dd>${connection}</dd>
