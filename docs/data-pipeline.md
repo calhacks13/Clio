@@ -201,6 +201,20 @@ The robot trajectory is an inference from the hands and is labelled that way eve
 proprioception and not a measured command. `clio export-lerobot --robot-profile <file>` builds a joint-space dataset from
 it; without that flag the export keeps the `human_hands` profile.
 
+### The whole G1 (body-g1.json)
+
+Every compile also poses a whole Unitree G1 (`retarget/body.py`, the `g1_body29_hand14` URDF the
+visualizer draws) from the three things measured: the head and the two hands. The learner's standing
+head height maps to the G1's eye height and every point is scaled by that ratio. The head's
+flattened forward direction is the body's yaw. The pelvis sits below the head by the G1's
+pelvis-to-eye length, between a deep crouch and standing, and the waist leans the torso toward the
+head. The feet stay planted in the reference stance and step only after the body moved 18 cm or
+turned 35 degrees; each leg is solved for its planted ankle, sole flat. Each palm is solved
+(position only) onto the scaled palm point; an untracked hand keeps its last pose. The Dex3
+fingers close with the pinch. The pelvis, legs, waist and fingers are rules, not measurements, and
+the viewer draws the G1 muted, as a wireframe, labelled "Inferred". Each frame records how far each
+palm stayed from the hand (`handResidualM`).
+
 ## Running it
 
 ```bash

@@ -7,6 +7,7 @@
                              (only when the headset recorded any)
     environment.json         table, floor and detected planes
     retarget-<profile>.json  one per robot profile
+    body-g1.json             a whole Unitree G1 posed from the head and hands (inferred)
 
 Raw files are only read, and a compile refuses to write into the episode or beside it in its
 episodes directory. Each stage runs on its own: a failure is recorded in the manifest (status
@@ -251,6 +252,8 @@ def _run_stages(
             ok_detail=f"version {p.profile.version}",
         )
 
+    stage("body-g1", lambda: _body(episode, fps, write), ok_detail="inferred")
+
     verdict = stage("quality", lambda: quality(episode_dir, episode, series, issues))
     if verdict is None:
         verdict = _unknown_quality(episode, issues)
@@ -262,6 +265,15 @@ def _retarget(episode: Episode, profile: Any, fps: int, write, name: str) -> Non
 
     result = retarget_episode(episode, profile, fps=fps)
     write(name, "retarget", retarget_doc(result, episode))
+
+
+def _body(episode: Episode, fps: int, write) -> None:
+    from .retarget.body import body_doc, load_g1, solve_body
+
+    model = load_g1()
+    write(
+        "body-g1.json", "body", body_doc(solve_body(episode, model, fps=fps), model, episode, fps)
+    )
 
 
 def tracks_doc(

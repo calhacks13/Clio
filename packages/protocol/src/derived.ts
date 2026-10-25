@@ -20,6 +20,7 @@ import { HandednessSchema } from './hand';
 //   environment.json   EnvironmentDoc: table, floor and detected planes
 //   shapes.json        ShapesDoc: each object's depth samples fused relative to its tracked position
 //   retarget-<profile>.json  RetargetDoc: robot joint trajectories solved by inverse kinematics
+//   body-g1.json             BodyDoc: a whole Unitree G1 posed from the head and hands (inferred)
 //
 // Arrays hold one value per grid frame. null marks "no valid value": compiled files never fill a
 // gap silently (a frame gap longer than policy.maxFrameGapMs leaves the head and wrists null), and
@@ -30,7 +31,7 @@ export const DERIVED_SCHEMA_ID = 'clio.derived/1';
 /** File names the server serves from data/derived/<id>/ and the visualizer's proxy allows. */
 export const DERIVED_FILE_NAME = /^[a-z0-9][a-z0-9._-]{0,95}\.json$/;
 
-export const DerivedKindSchema = z.enum(['tracks', 'environment', 'shapes', 'retarget']);
+export const DerivedKindSchema = z.enum(['tracks', 'environment', 'shapes', 'retarget', 'body']);
 
 const fraction = () => z.number().min(0).max(1);
 const ms = () => z.number();
@@ -371,7 +372,42 @@ export const RetargetDocSchema = z.object({
   }),
 });
 
+export const BodyDocSchema = z.object({
+  ...docBase,
+  kind: z.literal('body'),
+  profile: z.object({
+    id: z.string(),
+    version: z.number().int().positive(),
+    robotType: z.string().describe('LeRobot robot_type'),
+    urdf: z.string().describe('The URDF, relative to the lerobot robot-urdfs bucket'),
+    inferred: z
+      .array(z.string())
+      .describe(
+        'Parts posed by rule, not from a measurement: only the head and hands are measured',
+      ),
+  }),
+  scale: z
+    .number()
+    .positive()
+    .describe("The G1's eye height over the learner's standing head height"),
+  standingHeadM: z
+    .number()
+    .positive()
+    .describe("The learner's standing head height above the floor"),
+  joints: z.array(z.string()).describe('URDF joint names, the order of every q row'),
+  root: z.array(Pose7Schema.nullable()).describe('Pelvis pose, W (the G1 is z-up, x forward)'),
+  q: z.array(z.array(z.number()).nullable()).describe('Joint values, rad'),
+  handResidualM: z
+    .array(z.array(z.number().nonnegative().nullable()).length(2))
+    .describe('How far each palm (left, right) stayed from the scaled hand; null when untracked'),
+  summary: z.object({
+    frames: z.number().int().nonnegative(),
+    meanHandResidualM: z.number().nonnegative().nullable(),
+  }),
+});
+
 export type DerivedKind = z.infer<typeof DerivedKindSchema>;
+export type BodyDoc = z.infer<typeof BodyDocSchema>;
 export type DerivedInput = z.infer<typeof DerivedInputSchema>;
 export type CompileStage = z.infer<typeof CompileStageSchema>;
 export type DerivedArtifact = z.infer<typeof DerivedArtifactSchema>;

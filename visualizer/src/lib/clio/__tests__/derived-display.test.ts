@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import type { EnvironmentDoc, Pose7, RetargetDoc } from "@clio/protocol";
+import type {
+  BodyDoc,
+  EnvironmentDoc,
+  Pose7,
+  RetargetDoc,
+} from "@clio/protocol";
 import { rosFromW } from "@clio-viewer/capture/from-clio";
 import type { CaptureSpace, Vec3 } from "@clio-viewer/capture/model";
 import {
@@ -13,6 +18,7 @@ import {
 import {
   armBase,
   armsAt,
+  bodyAt,
   compiledFloor,
   compiledPlanes,
   compiledTable,
@@ -380,5 +386,45 @@ describe("gripper", () => {
 
   test("none without two links", () => {
     expect(gripperLines([[0, 0, 0]], 0)).toBeNull();
+  });
+});
+
+describe("the inferred G1 body", () => {
+  const body: BodyDoc = {
+    schema: "clio.derived/1",
+    episodeId: "ep-body",
+    frame: "workspace",
+    fps: 10,
+    t: [0, 100, 200],
+    kind: "body",
+    profile: {
+      id: "unitree-g1-body",
+      version: 1,
+      robotType: "unitree_g1",
+      urdf: "g1/g1_body29_hand14.urdf",
+      inferred: ["pelvis", "legs", "waist", "fingers"],
+    },
+    scale: 0.8,
+    standingHeadM: 1.6,
+    joints: ["left_knee_joint", "right_knee_joint"],
+    root: [null, [0.1, 0.05, 0.4, 0, 0, 0, 1], [0.2, 0.05, 0.4, 0, 0, 0, 1]],
+    q: [null, [0.3, 0.4], [0.5, 0.6]],
+    handResidualM: [
+      [null, null],
+      [0.01, 0.02],
+      [0.01, 0.02],
+    ],
+    summary: { frames: 2, meanHandResidualM: 0.015 },
+  };
+
+  test("is placed at the grid frame in force, its pelvis converted to ROS once", () => {
+    const pose = bodyAt(body, 150_000);
+    expect(pose?.position).toEqual(rosFromW([0.1, 0.05, 0.4]));
+    expect(pose?.rotation).toEqual(IDENTITY);
+    expect(pose?.joints).toEqual([0.3, 0.4]);
+  });
+
+  test("is hidden where it has no pose", () => {
+    expect(bodyAt(body, 50_000)).toBeNull();
   });
 });
