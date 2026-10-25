@@ -11,11 +11,11 @@ and reads one JSON line back per job: {"ok": true, "vertices": n, "faces": n, "s
 
 The model is TripoSR (VAST-AI-Research/TripoSR at the commit setup.sh pins, MIT; weights
 stabilityai/TripoSR). The mask is the tracker's outline of the object in the crop; without one,
-rembg (REMBG_MODEL) cuts the object out. The surface comes from marching cubes on a 128 grid by default
-(--mc-resolution), through PyMCubes instead of torchmcubes, which needs a C++/CUDA build. The mesh
-is turned from TripoSR's frame (z up, the input camera on +x) into Clio's model frame (y up, the
-side the crop saw facing +z) and keeps TripoSR's vertex colors. Scaling it to the measured size
-and placing it is the pipeline's job.
+rembg (REMBG_MODEL) cuts the object out. The surface comes from marching cubes on a 128 grid by
+default (--mc-resolution), through PyMCubes instead of torchmcubes, which needs a C++/CUDA build.
+The mesh is turned from TripoSR's frame (z up, the input camera on +x) into Clio's model frame (y
+up, the side the crop saw facing +z) and keeps TripoSR's vertex colors. Scaling it to the
+measured size and placing it is the pipeline's job.
 """
 
 from __future__ import annotations
@@ -91,7 +91,9 @@ class Generator:
 
         started = time.perf_counter()
         self.device = pick_device(device)
-        self.model = TSR.from_pretrained(MODEL_ID, config_name="config.yaml", weight_name="model.ckpt")
+        self.model = TSR.from_pretrained(
+            MODEL_ID, config_name="config.yaml", weight_name="model.ckpt"
+        )
         self.model.renderer.set_chunk_size(chunk_size)
         self.model.to(self.device)
         self.mc_resolution = mc_resolution
@@ -183,7 +185,11 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"ok": True, "device": generator.device}), flush=True)
         return 0
     if not args.serve:
-        print(json.dumps(generator.generate({"image": args.image, "mask": args.mask, "out": args.out})))
+        print(
+            json.dumps(
+                generator.generate({"image": args.image, "mask": args.mask, "out": args.out})
+            )
+        )
         return 0
     print(json.dumps({"ok": True, "ready": True, "device": generator.device}), flush=True)
     for line in sys.stdin:

@@ -4,6 +4,8 @@ What a lesson leaves behind to look at, beside the measurements: the room the le
 and a model of every object they worked with, in the episode's workspace frame W. The room is what
 the Quest already knows; nothing is reconstructed from photos and nothing heavy runs on the laptop.
 
+To set it up and try it, see [room-scene-setup.md](room-scene-setup.md).
+
 | Part          | Comes from                                                                                                                    | What it is        |
 | ------------- | ----------------------------------------------------------------------------------------------------------------------------- | ----------------- |
 | Room          | The Quest room scan (Space Setup), read by WebXR mesh detection: the room's global mesh and labelled furniture volumes        | Measured, earlier |

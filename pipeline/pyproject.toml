@@ -7,7 +7,7 @@ requires-python = ">=3.11,<3.14"
 dependencies = [
     "numpy>=1.26",
     "jsonschema>=4.18",
-    "pillow>=10.4",  # keyframe JPEGs: decoding for room colors and object crops, encoding crops
+    "pillow>=10.4",  # keyframe JPEGs: decoding and cropping them for the object models
 ]
 
 [project.optional-dependencies]
@@ -36,11 +36,6 @@ line-length = 100
 indent-width = 4
 target-version = "py311"
 src = ["src", "tests"]
-
-[tool.ruff.format]
-# Ruff >= 0.17 also formats code blocks in Markdown, which would undo the README's aligned
-# comments; the docs are written by hand.
-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "NPY"]
