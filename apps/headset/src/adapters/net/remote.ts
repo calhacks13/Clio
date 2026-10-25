@@ -8,6 +8,7 @@ import type {
   SceneAskResponse,
 } from '@clio/protocol';
 import type { ClipSource } from '../../domain/demo/demo-library';
+import type { FocusFinder } from '../../domain/session/action-focus';
 import type { SceneAsker } from '../../domain/session/closer-look';
 import type { LessonPlanner } from '../../domain/session/lesson-controller';
 import type {
@@ -52,14 +53,6 @@ export class RemoteSceneAsker implements SceneAsker {
   ask(request: SceneAskRequest): Promise<SceneAskResponse> {
     return this.api.askScene(request);
   }
-}
-
-/**
- * The action focus's port (domain/session/action-focus.ts): Robotics-ER 2 boxes the step's objects
- * and names the next thing to touch.
- */
-export interface FocusFinder {
-  focus(request: FocusRequest): Promise<FocusResponse>;
 }
 
 /** Robotics-ER 2's action focus on one sharp frame (POST /api/vision/focus). */

@@ -26,14 +26,23 @@ import {
 import type { XrRuntime } from '../adapters/xr/xr-session';
 import type { Clock } from '../core/clock';
 import { createLogger } from '../core/log';
-import type { AppBus } from '../domain/events';
+import type { Vec3 } from '../core/math';
+import type { AppBus, AppEvents } from '../domain/events';
+import { ACCENTS, type Accent } from '../domain/overlay/accents';
 import { ObjectTrackRecorder } from '../domain/recording/object-track-recorder';
+import type { FocusAnchor, FocusAnchors } from '../domain/session/action-focus';
 import { isShown, type LiveObject, LiveTracking } from '../domain/session/live-tracking';
 import type { DepthSource } from '../domain/world/depth-source';
 import type { SurfaceRaycaster } from '../domain/world/grounding';
 import { LiveObjects, type LiveView } from '../domain/world/live-objects';
 import type { ObjectRegistry } from '../domain/world/object-registry';
-import type { Placement } from '../domain/world/placement';
+import {
+  depthFromSurface,
+  maskRays,
+  type Placement,
+  placeBox,
+  surfaceOrTable,
+} from '../domain/world/placement';
 import type { PoseHistory } from '../domain/world/pose-history';
 import type { Workspace } from '../domain/world/workspace';
 
@@ -45,7 +54,8 @@ import type { Workspace } from '../domain/world/workspace';
 // it as the camera's untrusted `detector`. Each lit object's bounding box is drawn next to its glow,
 // with its name on a tag (with ?debug=1 every followed object's, its tag saying what the tracker
 // last said of it). Robotics-ER's boxes from the action focus come back in as anchors: the tracker
-// places the object from them and trusts them over jev for a while (tracker/TRACK.md). Without the
+// places the object from them and trusts them over jev for a while (tracker/TRACK.md); with
+// ?debug=1 they are drawn too, dashed, for a moment, where ER saw them. Without the
 // tracker (not running, or the connection dropped) nothing is streamed and the lesson's own looks
 // (Spotlight) carry on as before, while the connection keeps retrying. The Quest runs hot, so
 // frames go out only while the session is shown and something is being followed.
@@ -59,18 +69,18 @@ const MAX_PENDING = 4;
 const SIZES_KEPT = 32;
 /** An unlit object's box (?debug=1) is drawn this much fainter than a lit one's. */
 const UNLIT_BOX_OPACITY = 0.45;
-
 /**
- * One of Robotics-ER's boxes for the tracker: the action focus's FocusAnchors port
- * (domain/session/action-focus.ts).
+ * An anchor for an object the set does not have yet (an action item the lesson has just declared)
+ * waits this long for the set that has it (ms).
  */
-export interface FocusAnchor {
-  id: string;
-  box: NormalizedBox;
-  /** Capture time of the frame ER saw (performance.now ms). */
-  t: number;
-  /** ER's words for the object, for jev from now on. */
-  query?: string;
+const ANCHOR_WAIT_MS = 2000;
+/** Robotics-ER's boxes (?debug=1) show this long (ms). */
+const ER_BOX_MS = 1500;
+
+/** One of Robotics-ER's boxes, drawn dashed for a moment (?debug=1). */
+interface ErBox {
+  box: LiveBox;
+  until: number;
 }
 
 export interface LiveTrackerDeps {
@@ -97,17 +107,19 @@ export interface LiveTrackerDeps {
   socket?: (url: string) => TrackerSocket;
 }
 
-export class LiveTracker {
+export class LiveTracker implements FocusAnchors {
   readonly presenter: LiveHighlightsPresenter;
   /** The bounding boxes next to the glow, sharing its depth occlusion. */
   readonly boxPresenter: LiveBoxesPresenter;
   /** The real hands in the depth buffer, so a light behind a hand stays behind it. */
   readonly occluders = new HandOccluders();
-  private readonly tracking: LiveTracking;
+  /** What is followed and lit, and in which words (the action focus asks ER about these). */
+  readonly tracking: LiveTracking;
   private readonly objects: LiveObjects;
   private readonly client: TrackerClient;
   private readonly stream: FrameStream;
   private readonly detach: () => void;
+  private readonly detachFocus: (() => void) | null;
   private readonly pending: TrackerDetections[] = [];
   private readonly sizes = new Map<number, { width: number; height: number }>();
   private session: XRSession | null = null;
@@ -119,8 +131,14 @@ export class LiveTracker {
   private followed: string | null = null;
   /** The ids of the set last sent on this connection: the only ones an anchor may name. */
   private sentIds = new Set<string>();
+  /** Anchors for objects the set does not have yet, by id (the newest), each until a time. */
+  private readonly waitingAnchors = new Map<string, { anchor: FocusAnchor; until: number }>();
   private highlights: LiveHighlight[] = [];
   private boxes: LiveBox[] = [];
+  private erBoxes: ErBox[] = [];
+  private erShapes = 0;
+  /** Where each followed object was drawn on the last prepare() (world). */
+  private centers = new Map<string, Vec3>();
   private masks: Placement[] = [];
   private readonly onVisibility = () => this.updateStreaming();
 
@@ -133,6 +151,7 @@ export class LiveTracker {
     const { bus, clock, registry, camera, workspace } = deps;
     this.tracking = new LiveTracking({ bus, registry, procedure: deps.procedure });
     this.detach = this.tracking.attach();
+    this.detachFocus = deps.debug ? bus.on('focus.answered', (e) => this.showErBoxes(e)) : null;
     // The registry owns the lesson's 3D estimates: only the 2D observations are recorded here.
     const recorder = new ObjectTrackRecorder({ bus, clock, workspace, states: 'none' });
     this.objects = new LiveObjects({
@@ -159,6 +178,7 @@ export class LiveTracker {
         // A new connection starts in target mode, without the set: it is sent again.
         this.sent = null;
         this.sentIds.clear();
+        this.waitingAnchors.clear();
         this.pending.length = 0;
         this.objects.reset();
         this.masks = [];
@@ -235,12 +255,18 @@ export class LiveTracker {
 
   /**
    * The action focus's FocusAnchors: Robotics-ER's box for a followed object goes to the tracker,
-   * which places the object from it and trusts it over jev for a while. Dropped without a tracker,
-   * before the set was sent on this connection (objects mode), and for an object not in it.
+   * which places the object from it and trusts it over jev for a while. Dropped without a tracker
+   * and before the set was sent on this connection (objects mode). One for an object the set does
+   * not have yet (an action item the lesson has just declared) waits a moment for the set that has
+   * it; any other is dropped then.
    */
-  anchor({ id, box, t, query }: FocusAnchor): void {
-    if (!this.sentIds.has(id)) return;
-    this.client.send({ type: 'anchor', id, t, box, source: 'er', ...(query ? { query } : {}) });
+  anchor(anchor: FocusAnchor): void {
+    if (!this.client.connected || this.sent === null) return;
+    if (this.sentIds.has(anchor.id)) {
+      this.sendAnchor(anchor);
+      return;
+    }
+    this.waitingAnchors.set(anchor.id, { anchor, until: this.deps.clock.now() + ANCHOR_WAIT_MS });
   }
 
   /** Perceive stage: what to follow, depth reads, and the tracker's answers since the last frame. */
@@ -278,6 +304,7 @@ export class LiveTracker {
     });
     this.highlights = [];
     this.boxes = [];
+    this.centers = new Map(views.map((view) => [view.id, view.placement.center]));
     for (const view of views) {
       const object = this.tracking.get(view.id);
       const spec = registry.spec(view.id);
@@ -298,6 +325,9 @@ export class LiveTracker {
         tagged: box !== null,
       });
     }
+    const now = clock.now();
+    this.erBoxes = this.erBoxes.filter((er) => er.until > now);
+    this.boxes.push(...this.erBoxes.map((er) => er.box));
   }
 
   stop(): void {
@@ -315,8 +345,12 @@ export class LiveTracker {
     this.sensing = null;
     this.depth = null;
     this.occluders.hide();
+    this.detachFocus?.();
+    this.waitingAnchors.clear();
     this.highlights = [];
     this.boxes = [];
+    this.erBoxes = [];
+    this.centers.clear();
     this.masks = [];
   }
 
@@ -359,6 +393,78 @@ export class LiveTracker {
       this.sent = key;
       this.sentIds = new Set(objects.map((o) => o.id));
     }
+    this.flushAnchors();
+  }
+
+  /** Anchors that waited for the set: sent once it has their object, dropped when out of time. */
+  private flushAnchors(): void {
+    if (this.waitingAnchors.size === 0) return;
+    const now = this.deps.clock.now();
+    for (const [id, { anchor, until }] of this.waitingAnchors) {
+      if (this.sentIds.has(id)) this.sendAnchor(anchor);
+      else if (until > now) continue;
+      this.waitingAnchors.delete(id);
+    }
+  }
+
+  private sendAnchor({ id, box, t, query }: FocusAnchor): void {
+    this.client.send({ type: 'anchor', id, t, box, source: 'er', ...(query ? { query } : {}) });
+  }
+
+  /**
+   * ?debug=1: Robotics-ER's boxes, dashed, for a moment, where ER saw them: on the camera rays of
+   * its frame (the head pose then) at the object's distance as the tracker measures it now, else
+   * where the box's bottom meets a surface.
+   */
+  private showErBoxes({ frameT, detections, action, actionId }: AppEvents['focus.answered']): void {
+    const { registry, clock } = this.deps;
+    const until = clock.now() + ER_BOX_MS;
+    const shape = ++this.erShapes;
+    const add = (id: string | null, label: string, box: NormalizedBox, detail: string) => {
+      const placed = this.placeErBox(id, box, frameT);
+      if (!placed) return;
+      const accent: Accent = (id && this.tracking.get(id)?.accent) || {
+        color: ACCENTS.act,
+        opacity: 1,
+      };
+      const key = `er:${id ?? label}`;
+      this.erBoxes = this.erBoxes.filter((er) => er.box.key !== key);
+      this.erBoxes.push({
+        box: { key, ...placed, shapeVersion: shape, label, detail, accent, dashed: true },
+        until,
+      });
+    };
+    for (const d of detections) {
+      if (!d.found || !d.box) continue;
+      const label = registry.spec(d.id)?.label ?? d.id;
+      const next = d.id === actionId ? ' · next' : '';
+      add(d.id, label, d.box, `ER ${d.confidence.toFixed(2)}${next}`);
+    }
+    // The thing to touch next, when ER boxed it apart from the objects it was asked about.
+    const boxed = new Set(detections.filter((d) => d.found && d.box).map((d) => d.id));
+    if (action?.found && action.box && !(actionId && boxed.has(actionId))) {
+      const label = (actionId && registry.spec(actionId)?.label) || action.label;
+      add(actionId, label, action.box, `ER ${action.confidence.toFixed(2)} · next`);
+    }
+  }
+
+  private placeErBox(
+    id: string | null,
+    box: NormalizedBox,
+    frameT: number,
+  ): { center: Vec3; corners: LiveBox['corners'] } | null {
+    const model = this.deps.camera.model();
+    const head = this.deps.poses.at(frameT);
+    if (!model || !head) return null;
+    let center = id ? this.centers.get(id) : undefined;
+    if (!center) {
+      const rays = maskRays({ point: null, box, outline: null }, model, head);
+      const depth = rays && depthFromSurface(rays, surfaceOrTable(this.deps.surfaces, head));
+      if (!depth || depth.kind === 'fixed') return null;
+      center = depth.center;
+    }
+    const placed = placeBox(box, head, model, center);
+    return placed && { center, corners: placed.corners };
   }
 
   /** Stream only while the session is shown (not covered by the system menu) and something is followed. */
