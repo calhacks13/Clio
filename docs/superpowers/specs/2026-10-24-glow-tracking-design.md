@@ -55,9 +55,9 @@ answers, the appearance memory decides re-acquisition, and `wants_jev_now` still
 ## Decisions
 
 - Segmenter: SAM 2.1 through Hugging Face `transformers` (`Sam2Model`, `Sam2Processor`), on
-  MPS, `facebook/sam2.1-hiera-small` by default (`sam2.1-large` selectable). Best of the three
-  candidate masks by the model's own predicted IoU, no box padding (padding hurt in the
-  earlier benchmark).
+  MPS, `facebook/sam2.1-hiera-small` by default (`sam2.1-large` selectable). Of the three candidate masks, the one whose predicted IoU times the IoU of its bounds with
+  the prompt box is highest (the model's own confidence alone picked sub-parts of a loosely
+  boxed object in the harness), no box padding (padding hurt in the earlier benchmark).
 - The follower estimates a full affine (RANSAC) when it has at least 12 inliers, a similarity
   with 8 to 11, and otherwise uses the camera's motion alone and reports doubt.
 - When unsure (hand over the door, blur), the outline holds its last shape at the predicted
