@@ -7,7 +7,7 @@ import {
   type CheckedOutline,
   cardObject,
   cardStep,
-  checkStep,
+  checkWrittenStep,
   mergeParallelRest,
   mergeRevision,
   type PlanContext,
@@ -564,7 +564,11 @@ describe('stage rest in parallel', () => {
   };
   const written = (index: number) => {
     const { step, objects } = modelWrittenStep(index);
-    const checked = checkStep(step, writerObjects(first.objects, outline(), objects), restCtx);
+    const checked = checkWrittenStep(
+      step,
+      writerObjects(first.objects, outline(), objects),
+      restCtx,
+    );
     if (!checked.ok) throw new Error(checked.error);
     return { step: checked.step, objects };
   };
@@ -633,8 +637,8 @@ describe('stage rest in parallel', () => {
       'fluid_jug',
     ]);
     expect((all[2] as { kind: string }).kind).toBe('container');
-    expect(checkStep(step, all, restCtx).ok).toBe(true);
-    const bad = checkStep({ ...step, targets: ['ghost'] }, all, restCtx);
+    expect(checkWrittenStep(step, all, restCtx).ok).toBe(true);
+    const bad = checkWrittenStep({ ...step, targets: ['ghost'] }, all, restCtx);
     expect(bad.ok ? '' : bad.error).toMatch(/Unknown object "ghost"/);
   });
 

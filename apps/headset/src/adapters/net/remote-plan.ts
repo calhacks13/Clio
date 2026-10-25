@@ -1,4 +1,10 @@
-import type { Procedure, StepCheckRequest, StepCheckResponse } from '@clio/protocol';
+import type {
+  Procedure,
+  StepCheckRequest,
+  StepCheckResponse,
+  StepCriteriaRequest,
+  StepCriteriaResponse,
+} from '@clio/protocol';
 import type { StepChecker } from '../../domain/session/step-watcher';
 import type { TemplateSource, TemplateSummary } from '../../domain/session/templates';
 import type { ApiClient } from './api-client';
@@ -10,6 +16,9 @@ export class RemoteStepChecker implements StepChecker {
   constructor(private readonly api: ApiClient) {}
   check(request: StepCheckRequest): Promise<StepCheckResponse> {
     return this.api.checkStep(request);
+  }
+  criteria(request: StepCriteriaRequest): Promise<StepCriteriaResponse> {
+    return this.api.stepCriteria(request);
   }
 }
 

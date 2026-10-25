@@ -2,7 +2,7 @@ import { isRecord, type Json, parseModelJson } from './model-json';
 import {
   type Candidate,
   type CheckedOutline,
-  checkStep,
+  checkWrittenStep,
   mergeParallelRest,
   type PlanContext,
   readCheckedOutline,
@@ -144,7 +144,11 @@ function readWrittenStep(
     return { ok: false, error: 'The answer has no `step`' };
   }
   const declared = (Array.isArray(json.objects) ? json.objects : []).filter(isRecord);
-  const checked = checkStep({ ...json.step, id }, writerObjects(objects, outline, declared), ctx);
+  const checked = checkWrittenStep(
+    { ...json.step, id },
+    writerObjects(objects, outline, declared),
+    ctx,
+  );
   return checked.ok
     ? { ok: true, value: { step: tidyStep(checked.step), objects: declared } }
     : checked;

@@ -14,6 +14,7 @@ import { ProcessEpisodeCompiler } from './services/episode-compiler';
 import { createGeminiClient, isGeminiConfigured } from './services/gemini';
 import { createGeminiPlanner } from './services/gemini-planner';
 import { createGeminiSceneAsker } from './services/gemini-scene';
+import { createGeminiStepChecker } from './services/gemini-step-check';
 import { createGeminiLocator } from './services/gemini-vision';
 import { createHttpLocator } from './services/http-vision';
 import { createGeminiPrimaryPicker, createPrimaryObjectFinder } from './services/primary-object';
@@ -57,6 +58,7 @@ function main(): void {
     clips: new ClipStore(join(config.dataDir, 'clips')),
     tokenMinter: gemini && createGeminiTokenMinter(gemini),
     planner: gemini && createGeminiPlanner(gemini, config.plannerModel),
+    checker: gemini && createGeminiStepChecker(gemini, config.plannerModel),
     locator: config.visionUrl
       ? createHttpLocator({ url: config.visionUrl, token: config.visionToken })
       : gemini && createGeminiLocator(gemini, config.visionModel),

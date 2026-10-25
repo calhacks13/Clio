@@ -17,7 +17,13 @@ import {
   restPlanRequest,
   scenarioPlanRequest,
 } from '../src/services/bench';
-import { expectLabel, runCheckTest } from '../src/services/bench-checks';
+
+import {
+  criteriaTestRequest,
+  expectLabel,
+  falseDone,
+  runCheckTest,
+} from '../src/services/bench-checks';
 import {
   createGeminiClient,
   type GeminiClient,
@@ -25,8 +31,11 @@ import {
   type Thinking,
 } from '../src/services/gemini';
 import type { PartThinking, StageThinking } from '../src/services/gemini-planner';
+import type { GeminiStepCheckerOptions } from '../src/services/gemini-step-check';
 import type { RestPartReport } from '../src/services/plan-rest';
 import { DEFAULT_REST_MODE } from '../src/services/plan-service';
+import { askStepCriteria } from '../src/services/step-check-service';
+
 import { BenchCheckStore } from '../src/storage/bench-check-store';
 import { BenchStore } from '../src/storage/bench-store';
 import { ProcedureStore } from '../src/storage/procedure-store';
@@ -37,7 +46,7 @@ import { ProcedureStore } from '../src/storage/procedure-store';
 // too. No server needed; it reads .env like the server does.
 
 const USAGE = `Usage: pnpm bench [scenario-id ...] [options]
-       pnpm bench --checks [test-id ...] [--model <name> ...] [--repeat <n>]
+       pnpm bench --checks [test-id ...] [--model <name> ...] [--repeat <n>] [check options]
 
 Runs saved planner bench scenarios (data/bench/scenarios) and judges each plan against the
 scenario's expectations. With --checks, runs the saved watcher tests (data/bench/checks) instead:
@@ -60,6 +69,13 @@ Options:
   --no-judge            Plan only
   --slow                Allow 2 minutes per plan instead of the headset's 40 s
   --checks              Run the watcher tests instead of the scenarios
+  --thinking check=<l>  With --checks: thinking for the check, or criteria=<l> for the criteria
+  --criteria <how>      With --checks: the criteria to judge. seen (the default, as the headset):
+                        written first from the view at the start of the step; words: from the
+                        step's words alone; inline: written in each answer; none: no criteria
+  --quick               With --checks: ask as quick looks (minimal thinking), as the watcher
+                        does while a step is far from done
+  --parallel <n>        With --checks: ask n looks at a time (default 1)
   --list                List the scenarios (or watcher tests) and exit
   -h, --help            Show this help`;
 
@@ -147,6 +163,9 @@ async function main(): Promise<void> {
       'no-judge': { type: 'boolean' },
       slow: { type: 'boolean' },
       checks: { type: 'boolean' },
+      criteria: { type: 'string' },
+      parallel: { type: 'string' },
+      quick: { type: 'boolean' },
       list: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -160,6 +179,10 @@ async function main(): Promise<void> {
       models: values.model ?? [],
       repeat: values.repeat,
       list: values.list ?? false,
+      thinking: values.thinking ?? [],
+      criteria: values.criteria,
+      parallel: values.parallel,
+      quick: values.quick ?? false,
     });
   }
   const store = new BenchStore(benchDir);
@@ -380,18 +403,67 @@ interface CheckTally {
   runs: number;
   passed: number;
   failed: number;
+  /** Said done when the test expected anything else. */
+  falseDone: number;
   byExpect: Record<BenchCheckExpect, { runs: number; passed: number }>;
   times: number[];
+  /** Asking for the criteria, once per test and repeat. */
+  criteriaTimes: number[];
 }
 
-const EXPECTS: readonly BenchCheckExpect[] = ['done', 'not_done', 'wrong'];
+const EXPECTS: readonly BenchCheckExpect[] = ['done', 'not_done', 'wrong', 'unsure'];
+/** seen, the headset's way: criteria from the step's start view, asked once per test and repeat. */
+const CRITERIA_MODES = ['seen', 'words', 'inline', 'none'] as const;
+type CriteriaMode = (typeof CRITERIA_MODES)[number];
+
+interface CheckOptions {
+  models: string[];
+  repeat: string | undefined;
+  list: boolean;
+  /** check=<level> and criteria=<level>. */
+  thinking: string[];
+  criteria: string | undefined;
+  parallel: string | undefined;
+  quick: boolean;
+}
+
+/** `--thinking check=minimal --thinking criteria=low` for the watcher tests. */
+function parseCheckThinking(args: readonly string[]): GeminiStepCheckerOptions {
+  const options: GeminiStepCheckerOptions = {};
+  for (const arg of args) {
+    const [what = '', level = ''] = arg.split('=');
+    if (!['check', 'criteria'].includes(what) || !LEVELS.includes(level)) {
+      throw new Error(`--thinking ${arg}: use <check|criteria>=<${LEVELS.join('|')}>`);
+    }
+    const thinking = level === 'default' ? null : (level as Thinking);
+    if (what === 'check') options.thinking = thinking;
+    else options.criteriaThinking = thinking;
+  }
+  return options;
+}
+
+/** How a run was asked, for its `variant`: empty when the way the headset's careful look is. */
+function checkVariant(
+  options: GeminiStepCheckerOptions,
+  criteria: CriteriaMode,
+  quick: boolean,
+): string {
+  const parts: string[] = quick ? ['quick'] : [];
+  if (options.thinking !== undefined) parts.push(`thinking ${options.thinking ?? 'default'}`);
+  if (criteria === 'none') parts.push('no criteria');
+  else if (criteria !== 'seen') parts.push(`criteria ${criteria}`);
+  if ((criteria === 'seen' || criteria === 'words') && options.criteriaThinking !== undefined) {
+    parts.push(`criteria thinking ${options.criteriaThinking ?? 'default'}`);
+  }
+  return parts.join(', ');
+}
 
 /** `pnpm bench --checks`: every watcher test with every model, then a pass rate per model. */
 async function runChecks(
   config: Config,
   benchDir: string,
   ids: string[],
-  options: { models: string[]; repeat: string | undefined; list: boolean },
+  options: CheckOptions,
 ): Promise<void> {
   const store = new BenchCheckStore(benchDir);
   const all = await store.list();
@@ -406,16 +478,28 @@ async function runChecks(
     );
   }
   if (!isGeminiConfigured(config.geminiApiKey)) throw new Error('Set GEMINI_API_KEY in .env');
+  const criteria = options.criteria ?? 'seen';
+  if (!CRITERIA_MODES.includes(criteria as CriteriaMode)) {
+    throw new Error(`--criteria ${criteria}: use ${CRITERIA_MODES.join(', ')}`);
+  }
+  const mode = criteria as CriteriaMode;
+  const checkerOptions: GeminiStepCheckerOptions = {
+    ...parseCheckThinking(options.thinking),
+    ...(mode === 'inline' ? { inline: true } : {}),
+  };
+  const variant = checkVariant(checkerOptions, mode, options.quick);
 
   const models = createBenchModels(createGeminiClient(config.geminiApiKey), config);
   const checkModels = options.models.length ? options.models : [config.plannerModel];
   const repeat = Math.max(1, Number(options.repeat ?? 1) || 1);
+  const parallel = Math.max(1, Number(options.parallel ?? 1) || 1);
   const now = () => new Date();
   const total = tests.length * checkModels.length * repeat;
   console.log(
     `Watcher tests: ${tests.length} test${tests.length === 1 ? '' : 's'} × ` +
       `${checkModels.length} model${checkModels.length === 1 ? '' : 's'} × ${repeat} = ` +
-      `${total} look${total === 1 ? '' : 's'}\n`,
+      `${total} look${total === 1 ? '' : 's'}${variant ? `, ${variant}` : ''}` +
+      `${parallel > 1 ? `, ${parallel} at a time` : ''}\n`,
   );
   const tallies = new Map<string, CheckTally>(
     checkModels.map((m) => [
@@ -424,45 +508,76 @@ async function runChecks(
         runs: 0,
         passed: 0,
         failed: 0,
+        falseDone: 0,
         byExpect: {
           done: { runs: 0, passed: 0 },
           not_done: { runs: 0, passed: 0 },
           wrong: { runs: 0, passed: 0 },
+          unsure: { runs: 0, passed: 0 },
         },
         times: [],
+        criteriaTimes: [],
       },
     ]),
   );
   const width = Math.min(40, Math.max(...tests.map((t) => t.id.length)));
 
+  const jobs: Array<() => Promise<void>> = [];
   for (const summary of tests) {
-    const test = await store.getTest(summary.id);
-    if (!test) continue;
-    const frames = await store.readFrames(test);
     for (const model of checkModels) {
       for (let i = 0; i < repeat; i++) {
-        const tally = tallies.get(model) as CheckTally;
-        const run = await runCheckTest({ planner: models.planner(model), now }, test, frames);
-        await store.addRun(test.id, run);
-        tally.runs++;
-        tally.times.push(run.latencyMs);
-        tally.byExpect[run.expect].runs++;
-        if (run.passed) {
-          tally.passed++;
-          tally.byExpect[run.expect].passed++;
-        }
-        if (!run.result.ok) tally.failed++;
-        console.log(
-          `  ${test.id.slice(0, width).padEnd(width)}  ${model.padEnd(28)} ` +
-            `${seconds(run.latencyMs).padStart(7)}  expects ${expectLabel(run.expect).padEnd(8)}  ` +
-            `${checkAnswer(run)}  ${run.passed ? '✓' : '✗'}`,
-        );
+        jobs.push(async () => {
+          const test = await store.getTest(summary.id);
+          if (!test) return;
+          const frames = await store.readFrames(test);
+          const tally = tallies.get(model) as CheckTally;
+          const checker = models.checker(model, checkerOptions);
+          // The headset asks once when the step gains focus; each repeat asks again.
+          let given: string[] = [];
+          if (mode === 'seen' || mode === 'words') {
+            try {
+              const request = criteriaTestRequest(test, frames, { seen: mode === 'seen' });
+              const asked = await askStepCriteria(checker, request, now);
+              given = asked.criteria;
+              tally.criteriaTimes.push(asked.latencyMs);
+            } catch (error) {
+              console.log(`  ${test.id}: no criteria (${describeError(error)})`);
+            }
+          }
+          const run = await runCheckTest({ checker, now }, test, frames, {
+            criteria: given,
+            quick: options.quick,
+            ...(variant ? { variant } : {}),
+          });
+          await store.addRun(test.id, run);
+          tally.runs++;
+          tally.times.push(run.latencyMs);
+          tally.byExpect[run.expect].runs++;
+          if (run.passed) {
+            tally.passed++;
+            tally.byExpect[run.expect].passed++;
+          }
+          if (!run.result.ok) tally.failed++;
+          else if (falseDone(run.expect, run.result.answer)) tally.falseDone++;
+          console.log(
+            `  ${test.id.slice(0, width).padEnd(width)}  ${model.padEnd(28)} ` +
+              `${seconds(run.latencyMs).padStart(7)}  expects ${expectLabel(run.expect).padEnd(8)}  ` +
+              `${checkAnswer(run)}  ${run.passed ? '✓' : '✗'}`,
+          );
+        });
       }
     }
   }
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(parallel, jobs.length) }, async () => {
+      while (next < jobs.length) await jobs[next++]?.();
+    }),
+  );
 
   console.log(
-    '\nModel                         looks  passed   rate     done  not done  wrong  median time',
+    '\nModel                         looks  passed   rate   done  not done  wrong  unsure  ' +
+      'false done  median    p90',
   );
   for (const [model, t] of tallies) {
     const rate = t.runs ? `${Math.round((100 * t.passed) / t.runs)}%` : '-';
@@ -472,10 +587,17 @@ async function runChecks(
     });
     console.log(
       `${model.padEnd(28)}  ${String(t.runs).padStart(5)}  ${String(t.passed).padStart(6)}  ` +
-        `${rate.padStart(5)}  ${(by[0] ?? '').padStart(7)}  ${(by[1] ?? '').padStart(8)}  ` +
-        `${(by[2] ?? '').padStart(5)}  ${seconds(median(t.times)).padStart(11)}` +
-        `${t.failed ? `  (${t.failed} failed calls)` : ''}`,
+        `${rate.padStart(5)}  ${(by[0] ?? '').padStart(5)}  ${(by[1] ?? '').padStart(8)}  ` +
+        `${(by[2] ?? '').padStart(5)}  ${(by[3] ?? '').padStart(6)}  ` +
+        `${String(t.falseDone).padStart(10)}  ${seconds(median(t.times)).padStart(6)}  ` +
+        `${seconds(quantile(t.times, 0.9)).padStart(6)}${t.failed ? `  (${t.failed} failed calls)` : ''}`,
     );
+    if (t.criteriaTimes.length) {
+      console.log(
+        `${''.padEnd(28)}  criteria asked ${t.criteriaTimes.length} times, median ` +
+          `${seconds(median(t.criteriaTimes))}, p90 ${seconds(quantile(t.criteriaTimes, 0.9))}`,
+      );
+    }
   }
   console.log('\nRuns are saved with their tests; open bench.html to see the frames.');
 }
@@ -513,18 +635,18 @@ function emptyTally(): Tally {
   };
 }
 
-/** The value below which a share `q` of the values lie, nearest rank. */
-function quantile(values: number[], q: number): number {
-  if (!values.length) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.min(sorted.length - 1, Math.ceil(q * sorted.length) - 1)] ?? 0;
-}
-
 function median(values: number[]): number {
   if (!values.length) return 0;
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 ? (sorted[mid] ?? 0) : ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2;
+}
+
+/** The value below which `q` of them fall, nearest rank. */
+function quantile(values: number[], q: number): number {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.ceil(q * sorted.length) - 1)] ?? 0;
 }
 
 const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;

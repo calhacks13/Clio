@@ -19,6 +19,7 @@ import {
   createDepthSampler,
   type DepthSampler,
   depthSensingInit,
+  depthUsageOf,
   disableXrDepthOcclusion,
   preferDepthSensing,
 } from '../adapters/xr/depth-sensing';
@@ -512,7 +513,7 @@ async function enterAr(): Promise<void> {
     ? createDepthSampler(started, {
         space,
         gl: renderer.getContext() as WebGL2RenderingContext,
-        binding: started.depthUsage === 'gpu-optimized' ? renderer.xr.getBinding() : null,
+        binding: depthUsageOf(started) === 'gpu-optimized' ? renderer.xr.getBinding() : null,
         windowFar: EMULATE ? 'infinite' : 'reported',
       })
     : null;

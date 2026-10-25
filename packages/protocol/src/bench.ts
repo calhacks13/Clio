@@ -7,6 +7,7 @@ import {
   StepCheckObjectSchema,
   StepCheckRequestSchema,
   StepCheckResponseSchema,
+  StepCriteriaRequestSchema,
 } from './api';
 import { SlugSchema } from './checks';
 import { ProcedureSchema } from './procedure';
@@ -26,6 +27,7 @@ export const BenchPaths = {
   models: '/api/bench/models',
   plan: '/api/bench/plan',
   check: '/api/bench/check',
+  criteria: '/api/bench/criteria',
   scenarios: '/api/bench/scenarios',
   scenario: (id: string) => `/api/bench/scenarios/${seg(id)}`,
   scenarioView: (id: string, n: number) => `/api/bench/scenarios/${seg(id)}/views/${n}`,
@@ -62,6 +64,9 @@ export const BenchPlanRequestSchema = PlanRequestSchema.extend({
   budgetMs: BudgetSchema.optional(),
 });
 export const BenchCheckRequestSchema = StepCheckRequestSchema.extend({
+  model: ModelNameSchema.optional().describe('Defaults to the planner model'),
+});
+export const BenchCriteriaRequestSchema = StepCriteriaRequestSchema.extend({
   model: ModelNameSchema.optional().describe('Defaults to the planner model'),
 });
 
@@ -230,10 +235,11 @@ export const BenchJudgeRequestSchema = z.object({ model: ModelNameSchema.optiona
 // Watcher tests: data/bench/checks/<id>/
 
 export const BenchCheckExpectSchema = z
-  .enum(['done', 'not_done', 'wrong'])
+  .enum(['done', 'not_done', 'wrong', 'unsure'])
   .describe(
     'done: the watcher must say done. not_done: it must not say done (unsure passes). ' +
-      'wrong: it must not say done, and must say what the learner did instead',
+      'wrong: it must not say done, and must say what the learner did instead. ' +
+      'unsure: the frame cannot tell (hidden, out of view, blurred): it must say unsure',
   );
 
 const FrameFileSchema = z.object({ file: z.string(), mimeType: ImagePayloadSchema.shape.mimeType });
@@ -284,6 +290,10 @@ export const BenchCheckRunSchema = z.object({
   id: z.string(),
   createdAt: z.iso.datetime(),
   model: z.string(),
+  variant: z
+    .string()
+    .optional()
+    .describe('How it was asked when not as the headset asks, e.g. "thinking minimal"'),
   latencyMs: z.number().nonnegative(),
   expect: BenchCheckExpectSchema.describe('The expectation it was graded against'),
   result: z.discriminatedUnion('ok', [
@@ -332,6 +342,7 @@ export const BenchCheckTestRunRequestSchema = z.object({ model: ModelNameSchema.
 export type BenchModelsResponse = z.infer<typeof BenchModelsResponseSchema>;
 export type BenchPlanRequest = z.input<typeof BenchPlanRequestSchema>;
 export type BenchCheckRequest = z.input<typeof BenchCheckRequestSchema>;
+export type BenchCriteriaRequest = z.input<typeof BenchCriteriaRequestSchema>;
 export type BenchGrade = z.infer<typeof BenchGradeSchema>;
 export type BenchVerdict = z.infer<typeof BenchVerdictSchema>;
 export type BenchJudgement = z.infer<typeof BenchJudgementSchema>;

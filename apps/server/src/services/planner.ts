@@ -1,9 +1,10 @@
-import type { ImagePayload, PlanStage, Procedure, StepCheckRequest } from '@clio/protocol';
+import type { ImagePayload, PlanStage, Procedure } from '@clio/protocol';
 
 // The planner port: one model call that turns a goal (plus camera views) into plan JSON. The
 // server validates, retries and stores the result (plan-service.ts); implementations only talk to
-// the model. The same model also checks single steps for the headset's step watcher
-// (step-check.ts). Tests use a scripted fake; production uses gemini-planner.ts.
+// the model. A parallel stage rest (plan-rest.ts) makes several such calls, each for one part.
+// Tests use a scripted fake; production uses gemini-planner.ts. The step watcher's checks have a
+// port of their own (step-check.ts).
 
 export interface PlannerRequest {
   goal: string;
@@ -71,6 +72,4 @@ export interface Planner {
   readonly model: string;
   /** Returns the model's raw JSON text: a new plan, or (for revisions) the remaining steps. */
   draft(request: PlannerRequest): Promise<string>;
-  /** Judges from camera views whether one step looks done. Returns the model's raw JSON text. */
-  checkStep?(request: StepCheckRequest): Promise<string>;
 }

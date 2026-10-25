@@ -181,6 +181,24 @@ describe('LiveTracker', () => {
     expect(live.live).toBe(false);
   });
 
+  it('starts on a session without depth sensing, whose depthUsage throws', () => {
+    // The tracker did not answer in time, so the session never asked for depth sensing: the spec
+    // has depthUsage throw then, and start() runs before the app's first frame.
+    const { live } = setup();
+    const refusing = Object.defineProperty(session(), 'depthUsage', {
+      get() {
+        throw new DOMException('Depth sensing is not enabled', 'InvalidStateError');
+      },
+    });
+    expect(() =>
+      live.start(
+        { session: refusing, space: {} as XRReferenceSpace, features: [] } as XrRuntime,
+        renderer,
+      ),
+    ).not.toThrow();
+    live.stop();
+  });
+
   it('tells the tracker what the step shows, once per change, and again on a new connection', async () => {
     const { live, sockets, start, enter } = setup();
     const connected = live.connect();

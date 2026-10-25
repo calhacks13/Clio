@@ -341,27 +341,61 @@ A step is done when one of these says so:
 **The step watcher** is the coach's second pair of eyes. Gemini Live only takes a turn when the
 learner speaks; camera frames never prompt it. So a step finished in silence would go unnoticed.
 While a step has focus and nobody has spoken for 1 s, the watcher asks `POST /api/plans/check`
-(the planner's model, Robotics-ER 2) about it, and asks again 1 s after each answer, about every
-2.5 s. Each question carries:
+(the planner's model, Robotics-ER 2) about it, and asks again after each answer. Each question
+carries:
 - a fresh 1024 px frame, and the frame taken when the step gained focus, so the model compares
   the start with now (how Robotics-ER is trained to detect success);
 - the step's text and `doneWhen`;
 - what the step's objects look like (each show item's description, else the object's detector
-  query, else its name) and its mistake rules' messages, as mix-ups that look like success.
+  query, else its name) and its mistake rules' messages, as mix-ups that look like success;
+- the step's criteria.
+
+**Criteria.** When a step gains focus, the watcher asks `POST /api/plans/criteria` once, with the
+frame from the step's start: the done-when split into 2 to 4 things a camera can confirm in one
+view. Together they say what the done-when says and nothing more: the end state on the right
+object ("cup B's liquid is blue-green"), which object it must be when a look-alike is near ("the
+bottle in hand has a pink cap, not a blue one"), and what the step must leave as it was ("cup C
+is still purple"). Never an amount from the instruction or where the tools are: a learner may
+still hold the bottle once the step is done. They take about 1.5 s; the first look waits for them
+(at most 4 s) and looks go without them if asking fails. Every look judges each criterion (yes,
+no or unsure, and what it saw), and the server holds a `done` back unless all are met: one not
+met makes it `not_done`, one it could not see makes it `unsure`. Criteria never turn another
+answer into a done. One set left out "off the shelf", and the model's own verdict caught it.
 
 The model points at the object the learner is acting on and checks it is the right one, so the
 milk doesn't pass for the yogurt drink. It answers `done`, `not_done` or `unsure` (unsure when the
-object is out of view, blurred or hidden), a short observation, `progress` (0 to 100), `wrong`
-when the learner did something else ("picked up the milk, not the yogurt drink"), and the object
-that decided it. It thinks at level low, about 1.6 s an answer: on our hard cases minimal was
-0.5 s faster but once took the dropper for the knife and called that step done.
+object is out of view, blurred or hidden, whatever other clues say), a short observation,
+`progress` (0 to 100), `wrong` when the learner did something else ("picked up the milk, not the
+yogurt drink"), the criteria as judged, and the object that decided it.
 
-Two answers in a row must agree before the coach hears anything. Two `done`s: the coach gets the
-frame and "[app] Step watcher: … looks done (what it saw)", and decides; the watcher then leaves
-the step alone for 20 s. Two answers that say the learner did something else: the coach gets the
-frame and what went wrong, in words, and decides whether to correct them (once per 20 s a step).
-The watcher suggests; it never completes a step. After 3 failures in a row it pauses for 30 s.
-Every answer is recorded, with its progress, what went wrong and the deciding object's point.
+**Quick and careful looks.** While the step looks far from done, looks are quick: the request says
+`quick`, the model thinks at minimal (about 1.5 s with criteria), and the next look starts 1 s
+after each answer. Once an answer says the step is close (`progress` 50 or more) or finds it
+done or wrong, looks turn careful (thinking low, about 2 s), and a second one starts 1 s after
+the first, before it answers: a fresh answer arrives about every 1.2 s instead of every 2.5 to
+3 s. A look that finds something starts the next one at once. Answers count in the order their
+looks started; a late answer from an older look is recorded but not counted. On our 30 hard
+cases minimal was as right as low on done, not done and wrong, but it filled in what a hand hid
+("cup A is still purple") and once took the dropper for the knife and called that step done, so
+a quick look only notices; it never confirms.
+
+Two answers in a row must agree before the coach hears anything, and the second is always a
+careful one. Two `done`s: the coach gets the frame and the criteria it saw met ("[app] Step
+watcher: … looks done: cup B's liquid is blue-green; cup C's liquid is still purple"), and
+decides; the watcher then leaves the step alone for 20 s. Two answers that say the learner did
+something else: the coach gets the frame, what went wrong and the criteria not met with what was
+seen ("Not met: cup C's liquid is still purple (saw: blue-green)"), and decides whether to correct
+them (once per 20 s a step). The watcher suggests; it never completes a step. After 3 failures in
+a row it pauses for 30 s. Every answer is recorded, with its progress, what went wrong, the
+criteria and the deciding object's point.
+
+Measured on the planner bench's 30 hard watcher tests ([planner-bench.md](planner-bench.md)),
+directional: the old watcher (low, no criteria) passed 87 of 90 looks, the careful look now 30 of
+30 and the quick look 29 of 30; none ever said done when it wasn't. Simulated on the measured
+latencies, a done reaches the coach a median 4.1 to 5.2 s after it shows, against 6.6 s before:
+4.1 s when the step is visibly under way for a few seconds first (pouring, carrying), 5.2 s when
+the done state appears between two looks. It costs a fifth more looks a minute (23 against 19),
+most of them quick ones.
 
 Every look also names any hazard in view, whatever the step: a knife, something hot, broken glass.
 One answer is enough: the coach gets the frame and "[app] Step watcher: a possible hazard …", and
@@ -422,9 +456,12 @@ changing it.
   recorded when the lesson starts. A refined outline is op `refine`, next to a `plan.refined`
   annotation (`{ from, to, kept }`); a dropped one is a `plan.refine_dropped` with the reason.
 - Every step-watcher answer is an `annotation` with label `step.watch` and data `{ stepId,
-  verdict, observation, model, latencyMs, progress?, wrong?, evidence?, hazard? }`, where
-  `evidence` is `{ label, point }` with the point in 0..1 of the newest frame. A failed look
-  records `error`.
+  verdict, observation, model, latencyMs, progress?, wrong?, evidence?, hazard?, criteria?,
+  quick? }`, where `evidence` is `{ label, point }` with the point in 0..1 of the newest frame,
+  `criteria` is `[{ text, met, seen? }]` (`met` is `yes`, `no` or `unsure`) and `quick` marks a
+  quick look. A failed look records `error`.
+- A step's criteria are an `annotation` with label `step.criteria` and data `{ stepId, criteria,
+  model, latencyMs }`, recorded when they arrive; when asking fails, `{ stepId, error }`.
 - Every narration is a `coach.narration` event, recorded when it reaches the model, not when it's
   queued. A stale briefing dropped at delivery is an `annotation` with label
   `coach.narration_dropped`.

@@ -978,6 +978,27 @@ label.check input {
   color: var(--bad);
 }
 
+.tag.expect-unsure {
+  color: var(--muted);
+}
+
+.criteria {
+  display: block;
+  font-size: 0.85em;
+}
+
+.criterion.yes {
+  color: var(--ok);
+}
+
+.criterion.no {
+  color: var(--bad);
+}
+
+.criterion.unsure {
+  color: var(--warn);
+}
+
 .check-test.open {
   border: 1px solid var(--accent);
   border-radius: 0.5rem;

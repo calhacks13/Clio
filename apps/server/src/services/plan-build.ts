@@ -453,7 +453,7 @@ export function writerObjects(
 }
 
 /** One step with the objects it may use, validated as a plan of its own. */
-export function checkStep(
+export function checkWrittenStep(
   step: unknown,
   objects: readonly unknown[],
   ctx: PlanContext,
@@ -543,7 +543,7 @@ export function mergeParallelRest(
   const used = new Set(kept.flatMap(stepObjectRefs));
   const steps = outline.lines.map((line, i) => {
     const step = written[i]?.step;
-    const checked = step ? checkStep({ ...step, id: line.id }, objects, ctx) : null;
+    const checked = step ? checkWrittenStep({ ...step, id: line.id }, objects, ctx) : null;
     if (!checked?.ok)
       return outlineStep({ id: line.id, instruction: line.instruction, doneWhen: line.doneWhen });
     for (const id of stepObjectRefs(checked.step)) used.add(id);

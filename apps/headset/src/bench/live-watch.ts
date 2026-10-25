@@ -1,6 +1,7 @@
 import type {
   NormalizedPoint,
   Procedure,
+  StepCheckCriterion,
   StepCheckObject,
   StepCheckRequest,
   StepCheckVerdict,
@@ -37,6 +38,8 @@ export interface WatchLook {
   evidence?: { label: string; point: NormalizedPoint };
   /** A danger near the hands it noticed, whatever the step, e.g. "kitchen knife by cup A". */
   hazard?: string;
+  /** The step's criteria as this look judged them. */
+  criteria?: StepCheckCriterion[];
   error?: string;
   latencyMs?: number;
   model?: string;

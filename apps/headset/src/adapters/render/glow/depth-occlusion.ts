@@ -9,6 +9,9 @@ import {
   Vector4,
   type WebGLRenderer,
 } from 'three';
+import { depthUsageOf } from '../../xr/depth-sensing';
+import { projectionNear } from '../../xr/near-plane';
+import { frameGuard } from '../frame-guard';
 
 // Real surfaces in front of the glow hide it, from the headset's own depth map (WebXR depth
 // sensing, gpu-optimized: a texture per frame, one layer per eye on Quest). Each glow fragment is
@@ -24,6 +27,14 @@ import {
 // plane, capped by the object's size. A fragment then fades only where the real surface is nearer
 // than that front by more than the margin. A surface behind (a hand-held object's table) never
 // cuts it. Hands are hidden by their own depth-only occluders as well (hand-occluders.ts).
+//
+// Up close the map is not to be trusted: Meta gives the Quest 3 depth estimate a minimum
+// effective range of about 20 cm and calls anything nearer unreliable (not merely noisy), so a
+// learner leaning over the table would see the glow vanish behind phantom surfaces. A read nearer
+// than DEPTH_MIN_RELIABLE_M (or not a number) is unknown, never a surface in front, and the test
+// fades out as the glow itself comes near: fully on beyond OCCLUSION_NEAR_ON_M, off nearer than
+// OCCLUSION_NEAR_OFF_M, where anything that could hide it (nearer by the margin and falloff) would
+// have to be inside the unreliable range. Hands still hide it up close, through their occluders.
 //
 // three.js's own occlusion (the depth map drawn into the depth buffer) stays off in the primary
 // demo (disableXrDepthOcclusion): it hid the outline behind the object itself.
@@ -43,6 +54,31 @@ export const OCCLUSION_MARGIN_M = 0.05;
 export const OCCLUSION_FALLOFF_M = 0.03;
 /** Points inside the silhouette read for the object's front. */
 export const INTERIOR_POINTS = 16;
+/**
+ * Meta's documented minimum effective range of the Quest 3 depth estimate (m): a read nearer than
+ * this is taken as unknown.
+ */
+export const DEPTH_MIN_RELIABLE_M = 0.2;
+/**
+ * The test is off for a glow nearer than this (m): a surface hiding it would be nearer than the
+ * margin and falloff allow, inside the unreliable range...
+ */
+export const OCCLUSION_NEAR_OFF_M = DEPTH_MIN_RELIABLE_M + OCCLUSION_MARGIN_M + OCCLUSION_FALLOFF_M;
+/** ...and fully on beyond this (m), fading in between. */
+export const OCCLUSION_NEAR_ON_M = OCCLUSION_NEAR_OFF_M + 0.12;
+
+/** Where the depth map can be trusted (m): reads from minM; the test fades in from offM to onM. */
+export interface NearRange {
+  minM: number;
+  offM: number;
+  onM: number;
+}
+
+export const QUEST_NEAR_RANGE: Readonly<NearRange> = Object.freeze({
+  minM: DEPTH_MIN_RELIABLE_M,
+  offM: OCCLUSION_NEAR_OFF_M,
+  onM: OCCLUSION_NEAR_ON_M,
+});
 
 export type WindowFar = 'reported' | 'infinite';
 export type OcclusionViz = 'off' | 'depth' | 'diff';
@@ -66,6 +102,11 @@ export const occlusionSettings = {
   softness: 0.15,
   /** The object's own surface as a tilted plane (true) or a single depth (false). */
   plane: true,
+  /** Reads nearer than this are unknown (m). */
+  minDepth: DEPTH_MIN_RELIABLE_M,
+  /** The test is off for a glow nearer than nearOff and fully on beyond nearOn (m). */
+  nearOff: OCCLUSION_NEAR_OFF_M,
+  nearOn: OCCLUSION_NEAR_ON_M,
 };
 
 /** The shader variant: no depth map, a texture array (one layer per eye), or a plain texture. */
@@ -74,10 +115,30 @@ export type DepthVariant = (typeof DepthVariant)[keyof typeof DepthVariant];
 
 const VIZ_CODE: Record<OcclusionViz, number> = { off: 0, depth: 1, diff: 2 };
 
+const smoothstep = (edge0: number, edge1: number, x: number): number => {
+  if (!(edge1 > edge0)) return x < edge0 ? 0 : 1;
+  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+};
+
+/** A decoded read (m) the test may use: null when unknown, not a number, or nearer than `minM`. */
+export function reliableDepth(meters: number | null, minM = DEPTH_MIN_RELIABLE_M): number | null {
+  return meters !== null && meters >= minM && meters < 1e4 ? meters : null;
+}
+
+/**
+ * How much of the depth test applies to a glow at planar depth `depth` (m): 0 nearer than
+ * range.offM, 1 beyond range.onM, a smoothstep between (as the shader).
+ */
+export function nearFade(depth: number, range: NearRange = QUEST_NEAR_RANGE): number {
+  return smoothstep(range.offM, range.onM, depth);
+}
+
 /**
  * How much of the glow a real surface hides (0 none, 1 all): `glowDepth` and `realDepth` are
  * planar depths (m) in the depth view, `front` how far the object's own front is in front of the
- * glow (m); the same smoothstep as the shader.
+ * glow (m); the same test as the shader, near range included: an unreliable read hides nothing,
+ * and the test fades out for a glow up close.
  */
 export function glowOcclusion(
   glowDepth: number,
@@ -85,10 +146,12 @@ export function glowOcclusion(
   front = 0,
   margin = OCCLUSION_MARGIN_M,
   falloff = OCCLUSION_FALLOFF_M,
+  range: NearRange = QUEST_NEAR_RANGE,
 ): number {
-  if (realDepth === null || !(realDepth > 0)) return 0;
-  const t = Math.min(1, Math.max(0, (glowDepth - realDepth - front - margin) / falloff));
-  return t * t * (3 - 2 * t);
+  const real = reliableDepth(realDepth, range.minM);
+  if (real === null) return 0;
+  const t = Math.min(1, Math.max(0, (glowDepth - real - front - margin) / falloff));
+  return t * t * (3 - 2 * t) * nearFade(glowDepth, range);
 }
 
 /**
@@ -144,8 +207,8 @@ export function decodeDepth(raw: number, near: number, far: number, rawToMeters:
 /**
  * GLSL shared by the glow's two stages and the debug overlay (needs GLOW_DEPTH > 0): the depth
  * map's uniforms, realDepthAt(texel), depthTexel(world) and depthGap(world) = the point's
- * planar depth in the depth view
- * minus the real surface's there (m), or NO_DEPTH where the map says nothing.
+ * planar depth in the depth view minus the real surface's there (m), or NO_DEPTH where the map
+ * says nothing it can be trusted with (a read nearer than depthMinM is unknown).
  */
 export const depthChunk = /* glsl */ `
   #if GLOW_DEPTH == 1
@@ -159,6 +222,7 @@ export const depthChunk = /* glsl */ `
   uniform float depthNear;
   uniform float depthFar;
   uniform float depthRawToMeters;
+  uniform float depthMinM;
   uniform float depthOn;
   uniform float depthFlipY;
   const float NO_DEPTH = -1e9;
@@ -171,7 +235,8 @@ export const depthChunk = /* glsl */ `
     #endif
   }
 
-  // The real surface's planar depth (m) at a texel of the depth map, or 0 when unknown.
+  // The real surface's planar depth (m) at a texel of the depth map, or 0 when unknown: no
+  // value, not a number, or nearer than the sensor's reliable range (reliableDepth in TS).
   float realDepthAt(ivec2 p) {
     p = clamp(p, ivec2(0), depthSize() - 1);
     #if GLOW_DEPTH == 1
@@ -179,11 +244,16 @@ export const depthChunk = /* glsl */ `
     #else
       float raw = texelFetch(depthMap, p, 0).r;
     #endif
-    if (depthNear <= 0.0) return raw * depthRawToMeters;
-    if (raw <= 0.0 || raw >= 1.0) return 0.0;
-    return depthFar > 0.0
-      ? (2.0 * depthNear * depthFar) / (depthFar + depthNear - (2.0 * raw - 1.0) * (depthFar - depthNear))
-      : depthNear / (1.0 - raw);
+    float d;
+    if (depthNear <= 0.0) {
+      d = raw * depthRawToMeters;
+    } else {
+      if (raw <= 0.0 || raw >= 1.0) return 0.0;
+      d = depthFar > 0.0
+        ? (2.0 * depthNear * depthFar) / (depthFar + depthNear - (2.0 * raw - 1.0) * (depthFar - depthNear))
+        : depthNear / (1.0 - raw);
+    }
+    return d >= depthMinM && d < 1e4 ? d : 0.0;
   }
 
   // Where a world point lands in the depth map, in texels (xy), and its planar depth there (z);
@@ -233,6 +303,8 @@ export interface DepthUniforms {
   depthNear: { value: number };
   depthFar: { value: number };
   depthRawToMeters: { value: number };
+  /** Reads nearer than this are unknown (m). */
+  depthMinM: { value: number };
   depthOn: { value: number };
   depthFlipY: { value: number };
   /** The test itself (window.__occlusion.setDepth); the map stays bound for the overlays. */
@@ -243,6 +315,9 @@ export interface DepthUniforms {
   occlusionFilter: { value: number };
   occlusionSoftness: { value: number };
   occlusionPlane: { value: number };
+  /** The test fades out between these planar depths of the glow (m). */
+  occlusionNearOff: { value: number };
+  occlusionNearOn: { value: number };
 }
 
 export function depthUniforms(): DepthUniforms {
@@ -254,6 +329,7 @@ export function depthUniforms(): DepthUniforms {
     depthNear: { value: 0 },
     depthFar: { value: 0 },
     depthRawToMeters: { value: 1 },
+    depthMinM: { value: DEPTH_MIN_RELIABLE_M },
     depthOn: { value: 0 },
     depthFlipY: { value: 0 },
     occlusionOn: { value: 1 },
@@ -263,6 +339,8 @@ export function depthUniforms(): DepthUniforms {
     occlusionFilter: { value: 0 },
     occlusionSoftness: { value: 0.15 },
     occlusionPlane: { value: 1 },
+    occlusionNearOff: { value: OCCLUSION_NEAR_OFF_M },
+    occlusionNearOn: { value: OCCLUSION_NEAR_ON_M },
   };
 }
 
@@ -284,7 +362,22 @@ export interface EyeStats {
   /** The real depth (m) the occlusion test compares against there: glow centre - front. */
   referenceM: number | null;
   interiorKnown: number;
+  /** Interior reads with no value (0, 1 or none), and those nearer than the reliable range. */
+  interiorInvalid: number;
+  interiorTooNear: number;
+  /** Reads nearer than this were unknown (m). */
+  minReliableM: number;
+  /** How much of the test applied at the glow's centre (0: off, up close; 1: all of it). */
+  nearFade: number | null;
   t: number;
+}
+
+/** What the binder saw on the last frame it drew a glow (window.__occlusion.stats.render). */
+export interface RenderStats {
+  /** The eye cameras' near plane (m), from their projection: what clips content up close. */
+  nearPlaneM: number | null;
+  /** The last frame's depth map, per eye: bound, or why not. */
+  eyes: [string, string];
 }
 
 /** A glow's points to probe: its quad's world matrix and interior uv points. */
@@ -318,15 +411,18 @@ export class XrDepthOcclusion {
   /** Set by window.__occlusion.probe(): eyes still to measure. */
   probeEyes = 0;
   probeTarget: ProbeTarget | null = null;
-  readonly stats: { eyes: (EyeStats | null)[]; poses: unknown[] } = {
+  readonly stats: { eyes: (EyeStats | null)[]; poses: unknown[]; render: RenderStats } = {
     eyes: [null, null],
     poses: [null, null],
+    render: { nearPlaneM: null, eyes: ['not drawn', 'not drawn'] },
   };
 
   constructor(private readonly windowFar: WindowFar = 'reported') {}
 
   bind(renderer: WebGLRenderer, camera: Camera, u: DepthUniforms): DepthVariant {
     u.depthOn.value = 0;
+    // A map is valid during its own frame only: never leave the last one bound.
+    u.depthMap.value.sourceTexture = null;
     u.depthFlipY.value = occlusionSettings.flipY ? 1 : 0;
     u.occlusionMargin.value = occlusionSettings.margin;
     u.occlusionOn.value = occlusionSettings.depth ? 1 : 0;
@@ -334,32 +430,43 @@ export class XrDepthOcclusion {
     u.occlusionFilter.value = FILTER_CODE[occlusionSettings.filter];
     u.occlusionSoftness.value = occlusionSettings.softness;
     u.occlusionPlane.value = occlusionSettings.plane ? 1 : 0;
+    u.depthMinM.value = occlusionSettings.minDepth;
+    u.occlusionNearOff.value = occlusionSettings.nearOff;
+    u.occlusionNearOn.value = occlusionSettings.nearOn;
     const { xr } = renderer;
     if (!xr.isPresenting || this.failures >= MAX_FAILURES) return DepthVariant.None;
-    const session = xr.getSession();
-    const frame = xr.getFrame();
-    const space = xr.getReferenceSpace();
-    if (!session || !frame || !space || session.depthUsage !== 'gpu-optimized') {
-      return DepthVariant.None;
-    }
     const cameras = xr.getCamera().cameras;
     let eye = -1;
     for (let i = 0; i < cameras.length; i++) if (cameras[i] === camera) eye = i;
     if (eye < 0) return DepthVariant.None;
+    const { render } = this.stats;
+    render.nearPlaneM = projectionNear(camera.projectionMatrix.elements);
+    const skip = (reason: string): DepthVariant => {
+      if (eye < 2) render.eyes[eye] = reason;
+      return DepthVariant.None;
+    };
     try {
+      const session = xr.getSession();
+      const frame = xr.getFrame();
+      const space = xr.getReferenceSpace();
+      if (!session || !frame || !space) return skip('no frame');
+      // Not session.depthUsage: it throws on a session without depth sensing.
+      if (depthUsageOf(session) !== 'gpu-optimized') return skip('no gpu depth');
       if (renderer.info.render.frame !== this.renderFrame) {
         this.renderFrame = renderer.info.render.frame;
         this.views = frame.getViewerPose(space)?.views ?? [];
         this.infos.fill(undefined);
       }
       const view = this.views[eye];
-      if (!view) return DepthVariant.None;
+      if (!view) return skip('no view');
       let info = this.infos[eye];
       if (info === undefined) {
         info = xr.getBinding().getDepthInformation(view) as GpuDepthInfo | null;
         this.infos[eye] = info;
       }
-      if (!info || info.isValid === false || !info.texture) return DepthVariant.None;
+      if (!info) return skip('no info');
+      if (info.isValid === false) return skip('invalid');
+      if (!info.texture) return skip('no texture');
       const array = info.textureType !== 'texture';
       this.configure(renderer, info.texture, array);
       u.depthMap.value.sourceTexture = info.texture;
@@ -382,6 +489,7 @@ export class XrDepthOcclusion {
       u.depthFar.value = planes.far;
       u.depthRawToMeters.value = planes.rawToMeters;
       u.depthOn.value = 1;
+      if (eye < 2) render.eyes[eye] = 'bound';
       if (this.probeEyes & (1 << eye)) {
         this.probeEyes &= ~(1 << eye);
         this.stats.eyes[eye] = this.prober.measure(renderer, u, array, view.eye, info, this);
@@ -407,11 +515,13 @@ export class XrDepthOcclusion {
       }
       return array ? DepthVariant.Array : DepthVariant.Plain;
     } catch (err) {
+      u.depthOn.value = 0;
+      u.depthMap.value.sourceTexture = null;
       this.failures++;
       if (this.failures === MAX_FAILURES) {
         console.warn(`glow occlusion off: ${err instanceof Error ? err.message : String(err)}`);
       }
-      return DepthVariant.None;
+      return skip('error');
     }
   }
 
@@ -482,14 +592,22 @@ class DepthProber {
     const raw = this.read(renderer, u, array);
     const near = u.depthNear.value;
     const far = u.depthFar.value;
-    const real = (i: number) => {
+    const minM = u.depthMinM.value;
+    const decoded = (i: number) => {
       if (!known[i] || !raw) return null;
       const r = raw[i];
       return r === undefined || r < 0 ? null : decodeDepth(r, near, far, u.depthRawToMeters.value);
     };
+    // As the shader reads it: unknown nearer than the reliable range.
+    const real = (i: number) => reliableDepth(decoded(i), minM);
     const gaps: (number | null)[] = [];
+    let interiorInvalid = 0;
+    let interiorTooNear = 0;
     for (let i = 1; i < PROBE_POINTS; i++) {
       const g = glowDepths[i];
+      const d = decoded(i);
+      if (known[i] && d === null) interiorInvalid++;
+      else if (d !== null && reliableDepth(d, minM) === null) interiorTooNear++;
       const r = real(i);
       gaps.push(g != null && r !== null ? g - r : null);
     }
@@ -509,6 +627,17 @@ class DepthProber {
       frontM: front,
       referenceM: glowCenter !== null && front !== null ? glowCenter - front : null,
       interiorKnown,
+      interiorInvalid,
+      interiorTooNear,
+      minReliableM: minM,
+      nearFade:
+        glowCenter !== null
+          ? nearFade(glowCenter, {
+              minM,
+              offM: u.occlusionNearOff.value,
+              onM: u.occlusionNearOn.value,
+            })
+          : null,
       t: performance.now(),
     };
   }
@@ -700,12 +829,14 @@ export class DepthOverlay {
     this.object.renderOrder = 100;
     this.object.visible = false;
     this.object.onBeforeRender = (renderer, _scene, camera) => {
-      const variant = this.occlusion?.bind(renderer, camera, this.uniforms) ?? 0;
-      if (variant !== DepthVariant.None && material.defines.GLOW_DEPTH !== variant) {
-        material.defines.GLOW_DEPTH = variant;
-        material.needsUpdate = true;
-      }
-      if (variant === DepthVariant.None) this.uniforms.depthOn.value = 0;
+      frameGuard.run('depth overlay', () => {
+        const variant = this.occlusion?.bind(renderer, camera, this.uniforms) ?? 0;
+        if (variant !== DepthVariant.None && material.defines.GLOW_DEPTH !== variant) {
+          material.defines.GLOW_DEPTH = variant;
+          material.needsUpdate = true;
+        }
+        if (variant === DepthVariant.None) this.uniforms.depthOn.value = 0;
+      });
       material.uniformsNeedUpdate = true;
     };
   }
@@ -716,7 +847,9 @@ export const depthOverlay = new DepthOverlay();
 
 /**
  * window.__occlusion for DevTools on the headset: live switches, a probe of what the depth test
- * sees, and the stats it collected. `occlusion` is the primary glow's reader.
+ * sees, and the stats it collected (stats.eyes after a probe, stats.render every frame a glow
+ * draws: the near plane in use and whether each eye had a map; stats.frames: frames that threw).
+ * `occlusion` is the primary glow's reader.
  */
 export function installOcclusionDebug(occlusion: XrDepthOcclusion): void {
   depthOverlay.occlusion = occlusion;
@@ -758,7 +891,21 @@ export function installOcclusionDebug(occlusion: XrDepthOcclusion): void {
       occlusionSettings.plane = on;
       return api.state();
     },
-    /** 'off'; 'depth': the map over the whole view; 'diff': the glow tinted by the depth test. */
+    /** Depth reads nearer than this are unknown (m; Meta's reliable range starts at 0.2). */
+    setMinDepth(m: number) {
+      occlusionSettings.minDepth = Math.max(0, m);
+      return api.state();
+    },
+    /** The test is off for a glow nearer than `off` and fully on beyond `on` (m); 0, 0: never off. */
+    setNearRange(off: number, on: number) {
+      occlusionSettings.nearOff = Math.max(0, off);
+      occlusionSettings.nearOn = Math.max(occlusionSettings.nearOff, on);
+      return api.state();
+    },
+    /**
+     * 'off'; 'depth': the map over the whole view; 'diff': the glow tinted by the depth test
+     * (yellow where it is too near for the test, which is then off).
+     */
     setViz(mode: OcclusionViz) {
       occlusionSettings.viz = mode;
       depthOverlay.object.visible = mode === 'depth';
@@ -777,6 +924,8 @@ export function installOcclusionDebug(occlusion: XrDepthOcclusion): void {
         settings: { ...occlusionSettings },
         eyes: occlusion.stats.eyes,
         poses: occlusion.stats.poses,
+        render: { ...occlusion.stats.render, eyes: [...occlusion.stats.render.eyes] },
+        frames: { ...frameGuard.health, byStep: { ...frameGuard.health.byStep } },
       };
     },
   };

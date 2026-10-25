@@ -1,6 +1,7 @@
 import { Group, Quaternion } from 'three';
 import { recentLogs } from '../../../core/log';
 import { rotateVec } from '../../../core/math';
+import { drawOnTop } from '../on-top';
 import type { PresentContext, Presenter } from '../presenter';
 import { makeText, setText } from '../text';
 
@@ -17,6 +18,8 @@ export class HudPresenter implements Presenter {
 
   constructor() {
     this.object.add(this.text);
+    // Over the glow and the hands (on-top.ts).
+    drawOnTop(this.object);
   }
 
   update(ctx: PresentContext): void {

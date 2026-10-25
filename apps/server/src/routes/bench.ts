@@ -6,6 +6,7 @@ import {
   type BenchCheckTestListResponse,
   BenchCheckTestRunRequestSchema,
   BenchCheckTestUpdateSchema,
+  BenchCriteriaRequestSchema,
   BenchJudgeRequestSchema,
   type BenchModelsResponse,
   BenchPaths,
@@ -19,6 +20,7 @@ import {
   BenchScenarioUpdateSchema,
   type PlanStage,
   type StepCheckResponse,
+  type StepCriteriaResponse,
 } from '@clio/protocol';
 import { Hono } from 'hono';
 import type { BenchDeps, ServerDeps } from '../deps';
@@ -26,8 +28,9 @@ import { ApiError, geminiNotConfigured, invalidId, notFound } from '../errors';
 import { isSafeId } from '../ids';
 import { describeError } from '../log';
 import { type BenchModels, benchPlan, judgeRun, scenarioPlanRequest } from '../services/bench';
-import { askStepCheck, expectLabel, runCheckTest } from '../services/bench-checks';
+import { criteriaTestRequest, expectLabel, runCheckTest } from '../services/bench-checks';
 import type { PlanRequestBody } from '../services/plan-service';
+import { askStepCheck, askStepCriteria } from '../services/step-check-service';
 import { limitBody, parseBody, safeId } from './request';
 
 // The planner bench (docs/planner-bench.md): the laptop page and `pnpm bench` put the planner in
@@ -90,9 +93,21 @@ export function benchRoutes({ bench, planRest, now, logger, limits }: ServerDeps
   app.post(BenchPaths.check, limitBody(limits.imageBytes), async (c) => {
     const models = gemini();
     const { model, ...body } = await parseBody(c, BenchCheckRequestSchema, 'bench check request');
-    const planner = models.planner(model ?? models.plannerModel);
-    const { answer, latencyMs } = await askStepCheck(planner, body, now);
-    return c.json({ ...answer, model: planner.model, latencyMs } satisfies StepCheckResponse);
+    const checker = models.checker(model ?? models.plannerModel);
+    const { answer, latencyMs } = await askStepCheck(checker, body, now);
+    return c.json({ ...answer, model: checker.model, latencyMs } satisfies StepCheckResponse);
+  });
+
+  app.post(BenchPaths.criteria, limitBody(limits.imageBytes), async (c) => {
+    const models = gemini();
+    const { model, ...body } = await parseBody(
+      c,
+      BenchCriteriaRequestSchema,
+      'bench criteria request',
+    );
+    const checker = models.checker(model ?? models.plannerModel);
+    const { criteria, latencyMs } = await askStepCriteria(checker, body, now);
+    return c.json({ criteria, model: checker.model, latencyMs } satisfies StepCriteriaResponse);
   });
 
   app.get(BenchPaths.scenarios, async (c) =>
@@ -257,9 +272,14 @@ export function benchRoutes({ bench, planRest, now, logger, limits }: ServerDeps
     const { model } = await parseBody(c, BenchCheckTestRunRequestSchema, 'watcher test run', {
       emptyAsObject: true,
     });
-    const planner = models.planner(model ?? models.plannerModel);
-    if (!planner.checkStep) throw geminiNotConfigured('Step checks');
-    const run = await runCheckTest({ planner, now }, test, await on().checks.readFrames(test));
+    const checker = models.checker(model ?? models.plannerModel);
+    const frames = await on().checks.readFrames(test);
+    // As the headset asks: the step's criteria first, from its start view, then the look.
+    const criteria = await askStepCriteria(checker, criteriaTestRequest(test, frames), now).then(
+      (asked) => asked.criteria,
+      () => [],
+    );
+    const run = await runCheckTest({ checker, now }, test, frames, { criteria });
     await on().checks.addRun(test.id, run);
     const said = run.result.ok ? run.result.answer.verdict : `failed (${run.result.code})`;
     logger.info(

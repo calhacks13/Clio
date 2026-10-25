@@ -3,21 +3,24 @@ import {
   type PlanResponse,
   StepCheckRequestSchema,
   type StepCheckResponse,
+  StepCriteriaRequestSchema,
+  type StepCriteriaResponse,
 } from '@clio/protocol';
 import { Hono } from 'hono';
 import type { ServerDeps } from '../deps';
-import { geminiNotConfigured, notFound, upstreamFailed } from '../errors';
-import { describeError } from '../log';
+import { geminiNotConfigured, notFound } from '../errors';
 import { generatePlan } from '../services/plan-service';
-import { parseStepCheck, type StepCheckAnswer } from '../services/step-check';
+import { askStepCheck, askStepCriteria } from '../services/step-check-service';
 import { limitBody, parseBody, safeId } from './request';
 
 // AI-generated lesson plans: written by the planner at runtime, stored in <data>/plans/. The
-// planner's model also checks single steps from camera views for the headset's step watcher.
+// planner's model also checks single steps from camera views for the headset's step watcher, and
+// splits a step's done-when state into criteria when the step gains focus.
 
 export function planRoutes({
   planner,
   planRest,
+  checker,
   procedures,
   now,
   logger,
@@ -42,23 +45,17 @@ export function planRoutes({
   });
 
   app.post('/api/plans/check', limitBody(limits.imageBytes), async (c) => {
-    if (!planner?.checkStep) throw geminiNotConfigured('Step checks');
+    if (!checker) throw geminiNotConfigured('Step checks');
     const body = await parseBody(c, StepCheckRequestSchema, 'step check request');
-    const started = now().getTime();
-    let text: string;
-    try {
-      text = await planner.checkStep(body);
-    } catch (error) {
-      throw upstreamFailed(`Step check failed: ${describeError(error)}`);
-    }
-    const latencyMs = Math.max(0, now().getTime() - started);
-    let answer: StepCheckAnswer;
-    try {
-      answer = parseStepCheck(text);
-    } catch (error) {
-      throw upstreamFailed(`Step check gave an unusable answer: ${describeError(error)}`);
-    }
-    return c.json({ ...answer, model: planner.model, latencyMs } satisfies StepCheckResponse);
+    const { answer, latencyMs } = await askStepCheck(checker, body, now);
+    return c.json({ ...answer, model: checker.model, latencyMs } satisfies StepCheckResponse);
+  });
+
+  app.post('/api/plans/criteria', limitBody(limits.imageBytes), async (c) => {
+    if (!checker) throw geminiNotConfigured('Step criteria');
+    const body = await parseBody(c, StepCriteriaRequestSchema, 'step criteria request');
+    const { criteria, latencyMs } = await askStepCriteria(checker, body, now);
+    return c.json({ criteria, model: checker.model, latencyMs } satisfies StepCriteriaResponse);
   });
 
   app.get('/api/plans/:id', async (c) => {

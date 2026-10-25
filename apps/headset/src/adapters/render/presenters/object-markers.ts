@@ -1,6 +1,7 @@
 import { Group, Mesh, MeshBasicMaterial, SphereGeometry, TorusGeometry, Vector3 } from 'three';
 import type { Text } from 'troika-three-text';
 import type { HighlightStyle } from '../../../domain/events';
+import { drawOnTop } from '../on-top';
 import type { PresentContext, Presenter } from '../presenter';
 import { makeText, setText } from '../text';
 
@@ -97,6 +98,9 @@ export class ObjectMarkersPresenter implements Presenter {
     ring.rotation.x = -Math.PI / 2;
     const label = makeText({ size: 0.022, anchorX: 'center', anchorY: 'bottom' });
     label.position.set(0, labelHeight(radius), 0);
+    // After the glows, and over the hands (on-top.ts): a name stays readable as a hand works.
+    label.renderOrder = 11;
+    drawOnTop(label);
     group.add(dot, ring, label);
     this.object.add(group);
     const marker = { group, dot, ring, label, ringMaterial, radius };

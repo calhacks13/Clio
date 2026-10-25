@@ -58,7 +58,13 @@ sends:
 - `before`: a frame kept from the moment the step got focus, so the model can compare then and now;
 - `objects`: what the step's objects look like, from its outlines' descriptions and then the
   declared objects it targets (their `tracking.query`, description or label);
-- `confusions`: the step's mistake messages, which are often mix-ups that look like success.
+- `confusions`: the step's mistake messages, which are often mix-ups that look like success;
+- `criteria`: the step's done-when split into things a camera can confirm, asked once when the
+  step gets focus, with the `before` frame (`/api/bench/criteria`, as the headset's
+  `/api/plans/criteria`). Looks go without them if asking fails.
+
+The live watch always asks careful looks, one at a time; the headset's quick looks and its second
+look in flight near the end ([coach-plan.md](coach-plan.md)) are measured from the command line.
 
 The panel:
 - shows the step, its done-when, the last answer with the frame it judged (and the point that
@@ -66,6 +72,8 @@ The panel:
   time on this step and in all;
 - shows an answer with `wrong` in red ("Wrong: picked up the milk, not the yogurt drink"), counts
   the wrong answers in the header and the log, and never counts a wrong answer as done;
+- shows each criterion as the look judged it: ✓ met, ✗ not met with what the model saw instead,
+  ? when it could not see it;
 - with **Move on by itself** (on by default) completes a step after 1, 2 or 3 answers of "done" in
   a row (2 by default); turn it off to see the headset's behavior, where the watcher only suggests
   and the coach or **Mark done** decides;
@@ -88,13 +96,40 @@ step started and the frame it judged, the goal, the step (id, instruction, done-
 and mix-ups it was asked with, what the watcher answered, and the answer it should have given:
 - **done**: it must say done;
 - **not done**: it must not say done (unsure passes);
-- **wrong**: it must not say done, and must say what the learner did instead (`wrong`).
+- **wrong**: it must not say done, and must say what the learner did instead (`wrong`);
+- **unsure**: the frame can't tell (a hand hides the result, it is out of view, blurred or dark):
+  it must say unsure.
 
 This is how a failure seen live, like the milk taken for the yogurt drink and called done, becomes
 a regression test. **Watcher tests** under the scenarios lists them with their passes per model.
 Open one to see its frames and answers, change the answer it should get, or run it with the ticked
-models; **Run all tests** runs every test with every ticked model. Each answer is saved with the
-test.
+models; **Run all tests** runs every test with every ticked model. A run asks as the headset's
+careful look does: the step's criteria first, from the test's `before` frame, then the look. Each
+answer is saved with the test, with its criteria as judged and, when it was asked another way,
+how (its `variant`, e.g. "quick" or "no criteria").
+
+### Painted watcher tests
+
+`apps/server/scripts/check-tests.ts` paints 30 hard watcher tests with `gemini-3-pro-image` and
+saves them: first-person views of the pH table, a fridge, a desk and a basil pot, each "now" view
+painted from its "before" view so both show the same scene. The specs, with what each view shows,
+are in `scripts/check-test-specs.ts`: clearly done, not done, half done (two of three cups,
+grasped but not lifted, mid-pour), the wrong cup or look-alike (milk for the yogurt drink, the red
+cap for the blue, the grey mug), a listed mistake (base in the control cup too), unlabeled cups,
+a step back from the table, readable but dim frames, a hand hiding the result, out of view, and a
+dark blurred frame (the last two made with ffmpeg from a done view). 12 should say done, 7 not
+done, 8 wrong and 3 unsure.
+
+```bash
+cd apps/server
+npx tsx --env-file-if-exists=../../.env scripts/check-tests.ts            # paint what's missing, save
+npx tsx --env-file-if-exists=../../.env scripts/check-tests.ts --redo ph-b-teal --no-save
+```
+
+Scenes are cached in `data/bench/check-scenes` with the prompt that made them, so a run paints only
+what is missing or changed, and a scene painted again repaints those made from it. Look at every
+scene before trusting its test: two measuring-jug tests were dropped because the milk stood above
+500 mL in both. Needs ffmpeg.
 
 ## Scenarios and judging
 
@@ -123,9 +158,12 @@ pnpm bench --staged --thinking first=low --thinking rest=high
 pnpm bench --staged --thinking first=minimal --repeat 3   # how stage first was picked
 pnpm bench ph-lesson-cup-a-already-pink-knife-on-the-table --no-judge
 pnpm bench --list
-pnpm bench --checks                            # every watcher test, the planner model
+pnpm bench --checks                            # every watcher test as the headset's careful look
 pnpm bench --checks --model gemini-robotics-er-2-preview --model gemini-3.8-flash --repeat 3
 pnpm bench --checks milk-taken-for-the-yogurt-drink
+pnpm bench --checks --quick --parallel 2       # as its quick look (minimal thinking)
+pnpm bench --checks --criteria none            # as the watcher asked before criteria
+pnpm bench --checks --thinking check=minimal --criteria words --thinking criteria=low
 pnpm bench --checks --list
 ```
 
@@ -135,14 +173,20 @@ written, judged passes, expectations met, and the median time until the lesson c
 the plan is complete. A second table has the same per model and per scene: expectations met, the
 other issues the judge named, the median and p90 of both times, and what a lesson cost: the
 planner calls and their input, output and thought tokens (median; the judge's calls are not
-counted). `--staged` saves both stages as runs and judges the plan the learner ends up with:
-stage rest's steps, with the warnings of both stages, as the coach heard them. Stage rest is
-written in parallel ([coach-plan.md](coach-plan.md)); each run prints its parts' times and how the
-review read the scene, and `--rest single` writes it in one call instead.
-`--thinking <stage>=<level>` tries another thinking level for a stage, or for a part of the
-parallel rest (`review`, `step`, `objects`); `default` is the model's own. With `--checks` the
-table has looks, passes, the pass rate, passes by expected answer (done, not done, wrong) and the
-median time.
+counted; cached input in brackets). `--staged` saves both stages as runs and judges the plan the
+learner ends up with: stage rest's steps, with the warnings of both stages, as the coach heard
+them. Stage rest is written in parallel ([coach-plan.md](coach-plan.md)); each run prints its
+parts' times and how the review read the scene, and `--rest single` writes it in one call
+instead. `--thinking <stage>=<level>` tries another thinking level for a stage, or for a part of
+the parallel rest (`review`, `step`, `objects`); `default` is the model's own. With `--checks` the
+table has looks, passes, the pass rate, passes by expected answer (done, not done, wrong, unsure),
+how often it said done when it wasn't (false done) and the median and p90 time of a look. Each
+test's criteria are asked first, from its `before` frame, as the headset does, once per test and
+repeat, and their time is reported on a line of their own; `--criteria` asks them another way
+(`words`: from the step's words alone; `inline`: the model writes its own in every answer;
+`none`: no criteria).
+`--thinking check=<level>` and `criteria=<level>` change the two calls' thinking, `--quick` asks
+quick looks, and `--parallel <n>` asks n looks at a time (2 kept latencies steady).
 
 `apps/server/scripts/stage1-timing.ts` times stage first alone, streamed, on the saved scenarios:
 how long the model thinks before it writes, when the first step starts and when the answer ends, the
@@ -204,7 +248,8 @@ data/bench/plans/                         the plans the bench's runs wrote
 data/bench/checks/<id>/check.json         a watcher test: step, hints, expected answer
 data/bench/checks/<id>/before-<n>.jpg     the frames from when the step started
 data/bench/checks/<id>/now-<n>.jpg        the frames it judged
-data/bench/checks/<id>/runs/<run>.json    each answer: model, timing, answer or error, passed
+data/bench/checks/<id>/runs/<run>.json    each answer: model, variant, timing, answer or error, passed
+data/bench/check-scenes/<name>.jpg        the painted scenes, each with the recipe that made it
 data/bench/deleted/                       deleted scenarios and watcher tests, moved aside
 ```
 
@@ -215,7 +260,7 @@ data/bench/deleted/                       deleted scenarios and watcher tests, m
 | contract       | `packages/protocol/src/bench.ts`                                         |
 | routes         | `apps/server/src/routes/bench.ts` (`/api/bench/*`)                       |
 | runs and judge | `apps/server/src/services/bench.ts`, `bench-judge.ts`, `gemini-judge.ts` |
-| watcher tests  | `apps/server/src/services/bench-checks.ts`                               |
+| watcher tests  | `apps/server/src/services/bench-checks.ts`, `scripts/check-tests.ts`     |
 | storage        | `apps/server/src/storage/bench-store.ts`, `bench-check-store.ts`         |
 | CLI            | `apps/server/scripts/bench.ts`                                           |
 | scenes         | `apps/server/scripts/bench-scene.ts`, `scripts/bench-scenes/`            |

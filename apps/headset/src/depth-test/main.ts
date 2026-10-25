@@ -5,6 +5,7 @@ import {
   type DepthSampler,
   type DepthSamplerStats,
   depthSensingInit,
+  depthUsageOf,
   disableXrDepthOcclusion,
   type WindowFar,
 } from '../adapters/xr/depth-sensing';
@@ -292,7 +293,7 @@ async function enterAr(): Promise<void> {
   await renderer.xr.setSession(started);
   const space = renderer.xr.getReferenceSpace();
   if (!space) throw new Error('No local-floor reference space.');
-  const gpu = started.depthUsage === 'gpu-optimized';
+  const gpu = depthUsageOf(started) === 'gpu-optimized';
   const gl = renderer.getContext() as WebGL2RenderingContext;
   const binding = gpu ? renderer.xr.getBinding() : null;
   sampler = createDepthSampler(started, { space, gl, binding, windowFar: WINDOW_FAR });
@@ -301,9 +302,9 @@ async function enterAr(): Promise<void> {
   // Set before anything else that could throw, so the frame loop runs regardless.
   session = started;
   probe = createDepthProbe(started, space);
-  readings.mode = started.depthUsage ?? null;
+  readings.mode = depthUsageOf(started);
   console.info(
-    `[depth] features ${JSON.stringify(started.enabledFeatures ?? [])}, usage ${started.depthUsage}, format ${started.depthDataFormat}, binding ${binding ? 'three' : 'none'}`,
+    `[depth] features ${JSON.stringify(started.enabledFeatures ?? [])}, usage ${readings.mode}, format ${readings.mode ? started.depthDataFormat : 'none'}, binding ${binding ? 'three' : 'none'}`,
   );
 }
 
