@@ -343,6 +343,71 @@ def test_objects_mode_outline_comes_from_the_segmenter(vision, segmenter):
     assert cup["box"] == pytest.approx(list(norm_box(JEV)), abs=2 / 960)
 
 
+def anchored_lesson(vision, segmenter=None):
+    """A connection's Modes in objects mode on the cup (jev never answers), streaming `texture`
+    moved `shift` px right; FakeVision takes `things`, then the scenes laid out after them."""
+    jev, executor, clock, segmenting = FakeIdentifier(), ManualExecutor(), Clock(), ManualExecutor()
+    refresher = Refresher(segmenter, segmenting, clock=clock) if segmenter else None
+
+    def session() -> TrackerSession:
+        settings = SessionSettings()
+        return TrackerSession(
+            vision, jev, executor, settings, clock, segmenter=segmenter, refresher=refresher
+        )
+
+    modes = Modes(StreamTracker(vision), session)
+    modes.command(ObjectSet([CUP]))
+
+    def play(seq: int, shift: int = 0, things: tuple = ()) -> dict:
+        clock.t += 1 / 15
+        picture = np.ascontiguousarray(np.roll(texture(), shift, axis=1))
+        ok, jpeg = cv2.imencode(".jpg", picture)  # gray, so BGR or RGB alike
+        assert ok
+        vision.scenes.append(list(things))
+        header = FrameHeader(seq, 1000.0 + 66 * seq, 960, 720)
+        (cup,) = modes.step(header, jpeg.tobytes())["detections"]
+        return cup
+
+    return SimpleNamespace(modes=modes, play=play, segmenting=segmenting, jev=jev)
+
+
+def test_an_anchor_far_from_every_frame_is_carried_from_the_nearest_by_the_cameras_motion(vision):
+    from clio_tracker.track import Anchor
+
+    lesson = anchored_lesson(vision)
+    for seq in range(3):  # the camera pans: the picture moves 40 px right a frame
+        lesson.play(seq, 40 * seq, (Thing(at(100 + 40 * seq), A),))
+    # ER's frame was captured 200 ms before frame 0: no frame is near it, frame 0 the nearest.
+    lesson.modes.command(Anchor("cup", 1000.0 - 200, norm_box(at(100))))
+    lesson.play(3, 120, (Thing(at(220), A),))
+    cup = lesson.play(4, 160, (Thing(at(260), A),))
+    # Carried by the camera from frame 0 to now, it lands on the cup (where it was boxed, it
+    # would not).
+    assert cup["found"] and cup["source"] == "er"
+    assert cup["box"] == pytest.approx(list(norm_box(at(260))), abs=4 / 960)
+
+
+def test_an_anchors_box_is_cut_out_of_its_own_frame(vision, segmenter):
+    from clio_tracker.track import Anchor
+
+    lesson = anchored_lesson(vision, segmenter)
+    for seq in range(3):
+        lesson.play(seq, 0, (Thing(at(100), A),))
+    lesson.modes.command(Anchor("cup", 1000.0 + 66, norm_box(JEV)))  # boxed on frame 1
+    vision.scenes.append([Thing(at(100), A)])  # frame 1 again, encoded for the anchor
+    lesson.play(3, 0, (Thing(at(100), A),))
+    assert len(lesson.segmenting.pending) == 1  # the anchor's keyframe
+    lesson.segmenting.run_all()
+    ((_, _, box),) = segmenter.calls
+    assert box == pytest.approx(JEV)
+    for seq in range(4, 8):
+        cup = lesson.play(seq, 0, (Thing(at(100), A),))
+    session = lesson.modes.objects.session
+    assert session._objects["cup"].follower.reference_seq == 2  # the session's count of frame 1
+    assert cup["found"] and cup["source"] == "er"
+    assert bounds(cup["outline"]) == pytest.approx(list(norm_box(JEV)), abs=2 / 960)
+
+
 def test_the_session_carries_on_without_the_segmenter_once_its_executor_is_shut_down(
     vision, segmenter, caplog
 ):
