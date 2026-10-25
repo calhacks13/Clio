@@ -117,6 +117,8 @@ pnpm bench                                     # every scenario, the planner mod
 pnpm bench --model gemini-3.5-flash-lite --model gemini-3.8-flash --slow
 pnpm bench --tag hazard --repeat 3             # how steady are the answers?
 pnpm bench --staged                            # as the headset plans: stage first, then rest
+pnpm bench --staged --rest single              # stage rest in one call, as before the parallel rest
+pnpm bench --staged --thinking review=medium --thinking step=low   # the parallel rest's parts
 pnpm bench --staged --thinking first=low --thinking rest=high
 pnpm bench --staged --thinking first=minimal --repeat 3   # how stage first was picked
 pnpm bench ph-lesson-cup-a-already-pink-knife-on-the-table --no-judge
@@ -130,11 +132,17 @@ pnpm bench --checks --list
 No server is needed; the CLI reads `.env` like the server. It saves runs with their scenarios (or
 tests), so the page shows them too. For scenarios it ends with a table per model: runs, plans
 written, judged passes, expectations met, and the median time until the lesson can start and until
-the plan is complete. `--staged` saves both stages as runs and judges the plan the learner ends up
-with: stage rest's steps, with the warnings of both stages, as the coach heard them.
-`--thinking <stage>=<level>` tries another thinking level for a stage (`default` is the model's
-own). With `--checks` the table has looks, passes, the pass rate, passes by expected answer (done,
-not done, wrong) and the median time.
+the plan is complete. A second table has the same per model and per scene: expectations met, the
+other issues the judge named, the median and p90 of both times, and what a lesson cost: the
+planner calls and their input, output and thought tokens (median; the judge's calls are not
+counted). `--staged` saves both stages as runs and judges the plan the learner ends up with:
+stage rest's steps, with the warnings of both stages, as the coach heard them. Stage rest is
+written in parallel ([coach-plan.md](coach-plan.md)); each run prints its parts' times and how the
+review read the scene, and `--rest single` writes it in one call instead.
+`--thinking <stage>=<level>` tries another thinking level for a stage, or for a part of the
+parallel rest (`review`, `step`, `objects`); `default` is the model's own. With `--checks` the
+table has looks, passes, the pass rate, passes by expected answer (done, not done, wrong) and the
+median time.
 
 `apps/server/scripts/stage1-timing.ts` times stage first alone, streamed, on the saved scenarios:
 how long the model thinks before it writes, when the first step starts and when the answer ends, the
@@ -145,6 +153,30 @@ cd apps/server
 npx tsx --env-file-if-exists=../../.env scripts/stage1-timing.ts --thinking minimal
 npx tsx --env-file-if-exists=../../.env scripts/stage1-timing.ts fridge-yogurt-drink-beside-the-milk --thinking low --repeat 5
 ```
+
+## Synthetic scenes
+
+Scenes from a real camera are better, but they stay on the laptop that saved them. On a laptop
+without them, `apps/server/scripts/bench-scene.ts` makes a scene from a written spec in
+`apps/server/scripts/bench-scenes/`: the goal, the expectations, the tags, and a prompt per view.
+It asks `gemini-3-pro-image` for headset-like views (first person, looking slightly down), view 1
+from its prompt and each later view from view 1 so they show the same scene, and resizes them to
+1024 x 768 JPEG as the headset sends (macOS `sips`). Look at the views before saving: the model
+moves, adds and relabels things, and a view that doesn't show the setup the expectations assume
+is worth generating again (`--view 2` redoes one view).
+
+```bash
+cd apps/server
+npx tsx --env-file-if-exists=../../.env scripts/bench-scene.ts generate scripts/bench-scenes/fridge.json
+open ../../data/bench/generated/fridge          # look at them first
+npx tsx --env-file-if-exists=../../.env scripts/bench-scene.ts save scripts/bench-scenes/fridge.json
+```
+
+The specs recreate the fridge scene and the photo pH scene (cups B and C purple) the handoff
+describes, and add a half-done TV remote: one old battery still in, the other on the desk, new
+blue batteries in a tray and a loose look-alike. Its loose battery was meant to look thinner
+(AAA); neither Robotics-ER 2 nor gemini-3.8-flash sees it as different, so that expectation tests
+perception the planner doesn't have on these views.
 
 ## Scenes worth trying
 
@@ -186,4 +218,5 @@ data/bench/deleted/                       deleted scenarios and watcher tests, m
 | watcher tests  | `apps/server/src/services/bench-checks.ts`                               |
 | storage        | `apps/server/src/storage/bench-store.ts`, `bench-check-store.ts`         |
 | CLI            | `apps/server/scripts/bench.ts`                                           |
+| scenes         | `apps/server/scripts/bench-scene.ts`, `scripts/bench-scenes/`            |
 | page           | `apps/headset/bench.html`, `apps/headset/src/bench/`                     |

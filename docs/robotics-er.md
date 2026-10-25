@@ -91,8 +91,10 @@ of the card's rows is from its first version.
   look (it named a drawn knife on 2 of 8 looks, and invented none in the fridge scenes).
 - **Half a goal at minimal thinking**: the quick stage 1 outline sometimes stopped after the
   goal's first part (4 of 10 pH outlines tested only the acid). Saying that the outline covers
-  every part of the goal, in order, fixed it (7 of 7). It still doesn't read cup A's pink as the
-  acid test already done, so no pH plan keeps the spare cup C as the control.
+  every part of the goal, in order, fixed it (7 of 7). Planning, it still didn't read cup A's
+  pink as the acid test already done, so no pH plan kept the spare cup C as the control; asked
+  alone what is done, it did. With that reading written first (`done`, `todo`), 8 of 9 photo pH
+  plans put the base in cup B and kept cup C ([coach-plan.md](coach-plan.md)).
 - **Out of view**: models answered `not_done` rather than `unsure` when the target was cropped
   out of the frame; the step check says that hidden or out-of-view means unsure.
 - **Masks**: not supported. The documented mask prompt returned boxes or nothing, and base64 PNG
