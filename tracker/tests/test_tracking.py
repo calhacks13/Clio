@@ -682,6 +682,21 @@ def test_a_textureless_object_is_outlined_by_its_mask_carried_by_the_camera(visi
     assert run.tracker.wants_refresh
 
 
+def test_the_last_sighting_is_bytetracks_box_not_the_followers(vision):
+    """What a missed target coasts from, carried by the camera, is ByteTrack's box: the
+    follower's (a part inside it, in objects mode) must not become the whole's predicted box."""
+    follower = FakeFollower()
+    run = locked_following(vision, follower)
+    inside = followed((130, 340, 190, 404))
+    follower.answers.append(inside)
+    s = run.frame(Thing(at(100), A), Thing(at(500), B))
+    np.testing.assert_array_equal(s.measured, inside.box)
+    np.testing.assert_array_equal(run.tracker._fresh.box, at(100))
+    s = run.frame(Thing(at(500), B), camera=pan(10))  # missed, the follower silent: it coasts
+    assert s.state == "coasting"
+    np.testing.assert_allclose(run.tracker._fresh.box, at(110))
+
+
 def test_jevs_keyframe_replaces_a_refresh_of_a_newer_frame(vision):
     """jev confirms the object about a frame from before a refresh that has landed since (the
     refresh may have cut the wrong thing): its keyframe, cut on jev's older frame, still takes

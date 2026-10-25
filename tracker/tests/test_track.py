@@ -674,6 +674,30 @@ def test_a_part_target_gets_the_streams_follower_and_its_keyframe_outlines_the_p
     assert bounds(answer["outline"]) == pytest.approx(list(norm_box(DOOR)), abs=2 / 960)
 
 
+def test_a_part_target_after_the_whole_takes_the_follower_cleared(segmented):
+    """jev names one part of the object the stream follows: the part's tracker gets the
+    stream's follower cleared, so the whole's mask never stands for the part, not even before
+    the part's keyframe is cut."""
+    s = segmented
+    s.vision.scenes.extend([[Thing(FRIDGE, A)]] * 20)
+    seg_step(s, 0)
+    s.tracker.command(parse_command(part_target(0, FRIDGE, part=False)))  # the whole fridge
+    s.executor.run_all()
+    for seq in range(1, 4):
+        seg_step(s, seq)
+    assert s.tracker.part is None and s.tracker.follower.reference_seq == 0  # the fridge's mask
+    s.tracker.command(parse_command(part_target(3, DOOR)))  # now its door
+    assert s.tracker.part is not None and s.tracker.part.follower is s.tracker.follower
+    assert not s.tracker.follower.active
+    answer = seg_step(s, 4)  # the door's keyframe is still being cut
+    assert answer["box"] == pytest.approx(list(norm_box(DOOR)), abs=1e-3)
+    s.executor.run_all()
+    for seq in range(5, 10):
+        answer = seg_step(s, seq)
+    assert s.tracker.follower.reference_seq == 3
+    assert bounds(answer["outline"]) == pytest.approx(list(norm_box(DOOR)), abs=2 / 960)
+
+
 BIG_DOOR = (120.0, 320.0, 220.0, 420.0)  # a part of the fridge 100 px across
 
 
