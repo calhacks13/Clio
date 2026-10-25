@@ -17,8 +17,8 @@ times slower.
 ## The three loops
 
 1. **Identify (jev, about once a second, unchanged).** jev names and boxes the target on a
-   frame. It decides *what*. Its box is loose and rounded to 0.01, so it never defines the shape.
-2. **Segment (SAM 2.1, on jev's frame and on demand).** The *keyframe mask*: SAM 2.1 prompted
+   frame. It decides _what_. Its box is loose and rounded to 0.01, so it never defines the shape.
+2. **Segment (SAM 2.1, on jev's frame and on demand).** The _keyframe mask_: SAM 2.1 prompted
    with jev's box on the very frame jev looked at. The same model re-segments the newest frame,
    prompted with the followed box, whenever the follower is in doubt (at most about five times a
    second with Small). Both run in a background thread; the stream never waits for them.

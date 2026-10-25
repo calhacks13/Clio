@@ -4,7 +4,7 @@
 
 **Goal:** The tracker's outline becomes SAM 2.1's mask of the target, carried to every frame by a region follower, with a refresh whenever the follower is in doubt, behind a `--segmenter` flag that leaves today's tracker untouched when off.
 
-**Architecture:** Three loops at three rates. jev names and boxes the target about once a second (unchanged). A `Segmenter` (SAM 2.1 through `transformers`, on MPS) turns jev's box into a *keyframe mask* on jev's frame and re-segments the newest frame when asked, both through a background `Refresher` so no frame waits. A `RegionFollower` carries the latest mask to each frame by the camera's motion (motion.py) plus the part's own motion from Lucas-Kanade points inside the mask, and reports doubt when points die or its box disagrees with ByteTrack's. `ObjectTracker` and `PartTracker` prefer the follower's mask when it is confident and fall back to today's behaviour otherwise.
+**Architecture:** Three loops at three rates. jev names and boxes the target about once a second (unchanged). A `Segmenter` (SAM 2.1 through `transformers`, on MPS) turns jev's box into a _keyframe mask_ on jev's frame and re-segments the newest frame when asked, both through a background `Refresher` so no frame waits. A `RegionFollower` carries the latest mask to each frame by the camera's motion (motion.py) plus the part's own motion from Lucas-Kanade points inside the mask, and reports doubt when points die or its box disagrees with ByteTrack's. `ObjectTracker` and `PartTracker` prefer the follower's mask when it is confident and fall back to today's behaviour otherwise.
 
 **Tech Stack:** Python 3.12, numpy, OpenCV, PyTorch 2.14 on MPS, `transformers>=5.20` (`Sam2Model`, `Sam2Processor`), the existing tracker package (`tracker/src/clio_tracker`), pytest.
 
@@ -46,6 +46,7 @@
 
 **Interfaces:**
 - Produces:
+
   ```python
   SEGMENTERS = {"sam2.1-small": "facebook/sam2.1-hiera-small", "sam2.1-large": "facebook/sam2.1-hiera-large"}
 
@@ -66,6 +67,7 @@
   def load_segmenter(name: str, device: str = "auto") -> Segmenter | None: ...
   def clean_mask(logits: np.ndarray) -> np.ndarray: ...   # 3x3 morphological open on logits > 0, returned as logits (+10 inside, -10 outside)
   ```
+
   `mask_in_box` returns a `MaskCrop` (vision.py) over the box grown by 10% per side and clipped to the frame, `scale` chosen so the crop's longer side is at most 256 pixels, `origin` in frame pixels, logits > 0 inside; `None` when fewer than 16 frame pixels are inside the mask. `FakeSegmenter` (conftest) fills the box at scale 1 and records every call in `self.calls: list[tuple[int, int, tuple]]`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -110,16 +112,13 @@ def test_settings_segmenter_default_and_validation():
         load_settings({"CLIO_TRACKER_SEGMENTER": "sam3"})
 ```
 Add a `segmenter` fixture in conftest returning `FakeSegmenter()`.
-
 - [ ] **Step 2: Run them to make sure they fail**
 
 Run: `cd tracker && uv run pytest -q tests/test_segment.py`
 Expected: FAIL with `ModuleNotFoundError: clio_tracker.segment` / `AttributeError: segmenter`.
-
 - [ ] **Step 3: Implement `segment.py`, the setting and the flag**
 
 `Sam2Segmenter.encode`: `Sam2Processor(images=rgb)` then `model.get_image_embeddings(pixel_values)` under a `threading.Lock`, on `device` (`mps` when available, as `vision._pick_device`). `mask_in_box`: `model(image_embeddings=..., input_boxes=[[[x1, y1, x2, y2]]], multimask_output=True)`, pick `iou_scores.argmax()`, `processor.post_process_masks([...], [(h, w)], binarize=False)` to logits at frame size, cut the grown box, `clean_mask`, downscale to 256 on the long side with `cv2.INTER_LINEAR`, return the `MaskCrop`. `load_segmenter` maps names; `auto` tries `import transformers`. `config.load_settings` validates against `("auto", "none", *SEGMENTERS)`. `cli` adds `--segmenter` to the shared option loop and to `overrides`.
-
 - [ ] **Step 4: Run the tests and ruff**
 
 Run: `cd tracker && uv sync --extra coreml && uv run pytest -q tests/test_segment.py -m "not model" && uv run pytest -q tests/test_segment.py -m model && uv run ruff check src tests`
@@ -136,6 +135,7 @@ Expected: all PASS (the model test downloads small on first run; report its time
 **Interfaces:**
 - Consumes: `MaskCrop` (vision.py), `compose`, `warp_box` (motion.py).
 - Produces:
+
   ```python
   @dataclass(frozen=True)
   class FollowParams:
@@ -167,6 +167,7 @@ Expected: all PASS (the model test downloads small on first run; report its time
       def step(self, seq: int, gray: np.ndarray, camera: np.ndarray | None, t: float) -> Followed | None: ...
       def clear(self) -> None: ...
   ```
+
   `step` must be called for every frame in order (also before any reference, so motion is logged like `CameraMotion`). `gray` is the full frame in 8-bit gray. The follower keeps a deque of `(seq, M)` where `M` is the 2x3 frame-pixel transform from the previous frame to this one: its own estimate when confident, else `camera`, else identity. `set_reference` for a `seq` older than the newest logged frame is applied with the composed `M`s after `seq`; a `seq` older than the current reference's is ignored (returns without change). A `step` whose frame size differs from the last clears the follower.
 
 - [ ] **Step 1: Write the failing tests**
@@ -202,11 +203,9 @@ def test_scale_change_is_followed():
 
 Run: `cd tracker && uv run pytest -q tests/test_follow.py`
 Expected: FAIL with `ModuleNotFoundError: clio_tracker.follow`.
-
 - [ ] **Step 3: Implement `follow.py`**
 
 Points: `cv2.goodFeaturesToTrack(gray_small, max_corners, 0.01, 5, mask=warped_mask_small)`; track with `cv2.calcOpticalFlowPyrLK` forward and back (winSize 15, maxLevel 3, as motion.py), keep points with both statuses and forward-backward error under `fb_max_px`; estimate `M` with `estimateAffine2D` (RANSAC, threshold 2.0) when inliers >= `affine_inliers`, else `estimateAffinePartial2D` when >= `min_inliers`, else fall back to `camera` or identity and `confident=False`. Scale `M`'s translation back to frame pixels. Keep `T` = `compose(M, T)` (reference crop pixels to frame pixels, starting from the crop's `origin`/`scale`). Output: warp the reference logits with `cv2.warpAffine` into a crop around `warp_box(reference bounds, T)` at `crop_side`; `confident = inliers >= min_inliers and ratio >= doubt_ratio and in-view share >= in_view`. Re-seed points every `redetect_every` frames or when fewer than `min_inliers` remain.
-
 - [ ] **Step 4: Run the tests and ruff**
 
 Run: `cd tracker && uv run pytest -q tests/test_follow.py && uv run ruff check src tests`
@@ -223,6 +222,7 @@ Expected: PASS.
 **Interfaces:**
 - Consumes: `Segmenter` (Task 1); conftest's `FakeExecutor` (`submit` queues work, `run_all()` runs it) and `FakeClock`.
 - Produces:
+
   ```python
   @dataclass(frozen=True)
   class Refreshed:
@@ -240,6 +240,7 @@ Expected: PASS.
       @property
       def in_flight(self) -> int: ...
   ```
+
   `submit` returns False (and does nothing) when a call is in flight, or when the last submit for any key was under `min_interval_s` ago and this is not a keyframe. A keyframe waits for the in-flight call to finish: it is kept as `pending` and submitted by the next `drain`. Errors from the segmenter are logged once and the `Refreshed` is dropped.
 
 - [ ] **Step 1: Write the failing tests**
@@ -256,7 +257,6 @@ def test_segmenter_error_is_dropped_and_logged(caplog)
 
 Run: `cd tracker && uv run pytest -q tests/test_refresh.py`
 Expected: FAIL with `ModuleNotFoundError: clio_tracker.refresh`.
-
 - [ ] **Step 3: Implement `refresh.py`** with a `queue.SimpleQueue` of results like `session._Ask`, a copy of `rgb` taken at submit, and the segmenter call `segmenter.mask_in_box(segmenter.encode(rgb), box)` in the worker.
 
 - [ ] **Step 4: Run the tests and ruff**
@@ -275,6 +275,7 @@ Expected: PASS.
 **Interfaces:**
 - Consumes: `RegionFollower`, `Followed`, `FollowParams` (Task 2).
 - Produces:
+
   ```python
   # TrackerParams additions
   follow: FollowParams = field(default_factory=FollowParams)
@@ -289,6 +290,7 @@ Expected: PASS.
   @property wants_refresh -> bool        # follower doubted for refresh_after_frames frames, or no reference yet while a target exists
   @property refresh_box -> np.ndarray | None   # the box to prompt with: the follower's last box, else the tracked box
   ```
+
   Rule in `step`: call `follower.step(seq, gray, camera, t)` whenever a follower exists and `gray` is given, every frame. When the target is sighted by ByteTrack and the follower is confident and `iou(followed.box, tracked box) >= follow_agree_iou`, the Sighting uses the follower's box and crop (`self._smooth.sighted(t, followed.box, followed.crop, size)`) and `Sighting.measured` is the follower's box. When coasting, a confident follower still supplies box and crop (the object is followed by its pixels even when YOLOE missed it). Otherwise today's path. `identified(..., mask=crop)` calls `follower.set_reference(seq, crop)` when `crop` is not None; `refreshed` does the same, and a `None` crop counts one frame of doubt.
 
 - [ ] **Step 1: Write the failing tests** (FakeVision scenes as in the existing tests; a `FakeFollower` in the test file that returns a scripted `Followed` per call and records `set_reference` calls)
@@ -308,7 +310,6 @@ def test_no_follower_is_identical_to_before()               # follower None: out
 
 Run: `cd tracker && uv run pytest -q tests/test_tracking.py -k "follower or refresh or identified_with"`
 Expected: FAIL with `TypeError: unexpected keyword argument`.
-
 - [ ] **Step 3: Implement the changes in `tracking.py`** per the Interfaces block; keep `_sighted`'s learning and `_fresh` bookkeeping on ByteTrack's box as today.
 
 - [ ] **Step 4: Run the whole tracking suite and ruff**
@@ -343,7 +344,6 @@ def test_part_without_follower_is_identical_to_before()
 
 Run: `cd tracker && uv run pytest -q tests/test_part.py -k follower`
 Expected: FAIL with `TypeError`.
-
 - [ ] **Step 3: Implement the changes in `part.py`.**
 
 - [ ] **Step 4: Run the part and tracking suites and ruff**
@@ -386,7 +386,6 @@ def test_health_reports_segmenter()                                 # {"segmente
 
 Run: `cd tracker && uv run pytest -q tests/test_track.py tests/test_session.py tests/test_server.py -k "segmenter or refresh or keyframe"`
 Expected: FAIL with `TypeError`.
-
 - [ ] **Step 3: Implement the wiring** per the rule above. In `finder._detection`, when a segmenter is set: `crop = segmenter.mask_in_box(seg_enc, jev_box)` (encode once per request, in the same background encode thread as YOLOE's), then `mask_shape(crop.logits > 0, crop.origin, crop.scale, w, h, box)`; fall back to YOLOE's path when `crop` is None.
 
 - [ ] **Step 4: Run the full suite, ruff, and a real serve**
@@ -418,19 +417,16 @@ def test_swing_scene_truth_narrows()                      # truth width at t = 1
 def test_run_with_fake_segmenter_reports_follow_columns() # run(..., segmenter="fake") on one short scene returns a dict with "refreshes" and "followed" counts
 ```
 Expose a `"fake"` segmenter name in `jitter.load_segmenter_for_jitter(name)` that returns conftest-free `FakeSegmenter` (define a tiny one in jitter.py or import from a new `clio_tracker.fakes` module) so the harness is testable without weights.
-
 - [ ] **Step 2: Run them to make sure they fail**
 
 Run: `cd tracker && uv run pytest -q tests/test_jitter.py -k "slide or swing or fake_segmenter"`
 Expected: FAIL.
-
 - [ ] **Step 3: Implement**, adding two columns to `measure`/`table`: `refreshes` (segmenter calls per sequence) and `followed` (share of found frames whose outline came from the follower).
 
 - [ ] **Step 4: Run the harness before and after, and record**
 
 Run: `cd tracker && uv run clio-tracker jitter --segmenter none --json /tmp/jitter-none.json` and `uv run clio-tracker jitter --segmenter sam2.1-small --json /tmp/jitter-sam.json` (each a few minutes; run in the background and wait).
 Expected: both complete. Put the two summary tables (whole scenes, part scenes, the two moving-part scenes on their own) in `tracker/README.md` under Measured, with the per-frame `ms` so the follower's cost is visible, and say which outline (follower or YOLOE) each scene mostly drew.
-
 - [ ] **Step 5: Full suite and ruff**
 
 Run: `cd tracker && uv run pytest -q -m "not model" && uv run ruff check src tests`
