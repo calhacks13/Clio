@@ -471,14 +471,16 @@ learner's partial transcripts arrive (until 1.2 s after the last); `quiet` other
 without a microphone (the scripted coach) and once the session stops. `OverlayModel` keeps it in
 `OverlaySnapshot.voice`. The lesson card keeps quiet listening visually silent, with no status
 mark or duplicate transcript; a disconnected voice shows an actionable Done-button message.
-The card fits its measured text in both dimensions. `panel-placement.ts` checks its actual
-world-space corners for both eyes against all followed objects (not only lit targets) and detected
-nearby furniture, including before a lesson starts. `panel-motion.ts` holds both position and
-orientation in the room during ordinary head movement. Card orientation uses world-up and the
-head's heading, without pitch or roll, including throughout recovery. Only a sustained loss of
-reading reach starts a damped movement toward a captured target; each sample and its swept path must remain
-clear. Async text resizing rechecks clearance immediately. The presentation-only reserve above
-worktops does not change recorded room geometry.
+The card fits its measured text in both dimensions. `panel-placement.ts` places it beside the
+step's lit objects in view (above them, else below, right or left, at their depth and inside a
+comfortable view), or in a gaze slot in the lower or upper periphery when none is in view; it keeps
+the side it is on while that stays clear. It checks the card's actual world-space corners for both
+eyes against all followed objects (not only lit targets), and against detected nearby furniture in
+the gaze slots, including before a lesson starts. `panel-motion.ts` follows lazily: the card rests
+while its target stays within 4 degrees (beside objects) or 10 degrees (gaze slot), then glides on
+a critically damped spring until it arrives. Orientation is upright and level, turned only to face
+the eye. Async text resizing rechecks clearance. The presentation-only reserve above worktops does
+not change recorded room geometry.
 
 ### 5.8 Recording (`domain/recording`)
 

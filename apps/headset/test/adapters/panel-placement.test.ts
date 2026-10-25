@@ -3,12 +3,14 @@ import {
   isInstructionPanelClear,
   PANEL_DISTANCE,
   PANEL_MASK_GAP,
-  placeInstructionPanel,
+  PANEL_VIEW,
+  panelTarget,
 } from '../../src/adapters/render/panel-placement';
 import type { PresentContext } from '../../src/adapters/render/presenter';
 import {
   add,
   composePose,
+  distance,
   identityPose,
   invertPose,
   type Pose,
@@ -18,14 +20,17 @@ import {
   sub,
   transformPoint,
   type Vec3,
-  yawOnly,
 } from '../../src/core/math';
 import type { ObjectEstimate } from '../../src/domain/world/object-registry';
 import { billboard, outlinePoint } from '../../src/domain/world/outline';
 import type { Placement } from '../../src/domain/world/placement';
 
-const WIDTH = 0.3;
-const TOP = WIDTH / 2;
+const WIDTH = 0.28;
+const HEIGHT = 0.16;
+const TOP = 0.15;
+const turn = (degrees: number, axis: Vec3 = [0, 1, 0]) =>
+  quatFromAxisAngle(axis, (degrees * Math.PI) / 180);
+
 const rectMask = (center: Vec3, w = 0.2, h = 0.2): Placement => ({
   center,
   outline: {
@@ -93,16 +98,64 @@ function estimate(id: string, position: Vec3, radius = 0.03): ObjectEstimate {
   };
 }
 
+/** A followed object the step lights, with its live mask (identity workspace). */
+function lit(ctx: PresentContext, id: string, center: Vec3, w = 0.12, h = 0.1): Placement {
+  const mask = rectMask(center, w, h);
+  ctx.objects = [...ctx.objects, estimate(id, center)];
+  ctx.objectMasks = [...(ctx.objectMasks ?? []), mask];
+  ctx.snapshot.highlights.push({ objectId: id, style: 'target', source: 'auto', until: null });
+  return mask;
+}
+
+const target = (ctx: PresentContext, previous: Parameters<typeof panelTarget>[4] = null) =>
+  panelTarget(ctx, WIDTH, HEIGHT, TOP, previous);
+
+/** Card corners as the cyclopean eye sees them on the reference plane. */
+function screen(ctx: PresentContext, pose: Pose, width = WIDTH, height = HEIGHT, top = TOP) {
+  const view = invertPose(ctx.head);
+  const points = [
+    [-width / 2, top, 0],
+    [width / 2, top, 0],
+    [width / 2, top - height, 0],
+    [-width / 2, top - height, 0],
+  ].map((p) => {
+    const [x, y, z] = transformPoint(view, transformPoint(pose, p as Vec3));
+    expect(z).toBeLessThan(-0.03);
+    return [(x * PANEL_DISTANCE) / -z, (y * PANEL_DISTANCE) / -z] as const;
+  });
+  return {
+    left: Math.min(...points.map(([x]) => x)),
+    right: Math.max(...points.map(([x]) => x)),
+    bottom: Math.min(...points.map(([, y]) => y)),
+    top: Math.max(...points.map(([, y]) => y)),
+  };
+}
+
+function maskScreen(ctx: PresentContext, mask: Placement) {
+  const plane = billboard(mask.center, ctx.head.p);
+  if (!plane) throw new Error('Mask at the eye');
+  const view = invertPose(ctx.head);
+  const points = mask.outline.points.map((p) => {
+    const [x, y, z] = transformPoint(view, outlinePoint(plane, mask.center, p));
+    return [(x * PANEL_DISTANCE) / -z, (y * PANEL_DISTANCE) / -z] as const;
+  });
+  return {
+    left: Math.min(...points.map(([x]) => x)),
+    right: Math.max(...points.map(([x]) => x)),
+    bottom: Math.min(...points.map(([, y]) => y)),
+    top: Math.max(...points.map(([, y]) => y)),
+  };
+}
+
 /** Independently compare projected card corners against each real mask's projected vertices. */
 function expectClear(
   ctx: PresentContext,
   pose: Pose,
   masks: Placement[],
-  height = WIDTH,
+  height = HEIGHT,
   width = WIDTH,
   top = TOP,
   eyeX = 0,
-  requiredGap = PANEL_MASK_GAP,
 ) {
   const view = invertPose({ p: transformPoint(ctx.head, [eyeX, 0, 0]), q: ctx.head.q });
   const project = (p: Vec3) => {
@@ -116,126 +169,311 @@ function expectClear(
     [-width / 2, top - height, 0],
   ].map((p) => transformPoint(pose, p as Vec3));
   const projectedCard = corners.map(project);
-  const card = [
-    [
-      Math.min(...projectedCard.map(([x]) => x ?? 0)),
-      Math.min(...projectedCard.map(([, y]) => y ?? 0)),
-    ],
-    [
-      Math.max(...projectedCard.map(([x]) => x ?? 0)),
-      Math.max(...projectedCard.map(([, y]) => y ?? 0)),
-    ],
-  ];
+  const xs = projectedCard.map(([x]) => x ?? 0);
+  const ys = projectedCard.map(([, y]) => y ?? 0);
   const nearDepth = Math.min(...corners.map((p) => -transformPoint(view, p)[2]));
   for (const mask of masks) {
     const plane = billboard(mask.center, ctx.head.p);
     if (!plane) throw new Error('Mask at the eye');
     const projected = mask.outline.points.map((p) => project(outlinePoint(plane, mask.center, p)));
-    const xs = projected.map((p) => p[0] ?? 0);
-    const ys = projected.map((p) => p[1] ?? 0);
-    const gap = (requiredGap * PANEL_DISTANCE) / nearDepth - 1e-7;
+    const mx = projected.map((p) => p[0] ?? 0);
+    const my = projected.map((p) => p[1] ?? 0);
+    const gap = (PANEL_MASK_GAP * PANEL_DISTANCE) / nearDepth - 1e-7;
     expect(
-      (card[1]?.[0] ?? 0) <= Math.min(...xs) - gap ||
-        (card[0]?.[0] ?? 0) >= Math.max(...xs) + gap ||
-        (card[1]?.[1] ?? 0) <= Math.min(...ys) - gap ||
-        (card[0]?.[1] ?? 0) >= Math.max(...ys) + gap,
+      Math.max(...xs) <= Math.min(...mx) - gap ||
+        Math.min(...xs) >= Math.max(...mx) + gap ||
+        Math.max(...ys) <= Math.min(...my) - gap ||
+        Math.min(...ys) >= Math.max(...my) + gap,
     ).toBe(true);
   }
 }
 
-function expectFullyVisible(
-  ctx: PresentContext,
-  pose: Pose,
-  width: number,
-  height: number,
-  top = TOP,
-) {
-  const view = invertPose(ctx.head);
-  const center = transformPoint(view, transformPoint(pose, [0, top - height / 2, 0]));
-  expect(center[2]).toBeCloseTo(-PANEL_DISTANCE);
-  for (const point of [
-    [-width / 2, top, 0],
-    [width / 2, top, 0],
-    [width / 2, top - height, 0],
-    [-width / 2, top - height, 0],
-  ]) {
-    const [x, y, z] = transformPoint(view, transformPoint(pose, point as Vec3));
-    expect(z).toBeLessThan(-0.03);
-    const projectedX = (x * PANEL_DISTANCE) / -z;
-    const projectedY = (y * PANEL_DISTANCE) / -z;
-    expect(projectedX).toBeGreaterThanOrEqual(-0.58 - 1e-8);
-    expect(projectedX).toBeLessThanOrEqual(0.58 + 1e-8);
-    expect(projectedY).toBeGreaterThanOrEqual(-0.48 - 1e-8);
-    expect(projectedY).toBeLessThanOrEqual(0.4 + 1e-8);
-  }
+function expectInView(ctx: PresentContext, pose: Pose, width = WIDTH, height = HEIGHT) {
+  const rect = screen(ctx, pose, width, height);
+  // Within a twentieth of a degree: the fit converges over a few rounds of perspective.
+  expect(rect.left).toBeGreaterThanOrEqual(PANEL_VIEW.left - 5e-4);
+  expect(rect.right).toBeLessThanOrEqual(PANEL_VIEW.right + 5e-4);
+  expect(rect.bottom).toBeGreaterThanOrEqual(PANEL_VIEW.bottom - 5e-4);
+  expect(rect.top).toBeLessThanOrEqual(PANEL_VIEW.top + 5e-4);
 }
 
-describe('instruction panel placement', () => {
-  it('keeps the card center in the actual gaze while its up and right axes follow the world horizon', () => {
+/** Upright, level, and turned to face the eye from its center. */
+function expectFacingEye(ctx: PresentContext, pose: Pose, height = HEIGHT, top = TOP) {
+  const up = rotateVec(pose.q, [0, 1, 0]);
+  const right = rotateVec(pose.q, [1, 0, 0]);
+  expect(up[0]).toBeCloseTo(0, 10);
+  expect(up[1]).toBeCloseTo(1, 10);
+  expect(up[2]).toBeCloseTo(0, 10);
+  expect(right[1]).toBeCloseTo(0, 10);
+  const normal = rotateVec(pose.q, [0, 0, 1]);
+  const toEye = sub(ctx.head.p, transformPoint(pose, [0, top - height / 2, 0]));
+  const horizontal = Math.hypot(toEye[0], toEye[2]);
+  expect(normal[0]).toBeCloseTo(toEye[0] / horizontal, 10);
+  expect(normal[2]).toBeCloseTo(toEye[2] / horizontal, 10);
+}
+
+const cardCenter = (pose: Pose, height = HEIGHT, top = TOP) =>
+  transformPoint(pose, [0, top - height / 2, 0]);
+
+describe('instruction card beside the lit objects', () => {
+  it('sits just above the lit object, centered on it and at its depth', () => {
+    const ctx = context();
+    const object: Vec3 = [0.1, -0.28, -0.7];
+    const mask = lit(ctx, 'cup', object);
+    const { pose, slot } = target(ctx);
+    expect(slot).toBe('above');
+    const card = screen(ctx, pose);
+    const seen = maskScreen(ctx, mask);
+    expect((card.left + card.right) / 2).toBeCloseTo((seen.left + seen.right) / 2, 2);
+    expect(card.bottom).toBeGreaterThan(seen.top);
+    // Close: no more than the gap and its cushion, measured at the card's depth.
+    expect(card.bottom - seen.top).toBeLessThan(((PANEL_MASK_GAP + 0.04) * PANEL_DISTANCE) / 0.75);
+    expect(distance(cardCenter(pose), ctx.head.p)).toBeCloseTo(distance(object, ctx.head.p), 2);
+    expectInView(ctx, pose);
+    expectFacingEye(ctx, pose);
+    for (const eyeX of [-0.032, 0.032]) expectClear(ctx, pose, [mask], HEIGHT, WIDTH, TOP, eyeX);
+  });
+
+  it('keeps a comfortable reading depth for a far or very near object', () => {
+    const far = context();
+    lit(far, 'fridge', [0, -0.3, -2.5], 0.6, 0.8);
+    expect(distance(cardCenter(target(far).pose), far.head.p)).toBeCloseTo(0.85, 3);
+    const near = context();
+    lit(near, 'screw', [0, -0.12, -0.25], 0.03, 0.03);
+    expect(distance(cardCenter(target(near).pose), near.head.p)).toBeCloseTo(0.45, 3);
+  });
+
+  it('goes below an object at the top of the view, and stays below once it is there', () => {
+    const ctx = context();
+    const mask = lit(ctx, 'shelf', [0, 0.27, -0.7]);
+    const below = target(ctx);
+    expect(below.slot).toBe('below');
+    expect(screen(ctx, below.pose).top).toBeLessThan(maskScreen(ctx, mask).bottom);
+    expectInView(ctx, below.pose);
+    // The object drops to where "above" would fit, but the card keeps its side.
+    ctx.objects = [estimate('shelf', [0, -0.05, -0.7])];
+    ctx.objectMasks = [rectMask([0, -0.05, -0.7], 0.12, 0.1)];
+    expect(target(ctx, 'below').slot).toBe('below');
+    expect(target(ctx, null).slot).toBe('above');
+  });
+
+  it('moves to the side when another object blocks above and below', () => {
+    const ctx = context();
+    const mask = lit(ctx, 'cup', [0, -0.1, -0.7]);
+    const blockers = [rectMask([0, 0.15, -0.7], 0.5, 0.15), rectMask([0, -0.36, -0.7], 0.5, 0.15)];
+    ctx.objectMasks = [...(ctx.objectMasks ?? []), ...blockers];
+    const { pose, slot } = target(ctx);
+    expect(['right', 'left']).toContain(slot);
+    expectClear(ctx, pose, [mask, ...blockers]);
+    expectInView(ctx, pose);
+  });
+
+  it('slides inward along the view edge for an object near the side of the view', () => {
+    const ctx = context();
+    const mask = lit(ctx, 'tool', [0.38, -0.2, -0.7]);
+    const { pose, slot } = target(ctx);
+    expect(slot).toBe('above');
+    expectInView(ctx, pose);
+    expectClear(ctx, pose, [mask]);
+    expect(cardCenter(pose)[0]).toBeGreaterThan(0.1);
+  });
+
+  it('sits above two lit objects that are close together, and follows the first when apart', () => {
+    const close = context();
+    const a = lit(close, 'cup', [-0.08, -0.25, -0.7]);
+    const b = lit(close, 'plate', [0.1, -0.3, -0.7]);
+    const together = screen(close, target(close).pose);
+    const both = { left: maskScreen(close, a).left, right: maskScreen(close, b).right };
+    expect((together.left + together.right) / 2).toBeCloseTo((both.left + both.right) / 2, 2);
+    expect(together.bottom).toBeGreaterThan(maskScreen(close, a).top);
+
+    const apart = context();
+    const first = lit(apart, 'cup', [-0.3, -0.25, -0.7]);
+    lit(apart, 'sink', [0.35, -0.25, -0.7]);
+    const card = screen(apart, target(apart).pose);
+    const seen = maskScreen(apart, first);
+    expect((card.left + card.right) / 2).toBeCloseTo((seen.left + seen.right) / 2, 2);
+  });
+
+  it('leads with the step outline over the other lights', () => {
+    const ctx = context();
+    lit(ctx, 'plate', [0.3, -0.25, -0.7]);
+    const tool = estimate('tool', [-0.3, -0.25, -0.7]);
+    ctx.objects = [...ctx.objects, tool];
+    ctx.snapshot.outlines = [
+      {
+        objectId: 'tool',
+        outline: rectMask([0, 0, 0], 0.1, 0.1).outline,
+        offset: [0, 0, 0],
+        rank: 0,
+        role: 'act',
+        accent: { color: 0x24d4ed, opacity: 1 },
+        phrase: 'tool',
+      },
+    ];
+    expect(cardCenter(target(ctx).pose)[0]).toBeLessThan(-0.1);
+  });
+
+  it('keeps clear of furniture only in the gaze slots, not beside the work on a table', () => {
+    const ctx = context();
+    const mask = lit(ctx, 'cup', [0, -0.3, -0.7]);
+    // An 18cm worktop reservation covering the whole lower view.
+    ctx.sceneObstacles = [
+      [
+        [-1, -0.6, -0.3],
+        [1, -0.6, -0.3],
+        [1, -0.12, -1.2],
+        [-1, -0.12, -1.2],
+      ],
+    ];
+    const { pose, slot } = target(ctx);
+    expect(slot).toBe('above');
+    expect(screen(ctx, pose).bottom).toBeLessThan(maskScreen(ctx, mask).top + 0.15);
+    expect(isInstructionPanelClear(ctx, WIDTH, HEIGHT, TOP, pose, false)).toBe(true);
+  });
+
+  it('places beside a lit object in a shifted and rotated workspace', () => {
+    const ctx = context();
+    ctx.head = { p: [2, 1.6, 3], q: turn(60) };
+    ctx.worldFromWorkspace = composePose(ctx.head, { p: [0.2, -0.15, 0], q: turn(12) });
+    const object = estimate('tool', [0, -0.15, -0.65]);
+    ctx.objects = [object];
+    const outline = rectMask([0, 0, 0], 0.15, 0.12).outline;
+    ctx.snapshot.outlines = [
+      {
+        objectId: object.id,
+        outline,
+        offset: [0.05, 0, 0],
+        rank: 0,
+        role: 'act',
+        accent: { color: 0x24d4ed, opacity: 1 },
+        phrase: 'tool',
+      },
+    ];
+    const center = transformPoint(ctx.worldFromWorkspace, add(object.position, [0.05, 0, 0]));
+    const worldMask = { ...rectMask(center), outline };
+    const { pose, slot } = target(ctx);
+    expect(slot).toBe('above');
+    expectClear(ctx, pose, [worldMask]);
+    expectInView(ctx, pose);
+    expect(screen(ctx, pose).bottom).toBeGreaterThan(maskScreen(ctx, worldMask).top);
+  });
+
+  it('stays level and in view near a downward, rolled gaze at a table', () => {
+    const ctx = context();
+    ctx.head = {
+      p: [0, 1.25, 0],
+      q: quatMultiply(turn(30), quatMultiply(turn(-45, [1, 0, 0]), turn(12, [0, 0, 1]))),
+    };
+    const object = transformPoint(ctx.head, [0.05, -0.05, -0.7]);
+    const mask = lit(ctx, 'cup', object);
+    const { pose, slot } = target(ctx);
+    expect(slot).toBe('above');
+    expectFacingEye(ctx, pose);
+    expectInView(ctx, pose);
+    for (const eyeX of [-0.032, 0.032]) expectClear(ctx, pose, [mask], HEIGHT, WIDTH, TOP, eyeX);
+  });
+});
+
+describe('instruction card in the gaze slots', () => {
+  it('rests centered in the lower periphery when nothing lit is in view', () => {
+    const ctx = context();
+    const { pose, slot } = target(ctx);
+    expect(slot).toBe('low');
+    const card = screen(ctx, pose);
+    expect((card.left + card.right) / 2).toBeCloseTo(0, 6);
+    expect((card.bottom + card.top) / 2).toBeCloseTo(-0.25, 2);
+    expect(distance(cardCenter(pose), ctx.head.p)).toBeCloseTo(PANEL_DISTANCE, 6);
+    expectFacingEye(ctx, pose);
+    expectInView(ctx, pose);
+  });
+
+  it('follows the gaze heading and pitch but never the head roll', () => {
     const ctx = context();
     ctx.head = {
       p: [2, 1.6, 3],
-      q: quatMultiply(
-        quatFromAxisAngle([0, 1, 0], 0.7),
-        quatMultiply(quatFromAxisAngle([1, 0, 0], -1.05), quatFromAxisAngle([0, 0, 1], 0.4)),
-      ),
+      q: quatMultiply(turn(40), quatMultiply(turn(-30, [1, 0, 0]), turn(20, [0, 0, 1]))),
     };
-    const pose = placeInstructionPanel(ctx, 0.28, 0.2, TOP, null);
-    const center = transformPoint(invertPose(ctx.head), transformPoint(pose, [0, TOP - 0.1, 0]));
-    expect(center[0]).toBeCloseTo(0);
-    expect(center[1]).toBeCloseTo(-0.08);
-    expect(center[2]).toBeCloseTo(-PANEL_DISTANCE);
-    expect(rotateVec(pose.q, [0, 1, 0])).toEqual([0, 1, 0]);
-    expect(rotateVec(pose.q, [1, 0, 0])[1]).toBeCloseTo(0);
-    expectFullyVisible(ctx, pose, 0.28, 0.2);
+    const { pose } = target(ctx);
+    expectFacingEye(ctx, pose);
+    expectInView(ctx, pose);
   });
 
-  it.each([
-    [-0.35, 0.3],
-    [-0.9, -0.55],
-    [-1.25, 0.45],
-  ])(
-    'fits and clears all four level-card corners from both eyes at pitch %s and roll %s',
-    (pitch, roll) => {
-      const ctx = context();
-      ctx.head = {
-        p: [0, 1.6, 0],
-        q: quatMultiply(quatFromAxisAngle([1, 0, 0], pitch), quatFromAxisAngle([0, 0, 1], roll)),
-      };
-      const mask = rectMask(transformPoint(ctx.head, [0.03, -0.04, -0.9]), 0.22, 0.2);
-      ctx.objectMasks = [mask];
-      const width = 0.28;
-      const height = 0.2;
-      const pose = placeInstructionPanel(ctx, width, height, TOP, null);
-      expect(rotateVec(pose.q, [0, 1, 0])).toEqual([0, 1, 0]);
-      expectFullyVisible(ctx, pose, width, height);
-      expect(isInstructionPanelClear(ctx, width, height, TOP, pose)).toBe(true);
-      for (const eyeX of [-0.032, 0.032]) expectClear(ctx, pose, [mask], height, width, TOP, eyeX);
-    },
-  );
-
-  it('levels a legacy tilted anchor once around its center and then preserves the exact level pose', () => {
+  it('takes the upper slot over detected furniture before a lesson', () => {
     const ctx = context();
-    const q = quatMultiply(
-      quatFromAxisAngle([0, 1, 0], 0.12),
-      quatMultiply(quatFromAxisAngle([1, 0, 0], -0.2), quatFromAxisAngle([0, 0, 1], 0.25)),
-    );
-    const center: Vec3 = [0, -0.08, -0.65];
-    const old: Pose = { p: sub(center, rotateVec(q, [0, TOP - 0.1, 0])), q };
-    const leveled = placeInstructionPanel(ctx, 0.28, 0.2, TOP, old);
-    expect(leveled).not.toBe(old);
-    expect(rotateVec(leveled.q, [0, 1, 0])).toEqual([0, 1, 0]);
-    transformPoint(leveled, [0, TOP - 0.1, 0]).forEach((value, i) => {
-      expect(value).toBeCloseTo(center[i] ?? 0);
-    });
-    ctx.head.q = quatMultiply(ctx.head.q, quatFromAxisAngle([0, 0, 1], 0.1));
-    expect(placeInstructionPanel(ctx, 0.28, 0.2, TOP, leveled)).toBe(leveled);
+    ctx.snapshot.phase = 'idle';
+    ctx.sceneObstacles = [
+      [
+        [-0.5, -0.6, -0.65],
+        [0.5, -0.6, -0.65],
+        [0.5, -0.05, -0.65],
+        [-0.5, -0.05, -0.65],
+      ],
+      [
+        [Number.NaN, 0, -0.5],
+        [Infinity, 0, -0.5],
+      ],
+    ];
+    const { pose, slot } = target(ctx);
+    expect(slot).toBe('high');
+    expect(isInstructionPanelClear(ctx, WIDTH, HEIGHT, TOP, pose)).toBe(true);
+    expectInView(ctx, pose);
   });
 
-  it('keeps every corner in front of the near plane for an unusually tall level card at a steep gaze', () => {
+  it('keeps the slot it is in while that stays clear', () => {
     const ctx = context();
-    ctx.head.q = quatFromAxisAngle([1, 0, 0], -1.4);
-    const pose = placeInstructionPanel(ctx, 0.3, 1.6, TOP, null);
+    expect(target(ctx, 'high').slot).toBe('high');
+    expect(target(ctx, 'low').slot).toBe('low');
+  });
+
+  it('avoids unlit objects without anchoring to them', () => {
+    const blocker = rectMask([0, -0.2, -0.65], 0.4, 0.15);
+    const ctx = context([blocker]);
+    ctx.objects = [estimate('unlit', [0, -0.2, -0.65])];
+    const { pose, slot } = target(ctx);
+    expect(slot).toBe('high');
+    expectClear(ctx, pose, [blocker]);
+  });
+
+  it('ignores lit objects that are behind, lost, hidden or during calibration', () => {
+    const behind = context();
+    lit(behind, 'behind', [0, -0.2, 0.7]);
+    expect(target(behind).slot).toBe('low');
+
+    const lost = context();
+    lit(lost, 'lost', [0, -0.3, -0.7]);
+    lost.objects = [{ ...(lost.objects[0] as ObjectEstimate), lostAt: 0 }];
+    lost.objectMasks = [];
+    expect(target(lost).slot).toBe('low');
+
+    const hidden = context();
+    lit(hidden, 'hidden', [0, 0.25, -0.7]);
+    (hidden.objects[0] as ObjectEstimate).spec.hidden = true;
+    hidden.objectMasks = [];
+    expect(target(hidden).slot).toBe('low');
+
+    const calibrating = context();
+    lit(calibrating, 'cup', [0, -0.25, -0.7]);
+    calibrating.calibration = { text: 'Pinch a corner', error: null, firstCorner: null } as never;
+    expect(['low', 'high']).toContain(target(calibrating).slot);
+  });
+
+  it('switches to a gaze slot once the lit object leaves the view, with some hysteresis', () => {
+    const ctx = context();
+    lit(ctx, 'cup', [0, -0.25, -0.7]);
+    expect(target(ctx).slot).toBe('above');
+    // About 38 degrees off to the side: kept while the card is beside it, not taken up anew.
+    ctx.head.q = turn(38);
+    expect(target(ctx, 'above').slot).toBe('above');
+    expect(target(ctx, 'low').slot).toBe('low');
+    ctx.head.q = turn(60);
+    expect(target(ctx, 'above').slot).toBe('low');
+  });
+
+  it('keeps every corner in front of the eye for an unusually tall card at a steep gaze', () => {
+    const ctx = context();
+    ctx.head.q = turn(-80, [1, 0, 0]);
+    const { pose } = panelTarget(ctx, 0.3, 1.6, TOP, null);
     expect(pose.p.every(Number.isFinite)).toBe(true);
     for (const point of [
       [-0.15, TOP, 0],
@@ -249,67 +487,51 @@ describe('instruction panel placement', () => {
     }
   });
 
-  it('gives a real initial target enough slack to preserve its world pose through modest head motion', () => {
-    const ctx = context([rectMask([0, -0.2, -0.75], 0.16, 0.12)]);
-    const anchored = placeInstructionPanel(ctx, 0.26, 0.18, TOP, null);
-    const frozen = structuredClone(anchored);
-    expectClear(
-      ctx,
-      anchored,
-      [...(ctx.objectMasks ?? [])],
-      0.18,
-      0.26,
-      TOP,
-      0,
-      PANEL_MASK_GAP * 2,
-    );
-    ctx.head = {
-      p: [0.025, 0.015, 0.035],
-      q: quatMultiply(
-        quatFromAxisAngle([0, 1, 0], 0.07),
-        quatMultiply(quatFromAxisAngle([1, 0, 0], -0.08), quatFromAxisAngle([0, 0, 1], 0.05)),
-      ),
-    };
-    expect(isInstructionPanelClear(ctx, 0.26, 0.18, TOP, anchored)).toBe(true);
-    expect(placeInstructionPanel(ctx, 0.26, 0.18, TOP, anchored)).toBe(anchored);
-    expect(anchored).toEqual(frozen);
-    for (const eyeX of [-0.032, 0.032])
-      expectClear(ctx, anchored, [...(ctx.objectMasks ?? [])], 0.18, 0.26, TOP, eyeX);
-  });
-
-  it('detects a nearby object crossing a frozen card after a small lateral head movement', () => {
+  it('protects a lit object’s declared radius when it has no mask', () => {
     const ctx = context();
-    const anchored = placeInstructionPanel(ctx, 0.26, 0.18, TOP, null);
-    ctx.objectMasks = [rectMask([0.14, -0.08, -0.3], 0.03, 0.06)];
-    expect(isInstructionPanelClear(ctx, 0.26, 0.18, TOP, anchored)).toBe(true);
+    ctx.objects = [estimate('large-tool', [0.05, -0.2, -0.7], 0.12)];
+    ctx.snapshot.highlights.push({
+      objectId: 'large-tool',
+      style: 'target',
+      source: 'auto',
+      until: null,
+    });
+    const { pose } = target(ctx);
+    expectClear(ctx, pose, [rectMask([0.05, -0.2, -0.7], 0.24, 0.24)]);
+  });
+});
+
+describe('instruction card clearance', () => {
+  it('detects a nearby object crossing a resting card after a small lateral head movement', () => {
+    const ctx = context();
+    const resting: Pose = { p: [0, 0, -0.65], q: identityPose().q };
+    ctx.objectMasks = [rectMask([0.14, 0.07, -0.3], 0.03, 0.06)];
+    expect(isInstructionPanelClear(ctx, WIDTH, HEIGHT, TOP, resting)).toBe(true);
     ctx.head.p[0] = 0.08;
-    expect(isInstructionPanelClear(ctx, 0.26, 0.18, TOP, anchored)).toBe(false);
-    const relocated = placeInstructionPanel(ctx, 0.26, 0.18, TOP, null);
-    expect(isInstructionPanelClear(ctx, 0.26, 0.18, TOP, relocated)).toBe(true);
+    expect(isInstructionPanelClear(ctx, WIDTH, HEIGHT, TOP, resting)).toBe(false);
   });
 
-  it.each([0.325, 1.3])(
-    'scales the reserved physical gap to the actual card depth %s',
-    (distance) => {
-      const ctx = context();
-      const anchored: Pose = { p: [0, 0, -distance], q: identityPose().q };
-      const side = (gap: number): Vec3[] => [
-        [0.15 + gap, -0.08, -distance],
-        [0.25 + gap, -0.08, -distance],
-        [0.25 + gap, 0.08, -distance],
-        [0.15 + gap, 0.08, -distance],
-      ];
-      ctx.sceneObstacles = [side(PANEL_MASK_GAP - 0.01)];
-      expect(isInstructionPanelClear(ctx, 0.3, 0.2, 0.1, anchored)).toBe(false);
-      ctx.sceneObstacles = [side(PANEL_MASK_GAP + 0.01)];
-      expect(isInstructionPanelClear(ctx, 0.3, 0.2, 0.1, anchored)).toBe(true);
-    },
-  );
-
-  it('checks all four corners of a tilted frozen card instead of a diagonal pair', () => {
+  it.each([0.325, 1.3])('scales the reserved physical gap to the actual card depth %s', (depth) => {
     const ctx = context();
-    const anchored: Pose = { p: [0, 0, -0.65], q: quatFromAxisAngle([0, 0, 1], Math.PI / 4) };
-    // This catches the right-hand corner, which extends far beyond the other diagonal's x range.
+    const resting: Pose = { p: [0, 0, -depth], q: identityPose().q };
+    const side = (gap: number): Vec3[] => [
+      [0.15 + gap, -0.08, -depth],
+      [0.25 + gap, -0.08, -depth],
+      [0.25 + gap, 0.08, -depth],
+      [0.15 + gap, 0.08, -depth],
+    ];
+    ctx.sceneObstacles = [side(PANEL_MASK_GAP - 0.01)];
+    expect(isInstructionPanelClear(ctx, 0.3, 0.2, 0.1, resting)).toBe(false);
+    ctx.sceneObstacles = [side(PANEL_MASK_GAP + 0.01)];
+    expect(isInstructionPanelClear(ctx, 0.3, 0.2, 0.1, resting)).toBe(true);
+    // Beside the lit objects, furniture does not count.
+    ctx.sceneObstacles = [side(PANEL_MASK_GAP - 0.01)];
+    expect(isInstructionPanelClear(ctx, 0.3, 0.2, 0.1, resting, false)).toBe(true);
+  });
+
+  it('checks all four corners of a tilted card instead of a diagonal pair', () => {
+    const ctx = context();
+    const resting: Pose = { p: [0, 0, -0.65], q: quatFromAxisAngle([0, 0, 1], Math.PI / 4) };
     ctx.sceneObstacles = [
       [
         [0.165, 0.02, -0.65],
@@ -318,45 +540,20 @@ describe('instruction panel placement', () => {
         [0.165, 0.05, -0.65],
       ],
     ];
-    expect(isInstructionPanelClear(ctx, 0.3, 0.2, 0.1, anchored)).toBe(false);
+    expect(isInstructionPanelClear(ctx, 0.3, 0.2, 0.1, resting)).toBe(false);
   });
 
   it('rejects a pose that is clear at the midpoint but overlaps for one eye at a different depth', () => {
     const mask = rectMask([0.066, 0, -0.25], 0.02, 0.1);
     const ctx = context([mask]);
-    const anchored: Pose = { p: [0, 0, -0.8], q: identityPose().q };
-    expectClear(ctx, anchored, [mask], 0.1, 0.2, 0.05);
-    expect(isInstructionPanelClear(ctx, 0.2, 0.1, 0.05, anchored)).toBe(false);
-    const relocated = placeInstructionPanel(ctx, 0.2, 0.1, 0.05, null);
-    expect(isInstructionPanelClear(ctx, 0.2, 0.1, 0.05, relocated)).toBe(true);
-    for (const eyeX of [-0.032, 0.032]) expectClear(ctx, relocated, [mask], 0.1, 0.2, 0.05, eyeX);
+    const resting: Pose = { p: [0, 0, -0.8], q: identityPose().q };
+    expectClear(ctx, resting, [mask], 0.1, 0.2, 0.05);
+    expect(isInstructionPanelClear(ctx, 0.2, 0.1, 0.05, resting)).toBe(false);
   });
 
-  it('keeps pre-lesson cards clear of detected furniture and ignores invalid scene vertices', () => {
+  it('rechecks the actual footprint when content grows in either axis', () => {
     const ctx = context();
-    ctx.snapshot.phase = 'idle';
-    const anchored = placeInstructionPanel(ctx, 0.25, 0.14, TOP, null);
-    ctx.sceneObstacles = [
-      [
-        [-0.25, -0.25, -0.65],
-        [0.25, -0.25, -0.65],
-        [0.25, 0.1, -0.65],
-        [-0.25, 0.1, -0.65],
-      ],
-      [
-        [Number.NaN, 0, -0.5],
-        [Infinity, 0, -0.5],
-      ],
-    ];
-    expect(isInstructionPanelClear(ctx, 0.25, 0.14, TOP, anchored)).toBe(false);
-    const relocated = placeInstructionPanel(ctx, 0.25, 0.14, TOP, null);
-    expect(isInstructionPanelClear(ctx, 0.25, 0.14, TOP, relocated)).toBe(true);
-    expectFullyVisible(ctx, relocated, 0.25, 0.14);
-  });
-
-  it('rechecks the actual frozen footprint when content grows in either axis', () => {
-    const ctx = context();
-    const anchored = placeInstructionPanel(ctx, 0.2, 0.12, TOP, null);
+    const resting: Pose = { p: [0, 0.15, -0.65], q: identityPose().q };
     ctx.sceneObstacles = [
       [
         [0.19, -0.2, -0.65],
@@ -365,13 +562,13 @@ describe('instruction panel placement', () => {
         [0.19, 0.05, -0.65],
       ],
     ];
-    expect(isInstructionPanelClear(ctx, 0.2, 0.12, TOP, anchored)).toBe(true);
-    expect(isInstructionPanelClear(ctx, 0.38, 0.24, TOP, anchored)).toBe(false);
+    expect(isInstructionPanelClear(ctx, 0.2, 0.12, TOP, resting)).toBe(true);
+    expect(isInstructionPanelClear(ctx, 0.38, 0.24, TOP, resting)).toBe(false);
   });
 
-  it('leaves look-away timing to motion for behind-eye and peripheral near-plane cards', () => {
+  it('ignores obstacles for a card that is behind the eye or out in the periphery', () => {
     const ctx = context();
-    const anchored = placeInstructionPanel(ctx, 0.25, 0.14, TOP, null);
+    const resting: Pose = { p: [0, 0, -0.65], q: identityPose().q };
     ctx.sceneObstacles = [
       [
         [0.2, -0.1, -0.5],
@@ -380,10 +577,8 @@ describe('instruction panel placement', () => {
     ];
     for (const angle of [Math.PI, Math.PI / 2]) {
       ctx.head.q = quatFromAxisAngle([0, 1, 0], angle);
-      expect(isInstructionPanelClear(ctx, 0.25, 0.14, TOP, anchored)).toBe(true);
+      expect(isInstructionPanelClear(ctx, 0.25, 0.14, TOP, resting)).toBe(true);
     }
-    ctx.sceneObstacles = [];
-    expect(isInstructionPanelClear(ctx, 0.25, 0.14, TOP, anchored)).toBe(true);
   });
 
   it('rejects a partly eye-crossing card that could still occupy the visible scene', () => {
@@ -398,244 +593,18 @@ describe('instruction panel placement', () => {
     expect(isInstructionPanelClear(ctx, 0.3, 0.2, 0.1, crossing)).toBe(false);
   });
 
-  it('rests near the gaze without preferring an arbitrary side when no objects are known', () => {
-    const pose = placeInstructionPanel(context(), WIDTH, WIDTH, TOP, null);
-    expect(pose.p[0]).toBe(0);
-    expect(Math.abs(pose.p[1])).toBeLessThan(WIDTH / 2);
-    expect(pose.p[2]).toBe(-PANEL_DISTANCE);
-  });
-
-  it('fits compact, wide and tall content beside the same obstacles using their real dimensions', () => {
-    const masks = [
-      rectMask([0, -0.12, -0.65], 0.28, 0.22),
-      rectMask([-0.32, 0.16, -0.65], 0.15, 0.14),
-    ];
-    const ctx = context(masks);
-    const dimensions = [
-      [0.18, 0.12],
-      [0.78, 0.17],
-      [0.22, 0.62],
-    ] as const;
-    const positions = dimensions.map(([width, height]) => {
-      const pose = placeInstructionPanel(ctx, width, height, TOP, null);
-      expectClear(ctx, pose, masks, height, width);
-      expectFullyVisible(ctx, pose, width, height);
-      return pose.p;
-    });
-    expect(positions[0]).not.toEqual(positions[1]);
-    expect(positions[1]).not.toEqual(positions[2]);
-    // The tall text needs a side column, while the wide text uses a horizontal gap.
-    expect(Math.abs(positions[2]?.[0] ?? 0)).toBeGreaterThan(Math.abs(positions[1]?.[0] ?? 0));
-  });
-
-  it('slides a wide card along a viewport-edge task instead of placing its edges offscreen', () => {
-    const mask = rectMask([-0.5, 0.31, -0.65], 0.17, 0.13);
-    const ctx = context([mask]);
-    const width = 0.75;
-    const height = 0.2;
-    const pose = placeInstructionPanel(ctx, width, height, TOP, null);
-    expectClear(ctx, pose, [mask], height, width);
-    expectFullyVisible(ctx, pose, width, height);
-    expect(pose.p[0]).toBeGreaterThan(mask.center[0]);
-  });
-
-  it('rechecks width growth and keeps a comfortable clear placement when content shrinks', () => {
-    const mask = rectMask([0, -0.12, -0.65], 0.3, 0.25);
-    const ctx = context([mask]);
-    const wide = placeInstructionPanel(ctx, 0.54, 0.18, TOP, null);
-    const narrow = placeInstructionPanel(ctx, 0.28, 0.18, TOP, wide);
-    expect(narrow.p).toEqual(wide.p);
-    expectClear(ctx, narrow, [mask], 0.18, 0.28);
-    const grown = placeInstructionPanel(ctx, 0.85, 0.28, TOP, narrow);
-    expectClear(ctx, grown, [mask], 0.28, 0.85);
-    expectFullyVisible(ctx, grown, 0.85, 0.28);
-  });
-
-  it('keeps the reading position when both width and height shrink modestly', () => {
-    const mask = rectMask([0, -0.12, -0.65], 0.28, 0.2);
-    const ctx = context([mask]);
-    const before = placeInstructionPanel(ctx, 0.38, 0.26, TOP, null);
-    const after = placeInstructionPanel(ctx, 0.24, 0.16, TOP, before);
-    for (const [i, coordinate] of after.p.entries())
-      expect(coordinate).toBeCloseTo(before.p[i] ?? 0, 10);
-    expectClear(ctx, after, [mask], 0.16, 0.24);
-    expectFullyVisible(ctx, after, 0.24, 0.16);
-  });
-
-  it('keeps a clear world anchor when the task shifts without crossing it', () => {
-    const ctx = context([rectMask([-0.4, -0.1, -0.65], 0.1, 0.12)]);
-    const before = placeInstructionPanel(ctx, 0.2, 0.15, TOP, null);
-    const mask = rectMask([0.4, -0.1, -0.65], 0.1, 0.12);
-    ctx.objectMasks = [mask];
-    const after = placeInstructionPanel(ctx, 0.2, 0.15, TOP, before);
-    expect(after).toBe(before);
-    expectClear(ctx, after, [mask], 0.15, 0.2);
-  });
-
-  it('keeps the reserved gap from a close object for both eyes', () => {
-    const mask = rectMask([0, -0.08, -0.25], 0.12, 0.8);
-    const ctx = context([mask]);
-    const width = 0.25;
-    const height = 0.2;
-    const pose = placeInstructionPanel(ctx, width, height, TOP, null);
-    for (const eyeX of [-0.032, 0.032]) expectClear(ctx, pose, [mask], height, width, TOP, eyeX);
-  });
-
-  it('starts next to an off-center task rather than leaving the card across the view', () => {
-    const mask = rectMask([-0.35, -0.05, -0.65], 0.1, 0.1);
-    const ctx = context([mask]);
-    const pose = placeInstructionPanel(ctx, WIDTH, WIDTH, TOP, null);
-    expectClear(ctx, pose, [mask]);
-    // The center of gaze is clear but far away; the real task is on the left.
-    expect(pose.p[0]).toBeLessThan(0.1);
-    const plane = billboard(mask.center, ctx.head.p);
-    if (!plane) throw new Error('Mask at the eye');
-    const projected = mask.outline.points.map((p) => {
-      const [x, y, z] = outlinePoint(plane, mask.center, p);
-      return [(x * PANEL_DISTANCE) / -z, (y * PANEL_DISTANCE) / -z];
-    });
-    const xs = projected.map(([x]) => x ?? 0);
-    const ys = projected.map(([, y]) => y ?? 0);
-    const edgeDistance = Math.hypot(
-      Math.max(0, Math.min(...xs) - pose.p[0] - WIDTH / 2, pose.p[0] - WIDTH / 2 - Math.max(...xs)),
-      Math.max(0, Math.min(...ys) - pose.p[1] - WIDTH / 2, pose.p[1] - WIDTH / 2 - Math.max(...ys)),
-    );
-    expect(edgeDistance).toBeLessThan(PANEL_MASK_GAP * 2 + 0.015);
-  });
-
-  it.each([
-    ['a wide object', rectMask([0.1, -0.12, -0.65], 0.75, 0.1)],
-    ['a tall object', rectMask([0.28, -0.12, -0.65], 0.15, 0.65)],
-    ['a nearer object', rectMask([0.12, -0.1, -0.3], 0.24, 0.2)],
-    ['a distant object', rectMask([0.4, -0.3, -1.4], 0.65, 0.65)],
-  ])('leaves visible space beside %s', (_name, mask) => {
-    const ctx = context([mask]);
-    expectClear(ctx, placeInstructionPanel(ctx, WIDTH, WIDTH, TOP, null), [mask]);
-  });
-
-  it('avoids every silhouette when several objects share the view', () => {
+  it('finds a clear target among several objects, or falls back above the lit one', () => {
     const masks = [
       rectMask([0.3, -0.1, -0.65], 0.25, 0.35),
       rectMask([-0.15, -0.1, -0.6], 0.3, 0.25),
     ];
     const ctx = context(masks);
-    expectClear(ctx, placeInstructionPanel(ctx, WIDTH, WIDTH, TOP, null), masks);
-  });
+    expectClear(ctx, target(ctx).pose, masks);
 
-  it('keeps an unobstructed settled card stable and relocates it immediately when a mask moves in', () => {
-    const ctx = context();
-    const settled = placeInstructionPanel(ctx, WIDTH, WIDTH, TOP, null);
-    expect(placeInstructionPanel(ctx, WIDTH, WIDTH, TOP, settled)).toEqual(settled);
-    const mask = rectMask([...settled.p]);
-    ctx.objectMasks = [mask];
-    const moved = placeInstructionPanel(ctx, WIDTH, WIDTH, TOP, settled);
-    expect(moved).not.toEqual(settled);
-    expectClear(ctx, moved, [mask]);
-  });
-
-  it('rechecks clearance after longer text grows the card downward', () => {
-    const mask = rectMask([0.31, -0.4, -0.65], 0.25, 0.1);
-    const ctx = context([mask]);
-    const short = placeInstructionPanel(ctx, WIDTH, WIDTH, TOP, null);
-    const tall = placeInstructionPanel(ctx, WIDTH, 0.6, TOP, short);
-    expectClear(ctx, tall, [mask], 0.6);
-  });
-
-  it('uses an off-center, non-overlapping fallback when masks fill the preferred viewport', () => {
-    const mask = rectMask([0, 0, -0.65], 1.8, 1.5);
-    const ctx = context([mask]);
-    const pose = placeInstructionPanel(ctx, WIDTH, WIDTH, TOP, null);
-    expect(pose.p.every(Number.isFinite)).toBe(true);
-    expectClear(ctx, pose, [mask]);
-  });
-
-  it('transforms lesson outlines from a shifted and rotated workspace', () => {
-    const ctx = context();
-    ctx.head = { p: [2, 1.6, 3], q: quatFromAxisAngle([0, 1, 0], Math.PI / 3) };
-    ctx.worldFromWorkspace = composePose(ctx.head, {
-      p: [0.2, -0.15, 0],
-      q: quatFromAxisAngle([0, 1, 0], 0.2),
-    });
-    const object = estimate('tool', [0, 0, -0.65]);
-    ctx.objects = [object];
-    const outline = rectMask([0, 0, 0], 0.3, 0.3).outline;
-    ctx.snapshot.outlines = [
-      {
-        objectId: object.id,
-        outline,
-        offset: [0.05, 0, 0],
-        rank: 0,
-        role: 'act',
-        accent: { color: 0x24d4ed, opacity: 1 },
-        phrase: 'tool',
-      },
-    ];
-    const center = transformPoint(ctx.worldFromWorkspace, add(object.position, [0.05, 0, 0]));
-    // A workspace with yaw rotation still uses an upright billboard, matching the live view.
-    const worldMask = { ...rectMask(center), outline };
-    expectClear(ctx, placeInstructionPanel(ctx, WIDTH, WIDTH, TOP, null), [worldMask]);
-  });
-
-  it('stays horizon-level near a downward, rolled gaze and clear of a table mask in an offset workspace', () => {
-    const ctx = context();
-    ctx.head = {
-      p: [2, 1.6, 3],
-      q: quatMultiply(
-        quatFromAxisAngle([0, 1, 0], 0.5),
-        quatMultiply(quatFromAxisAngle([1, 0, 0], -0.9), quatFromAxisAngle([0, 0, 1], 0.2)),
-      ),
-    };
-    ctx.worldFromWorkspace = { p: [1.7, 0.75, 2.3], q: quatFromAxisAngle([0, 1, 0], 0.4) };
-    const center = transformPoint(ctx.head, [0.08, -0.03, -0.95]);
-    const object = estimate(
-      'table-tool',
-      transformPoint(invertPose(ctx.worldFromWorkspace), center),
-    );
-    const outline = rectMask([0, 0, 0], 0.25, 0.22).outline;
-    const offset: Vec3 = [0.04, 0, 0];
-    ctx.objects = [object];
-    ctx.snapshot.outlines = [
-      {
-        objectId: object.id,
-        outline,
-        offset,
-        rank: 0,
-        role: 'act',
-        accent: { color: 0x24d4ed, opacity: 1 },
-        phrase: 'tool',
-      },
-    ];
-    const mask = {
-      ...rectMask(transformPoint(ctx.worldFromWorkspace, add(object.position, offset))),
-      outline,
-    };
-    const pose = placeInstructionPanel(ctx, WIDTH, WIDTH, TOP, null);
-    expect(pose.q).toEqual(yawOnly(ctx.head.q));
-    const up = rotateVec(pose.q, [0, 1, 0]);
-    const right = rotateVec(pose.q, [1, 0, 0]);
-    expect(up[0]).toBeCloseTo(0);
-    expect(up[1]).toBeCloseTo(1);
-    expect(up[2]).toBeCloseTo(0);
-    expect(right[1]).toBeCloseTo(0);
-    expectFullyVisible(ctx, pose, WIDTH, WIDTH);
-    expect(isInstructionPanelClear(ctx, WIDTH, WIDTH, TOP, pose)).toBe(true);
-    for (const eyeX of [-0.032, 0.032]) expectClear(ctx, pose, [mask], WIDTH, WIDTH, TOP, eyeX);
-  });
-
-  it('protects the declared radius when no mask is available', () => {
-    const ctx = context();
-    ctx.objects = [estimate('large-tool', [0.31, -0.12, -0.65], 0.22)];
-    const mask = rectMask([0.31, -0.12, -0.65], 0.44, 0.44);
-    expectClear(ctx, placeInstructionPanel(ctx, WIDTH, WIDTH, TOP, null), [mask]);
-  });
-
-  it('ignores lost, hidden and clearly behind-the-head estimates', () => {
-    const ctx = context();
-    const initial = placeInstructionPanel(ctx, WIDTH, WIDTH, TOP, null);
-    const lost = { ...estimate('lost', [...initial.p], 0.5), lostAt: 0 };
-    const hidden = estimate('hidden', [...initial.p], 0.5);
-    hidden.spec.hidden = true;
-    ctx.objects = [lost, hidden, estimate('behind', [0.31, -0.12, 1], 0.1)];
-    expect(placeInstructionPanel(ctx, WIDTH, WIDTH, TOP, null)).toEqual(initial);
+    const crowded = context([rectMask([0, 0, -0.65], 1.8, 1.5)]);
+    lit(crowded, 'cup', [0, -0.2, -0.7]);
+    const fallback = target(crowded);
+    expect(fallback.slot).toBe('above');
+    expect(fallback.pose.p.every(Number.isFinite)).toBe(true);
   });
 });

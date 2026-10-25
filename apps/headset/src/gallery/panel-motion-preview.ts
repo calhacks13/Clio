@@ -15,18 +15,37 @@ import { ObjectHighlight } from '../adapters/render/object-highlight';
 import type { PresentContext } from '../adapters/render/presenter';
 import { InstructionPanelPresenter } from '../adapters/render/presenters/instruction-panel';
 import { type Pose, quatFromAxisAngle, quatMultiply, type Vec3 } from '../core/math';
+import type { ObjectEstimate } from '../domain/world/object-registry';
 import { billboard, outlinePoint } from '../domain/world/outline';
 import type { Placement } from '../domain/world/placement';
 import { CALIPER_OUTLINE, CALIPER_PHOTO_HEIGHT, CALIPER_PHOTO_WIDTH } from './caliper-outline';
 import { PANEL_STATES } from './states';
 
 // This developer preview deliberately never frames or follows the card with its camera.
-// Only the simulated head moves. The real presenter decides when its world anchor should hold
-// or catch up, using exactly the same frame context and object silhouette as the headset.
+// Only the simulated head moves. The caliper is the step's lit object, and the real presenter
+// decides when the card rests beside it, glides to a gaze slot when the caliper leaves the view,
+// and glides back, using exactly the same frame context and silhouette as the headset.
 const HEAD_POSITION: Vec3 = [0, 1.6, 0];
 const TASK_CENTER: Vec3 = [-0.1, 1.48, -0.85];
 const IDENTITY: Pose = { p: [0, 0, 0], q: [0, 0, 0, 1] };
 const REPLAY_DURATION_MS = 7700;
+const CALIPER: ObjectEstimate = {
+  id: 'caliper',
+  position: TASK_CENTER,
+  orientation: null,
+  confidence: 1,
+  source: 'detector',
+  t: 0,
+  heldBy: null,
+  spec: {
+    id: 'caliper',
+    label: 'caliper',
+    kind: 'tool',
+    radius: 0.05,
+    hidden: false,
+    placement: { method: 'detect', hint: 'caliper' },
+  },
+};
 
 export function mountPanelMotionPreview(host: HTMLElement): void {
   host.classList.add('panel-motion');
@@ -71,10 +90,17 @@ export function mountPanelMotionPreview(host: HTMLElement): void {
   const resetButton = required<HTMLButtonElement>('[data-motion-action="reset"]');
   const note = required<HTMLElement>('.panel-motion-note');
   const status = required<HTMLElement>('.panel-motion-status');
-  const snapshot = PANEL_STATES.find((state) => state.name === 'Ready')?.snapshot;
-  if (!snapshot) {
+  const step = PANEL_STATES.find((state) => state.name === 'Instruction')?.snapshot;
+  if (!step) {
     throw new Error('Incomplete panel motion preview');
   }
+  const snapshot = {
+    ...step,
+    outlines: [],
+    highlights: [
+      { objectId: CALIPER.id, style: 'target' as const, source: 'auto' as const, until: null },
+    ],
+  };
 
   const renderer = new WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -130,7 +156,7 @@ export function mountPanelMotionPreview(host: HTMLElement): void {
     dt: 0,
     snapshot,
     procedure: null,
-    objects: [],
+    objects: [CALIPER],
     objectMasks: [mask],
     demo: null,
     demoHands: null,
@@ -251,8 +277,8 @@ export function mountPanelMotionPreview(host: HTMLElement): void {
       if (replayElapsed !== null) {
         replayElapsed += dt;
         if (replayElapsed >= 400 && replaySide === null) {
-          // Turn away from whichever side the real placer chose, guaranteeing a meaningful
-          // out-of-view hold without changing the presenter's anchor or motion settings.
+          // Turn away from whichever side the card is on, far enough that the caliper leaves
+          // the view, without changing the presenter's placement or motion settings.
           replaySide = presenter.object.position.x >= head.p[0] ? 1 : -1;
         }
         const side = replaySide ?? 1;

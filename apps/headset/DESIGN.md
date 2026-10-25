@@ -19,26 +19,33 @@ override that reference's dark palette and purple controls.
   width. Keep readable text size and padding rather than shrinking the type or forcing a square.
   Use subtly rounded corners, dark text, a dark filled Done pill and sentence-case metadata.
   Quiet listening has no label or dot. Report a disconnected voice with an actionable message.
-- Anchor cards in the room: both world position and orientation remain fixed during ordinary head
-  turns, leaning, head bob and brief glances away. Do not billboard or rearrange them every frame.
-  Keep every card upright and level with the world horizon: placement uses heading only, never
-  the headset's pitch or roll. Relocation and catch-up preserve that level orientation.
-  Only after the card stays well outside reading reach (50 degrees horizontally, 40 vertically,
-  or outside 35cm–1.45m) for 800ms may it ease toward one captured recovery target. Use a damped
-  spring with no continuous head chasing, and let it settle before another optional recovery.
-  Keep a card still while a fingertip is near it. Reduced motion disables optional catch-up.
-- Keep a 6cm minimum gap at the card's actual depth from every known object, with extra initial
-  clearance so modest head movement and tracker jitter do not trigger constant rearrangement.
-  Consider left, right, top and bottom. Include all followed masks, including objects not lit by
-  this step, and detected nearby furniture before any lesson is running. Reserve 18cm above a
-  detected worktop as presentation clearance for the working area; never record that buffer as
-  measured geometry. Structural room planes do not block the entire UI view.
+- Put the card where the work is (Peter, 2026-10-25: cards at random places were lost half the
+  time). It sits just above the step's lit objects as the eye sees them, centered on them and at
+  their depth (45–85cm). If above is blocked or off the view it goes below, then right, then left.
+  It keeps its side while that stays clear, so it never hops between sides. With nothing lit in
+  view it takes a gaze slot about 21 degrees below the line of sight, or 14 above when the lower
+  one is blocked, edging outward past objects. The whole card stays inside a comfortable view
+  (about 35 degrees either side, 35 down, 28 up).
+- Follow lazily and always smoothly. The card rests exactly where it is while its target stays
+  within 4 degrees (beside objects) or 10 degrees (gaze slot), so head bob, small turns and
+  tracker jitter never move it. Past that, on a change of side, or when something covers it, it
+  glides on a critically damped spring (about 0.8s to settle), tracking the target until it
+  arrives. Nothing teleports except the first placement; a new step's object is reached by a
+  glide that leads the eye there. Keep every card upright and level: it turns only about the
+  vertical to face the eye, never with the headset's pitch or roll. Keep a card still while a
+  fingertip is near it. Reduced motion moves the card in one step, and only when it must.
+- Keep a 6cm minimum gap at the card's actual depth from every known object, and place new slots
+  2.5cm farther so tracker jitter does not trigger constant rearrangement. Include all followed
+  masks, including objects not lit by this step. In the gaze slots also keep clear of detected
+  nearby furniture, before and during a lesson, reserving 18cm above a detected worktop as
+  presentation clearance; never record that buffer as measured geometry. Beside lit objects the
+  worktop reserve does not apply, since the work sits on it. Structural room planes do not block
+  the entire UI view.
   Use conservative mask bounds; estimates without masks use their declared object radius.
   Check all four corners of the actual world-oriented card for both eyes, including depth and
-  parallax. Resizing and each catch-up sample must preserve clearance, including the swept path.
-  A newly blocking object may require immediate relocation; optional head recovery must never
-  slide through an object. In a crowded view, object visibility takes precedence over keeping the
-  whole card inside the preferred view area.
+  parallax. A resize or an object that covers the card starts a glide clear; a glide may pass
+  briefly over an object rather than jump. When no slot is clear, the card stays above the lit
+  objects, or takes the upper gaze slot.
 - Keep keyboard focus, readable disabled states, reduced-motion support and local-only assets.
   The gallery previews the actual launch UI and presenter, including a manual head-movement
   preview with a fixed world task and mask-clearance cases.
@@ -107,8 +114,8 @@ stays at 1 cm: three.js would move it to the depth map's 10 cm and clip what is 
 (window.__nearPlane.set(m) tries another live).
 
 Everything else stays in view. The HUDs rise to stay within 20 degrees of the gaze when the
-learner looks down at the work. Instruction cards use the persistent, horizon-level anchoring
-and delayed recovery described above. Cards, HUDs and the names over objects draw over the light
+learner looks down at the work. Instruction cards sit beside the lit objects and follow lazily,
+as described above. Cards, HUDs and the names over objects draw over the light
 and the hands' occluders (no depth test, after everything else), so a raised hand never takes the
 instructions away. A frame whose update or
 render throws is skipped, counted and logged once, and the next one draws as usual: three.js asks
