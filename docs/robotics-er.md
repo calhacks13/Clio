@@ -18,11 +18,11 @@ questions the voice hands it. The voice delegates through tools that answer at o
 Robotics-ER reports back as `[app]` messages when it has something: a plan, a refined plan, a step
 that looks done or wrong, an answer.
 
-| Model                               | API               | What Clio uses it for                                    |
-| ----------------------------------- | ----------------- | -------------------------------------------------------- |
-| `gemini-3.8-live-extended-thinking` | Live (bidi)       | the voice: conversation, with the camera in view         |
-| `gemini-robotics-er-2-preview`      | `generateContent` | planning, the step watcher, the object finder, questions |
-| `gemini-pro-latest`                 | `generateContent` | the bench's judge: a different model grades the planner  |
+| Model                               | API               | What Clio uses it for                                                      |
+| ----------------------------------- | ----------------- | -------------------------------------------------------------------------- |
+| `gemini-3.8-live-extended-thinking` | Live (bidi)       | the voice: conversation, with the camera in view                           |
+| `gemini-robotics-er-2-preview`      | `generateContent` | planning, the step watcher, the object finder, the action focus, questions |
+| `gemini-pro-latest`                 | `generateContent` | the bench's judge: a different model grades the planner                    |
 
 `gemini-robotics-er-2-streaming-preview` is Robotics-ER 2 on the Live API. It answers in text
 only (audio output is rejected with close code 1007), so it can't be the voice; it could watch in
@@ -49,6 +49,7 @@ More thinking was not better for our calls:
 | step check, 30 painted      | 56/60, 1.3 s        | 29/30, 1.7 s |                |             |
 | ... with criteria           | 29/30, 1.4 s        | 30/30, 2.0 s |                |             |
 | object finder (2 objects)   | 2.3 s               |              | 4.9 s          | 1.7 s       |
+| action focus (0-5 objects)  | 2.4 s (1.7-3.1 s)   |              |                |             |
 | full plan                   | 6.4 s, 8/12 met     | 10.1 s       | 18.8 s, 7/12   | 5.6 s, 4/12 |
 | stage 1 card, step 1 starts | 2.7-3.9 s           | 5.3-9.1 s    |                |             |
 | staged plan from the card   | 3.5 s, 24/27 met    | 6.2 s, 24/27 |                |             |
@@ -140,6 +141,36 @@ low left nothing to win.
 - **JSON fences**: answers often come wrapped in ` ```json `; `parseModelJson` strips them,
   and structured output avoids them.
 - **Preview limits**: no 429s in about 330 calls at two at a time; one 503, fine on retry.
+
+## The action focus's measurements
+
+While a step is focused, the headset asks `POST /api/vision/focus` about one sharp frame every 5 s:
+Robotics-ER 2 at minimal thinking boxes the step's objects (up to 8, its show items first), writes
+a new description of each, which is all jev is told about it from then on, and names the one thing
+the learner should touch next. Measured on the first views of the four bench scenes (the fridge,
+the photo and the drawn pH tables, the TV remote) with `apps/server/scripts/focus-look.ts`, which
+asks about a step of each scene's saved plan, October 2026: 20 looks with 0 to 5 objects.
+- **Latency**: median 2.4 s, 1.7 to 3.1 s: 1.7 to 2.0 s with 2 objects or none, 2.4 to 2.5 s with
+  3, 2.3 to 3.1 s with 4 or 5. Each object costs its description, about 25 words. The server
+  gives up at 8 s (504).
+- **Boxes**: every listed object in view was found (confidence 0.95 to 0.99), the boxes tight on
+  the bottles, cups, battery and cover, and within 0.01 of themselves from look to look. It boxed
+  the battery still in the remote, never the black-and-gold look-alike on the desk; asked for pH
+  test strips that weren't there, it said not found in 2 of 2 looks and never boxed the syringe
+  (the thing to touch was then nothing once, cup B once).
+- **The action item**: right in 12 of 12 looks where it was listed. For "Squeeze a few drops of
+  BASE into cup B", whose show items put cup B first, it named the base bottle: what the hands
+  act on, not where it goes. Left out of the request, the item was named on its own (`id: null`,
+  a phrase of its own, the right box) in 4 of 6 looks; the other 2 named the listed remote that
+  holds the missing battery, one of them after the prompt said "not what holds it".
+- **Descriptions**: sharper than the plan's in every look. They add the neighbors that tell
+  look-alikes apart ("to the left of the milk bottle", "between the purple indicator bottle and
+  the base bottle") and the contents and state ("containing purple liquid"), and they correct the
+  plan where the frame disagrees: step 2's plan had the base bottle "raised in the learner's
+  hand", and the focus wrote "standing on the right behind cup C". The first prompt once placed
+  the fridge door "on the left side of the frame", which is wrong as soon as the head turns; the
+  prompt now says the frame moves with the head, and no description has done it since. They
+  rarely give a size.
 
 ## Sources
 
