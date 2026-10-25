@@ -340,3 +340,121 @@ def test_info_names_an_object_state_it_cannot_read(episode_dir, capsys):
 
     assert main(["info", str(episode_dir)]) == 1
     assert re.search(r"cannot read .*objects\.ndjson:3", capsys.readouterr().err)
+
+
+# --- scene ----------------------------------------------------------------------------------------
+
+
+def _parse(argv):
+    from clio_pipeline.cli import _parser
+
+    return _parser().parse_args(argv)
+
+
+def test_scene_takes_the_servers_arguments():
+    args = _parse(
+        ["scene", "ep", "--derived", "d", "--out", "s", "--models", "gemini-cad", "--if-stale"]
+    )
+    assert (args.episodes, args.derived, args.out, args.models, args.if_stale, args.json) == (
+        ["ep"],
+        "d",
+        "s",
+        "gemini-cad",
+        True,
+        False,
+    )
+    defaults = _parse(["scene", "ep"])
+    assert (defaults.derived, defaults.out, defaults.models, defaults.if_stale) == (
+        None,
+        None,
+        "primitive",
+        False,
+    )
+
+
+@pytest.mark.parametrize("argv", [["scene", "ep", "--models", "trellis"], ["scene"]])
+def test_scene_refuses_bad_arguments(argv, capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        main(argv)
+    assert exit_info.value.code == 2
+
+
+def test_scene_builds_beside_the_episodes_directory_by_default(
+    tmp_path, make_default_episode, capsys
+):
+    path = _in_episodes_dir(tmp_path, make_default_episode)
+    assert main(["compile", str(path)]) == 0
+
+    assert main(["scene", str(path), "--json"]) == 0
+
+    line = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert line["episodeId"] == "ep-a" and line["skipped"] is False
+    assert Path(line["outDir"]) == tmp_path / "data" / "scenes" / "ep-a"
+    assert [s["name"] for s in line["stages"]] == ["models"]
+    scene = json.loads((tmp_path / "data" / "scenes" / "ep-a" / "scene.json").read_text())
+    assert scene["episodeId"] == "ep-a"
+
+    assert main(["scene", str(path), "--if-stale"]) == 0
+    assert capsys.readouterr().out == "skip  ep-a  up to date\n"
+
+
+def test_scene_without_a_compile_says_why_last(tmp_path, make_default_episode, capsys):
+    path = _in_episodes_dir(tmp_path, make_default_episode)
+
+    assert (
+        main(["scene", str(path), "--derived", str(tmp_path / "d"), "--out", str(tmp_path / "s")])
+        == 1
+    )
+
+    last = capsys.readouterr().err.strip().splitlines()[-1]
+    assert last.startswith("clio: cannot build the scene of ep-a: no compile of ep-a in ")
+    assert last.endswith("run `clio compile` first")
+
+
+def test_scene_needs_roots_for_an_episode_outside_an_episodes_directory(episode_dir, capsys):
+    assert main(["scene", str(episode_dir)]) == 1
+    assert "--derived" in capsys.readouterr().err
+
+
+_SLOW_SCENE = """
+import sys, time
+from clio_pipeline import models
+from clio_pipeline.cli import main
+
+def slow(*args, **kwargs):
+    time.sleep(60)
+
+models.build_object_models = slow
+sys.exit(main(["scene", sys.argv[1], "--derived", sys.argv[2], "--out", sys.argv[3]]))
+"""
+
+
+def test_a_scene_stopped_by_sigterm_leaves_the_previous_one(episode_dir, tmp_path):
+    # The server sends SIGTERM on its scene timeout and on shutdown.
+    derived, scenes = tmp_path / "derived", tmp_path / "scenes"
+    assert main(["compile", str(episode_dir), "--out", str(derived)]) == 0
+    first = main(["scene", str(episode_dir), "--derived", str(derived), "--out", str(scenes)])
+    scene = (scenes / "ep-20261024-031502-test" / "scene.json").read_bytes()
+    child = subprocess.Popen(
+        [sys.executable, "-c", _SLOW_SCENE, str(episode_dir), str(derived), str(scenes)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 30.0
+        while len([p for p in scenes.iterdir() if p.is_dir()]) < 2:  # building now
+            assert child.poll() is None and time.monotonic() < deadline
+            time.sleep(0.05)
+        time.sleep(0.2)
+        child.send_signal(signal.SIGTERM)
+        code = child.wait(timeout=30.0)
+    finally:
+        if child.poll() is None:
+            child.kill()
+
+    assert (first, code) == (0, 143)
+    assert sorted(p.name for p in scenes.iterdir()) == [
+        ".ep-20261024-031502-test.lock",
+        "ep-20261024-031502-test",
+    ]
+    assert (scenes / "ep-20261024-031502-test" / "scene.json").read_bytes() == scene

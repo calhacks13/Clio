@@ -1,4 +1,4 @@
-"""`clio`: validate, inspect, compile, replay and export Clio episodes."""
+"""`clio`: validate, inspect, compile, model, replay and export Clio episodes."""
 
 from __future__ import annotations
 
@@ -27,6 +27,11 @@ from .segments import mistakes, step_segments
 
 class CliError(Exception):
     """A user-facing error: printed to stderr, exit code 1."""
+
+
+# packages/protocol/src/scene.ts ModelBackendSchema (scene.MODEL_BACKENDS, kept here so the
+# parser does not import the scene build)
+SCENE_MODEL_BACKENDS = ("primitive", "gemini-cad", "command")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -75,6 +80,29 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--finished-only", action="store_true", help="skip episodes without finish.json")
     p.add_argument("--json", action="store_true", help="print one JSON line per episode")
     p.set_defaults(run=_compile)
+
+    p = sub.add_parser(
+        "scene",
+        help="build a generated model of each object of compiled episodes into scenes/<id>/",
+    )
+    p.add_argument("episodes", nargs="+", help=episodes_help)
+    p.add_argument(
+        "--derived",
+        metavar="DIR",
+        help="derived root with the compiles (default: derived/ beside an episodes/ dir)",
+    )
+    p.add_argument(
+        "--out", metavar="DIR", help="scenes root (default: scenes/ beside an episodes/ dir)"
+    )
+    p.add_argument(
+        "--models",
+        choices=SCENE_MODEL_BACKENDS,
+        default="primitive",
+        help="how object models are made (primitive: offline; gemini-cad sends crops to Google)",
+    )
+    p.add_argument("--if-stale", action="store_true", help="keep scenes that are up to date")
+    p.add_argument("--json", action="store_true", help="print one JSON line per episode")
+    p.set_defaults(run=_scene)
 
     p = sub.add_parser("view", help="replay an episode in Rerun (needs the viz extra)")
     p.add_argument("episode", help="an episode directory")
@@ -274,8 +302,7 @@ def _plan_lines(ep: Episode) -> list[str]:
 
 def default_derived_root(episode_dir: Path) -> Path | None:
     """<data>/derived for an episode in <data>/episodes/, else None."""
-    parent = Path(os.path.normpath(episode_dir.absolute())).parent
-    return parent.parent / "derived" if parent.name == "episodes" else None
+    return default_data_root(episode_dir, "derived")
 
 
 def _compile(args: argparse.Namespace) -> int:
@@ -365,6 +392,85 @@ def _describe_compile(result) -> str:
         f"      failed  {stage['name']}: {stage.get('detail', '')}"
         for stage in result.manifest["stages"]
         if stage["status"] == "failed"
+    ]
+    return "\n".join(lines)
+
+
+# --- scene ----------------------------------------------------------------------------------------
+
+
+def default_data_root(episode_dir: Path, name: str) -> Path | None:
+    """<data>/<name> for an episode in <data>/episodes/, else None."""
+    parent = Path(os.path.normpath(episode_dir.absolute())).parent
+    return parent.parent / name if parent.name == "episodes" else None
+
+
+def _scene(args: argparse.Namespace) -> int:
+    from .scene import build_scene
+
+    dirs = episode_dirs(args.episodes)
+    roots: dict[Path, tuple[Path, Path]] = {}
+    for path in dirs:
+        derived = Path(args.derived) if args.derived else default_data_root(path, "derived")
+        out = Path(args.out) if args.out else default_data_root(path, "scenes")
+        if derived is None or out is None:
+            raise CliError(
+                f"{path} is not in an episodes/ directory: give its derived root with --derived "
+                "and a scenes root of its own with --out"
+            )
+        roots[path] = (derived, out)
+
+    failed = 0
+    with _sigterm_exits():
+        for path in dirs:
+            derived, out = roots[path]
+            try:
+                result = build_scene(
+                    path,
+                    derived,
+                    out,
+                    models=args.models,
+                    if_stale=args.if_stale,
+                    log=lambda message: print(f"clio scene: {message}", file=sys.stderr),
+                )
+            except Exception as e:  # anything that stops a build before scene.json is written
+                failed += 1
+                if args.json:
+                    print(json.dumps(_no_scene(path.name, str(e))))
+                # Last on stderr: the server shows the tail of stderr as the reason.
+                print(f"clio: cannot build the scene of {path.name}: {e}", file=sys.stderr)
+                continue
+            print(json.dumps(scene_summary(result)) if args.json else _describe_scene(result))
+    return 1 if failed else 0
+
+
+def scene_summary(result) -> dict:
+    """The --json line for a built (or up-to-date) scene."""
+    return {
+        "episodeId": result.episode_id,
+        "skipped": result.skipped,
+        "outDir": str(result.out_dir),
+        "stages": result.scene["stages"],
+        "objects": len(result.scene["objects"]),
+    }
+
+
+def _no_scene(episode_id: str, error: str) -> dict:
+    return {"episodeId": episode_id, "skipped": False, "outDir": None, "stages": [], "error": error}
+
+
+def _describe_scene(result) -> str:
+    if result.skipped:
+        return f"skip  {result.episode_id}  up to date"
+    count, backend = len(result.scene["objects"]), result.scene["options"]["models"]
+    lines = [
+        f"ok    {result.episode_id}  {result.out_dir}",
+        f"      {count} object model{'s' if count != 1 else ''} ({backend})",
+    ]
+    lines += [
+        f"      {stage['status']}  {stage['name']}: {stage.get('detail', '')}"
+        for stage in result.scene["stages"]
+        if stage["status"] != "ok"
     ]
     return "\n".join(lines)
 
