@@ -152,7 +152,7 @@ def file_stems(ids: list[str]) -> dict[str, str]:
     taken: set[str] = set()
     for obj_id in ids:
         stem = obj_id
-        if not _SLUG.match(obj_id) or obj_id in taken:
+        if not _SLUG.fullmatch(obj_id) or obj_id in taken:
             clean = re.sub(r"[^a-z0-9_-]+", "-", obj_id.lower()).strip("-_")[:56] or "object"
             stem = f"{clean}-{hashlib.sha1(obj_id.encode('utf-8')).hexdigest()[:6]}"
         taken.add(stem)

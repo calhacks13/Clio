@@ -452,10 +452,11 @@ def test_a_part_whose_whole_is_not_modelled_gets_its_own_and_unplanned_needs_a_m
 
 
 def test_file_stems_are_the_id_when_it_is_a_slug_and_never_collide():
-    stems = file_stems(["cup", "Cup A", "cup-a", "cup a!"])
+    stems = file_stems(["cup", "Cup A", "cup-a", "cup a!", "cup\n"])
     assert stems["cup"] == "cup" and stems["cup-a"] == "cup-a"
     assert stems["Cup A"].startswith("cup-a-") and stems["cup a!"].startswith("cup-a-")
-    assert len(set(stems.values())) == 4
+    assert stems["cup\n"].startswith("cup-")
+    assert len(set(stems.values())) == 5
 
 
 # --- views ----------------------------------------------------------------------------------------

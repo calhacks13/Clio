@@ -58,9 +58,9 @@ def make_command_model(
     scratch.unlink(missing_ok=True)
     args = command_args(template, image=image.resolve(), out=scratch.resolve(), label=label)
     try:
+        # In the caller's working directory, so a relative command path in the template works.
         run = subprocess.run(
             args,
-            cwd=model_path.parent,
             stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=timeout_s,

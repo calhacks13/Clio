@@ -436,3 +436,11 @@ def test_the_command_needs_a_template_a_program_and_a_crop(scene, tmp_path):
     )
     assert "no crop to give it" in cup["note"]
     assert not Path(tmp_path / "notes" / "label.txt").exists()
+
+
+def test_a_relative_command_path_runs_from_the_callers_directory(scene, tmp_path, monkeypatch):
+    command(tmp_path)  # writes make_model.py and notes/ into tmp_path
+    monkeypatch.chdir(tmp_path)
+    template = f"{shlex.quote(sys.executable)} make_model.py {{image}} {{out}} {{label}} notes"
+    results, _ = run(scene, tmp_path / "s", "command", settings(CLIO_MODEL_COMMAND=template))
+    assert results["cup"]["backend"] == "command"
