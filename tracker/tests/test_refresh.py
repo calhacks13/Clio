@@ -7,6 +7,8 @@ clock is `Clock`; `FakeSegmenter` fills each box and records what it was asked.
 from __future__ import annotations
 
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pytest
@@ -277,4 +279,55 @@ def test_error_in_mask_in_box_frees_the_slot_too():
     refresher = Refresher(Broken(), executor, clock=Clock())
     assert refresher.submit("a", 1, frame(), BOX)
     assert refresher.drain() == []
+    assert refresher.in_flight == 0
+
+
+def test_executor_that_refuses_the_work_leaves_nothing_in_flight():
+    class Refusing(ManualExecutor):
+        refuse = True
+
+        def submit(self, fn, *args, **kwargs):
+            if self.refuse:
+                raise RuntimeError("cannot schedule new futures after shutdown")
+            return super().submit(fn, *args, **kwargs)
+
+    segmenter, executor = FakeSegmenter(), Refusing(run_now=True)
+    refresher = Refresher(segmenter, executor, clock=Clock())
+
+    with pytest.raises(RuntimeError, match="after shutdown"):
+        refresher.submit("a", 1, frame(), BOX)
+    assert refresher.in_flight == 0
+
+    executor.refuse = False  # no time passes: the refused call did not start the interval
+    assert refresher.submit("a", 2, frame(), BOX)
+    assert [r.seq for r in refresher.drain()] == [2]
+    assert refresher.in_flight == 0
+
+
+def test_real_thread_runs_the_call_while_the_frame_thread_is_refused():
+    started, release = threading.Event(), threading.Event()
+
+    class Blocking(FakeSegmenter):
+        def encode(self, rgb: np.ndarray) -> SegEncoding:
+            started.set()
+            assert release.wait(5), "the test never released the encoder"
+            return super().encode(rgb)
+
+    clock = Clock()
+    executor = ThreadPoolExecutor(max_workers=1)
+    refresher = Refresher(Blocking(), executor, clock=clock)
+    try:
+        assert refresher.submit("a", 1, frame(), BOX)
+        assert started.wait(5)
+        clock.t += 1.0  # past the interval: only the call in flight is the reason
+
+        assert not refresher.submit("a", 2, frame(), BOX)
+        assert refresher.in_flight == 1
+        assert refresher.drain() == []
+    finally:
+        release.set()
+        executor.shutdown(wait=True)
+
+    done = refresher.drain()
+    assert [(r.key, r.seq) for r in done] == [("a", 1)]
     assert refresher.in_flight == 0

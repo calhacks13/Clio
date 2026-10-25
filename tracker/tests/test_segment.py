@@ -71,6 +71,18 @@ def test_crop_mask_is_clipped_to_the_frame_and_small_masks_stay_unscaled():
     assert (crop.logits[:80, :80] > 0).all() and (crop.logits[80:, :] < 0).all()
 
 
+def test_crop_mask_is_clipped_at_the_right_and_bottom_edges():
+    logits = np.full((720, 960), -10.0, np.float32)
+    logits[610:700, 820:940] = 10.0
+    # 150 x 110: grown by 15 and 11, the bounds reach x = 965 and y = 721, past the frame.
+    crop = crop_mask(logits, np.array([800.0, 600.0, 950.0, 710.0]))
+    assert crop is not None
+    assert crop.origin == (785.0, 589.0) and crop.scale == 1.0
+    assert crop.logits.shape == (720 - 589, 960 - 785)  # ends at the frame edge, not past it
+    inside = paste(crop, 960, 720)
+    assert inside[610:700, 820:940].all() and inside.sum() == 90 * 120
+
+
 def test_crop_mask_is_none_without_an_object():
     logits = np.full((720, 960), -10.0, np.float32)
     assert crop_mask(logits, np.array([100.0, 100.0, 300.0, 300.0])) is None
@@ -83,18 +95,18 @@ def test_crop_mask_is_none_without_an_object():
 
 @pytest.mark.model
 def test_sam2_small_masks_a_bright_square():
+    pytest.importorskip("transformers")
     seg = load_segmenter("sam2.1-small")
-    if seg is None:
-        pytest.skip("transformers not installed")
     rgb = np.full((480, 640, 3), 30, np.uint8)
     rgb[150:330, 200:440] = 230
     crop = seg.mask_in_box(seg.encode(rgb), np.array([190.0, 140.0, 450.0, 340.0]))
     assert crop is not None
     assert max(crop.logits.shape) <= 256
     full = paste(crop, 640, 480)
-    inside = full[150:330, 200:440].mean()
-    outside = full.sum() - full[150:330, 200:440].sum()
-    assert inside > 0.9 and outside < 0.05 * full.size
+    inside_area = 180 * 240
+    inside = full[150:330, 200:440].sum()
+    outside = full.sum() - inside
+    assert inside > 0.9 * inside_area and outside <= 0.05 * inside_area
 
 
 def test_settings_segmenter_default_and_validation():

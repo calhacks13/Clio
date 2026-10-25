@@ -13,7 +13,7 @@ from pathlib import Path
 from . import __version__
 from .bench import valid_box
 from .config import HOST, MODELS, ConfigError, Settings, load_settings, model_name
-from .segment import SEGMENTERS
+from .segment import SEGMENTER_CHOICES
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -58,8 +58,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         p.add_argument("--device", help="torch device: auto, mps, cuda or cpu")
         p.add_argument(
             "--segmenter",
-            choices=["auto", "none", *SEGMENTERS],
-            help="what cuts the outline: SAM 2.1 small or large, or none for YOLOE's own mask",
+            choices=SEGMENTER_CHOICES,
+            help="what cuts the outline: SAM 2.1 small or large, or none for YOLOE's own mask"
+            " (default auto)",
         )
     for p in (parser, serve):
         p.add_argument("--port", type=int, help="8790 by default, which Clio's server expects")

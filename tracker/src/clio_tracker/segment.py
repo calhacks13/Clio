@@ -7,26 +7,28 @@ light mask decoder pass (once per box). The two halves are separate here, `encod
 `mask_in_box`, so a frame is encoded once however many boxes are cut out of it.
 
 A segmenter is optional: `load_segmenter("none")` is None and callers keep YOLOE's mask.
-torch, transformers and `vision` load on first use, so reading the setting stays cheap.
+torch, transformers, cv2, numpy and `vision` load on first use, so reading the setting stays cheap.
 """
 
 from __future__ import annotations
 
 import math
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
-import cv2
-import numpy as np
-
 if TYPE_CHECKING:
+    import numpy as np
+
     from .vision import MaskCrop
 
 SEGMENTERS = {
     "sam2.1-small": "facebook/sam2.1-hiera-small",
     "sam2.1-large": "facebook/sam2.1-hiera-large",
 }
+SEGMENTER_CHOICES = ("auto", "none", *SEGMENTERS)  # what the setting and --segmenter accept
 
 GROW = 0.10  # the crop is the prompt box grown by this much on every side
 CROP_PIXELS = 256  # the crop's longer side, in mask pixels, at most
@@ -58,6 +60,9 @@ class Segmenter(Protocol):
 
 def clean_mask(logits: np.ndarray) -> np.ndarray:
     """Logits > 0 with specks removed (a 3x3 morphological opening), as +10 inside, -10 outside."""
+    import cv2
+    import numpy as np
+
     inside = (logits > 0).astype(np.uint8)
     opened = cv2.morphologyEx(inside, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     return np.where(opened > 0, INSIDE, -INSIDE).astype(np.float32)
@@ -69,6 +74,8 @@ def crop_mask(logits: np.ndarray, box: np.ndarray) -> MaskCrop | None:
 
     None when fewer than 16 frame pixels are inside the cleaned mask.
     """
+    import cv2
+
     from .vision import MaskCrop
 
     height, width = logits.shape
@@ -88,6 +95,20 @@ def crop_mask(logits: np.ndarray, box: np.ndarray) -> MaskCrop | None:
     return MaskCrop(patch, (float(left), float(top)), scale)
 
 
+@contextmanager
+def _quiet_transformers() -> Iterator[None]:
+    """transformers logs errors only inside the block. The SAM 2.1 checkpoints are sam2_video
+    models that Sam2Model loads as sam2 on purpose, and it warns about that on every load."""
+    from transformers.utils import logging as hf_logging
+
+    level = hf_logging.get_verbosity()
+    hf_logging.set_verbosity_error()
+    try:
+        yield
+    finally:
+        hf_logging.set_verbosity(level)
+
+
 class Sam2Segmenter:
     """SAM 2.1 (Hugging Face transformers) on MPS, CUDA or CPU, in float32."""
 
@@ -101,9 +122,11 @@ class Sam2Segmenter:
         self.device = _pick_device(device)
         names = {repo: name for name, repo in SEGMENTERS.items()}
         self.name = names.get(model_id, model_id)
-        self.model = Sam2Model.from_pretrained(model_id, dtype=torch.float32)
+        with _quiet_transformers():
+            self.model = Sam2Model.from_pretrained(model_id, dtype=torch.float32)
         self.model.eval().to(self.device)
-        self.processor = Sam2Processor.from_pretrained(model_id)
+        with _quiet_transformers():
+            self.processor = Sam2Processor.from_pretrained(model_id)
         # One model instance; the encoder and decoder are not safe to run from two threads.
         self._lock = threading.Lock()
 
@@ -125,6 +148,8 @@ class Sam2Segmenter:
             self._torch.cuda.synchronize()
 
     def mask_in_box(self, enc: SegEncoding, box: np.ndarray) -> MaskCrop | None:
+        import numpy as np
+
         x1, y1, x2, y2 = (float(v) for v in box)
         prompt_box = [max(0.0, x1), max(0.0, y1), min(enc.width, x2), min(enc.height, y2)]
         if prompt_box[2] <= prompt_box[0] or prompt_box[3] <= prompt_box[1]:

@@ -1,13 +1,14 @@
 """Segmenter calls off the frame thread, one at a time and paced.
 
-SAM 2.1 takes 120 ms to 2 s per frame, so the stream thread never calls it. `submit` hands a
-frame and a box to the executor and returns at once; `drain`, once per frame, returns what has
-finished. At most one call is in flight, and calls start at least `min_interval_s` apart: a
-segmenter that is behind only falls further behind when asked more often. A keyframe (jev has
-just named the object, so this box is worth cutting out now) ignores the interval; if a call is
-in flight it waits as `pending` and goes at the next `drain` after that call, a newer keyframe
-replacing an older one. A segmenter error is logged once per outage and its result dropped; the
-caller goes on with the outline it has.
+SAM 2.1 Small takes about 120 ms a frame on this Mac with the cache cleared (see
+`Sam2Segmenter.encode`), and the frame thread must never wait on it. `submit` hands a frame and
+a box to the executor and returns at once; `drain`, once per frame, returns what has finished.
+At most one call is in flight, and calls start at least `min_interval_s` apart: a segmenter that
+is behind only falls further behind when asked more often. A keyframe (jev has just named the
+object, so this box is worth cutting out now) ignores the interval; if a call is in flight it
+waits as `pending` and goes at the next `drain` after that call, a newer keyframe replacing an
+older one. A segmenter error is logged once per outage and its result dropped; the caller goes on
+with the outline it has.
 
 `submit` and `drain` are for one thread, the frame thread. Only the executor's worker runs the
 segmenter.
@@ -113,8 +114,13 @@ class Refresher:
     def _start(self, job: _Job, now: float) -> None:
         with self._lock:
             self._in_flight += 1
+        try:
+            self._executor.submit(self._work, job)
+        except BaseException:
+            with self._lock:  # the work will never run, so nothing will count it out
+                self._in_flight -= 1
+            raise
         self._last_submit = now
-        self._executor.submit(self._work, job)
 
     def _work(self, job: _Job) -> None:
         started = self._clock()

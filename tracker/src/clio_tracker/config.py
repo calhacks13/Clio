@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .jev import DEFAULT_ENDPOINT, DEFAULT_MODEL, DEFAULT_TIMEOUT_S
-from .segment import SEGMENTERS
+from .segment import SEGMENTER_CHOICES
 
 TRACKER_DIR = Path(__file__).resolve().parents[2]
 REPO_ROOT = TRACKER_DIR.parent
@@ -80,9 +80,8 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
     if backend not in ("auto", "coreml", "torch"):
         raise ConfigError(f"CLIO_TRACKER_BACKEND={backend!r}: expected auto, coreml or torch")
     segmenter = text_or("CLIO_TRACKER_SEGMENTER", "auto")
-    segmenters = ("auto", "none", *SEGMENTERS)
-    if segmenter not in segmenters:
-        expected = f"{', '.join(segmenters[:-1])} or {segmenters[-1]}"
+    if segmenter not in SEGMENTER_CHOICES:
+        expected = f"{', '.join(SEGMENTER_CHOICES[:-1])} or {SEGMENTER_CHOICES[-1]}"
         raise ConfigError(f"CLIO_TRACKER_SEGMENTER={segmenter!r}: expected {expected}")
     identifier_url = text("CLIO_TRACKER_IDENTIFIER_URL")
     if identifier_url and not identifier_url.startswith(("http://", "https://")):
