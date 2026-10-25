@@ -202,7 +202,7 @@ export default function ClioReplayViewer({
                 <span className="tool-label">Pin</span>
               </button>
             )}
-            {derived.retarget.length > 0 && (
+            {(derived.retarget.length > 0 || derived.body !== null) && (
               <button
                 type="button"
                 aria-pressed={showRobot}
@@ -406,6 +406,7 @@ function ClioWorkspace({
                     tracks={derived.tracks}
                     shapes={derived.shapes}
                     retarget={derived.retarget}
+                    body={derived.body}
                     showRobot={showRobot}
                     className="absolute inset-0"
                   />

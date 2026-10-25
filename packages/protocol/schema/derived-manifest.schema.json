@@ -139,7 +139,8 @@
               "tracks",
               "environment",
               "shapes",
-              "retarget"
+              "retarget",
+              "body"
             ]
           },
           "bytes": {

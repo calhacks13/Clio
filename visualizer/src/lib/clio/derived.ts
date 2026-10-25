@@ -1,5 +1,7 @@
 import {
   ApiPaths,
+  type BodyDoc,
+  BodyDocSchema,
   type CompileManifest,
   type CompileState,
   type DerivedArtifact,
@@ -47,13 +49,15 @@ export type ArtifactStatus = "ok" | "missing" | "invalid";
 /**
  * The artifact kinds the scene draws, the only ones read: the compiled object
  * series and shapes (layers/objects.tsx), the environment and the retargeted
- * robots. Hands and the head still come from the raw episode.
+ * robots, and the G1 posed from the head and hands. Hands and the head still
+ * come from the raw episode.
  */
 export const DRAWN_KINDS: ReadonlySet<DerivedKind> = new Set([
   "tracks",
   "environment",
   "shapes",
   "retarget",
+  "body",
 ]);
 
 export interface DerivedState {
@@ -76,6 +80,8 @@ export interface DerivedState {
   shapes: ShapesDoc | null;
   /** One per robot profile, in manifest order. */
   retarget: readonly RetargetDoc[];
+  /** A whole Unitree G1 posed from the head and hands (inferred). */
+  body: BodyDoc | null;
   /** Each artifact read for `compiledAt` (the DRAWN_KINDS), by file name. */
   artifacts: Readonly<Record<string, ArtifactStatus>>;
   /** The last read failed (server unreachable or erroring) and will be retried. */
@@ -106,6 +112,7 @@ export function emptyDerivedState(episodeId: string | null): DerivedState {
     environment: null,
     shapes: null,
     retarget: NO_RETARGET,
+    body: null,
     artifacts: NO_ARTIFACTS,
     error: null,
   };
@@ -128,7 +135,8 @@ type Parsed =
   | { kind: "tracks"; doc: TracksDoc }
   | { kind: "environment"; doc: EnvironmentDoc }
   | { kind: "shapes"; doc: ShapesDoc }
-  | { kind: "retarget"; doc: RetargetDoc };
+  | { kind: "retarget"; doc: RetargetDoc }
+  | { kind: "body"; doc: BodyDoc };
 
 type ArtifactResult =
   | { name: string; status: "ok"; parsed: Parsed }
@@ -153,6 +161,9 @@ function parseArtifact(
   } else if (artifact.kind === "retarget") {
     const r = RetargetDocSchema.safeParse(body);
     if (r.success) parsed = { kind: "retarget", doc: r.data };
+  } else if (artifact.kind === "body") {
+    const r = BodyDocSchema.safeParse(body);
+    if (r.success) parsed = { kind: "body", doc: r.data };
   }
   // A valid document for another episode is not this episode's.
   return parsed && parsed.doc.episodeId === episodeId ? parsed : null;
@@ -305,6 +316,7 @@ export class ClioDerivedSource {
     let environment: EnvironmentDoc | null = null;
     let shapes: ShapesDoc | null = null;
     const retarget: RetargetDoc[] = [];
+    let bodyDoc: BodyDoc | null = null;
     const artifacts: Record<string, ArtifactStatus> = {};
     for (const result of results) {
       artifacts[result.name] = result.status;
@@ -313,6 +325,7 @@ export class ClioDerivedSource {
       if (parsed.kind === "tracks") tracks ??= parsed.doc;
       else if (parsed.kind === "environment") environment ??= parsed.doc;
       else if (parsed.kind === "shapes") shapes ??= parsed.doc;
+      else if (parsed.kind === "body") bodyDoc ??= parsed.doc;
       else retarget.push(parsed.doc);
     }
     this.#set({
@@ -321,6 +334,7 @@ export class ClioDerivedSource {
       environment,
       shapes,
       retarget: retarget.length > 0 ? retarget : NO_RETARGET,
+      body: bodyDoc,
       artifacts,
     });
   }
@@ -380,7 +394,8 @@ export class ClioDerivedSource {
         k === "tracks" ||
         k === "environment" ||
         k === "shapes" ||
-        k === "retarget"
+        k === "retarget" ||
+        k === "body"
       ) {
         return false;
       }

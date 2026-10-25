@@ -1,4 +1,5 @@
 import type {
+  BodyDoc,
   EnvironmentDoc,
   Pose7,
   RetargetDoc,
@@ -193,4 +194,26 @@ export function gripperLines(
     b,
     at(b, along, GRIPPER.finger),
   ];
+}
+
+export interface BodyPose {
+  /** The pelvis, ROS. */
+  position: Vec3;
+  /** The pelvis orientation as the document has it: the G1's axes into W (x, y, z, w). */
+  rotation: [number, number, number, number];
+  /** Joint values in `doc.joints` order, rad. */
+  joints: readonly number[];
+}
+
+/** The G1 of `doc` at `tUs`, or null where it has no pose or no grid frame. */
+export function bodyAt(doc: BodyDoc, tUs: number): BodyPose | null {
+  const i = gridFrameAt(doc.t, doc.fps, tUs);
+  const root = i < 0 ? null : doc.root[i];
+  const joints = i < 0 ? null : doc.q[i];
+  if (!root || !joints) return null;
+  return {
+    position: rosFromW(root),
+    rotation: [root[3], root[4], root[5], root[6]],
+    joints,
+  };
 }

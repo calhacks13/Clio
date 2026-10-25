@@ -4,6 +4,7 @@ import { Grid, OrbitControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
 import type {
   EnvironmentDoc,
+  BodyDoc,
   RetargetDoc,
   ShapesDoc,
   TracksDoc,
@@ -19,6 +20,7 @@ import { EnvironmentLayer, workspaceBounds } from "./layers/environment";
 import { HandsLayer } from "./layers/hands";
 import { HeadLayer } from "./layers/head";
 import { ObjectsLayer } from "./layers/objects";
+import { BodyLayer } from "./layers/body";
 import { RobotLayer } from "./layers/robot";
 
 // The Clio episode in 3D at one recording time. Every layer draws the Capture's ROS frame (z up,
@@ -75,6 +77,8 @@ export interface ClioSceneProps {
   retarget?: readonly RetargetDoc[];
   /** Draws the retargeted robots (default true). */
   showRobot?: boolean;
+  /** The G1 posed from the head and hands. */
+  body?: BodyDoc | null;
 }
 
 const NO_RETARGET: readonly RetargetDoc[] = [];
@@ -145,6 +149,7 @@ export default function ClioScene({
   shapes = null,
   retarget = NO_RETARGET,
   showRobot = true,
+  body = null,
 }: ClioSceneProps) {
   const theme = useTheme();
   // Frame the table from behind and above the learner, who stands at ROS x < 0 facing +x.
@@ -195,6 +200,7 @@ export default function ClioScene({
             shapes,
             retarget,
             showRobot,
+            body,
           ]}
         />
         <CameraRig position={view.position} target={view.target} />
@@ -221,6 +227,7 @@ export default function ClioScene({
           shapes={shapes}
           retarget={retarget}
           showRobot={showRobot}
+          body={body}
         />
         <OrbitControls makeDefault target={view.target} />
       </Canvas>
@@ -238,6 +245,7 @@ export interface SceneLayersProps extends LayerProps {
   shapes?: ShapesDoc | null;
   retarget?: readonly RetargetDoc[];
   showRobot?: boolean;
+  body?: BodyDoc | null;
 }
 
 /** Every layer of one capture, inside the group that turns ROS into the renderer's frame. */
@@ -251,6 +259,7 @@ export function SceneLayers({
   shapes = null,
   retarget = NO_RETARGET,
   showRobot = true,
+  body = null,
   ...layer
 }: SceneLayersProps) {
   return (
@@ -273,6 +282,7 @@ export function SceneLayers({
       {showRobot && retarget.length > 0 && (
         <RobotLayer {...layer} retarget={retarget} />
       )}
+      {showRobot && body && <BodyLayer {...layer} body={body} />}
     </group>
   );
 }

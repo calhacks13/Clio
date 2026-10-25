@@ -1,0 +1,209 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "clio.derived/1"
+    },
+    "episodeId": {
+      "type": "string"
+    },
+    "frame": {
+      "type": "string",
+      "const": "workspace"
+    },
+    "fps": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "t": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "description": "Grid times, ms since episode start, one per frame"
+    },
+    "kind": {
+      "type": "string",
+      "const": "body"
+    },
+    "profile": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "robotType": {
+          "type": "string",
+          "description": "LeRobot robot_type"
+        },
+        "urdf": {
+          "type": "string",
+          "description": "The URDF, relative to the lerobot robot-urdfs bucket"
+        },
+        "inferred": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Parts posed by rule, not from a measurement: only the head and hands are measured"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "robotType",
+        "urdf",
+        "inferred"
+      ],
+      "additionalProperties": false
+    },
+    "scale": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "The G1's eye height over the learner's standing head height"
+    },
+    "standingHeadM": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "The learner's standing head height above the floor"
+    },
+    "joints": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "URDF joint names, the order of every q row"
+    },
+    "root": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "items": false,
+            "minItems": 7,
+            "maxItems": 7,
+            "description": "[px, py, pz, qx, qy, qz, qw]"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "description": "Pelvis pose, W (the G1 is z-up, x forward)"
+    },
+    "q": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "description": "Joint values, rad"
+    },
+    "handResidualM": {
+      "type": "array",
+      "items": {
+        "minItems": 2,
+        "maxItems": 2,
+        "type": "array",
+        "items": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "description": "How far each palm (left, right) stayed from the scaled hand; null when untracked"
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "frames": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "meanHandResidualM": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "frames",
+        "meanHandResidualM"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema",
+    "episodeId",
+    "frame",
+    "fps",
+    "t",
+    "kind",
+    "profile",
+    "scale",
+    "standingHeadM",
+    "joints",
+    "root",
+    "q",
+    "handResidualM",
+    "summary"
+  ],
+  "additionalProperties": false,
+  "$id": "https://clio.dev/schema/derived-body.schema.json",
+  "title": "Clio compiled body-g1.json"
+}
