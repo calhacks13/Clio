@@ -3,6 +3,8 @@ import {
   EPISODE_EVENT_TYPES,
   type EpisodeEventPayload,
   type EpisodeEventType,
+  type FocusAction,
+  type FocusDetection,
   type HighlightRole,
   type ObjectObservation,
   type ObjectState,
@@ -92,6 +94,24 @@ export interface InternalEvents {
    */
   'objects.observed': Timed<{ observation: ObjectObservation }>;
   'overlay.highlight': Timed<{ objectId: string; style: HighlightStyle; source: 'auto' | 'coach' }>;
+  /**
+   * Robotics-ER 2's action focus answered for the focused step (session/action-focus.ts): where
+   * the followed objects are in the frame it saw and the one thing to touch next. For the learner's
+   * view and the recording, never a Gemini coach.
+   */
+  'focus.answered': Timed<{
+    /** When the frame ER saw was captured (performance.now ms, like `t`). */
+    frameT: number;
+    stepId: string;
+    /** One per object it was asked about, in that order; boxes are 0..1 of that frame. */
+    detections: FocusDetection[];
+    /** The one thing to touch next, in ER's words; null when the step needs nothing touched. */
+    action: FocusAction | null;
+    /** The lesson object lit for the action (declared now if the plan lacked it), or null. */
+    actionId: string | null;
+    model: string;
+    latencyMs: number;
+  }>;
   'overlay.demo': Timed<{ stepId: string; playing: boolean }>;
   /** An outline for something the current step shows (replaces the object's previous one). */
   'overlay.outline': Timed<{
