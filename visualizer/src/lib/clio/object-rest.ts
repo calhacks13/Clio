@@ -46,9 +46,12 @@ import { formatTime, type InspectorRow } from "./lanes";
 // A rest stretch's pose is the recorded estimate in it nearest the per-axis median of its
 // estimates: robust to stray ones (a far camera's jumps), and always a pose that was recorded, with
 // that estimate's rotation. A compiled track takes them from the raw estimates the compile
-// resampled, each counted once, so the raw and compiled views agree. Entered from a reach, the drawn position eases from the tracked one
-// to the rest pose over EASE, and back before a reach, so an object that was still does not jump;
-// while in reach the tracked motion is drawn exactly. Pure: no DOM or three.js. Positions are in
+// resampled, each counted once, so the raw and compiled views agree.
+//
+// Entered from a reach, the drawn position eases from the tracked one to the rest pose over EASE,
+// and back before a reach, so an object that was still does not jump; a tracked position farther
+// than EASE_WITHIN from the rest pose is a stray, left at once rather than slid across the scene.
+// While in reach the tracked motion is drawn exactly. Pure: no DOM or three.js. Positions are in
 // the Capture's ROS frame (z up, meters).
 
 /** The rule's numbers; INTEGRATION.md says why each is what it is. */
@@ -71,6 +74,8 @@ export const REST_RULE = {
   minRestUs: 500_000,
   /** The drawn position eases between the tracked one and the rest pose over this. */
   easeUs: 250_000,
+  /** Only from a tracked position this close to the rest pose; a farther one is a stray. */
+  easeWithinM: 0.2,
 } as const;
 
 export type RestRule = { [K in keyof typeof REST_RULE]: number };
@@ -491,7 +496,8 @@ export function restAt(
 /**
  * What the scene draws at `tUs` for an object whose drawn track says `position` and `rotation`:
  * the same while a hand could reach it, its rest pose while none could, and between the two at a
- * stretch's eased edges. The rotation switches halfway through an ease.
+ * stretch's eased edges, unless the tracked position is a stray farther than easeWithinM from the
+ * rest pose. The rotation switches halfway through an ease.
  */
 export function restedPose(
   plan: RestPlan,
@@ -502,8 +508,12 @@ export function restedPose(
 ): { position: Vec3; rotation: Quat | null; resting: boolean } {
   const at = restAt(plan, tUs, rule);
   if (!at) return { position, rotation, resting: false };
-  const { stretch, weight: w } = at;
+  const { stretch } = at;
   const r = stretch.position;
+  const near =
+    Math.hypot(r[0] - position[0], r[1] - position[1], r[2] - position[2]) <=
+    rule.easeWithinM;
+  const w = near ? at.weight : 1;
   return {
     position:
       w === 1

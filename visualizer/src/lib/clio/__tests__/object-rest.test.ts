@@ -372,6 +372,38 @@ describe("hysteresis", () => {
   });
 });
 
+describe("easing into a rest stretch", () => {
+  const OBJECT: Vec3 = [0.6, 0, 0.8];
+  const STRAY = add(OBJECT, [-1, 0.5, 0]);
+  // The hand touches the jar from 2 s to 2.5 s; the estimate written just after is a stray.
+  const capture = bodyCapture({
+    durationUs: 6 * S,
+    right: (t) =>
+      t >= 2 * S && t < 2.5 * S ? add(OBJECT, [-0.05, 0, 0]) : IDLE.right,
+  });
+  addObject(capture, "jar", [
+    ...every200ms(0, 2.6 * S, (_, i) => add(OBJECT, jitter(i, 0.01))),
+    { tUs: 2.6 * S, position: STRAY },
+    ...every200ms(2.7 * S, 6 * S, (_, i) => add(OBJECT, jitter(i, 0.01))),
+  ]);
+  const [, after] = rest(capture, "jar").plan.stretches;
+
+  test("starts from the tracked position when it is close", () => {
+    expect(after.easeIn).toBe(true);
+    expect(after.startUs).toBeLessThan(2.6 * S);
+    const t = after.startUs + 10_000;
+    const drawn = drawnAt(capture, "jar", t);
+    const raw = objectAt(capture, "jar", t, { trailUs: 0 })?.position;
+    expect(drawn).not.toEqual(after.position);
+    expect(dist(drawn ?? FAR, raw ?? FAR)).toBeLessThan(0.01);
+  });
+
+  test("never slides from a stray: the rest pose is drawn at once", () => {
+    // Mid-ease, the tracked position is the stray a meter off.
+    expect(drawnAt(capture, "jar", 2.65 * S)).toEqual(after.position);
+  });
+});
+
 describe("hands that are not tracked", () => {
   const NEAR_HEAD: Vec3 = [0.4, 0, 1.2]; // 0.5 m from the head
   const BEYOND: Vec3 = [1.5, 0, 0.8]; // 1.65 m from the head
