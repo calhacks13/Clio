@@ -9,9 +9,9 @@ the learner see (outlines, ghost hands) and label the dataset. They never feed a
 which judges from the camera. The scripted coach can't see, so it is still told about missing and
 pinched objects.
 
-A Gemini coach is two models at once: the voice (`gemini-3.8-live`), which talks with the learner,
-and the smart model (Robotics-ER 2), which plans, watches the steps and takes a closer look when
-the voice asks. Only the voice speaks; the smart model's results reach it as text
+A Gemini coach is two models at once: the voice (`gemini-3.8-live-extended-thinking`), which talks
+with the learner, and the smart model (Robotics-ER 2), which plans, watches the steps and takes a
+closer look when the voice asks. Only the voice speaks; the smart model's results reach it as text
 ([The smart model](#the-smart-model)).
 
 This document is the design. [ARCHITECTURE.md](ARCHITECTURE.md) is the map, and

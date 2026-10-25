@@ -12,17 +12,17 @@ type is not a benchmark: treat the quality numbers as directional and re-check t
 ## Two models at once
 
 The coach is two models working side by side. The voice is a realtime native-audio Live model
-(`gemini-3.8-live`): it sees the camera, listens and talks, and never waits on the other one.
+(`gemini-3.8-live-extended-thinking`): it sees the camera, listens and talks, and never waits on the other one.
 Robotics-ER 2 is the smart model: it plans, watches each step, finds objects and answers the
 questions the voice hands it. The voice delegates through tools that answer at once, and
 Robotics-ER reports back as `[app]` messages when it has something: a plan, a refined plan, a step
 that looks done or wrong, an answer.
 
-| Model                          | API               | What Clio uses it for                                    |
-| ------------------------------ | ----------------- | -------------------------------------------------------- |
-| `gemini-3.8-live`              | Live (bidi)       | the voice: conversation, with the camera in view         |
-| `gemini-robotics-er-2-preview` | `generateContent` | planning, the step watcher, the object finder, questions |
-| `gemini-pro-latest`            | `generateContent` | the bench's judge: a different model grades the planner  |
+| Model                               | API               | What Clio uses it for                                    |
+| ----------------------------------- | ----------------- | -------------------------------------------------------- |
+| `gemini-3.8-live-extended-thinking` | Live (bidi)       | the voice: conversation, with the camera in view         |
+| `gemini-robotics-er-2-preview`      | `generateContent` | planning, the step watcher, the object finder, questions |
+| `gemini-pro-latest`                 | `generateContent` | the bench's judge: a different model grades the planner  |
 
 `gemini-robotics-er-2-streaming-preview` is Robotics-ER 2 on the Live API. It answers in text
 only (audio output is rejected with close code 1007), so it can't be the voice; it could watch in

@@ -13,7 +13,7 @@ describe('loadConfig', () => {
       dataDir: '/repo/data',
       proceduresDir: '/repo/procedures',
       geminiApiKey: null,
-      liveModel: 'gemini-3.8-live',
+      liveModel: 'gemini-3.8-live-extended-thinking',
       plannerModel: 'gemini-robotics-er-2-preview',
       visionModel: 'gemini-robotics-er-2-preview',
       sceneModel: 'gemini-robotics-er-2-preview',
@@ -48,7 +48,7 @@ describe('loadConfig', () => {
     );
     expect(config.port).toBe(8787);
     expect(config.geminiApiKey).toBeNull();
-    expect(config.liveModel).toBe('gemini-3.8-live');
+    expect(config.liveModel).toBe('gemini-3.8-live-extended-thinking');
     expect(config.plannerModel).toBe('gemini-robotics-er-2-preview');
     expect(config.visionModel).toBe('gemini-robotics-er-2-preview');
     expect(config.sceneModel).toBe('gemini-robotics-er-2-preview');

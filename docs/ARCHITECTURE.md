@@ -303,7 +303,8 @@ Camera facts that shaped this (October 2026):
 ### 5.7 Coach (`domain/coach`, `adapters/gemini`, `adapters/scripted`)
 
 **Two models.** The coach is two models working at the same time:
-- **The voice** is the realtime model (`gemini-3.8-live`, native audio in and out). It is the only
+- **The voice** is the realtime model (`gemini-3.8-live-extended-thinking`, native audio in and
+  out, thinking at LOW). It is the only
   one that talks with the learner. It sees one small frame every 4 s, listens, speaks, and calls
   the tools. It never waits on the smart model.
 - **The smart model** is Gemini Robotics-ER 2 (`gemini-robotics-er-2-preview`). It plans and
@@ -393,7 +394,12 @@ everything. Under local authority (the scripted coach, no coach, `record_demo`, 
 connection that is down), checks use every position, as before, and a Gemini coach isn't told rule
 mistakes. The scripted coach can't see, so it still hears about missing objects and pinches.
 
-**Gemini Live** (`gemini-3.8-live`):
+**Gemini Live** (`gemini-3.8-live-extended-thinking`; `GEMINI_LIVE_MODEL=gemini-3.8-live` is the
+same build without thinking, about 2 s quicker to call a tool):
+- **Thinking voice:** it closes the session on a `BLOCKING` declaration, on a response's
+  `scheduling` and without a thinking level (MINIMAL is refused), so the adapter declares the tools
+  without `behavior`, answers without `scheduling` and asks for LOW (`adapters/gemini/live-model.ts`).
+  It then waits for every answer, `look_closer`'s included.
 - **Relay transport (default):** the SDK connects to the laptop, which injects the key, so the
   headset needs no key and no internet.
 - **Direct transport:** ephemeral tokens.
